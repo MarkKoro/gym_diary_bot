@@ -1,10 +1,19 @@
 import asyncio
 from datetime import datetime
 from telegram import Update
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, AIORateLimiter
 from keyboards import main_menu_kb, today_kb
-from settings import TG_TOKEN, SUPPORT_DEEPLINK
-from db import init_db, get_or_create_user, ensure_default_plan, get_or_create_today_session, fetch_day_exercises, fetch_sets_table, add_set, inc_last_set
+from settings import TG_TOKEN, SUPPORT_DEEPLINK, TG_POOL_SIZE
+from db import (
+    init_db,
+    get_or_create_user,
+    ensure_default_plan,
+    get_or_create_today_session,
+    fetch_day_exercises,
+    fetch_sets_table,
+    add_set,
+    inc_last_set,
+)
 
 def render_today_text(ex_rows, set_rows):
     # ex_rows: [(ue_id, name), ...]
@@ -88,15 +97,20 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await q.edit_message_text(render_today_text(ex_rows, set_rows), reply_markup=today_kb([r[0] for r in ex_rows]))
         return
 
-async def main():
-    await init_db()
-    app = Application.builder().token(TG_TOKEN).build()
+def main():
+    asyncio.run(init_db())
+    app = (
+        Application.builder()
+        .token(TG_TOKEN)
+        .concurrent_updates(True)
+        .connection_pool_size(TG_POOL_SIZE)
+        .rate_limiter(AIORateLimiter())
+        .build()
+    )
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(menu_router))
-    await app.initialize()
-    await app.start()
-    await app.updater.start_polling()
-    await app.updater.idle()
+    app.run_polling()
+
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
