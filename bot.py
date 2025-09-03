@@ -99,6 +99,8 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 def main():
     asyncio.run(init_db())
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
     app = (
         Application.builder()
         .token(TG_TOKEN)
