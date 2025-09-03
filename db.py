@@ -1,13 +1,19 @@
-import aiosqlite, os
+import aiosqlite, asyncio
 from datetime import datetime, timedelta
-from dotenv import load_dotenv
+from contextlib import asynccontextmanager
+from settings import DB_PATH, TRIAL_DAYS, DB_POOL_SIZE
 
-load_dotenv()
-DB_PATH = os.getenv("DB_PATH", "./gymdiary.db")
-TRIAL_DAYS = int(os.getenv("TRIAL_DAYS", "60"))
+# Ограничиваем число одновременных операций с базой
+_db_semaphore = asyncio.BoundedSemaphore(DB_POOL_SIZE)
+
+@asynccontextmanager
+async def connect_db():
+    async with _db_semaphore:
+        async with aiosqlite.connect(DB_PATH) as db:
+            yield db
 
 async def init_db():
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with connect_db() as db:
         await db.executescript("""
         PRAGMA journal_mode=WAL;
 
@@ -76,7 +82,7 @@ async def init_db():
         await db.commit()
 
 async def get_or_create_user(tg_id: int, username: str|None):
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with connect_db() as db:
         cur = await db.execute("SELECT id, trial_until FROM users WHERE tg_id=?", (tg_id,))
         row = await cur.fetchone()
         if row:
@@ -94,7 +100,7 @@ async def get_or_create_user(tg_id: int, username: str|None):
 async def ensure_default_plan(user_id: int):
     """Демо: создаём базовый День 1 с 3 упражнениями, если у юзера ничего нет."""
     default = [("Жим лёжа", "chest"), ("Присед", "legs"), ("Тяга в наклоне", "back")]
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with connect_db() as db:
         # вставим упражнения в каталог (если их нет)
         for name, mg in default:
             try:
@@ -118,7 +124,7 @@ async def ensure_default_plan(user_id: int):
         await db.commit()
 
 async def get_or_create_today_session(user_id: int, date_str: str, day_index: int = 1):
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with connect_db() as db:
         cur = await db.execute("SELECT id FROM sessions WHERE user_id=? AND date=?", (user_id, date_str))
         row = await cur.fetchone()
         if row: return row[0]
@@ -128,7 +134,7 @@ async def get_or_create_today_session(user_id: int, date_str: str, day_index: in
         return (await cur.fetchone())[0]
 
 async def fetch_day_exercises(user_id: int, day_index: int = 1):
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with connect_db() as db:
         cur = await db.execute("""
         SELECT ue.id, e.name
         FROM user_exercises ue
@@ -139,7 +145,7 @@ async def fetch_day_exercises(user_id: int, day_index: int = 1):
         return await cur.fetchall()
 
 async def fetch_sets_table(session_id: int):
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with connect_db() as db:
         cur = await db.execute("""
         SELECT sets.id, sets.user_exercise_id, sets.set_no, sets.reps, sets.weight_kg, e.name
         FROM sets
@@ -152,7 +158,7 @@ async def fetch_sets_table(session_id: int):
         return rows
 
 async def add_set(session_id: int, user_ex_id: int):
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with connect_db() as db:
         cur = await db.execute("SELECT COALESCE(MAX(set_no),0)+1 FROM sets WHERE session_id=? AND user_exercise_id=?", (session_id, user_ex_id))
         next_no = (await cur.fetchone())[0]
         await db.execute("INSERT INTO sets(session_id, user_exercise_id, set_no, reps, weight_kg) VALUES(?,?,?,?,?)",
@@ -161,7 +167,7 @@ async def add_set(session_id: int, user_ex_id: int):
 
 async def inc_last_set(user_ex_id: int, session_id: int, field: str, delta: float):
     assert field in ("reps", "weight_kg")
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with connect_db() as db:
         cur = await db.execute("""
             SELECT id, reps, weight_kg FROM sets
             WHERE session_id=? AND user_exercise_id=?
