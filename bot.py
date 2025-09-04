@@ -69,6 +69,8 @@ from db import (
     rename_day,
     get_weight_step,
     set_weight_step,
+    add_user_muscle_group,
+    list_user_muscle_groups,
 )
 
 user_locks = defaultdict(asyncio.Lock)
@@ -87,11 +89,23 @@ async def check_subscription(tg_id: int, bot) -> bool:
     except Exception:
         return False
 
+async def get_custom_groups(user_id: int, context) -> dict[str, str]:
+    groups = context.user_data.get("custom_groups")
+    if groups is None:
+        rows = await list_user_muscle_groups(user_id)
+        groups = {code: name for code, name in rows}
+        context.user_data["custom_groups"] = groups
+    return groups
+
 def day_groups_text(i: int) -> str:
     return f"День {i}. Что тренируешь в этот день? Выбери группы, затем «Далее»."
 
-def day_exercises_text(i: int, group: str) -> str:
-    name = MG_NAMES.get(group, group)
+def day_exercises_text(i: int, group: str, custom: dict[str, str] | None = None) -> str:
+    name = MG_NAMES.get(group)
+    if not name and custom:
+        name = custom.get(group, group)
+    if not name:
+        name = group
     return f"День {i} — {name}. Выбери упражнения или добавь своё. Потом жми «Готово»."
 
 def render_day_text(i: int, label: str) -> str:
@@ -134,7 +148,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     settings = await fetch_user_settings(user_id)
     if not settings or not settings[0] or not settings[1]:
-        await update.message.reply_text("Как ты тренируешься?", reply_markup=system_kb())
+        await update.message.reply_text("Как ты тренируешься?", reply_markup=system_kb(False))
         return
     days = await list_active_days(user_id)
     await update.message.reply_text(
@@ -144,16 +158,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def show_exercises(q, user_id: int, day: int, group: str, context):
     ex_rows = await list_exercises_by_group(group)
-    prefilled = context.user_data.setdefault("prefilled_groups", set())
-    key = (day, group)
-    if key not in prefilled:
-        for ex_id, _ in ex_rows:
-            await add_user_exercise(user_id, day, ex_id)
-        prefilled.add(key)
     selected_ids = set(await list_user_exercise_ids(user_id, day, group))
+    custom = context.user_data.get("custom_groups", {})
     await safe_edit_message(
         q,
-        day_exercises_text(day, group),
+        day_exercises_text(day, group, custom),
         exercises_kb(day, group, ex_rows, selected_ids),
     )
 
@@ -168,9 +177,10 @@ async def advance_day(q, context, user_id: int, next_day: int):
     n = context.user_data.get("workouts_per_week", 0)
     if next_day <= n:
         selected = context.user_data.setdefault("day_groups", {}).get(next_day, set())
+        custom = await get_custom_groups(user_id, context)
         await q.edit_message_text(
             day_groups_text(next_day),
-            reply_markup=muscle_groups_kb(next_day, selected or set()),
+            reply_markup=muscle_groups_kb(next_day, selected or set(), custom),
         )
     else:
         await q.edit_message_text(
@@ -199,10 +209,9 @@ async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAUL
                 "Сплит — разные группы мышц в разные дни.\n"
                 "Если не уверен, выбери «Другое»."
             )
-            kb = InlineKeyboardMarkup([
-                [InlineKeyboardButton("Продолжить", callback_data="menu:root")],
-                [InlineKeyboardButton("⬅︎ Назад", callback_data="wiz:sys:back")],
-            ])
+            kb = InlineKeyboardMarkup(
+                [[InlineKeyboardButton("⬅︎ Назад", callback_data="wiz:sys:back")]]
+            )
             await q.edit_message_text(hint, reply_markup=kb)
             return
         await update_user_system(user_id, code)
@@ -219,9 +228,10 @@ async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAUL
         await set_workouts_per_week(user_id, n)
         context.user_data["workouts_per_week"] = n
         context.user_data["day_groups"] = {}
+        custom = await get_custom_groups(user_id, context)
         await q.edit_message_text(
             day_groups_text(1),
-            reply_markup=muscle_groups_kb(1, set()),
+            reply_markup=muscle_groups_kb(1, set(), custom),
         )
         return
     if data.startswith("wiz:base:"):
@@ -257,6 +267,20 @@ async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAUL
                 context.user_data.pop("baseline_values", None)
                 await finish_day(q, context, user_id, day)
             return
+        if action == "skip":
+            idx += 1
+            if idx < len(context.user_data["baseline_list"]):
+                context.user_data["baseline_idx"] = idx
+                ex_id, name = context.user_data["baseline_list"][idx]
+                values = context.user_data.setdefault("baseline_values", {}).setdefault(ex_id, [0, 0, 0.0])
+                await safe_edit_message(q, baseline_text(name, *values), baseline_kb(day, *values))
+            else:
+                context.user_data.pop("baseline_day", None)
+                context.user_data.pop("baseline_list", None)
+                context.user_data.pop("baseline_idx", None)
+                context.user_data.pop("baseline_values", None)
+                await finish_day(q, context, user_id, day)
+            return
         if action == "back":
             if idx > 0:
                 idx -= 1
@@ -270,9 +294,10 @@ async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAUL
                 context.user_data.pop("baseline_idx", None)
                 context.user_data.pop("baseline_values", None)
                 selected = context.user_data.setdefault("day_groups", {}).get(day, set())
+                custom = await get_custom_groups(user_id, context)
                 await q.edit_message_text(
                     day_groups_text(day),
-                    reply_markup=muscle_groups_kb(day, selected),
+                    reply_markup=muscle_groups_kb(day, selected, custom),
                 )
             return
     if data.startswith("wiz:day:"):
@@ -284,16 +309,31 @@ async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAUL
                 reply_markup=days_kb(),
             )
             return
+        if parts[3] == "redo":
+            selected = context.user_data.setdefault("day_groups", {}).get(day, set())
+            custom = await get_custom_groups(user_id, context)
+            await q.edit_message_text(
+                day_groups_text(day),
+                reply_markup=muscle_groups_kb(day, selected, custom),
+            )
+            return
         if parts[3] == "mg":
             group = parts[4]
+            if group == "other":
+                context.user_data["awaiting_group_name"] = (day, q.message.chat_id, q.message.message_id, "wizard")
+                await q.edit_message_text(
+                    f"Укажи группу мышц для дня {day}, которой нет в списке."
+                )
+                return
             selected = context.user_data.setdefault("day_groups", {}).setdefault(day, set())
             if group in selected:
                 selected.remove(group)
             else:
                 selected.add(group)
+            custom = await get_custom_groups(user_id, context)
             await q.edit_message_text(
                 day_groups_text(day),
-                reply_markup=muscle_groups_kb(day, selected),
+                reply_markup=muscle_groups_kb(day, selected, custom),
             )
             return
         if parts[3] == "groups" and parts[4] == "next":
@@ -323,9 +363,10 @@ async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAUL
                 return
             if action == "back":
                 selected = context.user_data.setdefault("day_groups", {}).get(day, set())
+                custom = await get_custom_groups(user_id, context)
                 await q.edit_message_text(
                     day_groups_text(day),
-                    reply_markup=muscle_groups_kb(day, selected),
+                    reply_markup=muscle_groups_kb(day, selected, custom),
                 )
                 return
             if action == "done":
@@ -445,6 +486,34 @@ async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAUL
         return
 
 async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if context.user_data.get("awaiting_group_name"):
+        day, chat_id, msg_id, mode = context.user_data.pop("awaiting_group_name")
+        name = update.message.text.strip()
+        u = update.effective_user
+        user_id = await get_or_create_user(u.id, u.username)
+        code = await add_user_muscle_group(user_id, name)
+        custom = await get_custom_groups(user_id, context)
+        custom[code] = name
+        await update.message.delete()
+        if mode == "wizard":
+            selected = context.user_data.setdefault("day_groups", {}).setdefault(day, set())
+            selected.add(code)
+            await context.bot.edit_message_text(
+                day_groups_text(day),
+                chat_id=chat_id,
+                message_id=msg_id,
+                reply_markup=muscle_groups_kb(day, selected, custom),
+            )
+        else:
+            context.user_data["add_group"] = (day, code)
+            ex_rows = await list_exercises_by_group(code)
+            await context.bot.edit_message_text(
+                day_exercises_text(day, code, custom),
+                chat_id=chat_id,
+                message_id=msg_id,
+                reply_markup=day_add_exercises_kb(day, code, ex_rows),
+            )
+        return
     if context.user_data.get("awaiting_rename"):
         day, chat_id, msg_id = context.user_data.pop("awaiting_rename")
         label = update.message.text.strip()
@@ -461,15 +530,16 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_id = await get_or_create_user(u.id, u.username)
         await add_user_exercise(user_id, day, ex_id)
         ex_rows = await list_exercises_by_group(group)
+        custom = context.user_data.get("custom_groups", {})
         if context.user_data.get("add_group") == (day, group):
             await update.message.reply_text(
-                day_exercises_text(day, group),
+                day_exercises_text(day, group, custom),
                 reply_markup=day_add_exercises_kb(day, group, ex_rows),
             )
         else:
             selected_ids = set(await list_user_exercise_ids(user_id, day, group))
             await update.message.reply_text(
-                day_exercises_text(day, group),
+                day_exercises_text(day, group, custom),
                 reply_markup=exercises_kb(day, group, ex_rows, selected_ids),
             )
         return
@@ -570,7 +640,8 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         if action == "add_ex":
             day = int(parts[2])
-            await safe_edit_message(q, "Выбери группу:", reply_markup=day_add_group_kb(day))
+            custom = await get_custom_groups(user_id, context)
+            await safe_edit_message(q, "Выбери группу:", reply_markup=day_add_group_kb(day, custom))
             return
         if action == "del_ex":
             day = int(parts[2])
@@ -582,9 +653,14 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             sub = parts[3]
             if sub == "mg":
                 group = parts[4]
+                if group == "other":
+                    context.user_data["awaiting_group_name"] = (day, q.message.chat_id, q.message.message_id, "settings")
+                    await q.edit_message_text("Укажи группу мышц, которой хочешь заниматься.")
+                    return
                 context.user_data["add_group"] = (day, group)
                 ex_rows = await list_exercises_by_group(group)
-                await safe_edit_message(q, day_exercises_text(day, group), reply_markup=day_add_exercises_kb(day, group, ex_rows))
+                custom = context.user_data.get("custom_groups", {})
+                await safe_edit_message(q, day_exercises_text(day, group, custom), reply_markup=day_add_exercises_kb(day, group, ex_rows))
                 return
             if sub == "ex":
                 ex_id = int(parts[4])
@@ -592,7 +668,8 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 _, group = context.user_data.get("add_group", (day, None))
                 if group:
                     ex_rows = await list_exercises_by_group(group)
-                    await safe_edit_message(q, day_exercises_text(day, group), reply_markup=day_add_exercises_kb(day, group, ex_rows))
+                    custom = context.user_data.get("custom_groups", {})
+                    await safe_edit_message(q, day_exercises_text(day, group, custom), reply_markup=day_add_exercises_kb(day, group, ex_rows))
                 return
             if sub == "custom":
                 group = parts[4]

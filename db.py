@@ -94,6 +94,13 @@ async def init_db():
             weight_step REAL DEFAULT 0.5
         );
 
+        CREATE TABLE IF NOT EXISTS user_muscle_groups(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            name TEXT,
+            UNIQUE(user_id, name)
+        );
+
         -- задел под биллинг (появится в Блоке 4)
         CREATE TABLE IF NOT EXISTS subscriptions(
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -327,6 +334,24 @@ async def list_user_exercise_ids(user_id: int, day_index: int, group: str):
         )
         rows = await cur.fetchall()
         return [r[0] for r in rows]
+
+async def add_user_muscle_group(user_id: int, name: str) -> str:
+    async with connect_db() as db:
+        cur = await db.execute(
+            "INSERT INTO user_muscle_groups(user_id, name) VALUES(?,?)",
+            (user_id, name),
+        )
+        await db.commit()
+        return f"u{cur.lastrowid}"
+
+async def list_user_muscle_groups(user_id: int):
+    async with connect_db() as db:
+        cur = await db.execute(
+            "SELECT id, name FROM user_muscle_groups WHERE user_id=? ORDER BY name",
+            (user_id,),
+        )
+        rows = await cur.fetchall()
+        return [(f"u{r[0]}", r[1]) for r in rows]
 
 async def add_user_exercise(user_id: int, day_index: int, exercise_id: int):
     async with connect_db() as db:
