@@ -55,14 +55,16 @@ def subscription_settings_kb(join_url: str):
         [InlineKeyboardButton("⬅︎ Назад", callback_data="menu:settings")],
     ])
 
-def system_kb():
-    return InlineKeyboardMarkup([
+def system_kb(show_back: bool = True):
+    rows = [
         [InlineKeyboardButton("Фулбоди", callback_data="wiz:sys:fullbody")],
         [InlineKeyboardButton("Сплит", callback_data="wiz:sys:split")],
         [InlineKeyboardButton("Другое", callback_data="wiz:sys:other")],
         [InlineKeyboardButton("❓Не знаю", callback_data="wiz:sys:help")],
-        [InlineKeyboardButton("⬅︎ Назад", callback_data="menu:root")],
-    ])
+    ]
+    if show_back:
+        rows.append([InlineKeyboardButton("⬅︎ Назад", callback_data="menu:root")])
+    return InlineKeyboardMarkup(rows)
 
 def days_kb():
     rows = []
@@ -81,11 +83,18 @@ MG_NAMES = {
     "other": "Другое",
 }
 
-def muscle_groups_kb(day_index: int, selected: set[str]):
+def muscle_groups_kb(day_index: int, selected: set[str], custom: dict[str, str] | None = None):
     rows = []
     for code, name in MG_NAMES.items():
+        if code == "other":
+            continue
         mark = "✅" if code in selected else "⬜"
         rows.append([InlineKeyboardButton(f"{mark} {name}", callback_data=f"wiz:day:{day_index}:mg:{code}")])
+    if custom:
+        for code, name in custom.items():
+            mark = "✅" if code in selected else "⬜"
+            rows.append([InlineKeyboardButton(f"{mark} {name}", callback_data=f"wiz:day:{day_index}:mg:{code}")])
+    rows.append([InlineKeyboardButton(f"⬜ {MG_NAMES['other']}", callback_data=f"wiz:day:{day_index}:mg:other")])
     rows.append([
         InlineKeyboardButton("▶︎ Далее", callback_data=f"wiz:day:{day_index}:groups:next"),
         InlineKeyboardButton("⏭ Пропустить день", callback_data=f"wiz:day:{day_index}:skip"),
@@ -120,7 +129,8 @@ def baseline_kb(day_index: int, sets: int, reps: int, weight: float):
             btn("−10 кг", "wiz:base:inc:kg:-10"),
         ],
         [btn("✅ Готово", "wiz:base:ready"), btn("⬅︎ Назад", "wiz:base:back")],
-        [btn("⏭ Пропустить всё", f"wiz:day:{day_index}:baseline:skip_all")],
+        [btn("⏭ Пропустить это упражнение", "wiz:base:skip")],
+        [btn("⏭ Пропустить настройку веса", f"wiz:day:{day_index}:baseline:skip_all")],
     ]
     return InlineKeyboardMarkup(rows)
 
@@ -128,6 +138,7 @@ def day_done_kb(day_index: int):
     return InlineKeyboardMarkup([
         [InlineKeyboardButton(f"▶︎ День {day_index+1}", callback_data=f"wiz:day:{day_index}:next")],
         [InlineKeyboardButton("⏹ Завершить онбординг", callback_data="wiz:finish_early")],
+        [InlineKeyboardButton("⬅︎ Назад", callback_data=f"wiz:day:{day_index}:redo")],
     ])
 
 def reminders_kb():
@@ -163,10 +174,16 @@ def day_kb(day_index: int, ex_rows: list[tuple[int, str]]):
     rows.append([InlineKeyboardButton("⬅︎ Назад", callback_data="menu:root")])
     return InlineKeyboardMarkup(rows)
 
-def day_add_group_kb(day_index: int):
+def day_add_group_kb(day_index: int, custom: dict[str, str] | None = None):
     rows = []
     for code, name in MG_NAMES.items():
+        if code == "other":
+            continue
         rows.append([InlineKeyboardButton(name, callback_data=f"day:add:{day_index}:mg:{code}")])
+    if custom:
+        for code, name in custom.items():
+            rows.append([InlineKeyboardButton(name, callback_data=f"day:add:{day_index}:mg:{code}")])
+    rows.append([InlineKeyboardButton(MG_NAMES["other"], callback_data=f"day:add:{day_index}:mg:other")])
     rows.append([InlineKeyboardButton("⬅︎ Назад", callback_data=f"day:open:{day_index}")])
     return InlineKeyboardMarkup(rows)
 
