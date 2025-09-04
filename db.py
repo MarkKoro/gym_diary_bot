@@ -24,7 +24,9 @@ async def init_db():
             tz TEXT DEFAULT 'Asia/Jerusalem',
             created_at TEXT,
             trial_until TEXT,
-            plan TEXT DEFAULT 'trial'
+            plan TEXT DEFAULT 'trial',
+            system TEXT,
+            workouts_per_week INTEGER
         );
 
         CREATE TABLE IF NOT EXISTS exercises(
@@ -41,6 +43,15 @@ async def init_db():
             UNIQUE(user_id, exercise_id, day_index)
         );
 
+        CREATE TABLE IF NOT EXISTS user_days(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            day_index INTEGER,
+            label TEXT,
+            is_active INTEGER,
+            UNIQUE(user_id, day_index)
+        );
+
         CREATE TABLE IF NOT EXISTS sessions(
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id INTEGER,
@@ -55,7 +66,32 @@ async def init_db():
             user_exercise_id INTEGER,
             set_no INTEGER,
             reps INTEGER DEFAULT 0,
-            weight_kg REAL DEFAULT 0
+            weight_kg REAL DEFAULT 0,
+            is_warmup INTEGER DEFAULT 0
+        );
+
+        CREATE TABLE IF NOT EXISTS exercise_baseline(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            day_index INTEGER,
+            exercise_id INTEGER,
+            sets INTEGER,
+            reps INTEGER,
+            weight_kg REAL,
+            UNIQUE(user_id, day_index, exercise_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS user_reminders(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            dow INTEGER,
+            hour INTEGER,
+            minute INTEGER
+        );
+
+        CREATE TABLE IF NOT EXISTS user_prefs(
+            user_id INTEGER PRIMARY KEY,
+            weight_step REAL DEFAULT 0.5
         );
 
         -- задел под биллинг (появится в Блоке 4)
@@ -79,6 +115,18 @@ async def init_db():
             payload_json TEXT
         );
         """)
+        try:
+            await db.execute("ALTER TABLE users ADD COLUMN system TEXT")
+        except Exception:
+            pass
+        try:
+            await db.execute("ALTER TABLE users ADD COLUMN workouts_per_week INTEGER")
+        except Exception:
+            pass
+        try:
+            await db.execute("ALTER TABLE sets ADD COLUMN is_warmup INTEGER DEFAULT 0")
+        except Exception:
+            pass
         await db.commit()
 
 async def get_or_create_user(tg_id: int, username: str|None):
@@ -157,14 +205,6 @@ async def fetch_sets_table(session_id: int):
         rows = await cur.fetchall()
         return rows
 
-async def add_set(session_id: int, user_ex_id: int):
-    async with connect_db() as db:
-        cur = await db.execute("SELECT COALESCE(MAX(set_no),0)+1 FROM sets WHERE session_id=? AND user_exercise_id=?", (session_id, user_ex_id))
-        next_no = (await cur.fetchone())[0]
-        await db.execute("INSERT INTO sets(session_id, user_exercise_id, set_no, reps, weight_kg) VALUES(?,?,?,?,?)",
-                         (session_id, user_ex_id, next_no, 0, 0.0))
-        await db.commit()
-
 async def inc_last_set(user_ex_id: int, session_id: int, field: str, delta: float):
     assert field in ("reps", "weight_kg")
     async with connect_db() as db:
@@ -187,4 +227,259 @@ async def inc_last_set(user_ex_id: int, session_id: int, field: str, delta: floa
         else:
             weight = float(weight + delta)
             await db.execute("UPDATE sets SET weight_kg=? WHERE id=?", (max(weight, 0.0), set_id))
+        await db.commit()
+
+async def fetch_user_settings(user_id: int):
+    async with connect_db() as db:
+        cur = await db.execute("SELECT system, workouts_per_week FROM users WHERE id=?", (user_id,))
+        return await cur.fetchone()
+
+async def update_user_system(user_id: int, system: str):
+    async with connect_db() as db:
+        await db.execute("UPDATE users SET system=? WHERE id=?", (system, user_id))
+        await db.commit()
+
+async def set_workouts_per_week(user_id: int, n: int):
+    async with connect_db() as db:
+        await db.execute("UPDATE users SET workouts_per_week=? WHERE id=?", (n, user_id))
+        for i in range(1, 8):
+            label = f"День {i}"
+            is_active = 1 if i <= n else 0
+            await db.execute(
+                """
+                INSERT INTO user_days(user_id, day_index, label, is_active) VALUES(?,?,?,?)
+                ON CONFLICT(user_id, day_index) DO UPDATE SET label=excluded.label, is_active=excluded.is_active
+                """,
+                (user_id, i, label, is_active),
+            )
+        await db.commit()
+
+async def list_exercises_by_group(group: str):
+    async with connect_db() as db:
+        cur = await db.execute(
+            "SELECT id, name FROM exercises WHERE muscle_group=? ORDER BY name",
+            (group,),
+        )
+        return await cur.fetchall()
+
+async def list_user_exercise_ids(user_id: int, day_index: int, group: str):
+    async with connect_db() as db:
+        cur = await db.execute(
+            """
+            SELECT e.id
+            FROM user_exercises ue
+            JOIN exercises e ON e.id = ue.exercise_id
+            WHERE ue.user_id=? AND ue.day_index=? AND e.muscle_group=?
+            """,
+            (user_id, day_index, group),
+        )
+        rows = await cur.fetchall()
+        return [r[0] for r in rows]
+
+async def add_user_exercise(user_id: int, day_index: int, exercise_id: int):
+    async with connect_db() as db:
+        try:
+            await db.execute(
+                "INSERT INTO user_exercises(user_id, exercise_id, day_index) VALUES(?,?,?)",
+                (user_id, exercise_id, day_index),
+            )
+            await db.commit()
+        except Exception:
+            pass
+
+async def get_or_create_exercise(name: str, muscle_group: str):
+    async with connect_db() as db:
+        cur = await db.execute(
+            "SELECT id FROM exercises WHERE LOWER(name)=LOWER(?)",
+            (name,),
+        )
+        row = await cur.fetchone()
+        if row:
+            return row[0]
+        await db.execute(
+            "INSERT INTO exercises(name, muscle_group) VALUES(?,?)",
+            (name, muscle_group),
+        )
+        await db.commit()
+        cur = await db.execute("SELECT last_insert_rowid()")
+        return (await cur.fetchone())[0]
+
+async def list_day_exercises(user_id: int, day_index: int):
+    async with connect_db() as db:
+        cur = await db.execute(
+            """
+            SELECT e.id, e.name
+            FROM user_exercises ue
+            JOIN exercises e ON e.id = ue.exercise_id
+            WHERE ue.user_id=? AND ue.day_index=?
+            ORDER BY e.name
+            """,
+            (user_id, day_index),
+        )
+        return await cur.fetchall()
+
+async def set_baseline(user_id: int, day_index: int, exercise_id: int, sets: int, reps: int, weight: float):
+    async with connect_db() as db:
+        await db.execute(
+            """
+            INSERT INTO exercise_baseline(user_id, day_index, exercise_id, sets, reps, weight_kg)
+            VALUES(?,?,?,?,?,?)
+            ON CONFLICT(user_id, day_index, exercise_id)
+            DO UPDATE SET sets=excluded.sets, reps=excluded.reps, weight_kg=excluded.weight_kg
+            """,
+            (user_id, day_index, exercise_id, sets, reps, weight),
+        )
+        await db.commit()
+
+async def set_user_timezone(user_id: int, tz: str):
+    async with connect_db() as db:
+        await db.execute("UPDATE users SET tz=? WHERE id=?", (tz, user_id))
+        await db.commit()
+
+async def add_user_reminder(user_id: int, hour: int, minute: int):
+    async with connect_db() as db:
+        await db.execute(
+            "INSERT INTO user_reminders(user_id, dow, hour, minute) VALUES(?,?,?,?)",
+            (user_id, None, hour, minute),
+        )
+        await db.commit()
+
+async def list_active_days(user_id: int):
+    async with connect_db() as db:
+        cur = await db.execute(
+            "SELECT day_index, label FROM user_days WHERE user_id=? AND is_active=1 ORDER BY day_index",
+            (user_id,),
+        )
+        return await cur.fetchall()
+
+async def get_day_label(user_id: int, day_index: int):
+    async with connect_db() as db:
+        cur = await db.execute(
+            "SELECT label FROM user_days WHERE user_id=? AND day_index=?",
+            (user_id, day_index),
+        )
+        row = await cur.fetchone()
+        return row[0] if row else f"День {day_index}"
+
+async def rename_day(user_id: int, day_index: int, label: str):
+    async with connect_db() as db:
+        await db.execute(
+            "UPDATE user_days SET label=? WHERE user_id=? AND day_index=?",
+            (label, user_id, day_index),
+        )
+        await db.commit()
+
+async def remove_user_exercise(user_id: int, day_index: int, ue_id: int):
+    async with connect_db() as db:
+        await db.execute(
+            "DELETE FROM user_exercises WHERE id=? AND user_id=? AND day_index=?",
+            (ue_id, user_id, day_index),
+        )
+        await db.commit()
+
+async def get_exercise_info(ue_id: int):
+    async with connect_db() as db:
+        cur = await db.execute(
+            "SELECT exercise_id, e.name FROM user_exercises ue JOIN exercises e ON e.id=ue.exercise_id WHERE ue.id=?",
+            (ue_id,),
+        )
+        return await cur.fetchone()
+
+async def get_baseline(user_id: int, day_index: int, exercise_id: int):
+    async with connect_db() as db:
+        cur = await db.execute(
+            "SELECT sets, reps, weight_kg FROM exercise_baseline WHERE user_id=? AND day_index=? AND exercise_id=?",
+            (user_id, day_index, exercise_id),
+        )
+        return await cur.fetchone()
+
+async def get_last_session_summary(user_id: int, day_index: int, ue_id: int, today: str):
+    async with connect_db() as db:
+        cur = await db.execute(
+            "SELECT id FROM sessions WHERE user_id=? AND day_index=? AND date<? ORDER BY date DESC LIMIT 1",
+            (user_id, day_index, today),
+        )
+        row = await cur.fetchone()
+        if not row:
+            return None
+        session_id = row[0]
+        cur = await db.execute(
+            "SELECT reps, weight_kg FROM sets WHERE session_id=? AND user_exercise_id=? ORDER BY set_no DESC LIMIT 1",
+            (session_id, ue_id),
+        )
+        last = await cur.fetchone()
+        if not last:
+            return None
+        reps, weight = last
+        cur = await db.execute(
+            "SELECT COUNT(*) FROM sets WHERE session_id=? AND user_exercise_id=?",
+            (session_id, ue_id),
+        )
+        count = (await cur.fetchone())[0]
+        return count, reps, weight
+
+async def fetch_exercise_sets(session_id: int, ue_id: int):
+    async with connect_db() as db:
+        cur = await db.execute(
+            "SELECT set_no, reps, weight_kg, is_warmup FROM sets WHERE session_id=? AND user_exercise_id=? ORDER BY set_no",
+            (session_id, ue_id),
+        )
+        return await cur.fetchall()
+
+async def add_set(session_id: int, user_ex_id: int, reps: int = 0, weight: float = 0.0):
+    async with connect_db() as db:
+        cur = await db.execute(
+            "SELECT COALESCE(MAX(set_no),0)+1 FROM sets WHERE session_id=? AND user_exercise_id=?",
+            (session_id, user_ex_id),
+        )
+        next_no = (await cur.fetchone())[0]
+        await db.execute(
+            "INSERT INTO sets(session_id, user_exercise_id, set_no, reps, weight_kg, is_warmup) VALUES(?,?,?,?,?,0)",
+            (session_id, user_ex_id, next_no, reps, weight),
+        )
+        await db.commit()
+
+async def remove_last_set(user_ex_id: int, session_id: int):
+    async with connect_db() as db:
+        cur = await db.execute(
+            "SELECT id FROM sets WHERE session_id=? AND user_exercise_id=? ORDER BY set_no DESC LIMIT 1",
+            (session_id, user_ex_id),
+        )
+        row = await cur.fetchone()
+        if row:
+            await db.execute("DELETE FROM sets WHERE id=?", (row[0],))
+            await db.commit()
+
+async def toggle_last_set_warmup(user_ex_id: int, session_id: int):
+    async with connect_db() as db:
+        cur = await db.execute(
+            "SELECT id, is_warmup FROM sets WHERE session_id=? AND user_exercise_id=? ORDER BY set_no DESC LIMIT 1",
+            (session_id, user_ex_id),
+        )
+        row = await cur.fetchone()
+        if not row:
+            return
+        set_id, is_warmup = row
+        new_val = 0 if is_warmup else 1
+        await db.execute("UPDATE sets SET is_warmup=? WHERE id=?", (new_val, set_id))
+        await db.commit()
+
+async def get_weight_step(user_id: int) -> float:
+    async with connect_db() as db:
+        cur = await db.execute(
+            "SELECT weight_step FROM user_prefs WHERE user_id=?",
+            (user_id,),
+        )
+        row = await cur.fetchone()
+        return row[0] if row and row[0] is not None else 0.5
+
+async def set_weight_step(user_id: int, step: float):
+    async with connect_db() as db:
+        await db.execute(
+            """
+            INSERT INTO user_prefs(user_id, weight_step) VALUES(?,?)
+            ON CONFLICT(user_id) DO UPDATE SET weight_step=excluded.weight_step
+            """,
+            (user_id, step),
+        )
         await db.commit()
