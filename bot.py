@@ -52,6 +52,7 @@ from db import (
     list_exercises_by_group,
     list_user_exercise_ids,
     add_user_exercise,
+    toggle_user_exercise,
     get_or_create_exercise,
     list_day_exercises,
     set_baseline,
@@ -139,12 +140,19 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=main_menu_kb(days, SUPPORT_DEEPLINK)
     )
 
-async def show_exercises(q, user_id: int, day: int, group: str):
+async def show_exercises(q, user_id: int, day: int, group: str, context):
     ex_rows = await list_exercises_by_group(group)
+    prefilled = context.user_data.setdefault("prefilled_groups", set())
+    key = (day, group)
+    if key not in prefilled:
+        for ex_id, _ in ex_rows:
+            await add_user_exercise(user_id, day, ex_id)
+        prefilled.add(key)
     selected_ids = set(await list_user_exercise_ids(user_id, day, group))
-    await q.edit_message_text(
+    await safe_edit_message(
+        q,
         day_exercises_text(day, group),
-        reply_markup=exercises_kb(day, group, ex_rows, selected_ids),
+        exercises_kb(day, group, ex_rows, selected_ids),
     )
 
 async def finish_day(q, context, user_id: int, day: int):
@@ -182,8 +190,8 @@ async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAUL
         code = data.split(":")[2]
         if code == "help":
             hint = (
-                "Full body — за одну тренировку тренируешь всё тело.\n"
-                "Split — разные группы мышц в разные дни.\n"
+                "Фулбоди — за одну тренировку тренируешь всё тело.\n"
+                "Сплит — разные группы мышц в разные дни.\n"
                 "Если не уверен, выбери «Другое»."
             )
             kb = InlineKeyboardMarkup(
@@ -229,7 +237,7 @@ async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAUL
             else:
                 context.user_data["group_list"] = groups
                 context.user_data["group_idx"] = 0
-                await show_exercises(q, user_id, day, groups[0])
+                await show_exercises(q, user_id, day, groups[0], context)
             return
         if parts[3] == "skip":
             await advance_day(q, context, user_id, day + 1)
@@ -238,9 +246,9 @@ async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAUL
             action = parts[4]
             if action == "add":
                 ex_id = int(parts[5])
-                await add_user_exercise(user_id, day, ex_id)
+                await toggle_user_exercise(user_id, day, ex_id)
                 group = context.user_data["group_list"][context.user_data["group_idx"]]
-                await show_exercises(q, user_id, day, group)
+                await show_exercises(q, user_id, day, group, context)
                 return
             if action == "custom":
                 group = parts[5]
@@ -252,7 +260,7 @@ async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAUL
                 idx = context.user_data.get("group_idx", 0) + 1
                 if idx < len(groups):
                     context.user_data["group_idx"] = idx
-                    await show_exercises(q, user_id, day, groups[idx])
+                    await show_exercises(q, user_id, day, groups[idx], context)
                 else:
                     exs = await list_day_exercises(user_id, day)
                     if exs:
