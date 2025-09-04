@@ -57,8 +57,8 @@ def subscription_settings_kb(join_url: str):
 
 def system_kb():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("Full body", callback_data="wiz:sys:fullbody")],
-        [InlineKeyboardButton("Split", callback_data="wiz:sys:split")],
+        [InlineKeyboardButton("Фулбоди", callback_data="wiz:sys:fullbody")],
+        [InlineKeyboardButton("Сплит", callback_data="wiz:sys:split")],
         [InlineKeyboardButton("Другое", callback_data="wiz:sys:other")],
         [InlineKeyboardButton("❓Не знаю", callback_data="wiz:sys:help")],
     ])
@@ -73,6 +73,9 @@ MG_NAMES = {
     "chest": "Грудь",
     "back": "Спина",
     "legs": "Ноги",
+    "shoulders": "Плечи",
+    "biceps": "Бицепс",
+    "triceps": "Трицепс",
     "other": "Другое",
 }
 
@@ -90,7 +93,7 @@ def muscle_groups_kb(day_index: int, selected: set[str]):
 def exercises_kb(day_index: int, group: str, ex_rows: list[tuple[int,str]], selected: set[int]):
     rows = []
     for ex_id, name in ex_rows:
-        mark = "✅" if ex_id in selected else "⬜"
+        mark = "✅" if ex_id in selected else "❌"
         rows.append([InlineKeyboardButton(f"{mark} {name}", callback_data=f"wiz:day:{day_index}:ex:add:{ex_id}")])
     rows.append([InlineKeyboardButton("📝 Свой вариант", callback_data=f"wiz:day:{day_index}:ex:custom:{group}")])
     rows.append([InlineKeyboardButton("✅ Готово", callback_data=f"wiz:day:{day_index}:ex:done")])

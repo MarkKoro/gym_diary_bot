@@ -129,6 +129,33 @@ async def init_db():
             pass
         await db.commit()
 
+        default_exercises = [
+            ("Жим лёжа", "chest"),
+            ("Жим гантелей", "chest"),
+            ("Отжимания", "chest"),
+            ("Тяга в наклоне", "back"),
+            ("Подтягивания", "back"),
+            ("Становая тяга", "back"),
+            ("Присед", "legs"),
+            ("Выпады", "legs"),
+            ("Румынская тяга", "legs"),
+            ("Жим над головой", "shoulders"),
+            ("Подъём гантелей в стороны", "shoulders"),
+            ("Подъём на бицепс", "biceps"),
+            ("Молотки", "biceps"),
+            ("Жим узким хватом", "triceps"),
+            ("Разгибание на блоке", "triceps"),
+        ]
+        for name, mg in default_exercises:
+            try:
+                await db.execute(
+                    "INSERT INTO exercises(name, muscle_group) VALUES(?,?)",
+                    (name, mg),
+                )
+            except Exception:
+                pass
+        await db.commit()
+
 async def get_or_create_user(tg_id: int, username: str|None):
     async with connect_db() as db:
         cur = await db.execute("SELECT id, trial_until FROM users WHERE tg_id=?", (tg_id,))
@@ -286,6 +313,23 @@ async def add_user_exercise(user_id: int, day_index: int, exercise_id: int):
             await db.commit()
         except Exception:
             pass
+
+async def toggle_user_exercise(user_id: int, day_index: int, exercise_id: int):
+    async with connect_db() as db:
+        cur = await db.execute(
+            "SELECT id FROM user_exercises WHERE user_id=? AND day_index=? AND exercise_id=?",
+            (user_id, day_index, exercise_id),
+        )
+        row = await cur.fetchone()
+        if row:
+            await db.execute("DELETE FROM user_exercises WHERE id=?", (row[0],))
+        else:
+            await db.execute(
+                "INSERT INTO user_exercises(user_id, exercise_id, day_index) VALUES(?,?,?)",
+                (user_id, exercise_id, day_index),
+            )
+        await db.commit()
+        return row is None
 
 async def get_or_create_exercise(name: str, muscle_group: str):
     async with connect_db() as db:
