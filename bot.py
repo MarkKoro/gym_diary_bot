@@ -1,5 +1,4 @@
 import asyncio
-import re
 from datetime import datetime, time
 from zoneinfo import ZoneInfo
 from collections import defaultdict
@@ -98,6 +97,9 @@ def day_exercises_text(i: int, group: str) -> str:
 def render_day_text(i: int, label: str) -> str:
     return f"День {i} — {label}\nУпражнения:"
 
+def baseline_text(name: str, sets: int, reps: int, weight: float) -> str:
+    return f"{name} — {sets}x{reps} @ {weight:.1f} кг"
+
 async def render_exercise_view(user_id: int, day: int, ue_id: int):
     ex_id, name = await get_exercise_info(ue_id)
     today = datetime.utcnow().strftime("%Y-%m-%d")
@@ -186,6 +188,9 @@ async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAUL
                 reply_markup=subscription_kb(JOIN_URL),
             )
         return
+    if data == "wiz:sys:back":
+        await q.edit_message_text("Как ты тренируешься?", reply_markup=system_kb())
+        return
     if data.startswith("wiz:sys:"):
         code = data.split(":")[2]
         if code == "help":
@@ -194,9 +199,10 @@ async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAUL
                 "Сплит — разные группы мышц в разные дни.\n"
                 "Если не уверен, выбери «Другое»."
             )
-            kb = InlineKeyboardMarkup(
-                [[InlineKeyboardButton("Продолжить", callback_data="wiz:sys:other")]]
-            )
+            kb = InlineKeyboardMarkup([
+                [InlineKeyboardButton("Продолжить", callback_data="menu:root")],
+                [InlineKeyboardButton("⬅︎ Назад", callback_data="wiz:sys:back")],
+            ])
             await q.edit_message_text(hint, reply_markup=kb)
             return
         await update_user_system(user_id, code)
@@ -204,6 +210,9 @@ async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAUL
             "Сколько тренировок планируешь в неделю?",
             reply_markup=days_kb(),
         )
+        return
+    if data == "wiz:days:back":
+        await q.edit_message_text("Как ты тренируешься?", reply_markup=system_kb())
         return
     if data.startswith("wiz:days:"):
         n = int(data.split(":")[2])
@@ -215,9 +224,66 @@ async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAUL
             reply_markup=muscle_groups_kb(1, set()),
         )
         return
+    if data.startswith("wiz:base:"):
+        parts = data.split(":")
+        action = parts[2]
+        day = context.user_data.get("baseline_day")
+        idx = context.user_data.get("baseline_idx", 0)
+        ex_id, name = context.user_data["baseline_list"][idx]
+        values = context.user_data.setdefault("baseline_values", {}).setdefault(ex_id, [0, 0, 0.0])
+        if action == "inc":
+            field = parts[3]
+            delta = float(parts[4])
+            if field == "sets":
+                values[0] = max(0, values[0] + int(delta))
+            elif field == "reps":
+                values[1] = max(0, values[1] + int(delta))
+            elif field == "kg":
+                values[2] = max(0.0, values[2] + delta)
+            await safe_edit_message(q, baseline_text(name, *values), baseline_kb(day, *values))
+            return
+        if action == "ready":
+            await set_baseline(user_id, day, ex_id, values[0], values[1], values[2])
+            idx += 1
+            if idx < len(context.user_data["baseline_list"]):
+                context.user_data["baseline_idx"] = idx
+                ex_id, name = context.user_data["baseline_list"][idx]
+                values = context.user_data.setdefault("baseline_values", {}).setdefault(ex_id, [0, 0, 0.0])
+                await safe_edit_message(q, baseline_text(name, *values), baseline_kb(day, *values))
+            else:
+                context.user_data.pop("baseline_day", None)
+                context.user_data.pop("baseline_list", None)
+                context.user_data.pop("baseline_idx", None)
+                context.user_data.pop("baseline_values", None)
+                await finish_day(q, context, user_id, day)
+            return
+        if action == "back":
+            if idx > 0:
+                idx -= 1
+                context.user_data["baseline_idx"] = idx
+                ex_id, name = context.user_data["baseline_list"][idx]
+                values = context.user_data.setdefault("baseline_values", {}).setdefault(ex_id, [0, 0, 0.0])
+                await safe_edit_message(q, baseline_text(name, *values), baseline_kb(day, *values))
+            else:
+                context.user_data.pop("baseline_day", None)
+                context.user_data.pop("baseline_list", None)
+                context.user_data.pop("baseline_idx", None)
+                context.user_data.pop("baseline_values", None)
+                selected = context.user_data.setdefault("day_groups", {}).get(day, set())
+                await q.edit_message_text(
+                    day_groups_text(day),
+                    reply_markup=muscle_groups_kb(day, selected),
+                )
+            return
     if data.startswith("wiz:day:"):
         parts = data.split(":")
         day = int(parts[2])
+        if parts[3] == "back":
+            await q.edit_message_text(
+                "Сколько тренировок планируешь в неделю?",
+                reply_markup=days_kb(),
+            )
+            return
         if parts[3] == "mg":
             group = parts[4]
             selected = context.user_data.setdefault("day_groups", {}).setdefault(day, set())
@@ -255,6 +321,13 @@ async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAUL
                 context.user_data["awaiting_custom"] = (day, group)
                 await q.edit_message_text("Напиши название упражнения:")
                 return
+            if action == "back":
+                selected = context.user_data.setdefault("day_groups", {}).get(day, set())
+                await q.edit_message_text(
+                    day_groups_text(day),
+                    reply_markup=muscle_groups_kb(day, selected),
+                )
+                return
             if action == "done":
                 groups = context.user_data.get("group_list", [])
                 idx = context.user_data.get("group_idx", 0) + 1
@@ -267,19 +340,21 @@ async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAUL
                         context.user_data["baseline_day"] = day
                         context.user_data["baseline_list"] = exs
                         context.user_data["baseline_idx"] = 0
-                        context.user_data["awaiting_baseline"] = True
+                        context.user_data["baseline_values"] = {}
+                        ex_id, name = exs[0]
+                        vals = context.user_data["baseline_values"].setdefault(ex_id, [0, 0, 0.0])
                         await q.edit_message_text(
-                            f"{exs[0][1]} — введи формат: сеты x повторы @ вес_кг, пример: 3x6 @ 60",
-                            reply_markup=baseline_kb(day),
+                            baseline_text(name, *vals),
+                            reply_markup=baseline_kb(day, *vals),
                         )
                     else:
                         await finish_day(q, context, user_id, day)
                 return
         if parts[3] == "baseline" and parts[4] == "skip_all":
-            context.user_data.pop("awaiting_baseline", None)
             context.user_data.pop("baseline_list", None)
             context.user_data.pop("baseline_idx", None)
             context.user_data.pop("baseline_day", None)
+            context.user_data.pop("baseline_values", None)
             await finish_day(q, context, user_id, day)
             return
         if parts[3] == "next":
@@ -333,6 +408,10 @@ async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAUL
                 "Настройка завершена.",
                 reply_markup=main_menu_kb(days, SUPPORT_DEEPLINK),
             )
+        return
+    if data == "wiz:reminders:back" or data == "wiz:tz:back" or data == "wiz:remind:back":
+        days = await list_active_days(user_id)
+        await q.edit_message_text("Главное меню:", reply_markup=main_menu_kb(days, SUPPORT_DEEPLINK))
         return
     if data.startswith("wiz:tz:"):
         action = data.split(":")[2]
@@ -392,40 +471,6 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(
                 day_exercises_text(day, group),
                 reply_markup=exercises_kb(day, group, ex_rows, selected_ids),
-            )
-        return
-    if context.user_data.get("awaiting_baseline"):
-        txt = update.message.text.strip().replace(",", ".")
-        m = re.match(r"^(\d+)\s*x\s*(\d+)\s*@\s*([\d.]+)$", txt)
-        day = context.user_data.get("baseline_day")
-        ex_id, name = context.user_data["baseline_list"][context.user_data["baseline_idx"]]
-        u = update.effective_user
-        user_id = await get_or_create_user(u.id, u.username)
-        if not m:
-            await update.message.reply_text("Формат: 3x6 @ 60")
-            await update.message.reply_text(
-                f"{name} — введи формат: сеты x повторы @ вес_кг, пример: 3x6 @ 60",
-                reply_markup=baseline_kb(day),
-            )
-            return
-        sets, reps, weight = int(m.group(1)), int(m.group(2)), float(m.group(3))
-        await set_baseline(user_id, day, ex_id, sets, reps, weight)
-        idx = context.user_data["baseline_idx"] + 1
-        if idx < len(context.user_data["baseline_list"]):
-            context.user_data["baseline_idx"] = idx
-            next_name = context.user_data["baseline_list"][idx][1]
-            await update.message.reply_text(
-                f"{next_name} — введи формат: сеты x повторы @ вес_кг, пример: 3x6 @ 60",
-                reply_markup=baseline_kb(day),
-            )
-        else:
-            context.user_data.pop("awaiting_baseline", None)
-            context.user_data.pop("baseline_list", None)
-            context.user_data.pop("baseline_idx", None)
-            context.user_data.pop("baseline_day", None)
-            await update.message.reply_text(
-                f"День {day} сохранён. Перейти к Дню {day + 1}?",
-                reply_markup=day_done_kb(day),
             )
         return
     if context.user_data.get("awaiting_tz"):

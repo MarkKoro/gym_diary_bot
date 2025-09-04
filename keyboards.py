@@ -61,12 +61,14 @@ def system_kb():
         [InlineKeyboardButton("Сплит", callback_data="wiz:sys:split")],
         [InlineKeyboardButton("Другое", callback_data="wiz:sys:other")],
         [InlineKeyboardButton("❓Не знаю", callback_data="wiz:sys:help")],
+        [InlineKeyboardButton("⬅︎ Назад", callback_data="menu:root")],
     ])
 
 def days_kb():
     rows = []
     for i in range(1, 8):
         rows.append([InlineKeyboardButton(str(i), callback_data=f"wiz:days:{i}")])
+    rows.append([InlineKeyboardButton("⬅︎ Назад", callback_data="wiz:days:back")])
     return InlineKeyboardMarkup(rows)
 
 MG_NAMES = {
@@ -88,21 +90,39 @@ def muscle_groups_kb(day_index: int, selected: set[str]):
         InlineKeyboardButton("▶︎ Далее", callback_data=f"wiz:day:{day_index}:groups:next"),
         InlineKeyboardButton("⏭ Пропустить день", callback_data=f"wiz:day:{day_index}:skip"),
     ])
+    rows.append([InlineKeyboardButton("⬅︎ Назад", callback_data=f"wiz:day:{day_index}:back")])
     return InlineKeyboardMarkup(rows)
 
 def exercises_kb(day_index: int, group: str, ex_rows: list[tuple[int,str]], selected: set[int]):
     rows = []
     for ex_id, name in ex_rows:
-        mark = "✅" if ex_id in selected else "❌"
+        mark = "✅" if ex_id in selected else "⬜"
         rows.append([InlineKeyboardButton(f"{mark} {name}", callback_data=f"wiz:day:{day_index}:ex:add:{ex_id}")])
     rows.append([InlineKeyboardButton("📝 Свой вариант", callback_data=f"wiz:day:{day_index}:ex:custom:{group}")])
-    rows.append([InlineKeyboardButton("✅ Готово", callback_data=f"wiz:day:{day_index}:ex:done")])
+    rows.append([
+        InlineKeyboardButton("⬅︎ Назад", callback_data=f"wiz:day:{day_index}:ex:back"),
+        InlineKeyboardButton("✅ Готово", callback_data=f"wiz:day:{day_index}:ex:done"),
+    ])
     return InlineKeyboardMarkup(rows)
 
-def baseline_kb(day_index: int):
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("⏭ Пропустить всё", callback_data=f"wiz:day:{day_index}:baseline:skip_all")]
-    ])
+def baseline_kb(day_index: int, sets: int, reps: int, weight: float):
+    def btn(label: str, cb: str):
+        return InlineKeyboardButton(label, callback_data=cb)
+    rows = [
+        [btn("＋1 сет", "wiz:base:inc:sets:1"), btn("−1 сет", "wiz:base:inc:sets:-1")],
+        [btn("＋1 повт", "wiz:base:inc:reps:1"), btn("−1 повт", "wiz:base:inc:reps:-1")],
+        [
+            btn("＋1 кг", "wiz:base:inc:kg:1"),
+            btn("＋5 кг", "wiz:base:inc:kg:5"),
+            btn("＋10 кг", "wiz:base:inc:kg:10"),
+            btn("−1 кг", "wiz:base:inc:kg:-1"),
+            btn("−5 кг", "wiz:base:inc:kg:-5"),
+            btn("−10 кг", "wiz:base:inc:kg:-10"),
+        ],
+        [btn("✅ Готово", "wiz:base:ready"), btn("⬅︎ Назад", "wiz:base:back")],
+        [btn("⏭ Пропустить всё", f"wiz:day:{day_index}:baseline:skip_all")],
+    ]
+    return InlineKeyboardMarkup(rows)
 
 def day_done_kb(day_index: int):
     return InlineKeyboardMarkup([
@@ -115,13 +135,15 @@ def reminders_kb():
         [
             InlineKeyboardButton("Да", callback_data="wiz:reminders:yes"),
             InlineKeyboardButton("Нет", callback_data="wiz:reminders:no"),
-        ]
+        ],
+        [InlineKeyboardButton("⬅︎ Назад", callback_data="wiz:reminders:back")],
     ])
 
 def timezone_kb(auto_tz: str):
     return InlineKeyboardMarkup([
         [InlineKeyboardButton(f"Авто: {auto_tz}", callback_data="wiz:tz:auto")],
         [InlineKeyboardButton("Изменить", callback_data="wiz:tz:change")],
+        [InlineKeyboardButton("⬅︎ Назад", callback_data="wiz:tz:back")],
     ])
 
 def reminder_time_kb():
@@ -129,6 +151,7 @@ def reminder_time_kb():
     for h in range(6, 23):
         t = f"{h:02d}:00"
         rows.append([InlineKeyboardButton(t, callback_data=f"wiz:remind:{t}")])
+    rows.append([InlineKeyboardButton("⬅︎ Назад", callback_data="wiz:remind:back")])
     return InlineKeyboardMarkup(rows)
 
 def day_kb(day_index: int, ex_rows: list[tuple[int, str]]):
