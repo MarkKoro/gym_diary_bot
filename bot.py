@@ -135,6 +135,14 @@ def render_day_text(i: int, label: str) -> str:
 def baseline_text(name: str, sets: int, reps: int, weight: float) -> str:
     return f"{name} — {sets}x{reps} @ {weight:.1f} кг"
 
+def render_baseline_progress(done: list[str], name: str, sets: int, reps: int, weight: float) -> str:
+    lines = list(done)
+    if name:
+        if lines:
+            lines.append("────────")
+        lines.append(baseline_text(name, sets, reps, weight))
+    return "\n".join(lines)
+
 async def render_exercise_view(user_id: int, day: int, ue_id: int):
     ex_id, name = await get_exercise_info(ue_id)
     today = datetime.utcnow().strftime("%Y-%m-%d")
@@ -183,10 +191,13 @@ async def show_exercises(q, user_id: int, day: int, group: str, context):
         exercises_kb(day, group, ex_rows, selected_ids),
     )
 
-async def finish_day(q, context, user_id: int, day: int):
+async def finish_day(q, context, user_id: int, day: int, summary: str | None = None):
     context.user_data["current_day"] = day
+    text = f"День {day} сохранён. Перейти к Дню {day + 1}?"
+    if summary:
+        text = summary + "\n────────\n" + text
     await q.edit_message_text(
-        f"День {day} сохранён. Перейти к Дню {day + 1}?",
+        text,
         reply_markup=day_done_kb(day),
     )
 
@@ -258,7 +269,12 @@ async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAUL
         day = context.user_data.get("baseline_day")
         idx = context.user_data.get("baseline_idx", 0)
         ex_id, name = context.user_data["baseline_list"][idx]
-        values = context.user_data.setdefault("baseline_values", {}).setdefault(ex_id, [0, 0, 0.0])
+        vals_map = context.user_data.setdefault("baseline_values", {})
+        if ex_id not in vals_map:
+            existing = await get_baseline(user_id, day, ex_id)
+            vals_map[ex_id] = list(existing) if existing else [0, 0, 0.0]
+        values = vals_map[ex_id]
+        done = context.user_data.setdefault("baseline_done", [])
         if action == "inc":
             field = parts[3]
             delta = float(parts[4])
@@ -268,49 +284,63 @@ async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAUL
                 values[1] = max(0, values[1] + int(delta))
             elif field == "kg":
                 values[2] = max(0.0, values[2] + delta)
-            await safe_edit_message(q, baseline_text(name, *values), baseline_kb(day, *values))
+            await safe_edit_message(q, render_baseline_progress(done, name, *values), baseline_kb(day, *values))
             return
         if action == "ready":
             await set_baseline(user_id, day, ex_id, values[0], values[1], values[2])
+            done.append(f"{baseline_text(name, *values)} ✅")
             idx += 1
             if idx < len(context.user_data["baseline_list"]):
                 context.user_data["baseline_idx"] = idx
                 ex_id, name = context.user_data["baseline_list"][idx]
-                values = context.user_data.setdefault("baseline_values", {}).setdefault(ex_id, [0, 0, 0.0])
-                await safe_edit_message(q, baseline_text(name, *values), baseline_kb(day, *values))
+                if ex_id not in vals_map:
+                    existing = await get_baseline(user_id, day, ex_id)
+                    vals_map[ex_id] = list(existing) if existing else [0, 0, 0.0]
+                values = vals_map[ex_id]
+                await safe_edit_message(q, render_baseline_progress(done, name, *values), baseline_kb(day, *values))
             else:
+                summary = "\n".join(done)
                 context.user_data.pop("baseline_day", None)
                 context.user_data.pop("baseline_list", None)
                 context.user_data.pop("baseline_idx", None)
                 context.user_data.pop("baseline_values", None)
-                await finish_day(q, context, user_id, day)
+                context.user_data.pop("baseline_done", None)
+                await finish_day(q, context, user_id, day, summary)
             return
         if action == "skip":
             idx += 1
             if idx < len(context.user_data["baseline_list"]):
                 context.user_data["baseline_idx"] = idx
                 ex_id, name = context.user_data["baseline_list"][idx]
-                values = context.user_data.setdefault("baseline_values", {}).setdefault(ex_id, [0, 0, 0.0])
-                await safe_edit_message(q, baseline_text(name, *values), baseline_kb(day, *values))
+                if ex_id not in vals_map:
+                    existing = await get_baseline(user_id, day, ex_id)
+                    vals_map[ex_id] = list(existing) if existing else [0, 0, 0.0]
+                values = vals_map[ex_id]
+                await safe_edit_message(q, render_baseline_progress(done, name, *values), baseline_kb(day, *values))
             else:
+                summary = "\n".join(done)
                 context.user_data.pop("baseline_day", None)
                 context.user_data.pop("baseline_list", None)
                 context.user_data.pop("baseline_idx", None)
                 context.user_data.pop("baseline_values", None)
-                await finish_day(q, context, user_id, day)
+                context.user_data.pop("baseline_done", None)
+                await finish_day(q, context, user_id, day, summary)
             return
         if action == "back":
             if idx > 0:
                 idx -= 1
                 context.user_data["baseline_idx"] = idx
+                if done:
+                    done.pop()
                 ex_id, name = context.user_data["baseline_list"][idx]
-                values = context.user_data.setdefault("baseline_values", {}).setdefault(ex_id, [0, 0, 0.0])
-                await safe_edit_message(q, baseline_text(name, *values), baseline_kb(day, *values))
+                values = vals_map[ex_id]
+                await safe_edit_message(q, render_baseline_progress(done, name, *values), baseline_kb(day, *values))
             else:
                 context.user_data.pop("baseline_day", None)
                 context.user_data.pop("baseline_list", None)
                 context.user_data.pop("baseline_idx", None)
                 context.user_data.pop("baseline_values", None)
+                context.user_data.pop("baseline_done", None)
                 selected = context.user_data.setdefault("day_groups", {}).get(day, set())
                 custom = await get_custom_groups(user_id, context)
                 await q.edit_message_text(
@@ -400,10 +430,14 @@ async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAUL
                         context.user_data["baseline_list"] = exs
                         context.user_data["baseline_idx"] = 0
                         context.user_data["baseline_values"] = {}
+                        context.user_data["baseline_done"] = []
                         ex_id, name = exs[0]
-                        vals = context.user_data["baseline_values"].setdefault(ex_id, [0, 0, 0.0])
+                        vals_map = context.user_data["baseline_values"]
+                        existing = await get_baseline(user_id, day, ex_id)
+                        vals_map[ex_id] = list(existing) if existing else [0, 0, 0.0]
+                        vals = vals_map[ex_id]
                         await q.edit_message_text(
-                            baseline_text(name, *vals),
+                            render_baseline_progress([], name, *vals),
                             reply_markup=baseline_kb(day, *vals),
                         )
                     else:
@@ -414,6 +448,7 @@ async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAUL
             context.user_data.pop("baseline_idx", None)
             context.user_data.pop("baseline_day", None)
             context.user_data.pop("baseline_values", None)
+            context.user_data.pop("baseline_done", None)
             await finish_day(q, context, user_id, day)
             return
         if parts[3] == "next":

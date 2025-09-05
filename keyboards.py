@@ -109,14 +109,21 @@ def baseline_kb(day_index: int, sets: int, reps: int, weight: float):
         return InlineKeyboardButton(label, callback_data=cb)
     rows = [
         [btn("＋1 сет", "wiz:base:inc:sets:1"), btn("−1 сет", "wiz:base:inc:sets:-1")],
+        [btn("＋5 сетов", "wiz:base:inc:sets:5"), btn("−5 сетов", "wiz:base:inc:sets:-5")],
         [btn("＋1 повт", "wiz:base:inc:reps:1"), btn("−1 повт", "wiz:base:inc:reps:-1")],
         [
+            btn("＋0.5 кг", "wiz:base:inc:kg:0.5"),
             btn("＋1 кг", "wiz:base:inc:kg:1"),
             btn("＋5 кг", "wiz:base:inc:kg:5"),
             btn("＋10 кг", "wiz:base:inc:kg:10"),
+            btn("＋25 кг", "wiz:base:inc:kg:25"),
+        ],
+        [
+            btn("−0.5 кг", "wiz:base:inc:kg:-0.5"),
             btn("−1 кг", "wiz:base:inc:kg:-1"),
             btn("−5 кг", "wiz:base:inc:kg:-5"),
             btn("−10 кг", "wiz:base:inc:kg:-10"),
+            btn("−25 кг", "wiz:base:inc:kg:-25"),
         ],
         [btn("✅ Готово", "wiz:base:ready"), btn("⬅︎ Назад", "wiz:base:back")],
         [btn("⏭ Пропустить это упражнение", "wiz:base:skip")],
