@@ -21,7 +21,7 @@ async def init_db():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             tg_id INTEGER UNIQUE,
             username TEXT,
-            tz TEXT DEFAULT 'Asia/Jerusalem',
+            tz TEXT DEFAULT 'UTC',
             created_at TEXT,
             trial_until TEXT,
             plan TEXT DEFAULT 'trial',

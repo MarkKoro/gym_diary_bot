@@ -6,7 +6,6 @@ def main_menu_kb(days: list[tuple[int, str]], support_url: str):
         rows.append([InlineKeyboardButton(f"День {idx} — {label}", callback_data=f"day:open:{idx}")])
     rows.append([InlineKeyboardButton("⚙︎ Настройки", callback_data="menu:settings")])
     rows.append([InlineKeyboardButton("📩 Техподдержка", url=support_url)])
-    rows.append([InlineKeyboardButton("ℹ️ Помощь", callback_data="menu:help")])
     return InlineKeyboardMarkup(rows)
 
 def subscription_kb(join_url: str):
@@ -48,22 +47,13 @@ def weight_step_kb(current: float):
     rows.append([InlineKeyboardButton("⬅︎ Назад", callback_data="menu:settings")])
     return InlineKeyboardMarkup(rows)
 
-def subscription_settings_kb(join_url: str):
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("📢 Канал", url=join_url)],
-        [InlineKeyboardButton("✅ Проверить", callback_data="set:subscription:check")],
-        [InlineKeyboardButton("⬅︎ Назад", callback_data="menu:settings")],
-    ])
-
-def system_kb(show_back: bool = True):
+def system_kb():
     rows = [
         [InlineKeyboardButton("Фулбоди", callback_data="wiz:sys:fullbody")],
         [InlineKeyboardButton("Сплит", callback_data="wiz:sys:split")],
         [InlineKeyboardButton("Другое", callback_data="wiz:sys:other")],
         [InlineKeyboardButton("❓Не знаю", callback_data="wiz:sys:help")],
     ]
-    if show_back:
-        rows.append([InlineKeyboardButton("⬅︎ Назад", callback_data="menu:root")])
     return InlineKeyboardMarkup(rows)
 
 def days_kb():
@@ -150,12 +140,47 @@ def reminders_kb():
         [InlineKeyboardButton("⬅︎ Назад", callback_data="wiz:reminders:back")],
     ])
 
-def timezone_kb(auto_tz: str):
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton(f"Авто: {auto_tz}", callback_data="wiz:tz:auto")],
-        [InlineKeyboardButton("Изменить", callback_data="wiz:tz:change")],
-        [InlineKeyboardButton("⬅︎ Назад", callback_data="wiz:tz:back")],
-    ])
+TIMEZONES = [
+    ("Europe/Kaliningrad", "GMT+2 (Калининград)"),
+    ("Europe/Moscow", "GMT+3 (Москва)"),
+    ("Europe/Samara", "GMT+4 (Самара)"),
+    ("Asia/Yekaterinburg", "GMT+5 (Екатеринбург)"),
+    ("Asia/Omsk", "GMT+6 (Омск)"),
+    ("Asia/Krasnoyarsk", "GMT+7 (Красноярск)"),
+    ("Asia/Irkutsk", "GMT+8 (Иркутск)"),
+    ("Asia/Yakutsk", "GMT+9 (Якутск)"),
+    ("Asia/Vladivostok", "GMT+10 (Владивосток)"),
+    ("Asia/Magadan", "GMT+11 (Магадан)"),
+    ("Asia/Kamchatka", "GMT+12 (Камчатка)"),
+    ("Europe/Paris", "GMT+1 (Париж)"),
+    ("UTC", "GMT"),
+    ("Atlantic/Azores", "GMT-1"),
+    ("America/Noronha", "GMT-2"),
+    ("America/Montevideo", "GMT-3"),
+    ("America/Barbados", "GMT-4"),
+    ("America/New_York", "GMT-5"),
+    ("America/Chicago", "GMT-6"),
+    ("America/Denver", "GMT-7"),
+    ("America/Los_Angeles", "GMT-8"),
+    ("America/Anchorage", "GMT-9"),
+    ("Pacific/Honolulu", "GMT-10"),
+]
+
+def tz_select_kb(page: int = 0, per_page: int = 6):
+    start = page * per_page
+    end = start + per_page
+    rows = []
+    for zone, label in TIMEZONES[start:end]:
+        rows.append([InlineKeyboardButton(label, callback_data=f"wiz:tzsel:set:{zone}")])
+    nav = []
+    if start > 0:
+        nav.append(InlineKeyboardButton("⬅︎", callback_data=f"wiz:tzsel:page:{page-1}"))
+    if end < len(TIMEZONES):
+        nav.append(InlineKeyboardButton("➡︎", callback_data=f"wiz:tzsel:page:{page+1}"))
+    if nav:
+        rows.append(nav)
+    rows.append([InlineKeyboardButton("⬅︎ Назад", callback_data="wiz:tzsel:back")])
+    return InlineKeyboardMarkup(rows)
 
 def reminder_time_kb():
     rows = []

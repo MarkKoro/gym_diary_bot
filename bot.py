@@ -1,5 +1,5 @@
 import asyncio
-from datetime import datetime, time
+from datetime import datetime, time, timedelta
 from zoneinfo import ZoneInfo
 from collections import defaultdict
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
@@ -23,8 +23,8 @@ from keyboards import (
     baseline_kb,
     day_done_kb,
     reminders_kb,
-    timezone_kb,
     reminder_time_kb,
+    tz_select_kb,
     MG_NAMES,
     day_kb,
     day_add_group_kb,
@@ -35,7 +35,6 @@ from keyboards import (
     rename_day_kb,
     days_count_kb,
     weight_step_kb,
-    subscription_settings_kb,
 )
 from settings import TG_TOKEN, SUPPORT_DEEPLINK, TG_POOL_SIZE, SUBSCRIPTION_CHAT, JOIN_URL
 from db import (
@@ -89,6 +88,28 @@ async def check_subscription(tg_id: int, bot) -> bool:
     except Exception:
         return False
 
+async def require_subscription(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    now = datetime.utcnow()
+    exp = context.user_data.get("sub_expiry")
+    if exp and exp > now:
+        return True
+    u = update.effective_user
+    if await check_subscription(u.id, context.bot):
+        context.user_data["sub_expiry"] = now + timedelta(days=1)
+        return True
+    kb = subscription_kb(JOIN_URL)
+    if update.callback_query:
+        await update.callback_query.edit_message_text(
+            "Прежде чем получить помощника, подпишись на наш канал, чтобы поддержать нас и быть в курсе новостей.",
+            reply_markup=kb,
+        )
+    else:
+        await update.message.reply_text(
+            "Прежде чем получить помощника, подпишись на наш канал, чтобы поддержать нас и быть в курсе новостей.",
+            reply_markup=kb,
+        )
+    return False
+
 async def get_custom_groups(user_id: int, context) -> dict[str, str]:
     groups = context.user_data.get("custom_groups")
     if groups is None:
@@ -138,17 +159,13 @@ async def reminder_job(context: ContextTypes.DEFAULT_TYPE):
     await context.bot.send_message(context.job.chat_id, "Напоминание о тренировке!")
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await require_subscription(update, context):
+        return
     u = update.effective_user
     user_id = await get_or_create_user(u.id, u.username)
-    if not await check_subscription(u.id, context.bot):
-        await update.message.reply_text(
-            "Прежде чем получить помощника, подпишись на наш канал, чтобы поддержать нас и быть в курсе новостей.",
-            reply_markup=subscription_kb(JOIN_URL),
-        )
-        return
     settings = await fetch_user_settings(user_id)
     if not settings or not settings[0] or not settings[1]:
-        await update.message.reply_text("Как ты тренируешься?", reply_markup=system_kb(False))
+        await update.message.reply_text("Как ты тренируешься?", reply_markup=system_kb())
         return
     days = await list_active_days(user_id)
     await update.message.reply_text(
@@ -191,6 +208,7 @@ async def advance_day(q, context, user_id: int, next_day: int):
 async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAULT_TYPE):
     if data == "wiz:sub:verify":
         if await check_subscription(q.from_user.id, context.bot):
+            context.user_data["sub_expiry"] = datetime.utcnow() + timedelta(days=1)
             await q.edit_message_text("Как ты тренируешься?", reply_markup=system_kb())
         else:
             await q.edit_message_text(
@@ -435,9 +453,8 @@ async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAUL
         )
         return
     if data == "wiz:reminders:yes":
-        auto = "Asia/Jerusalem"
-        context.user_data["tz"] = auto
-        await q.edit_message_text("Твой часовой пояс?", reply_markup=timezone_kb(auto))
+        context.user_data["tz_page"] = 0
+        await q.edit_message_text("Выбери свой часовой пояс:", reply_markup=tz_select_kb(0))
         return
     if data == "wiz:reminders:no":
         if context.user_data.get("from_settings"):
@@ -450,28 +467,51 @@ async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAUL
                 reply_markup=main_menu_kb(days, SUPPORT_DEEPLINK),
             )
         return
-    if data == "wiz:reminders:back" or data == "wiz:tz:back" or data == "wiz:remind:back":
-        days = await list_active_days(user_id)
-        await q.edit_message_text("Главное меню:", reply_markup=main_menu_kb(days, SUPPORT_DEEPLINK))
+    if data == "wiz:reminders:back":
+        if context.user_data.get("from_settings"):
+            context.user_data.pop("from_settings", None)
+            await q.edit_message_text("Настройки:", reply_markup=settings_kb())
+        else:
+            day = context.user_data.get("current_day", 1)
+            await q.edit_message_text(
+                f"День {day} сохранён. Перейти к Дню {day + 1}?",
+                reply_markup=day_done_kb(day),
+            )
         return
-    if data.startswith("wiz:tz:"):
-        action = data.split(":")[2]
-        if action == "auto":
-            tz = context.user_data.get("tz", "Asia/Jerusalem")
+    if data.startswith("wiz:tzsel:"):
+        parts = data.split(":")
+        action = parts[2]
+        if action == "page":
+            page = int(parts[3])
+            context.user_data["tz_page"] = page
+            await q.edit_message_text("Выбери свой часовой пояс:", reply_markup=tz_select_kb(page))
+        elif action == "set":
+            tz = parts[3]
+            context.user_data["tz"] = tz
             await set_user_timezone(user_id, tz)
             await q.edit_message_text(
                 "Во сколько напоминать в дни тренировок? Выбери время (по твоему часовому поясу)",
                 reply_markup=reminder_time_kb(),
             )
-        elif action == "change":
-            context.user_data["awaiting_tz"] = True
-            await q.edit_message_text("Введи часовой пояс в формате Region/City")
+        elif action == "back":
+            if context.user_data.get("from_settings"):
+                context.user_data.pop("from_settings", None)
+                await q.edit_message_text("Настройки:", reply_markup=settings_kb())
+            else:
+                await q.edit_message_text(
+                    "Присылать напоминания перед тренировками?",
+                    reply_markup=reminders_kb(),
+                )
+        return
+    if data == "wiz:remind:back":
+        page = context.user_data.get("tz_page", 0)
+        await q.edit_message_text("Выбери свой часовой пояс:", reply_markup=tz_select_kb(page))
         return
     if data.startswith("wiz:remind:"):
         _, _, hh, mm = data.split(":")
         hour, minute = int(hh), int(mm)
         await add_user_reminder(user_id, hour, minute)
-        tz = context.user_data.get("tz", "Asia/Jerusalem")
+        tz = context.user_data.get("tz", "UTC")
         reminder_time = time(hour, minute, tzinfo=ZoneInfo(tz))
         context.job_queue.run_daily(reminder_job, reminder_time, chat_id=q.message.chat_id)
         if context.user_data.get("from_settings"):
@@ -486,6 +526,8 @@ async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAUL
         return
 
 async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await require_subscription(update, context):
+        return
     if context.user_data.get("awaiting_group_name"):
         day, chat_id, msg_id, mode = context.user_data.pop("awaiting_group_name")
         name = update.message.text.strip()
@@ -543,25 +585,12 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 reply_markup=exercises_kb(day, group, ex_rows, selected_ids),
             )
         return
-    if context.user_data.get("awaiting_tz"):
-        tz = update.message.text.strip()
-        if "/" not in tz:
-            await update.message.reply_text("Формат: Region/City")
-            return
-        u = update.effective_user
-        user_id = await get_or_create_user(u.id, u.username)
-        await set_user_timezone(user_id, tz)
-        context.user_data["tz"] = tz
-        context.user_data.pop("awaiting_tz", None)
-        await update.message.reply_text(
-            "Во сколько напоминать в дни тренировок? Выбери время (по твоему часовому поясу)",
-            reply_markup=reminder_time_kb(),
-        )
-        return
 
 async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
+    if not await require_subscription(update, context):
+        return
     data = q.data
     u = update.effective_user
     user_id = await get_or_create_user(u.id, u.username)
@@ -577,11 +606,6 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if data == "menu:settings":
         await safe_edit_message(q, "Настройки:", reply_markup=settings_kb())
-        return
-
-    if data == "menu:help":
-        days = await list_active_days(user_id)
-        await safe_edit_message(q, "Помощь пока недоступна.", reply_markup=main_menu_kb(days, SUPPORT_DEEPLINK))
         return
 
     parts = data.split(":")
@@ -615,19 +639,11 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         if action == "reminders":
             context.user_data["from_settings"] = True
-            auto = "Asia/Jerusalem"
-            context.user_data["tz"] = auto
-            await safe_edit_message(q, "Твой часовой пояс?", reply_markup=timezone_kb(auto))
+            context.user_data["tz_page"] = 0
+            await safe_edit_message(q, "Выбери свой часовой пояс:", reply_markup=tz_select_kb(0))
             return
         if action == "subscription":
-            if len(parts) == 2:
-                await safe_edit_message(q, "Подпишись на наш канал:", reply_markup=subscription_settings_kb(JOIN_URL))
-            else:
-                subscribed = await check_subscription(u.id, context.bot)
-                if subscribed:
-                    await safe_edit_message(q, "Спасибо, что подписаны!", reply_markup=settings_kb())
-                else:
-                    await safe_edit_message(q, "Похоже, вы не подписаны.", reply_markup=subscription_settings_kb(JOIN_URL))
+            await safe_edit_message(q, "Подписка пока в разработке.", reply_markup=settings_kb())
             return
 
     if parts[0] == "day":
