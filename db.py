@@ -485,6 +485,13 @@ async def get_baseline(user_id: int, day_index: int, exercise_id: int):
             "SELECT sets, reps, weight_kg FROM exercise_baseline WHERE user_id=? AND day_index=? AND exercise_id=?",
             (user_id, day_index, exercise_id),
         )
+        row = await cur.fetchone()
+        if row:
+            return row
+        cur = await db.execute(
+            "SELECT sets, reps, weight_kg FROM exercise_baseline WHERE user_id=? AND exercise_id=? ORDER BY day_index LIMIT 1",
+            (user_id, exercise_id),
+        )
         return await cur.fetchone()
 
 async def get_last_session_summary(user_id: int, day_index: int, ue_id: int, today: str):
