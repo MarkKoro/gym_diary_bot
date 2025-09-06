@@ -109,7 +109,7 @@ def baseline_kb(day_index: int, sets: int, reps: int, weight: float):
         return InlineKeyboardButton(label, callback_data=cb)
     rows = [
         [btn("＋1 сет", "wiz:base:inc:sets:1"), btn("−1 сет", "wiz:base:inc:sets:-1")],
-        [btn("＋5 сетов", "wiz:base:inc:sets:5"), btn("−5 сетов", "wiz:base:inc:sets:-5")],
+        [btn("＋5 повт", "wiz:base:inc:reps:5"), btn("−5 повт", "wiz:base:inc:reps:-5")],
         [btn("＋1 повт", "wiz:base:inc:reps:1"), btn("−1 повт", "wiz:base:inc:reps:-1")],
         [
             btn("＋0.5 кг", "wiz:base:inc:kg:0.5"),
@@ -197,9 +197,9 @@ def reminder_time_kb():
     rows.append([InlineKeyboardButton("⬅︎ Назад", callback_data="wiz:remind:back")])
     return InlineKeyboardMarkup(rows)
 
-def day_kb(day_index: int, ex_rows: list[tuple[int, str]]):
+def day_kb(day_index: int, ex_rows: list[tuple[int, str, str]]):
     rows = []
-    for ue_id, name in ex_rows:
+    for ue_id, name, _ in ex_rows:
         rows.append([InlineKeyboardButton(f"• {name} ▸", callback_data=f"ex:view:{day_index}:{ue_id}")])
     rows.append([InlineKeyboardButton("➕ Добавить упражнение", callback_data=f"day:add_ex:{day_index}")])
     rows.append([InlineKeyboardButton("🗑 Удалить упражнение", callback_data=f"day:del_ex:{day_index}")])
@@ -227,9 +227,9 @@ def day_add_exercises_kb(day_index: int, group: str, ex_rows: list[tuple[int, st
     rows.append([InlineKeyboardButton("✅ Готово", callback_data=f"day:add:{day_index}:done")])
     return InlineKeyboardMarkup(rows)
 
-def del_exercises_kb(day_index: int, ex_rows: list[tuple[int, str]]):
+def del_exercises_kb(day_index: int, ex_rows: list[tuple[int, str, str]]):
     rows = []
-    for ue_id, name in ex_rows:
+    for ue_id, name, _ in ex_rows:
         rows.append([InlineKeyboardButton(f"Удалить {name}", callback_data=f"day:del:{day_index}:{ue_id}")])
     rows.append([InlineKeyboardButton("⬅︎ Назад", callback_data=f"day:open:{day_index}")])
     return InlineKeyboardMarkup(rows)

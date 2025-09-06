@@ -129,8 +129,26 @@ def day_exercises_text(i: int, group: str, custom: dict[str, str] | None = None)
         name = group
     return f"День {i} — {name}. Выбери упражнения или добавь своё. Потом жми «Готово»."
 
-def render_day_text(i: int, label: str) -> str:
-    return f"День {i} — {label}\nУпражнения:"
+def render_day_text(
+    i: int,
+    label: str,
+    ex_rows: list[tuple[int, str, str]],
+    custom: dict[str, str] | None = None,
+) -> str:
+    groups: dict[str, list[str]] = {}
+    for _, name, group in ex_rows:
+        groups.setdefault(group, []).append(name)
+    lines = [f"День {i} — {label}", "Упражнения:"]
+    for code, names in groups.items():
+        gname = MG_NAMES.get(code)
+        if not gname and custom:
+            gname = custom.get(code, code)
+        if not gname:
+            gname = code
+        lines.append(f"{gname}:")
+        for n in names:
+            lines.append(f"• {n}")
+    return "\n".join(lines)
 
 def baseline_text(name: str, sets: int, reps: int, weight: float) -> str:
     return f"{name} — {sets}x{reps} @ {weight:.1f} кг"
@@ -687,7 +705,8 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             day = int(parts[2])
             label = await get_day_label(user_id, day)
             ex_rows = await fetch_day_exercises(user_id, day)
-            await safe_edit_message(q, render_day_text(day, label), reply_markup=day_kb(day, ex_rows))
+            custom = await get_custom_groups(user_id, context)
+            await safe_edit_message(q, render_day_text(day, label, ex_rows, custom), reply_markup=day_kb(day, ex_rows))
             return
         if action == "add_ex":
             day = int(parts[2])
@@ -731,7 +750,8 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 context.user_data.pop("add_group", None)
                 label = await get_day_label(user_id, day)
                 ex_rows = await fetch_day_exercises(user_id, day)
-                await safe_edit_message(q, render_day_text(day, label), reply_markup=day_kb(day, ex_rows))
+                custom = await get_custom_groups(user_id, context)
+                await safe_edit_message(q, render_day_text(day, label, ex_rows, custom), reply_markup=day_kb(day, ex_rows))
                 return
         if action == "del":
             day = int(parts[2])
