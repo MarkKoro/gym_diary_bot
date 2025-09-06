@@ -243,11 +243,11 @@ async def get_or_create_today_session(user_id: int, date_str: str, day_index: in
 async def fetch_day_exercises(user_id: int, day_index: int = 1):
     async with connect_db() as db:
         cur = await db.execute("""
-        SELECT ue.id, e.name
+        SELECT ue.id, e.name, e.muscle_group
         FROM user_exercises ue
         JOIN exercises e ON e.id = ue.exercise_id
         WHERE ue.user_id=? AND ue.day_index=?
-        ORDER BY e.name
+        ORDER BY e.muscle_group, e.name
         """, (user_id, day_index))
         return await cur.fetchall()
 
