@@ -70,6 +70,16 @@ async def init_db():
             is_warmup INTEGER DEFAULT 0
         );
 
+        CREATE TABLE IF NOT EXISTS session_exercises(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id INTEGER,
+            user_exercise_id INTEGER,
+            is_done INTEGER DEFAULT 0,
+            is_microcycle INTEGER DEFAULT 0,
+            done_at TEXT,
+            UNIQUE(session_id, user_exercise_id)
+        );
+
         CREATE TABLE IF NOT EXISTS exercise_baseline(
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id INTEGER,
@@ -240,15 +250,21 @@ async def get_or_create_today_session(user_id: int, date_str: str, day_index: in
         cur = await db.execute("SELECT last_insert_rowid()")
         return (await cur.fetchone())[0]
 
-async def fetch_day_exercises(user_id: int, day_index: int = 1):
+async def fetch_day_exercises(user_id: int, day_index: int = 1, date_str: str | None = None):
+    date_str = date_str or datetime.utcnow().strftime("%Y-%m-%d")
     async with connect_db() as db:
-        cur = await db.execute("""
-        SELECT ue.id, e.name, e.muscle_group
+        cur = await db.execute(
+            """
+        SELECT ue.id, e.name, e.muscle_group, IFNULL(se.is_done,0)
         FROM user_exercises ue
         JOIN exercises e ON e.id = ue.exercise_id
+        LEFT JOIN sessions s ON s.user_id=ue.user_id AND s.date=? AND s.day_index=ue.day_index
+        LEFT JOIN session_exercises se ON se.session_id=s.id AND se.user_exercise_id=ue.id
         WHERE ue.user_id=? AND ue.day_index=?
         ORDER BY e.muscle_group, e.name
-        """, (user_id, day_index))
+        """,
+            (date_str, user_id, day_index),
+        )
         return await cur.fetchall()
 
 async def fetch_sets_table(session_id: int):
@@ -430,6 +446,13 @@ async def set_user_timezone(user_id: int, tz: str):
         await db.execute("UPDATE users SET tz=? WHERE id=?", (tz, user_id))
         await db.commit()
 
+
+async def get_user_timezone(user_id: int):
+    async with connect_db() as db:
+        cur = await db.execute("SELECT tz FROM users WHERE id=?", (user_id,))
+        row = await cur.fetchone()
+        return row[0] if row else "UTC"
+
 async def add_user_reminder(user_id: int, hour: int, minute: int):
     async with connect_db() as db:
         await db.execute(
@@ -437,6 +460,15 @@ async def add_user_reminder(user_id: int, hour: int, minute: int):
             (user_id, None, hour, minute),
         )
         await db.commit()
+
+
+async def get_user_reminder(user_id: int):
+    async with connect_db() as db:
+        cur = await db.execute(
+            "SELECT hour, minute FROM user_reminders WHERE user_id=? ORDER BY id DESC LIMIT 1",
+            (user_id,),
+        )
+        return await cur.fetchone()
 
 async def list_active_days(user_id: int):
     async with connect_db() as db:
@@ -564,6 +596,61 @@ async def toggle_last_set_warmup(user_ex_id: int, session_id: int):
         new_val = 0 if is_warmup else 1
         await db.execute("UPDATE sets SET is_warmup=? WHERE id=?", (new_val, set_id))
         await db.commit()
+
+async def mark_exercise_done(session_id: int, ue_id: int):
+    async with connect_db() as db:
+        await db.execute(
+            """
+            INSERT INTO session_exercises(session_id, user_exercise_id, is_done, done_at)
+            VALUES(?,?,1,?)
+            ON CONFLICT(session_id, user_exercise_id)
+            DO UPDATE SET is_done=1, done_at=excluded.done_at
+            """,
+            (session_id, ue_id, datetime.utcnow().isoformat()),
+        )
+        await db.commit()
+
+async def toggle_microcycle(session_id: int, ue_id: int):
+    async with connect_db() as db:
+        await db.execute(
+            """
+            INSERT INTO session_exercises(session_id, user_exercise_id, is_microcycle)
+            VALUES(?,?,1)
+            ON CONFLICT(session_id, user_exercise_id)
+            DO UPDATE SET is_microcycle=1-is_microcycle
+            """,
+            (session_id, ue_id),
+        )
+        await db.commit()
+
+async def list_recent_progress(user_id: int, day_index: int, ue_id: int, limit: int = 4):
+    async with connect_db() as db:
+        cur = await db.execute(
+            """
+            SELECT s.date, se.is_microcycle,
+                   COUNT(st.id) as sets,
+                   MAX(st.reps) as reps,
+                   MAX(st.weight_kg) as weight
+            FROM sessions s
+            JOIN session_exercises se ON se.session_id=s.id AND se.user_exercise_id=?
+            LEFT JOIN sets st ON st.session_id=s.id AND st.user_exercise_id=?
+            WHERE s.user_id=? AND s.day_index=? AND se.is_done=1
+            GROUP BY s.id
+            ORDER BY s.date DESC
+            LIMIT ?
+            """,
+            (ue_id, ue_id, user_id, day_index, limit),
+        )
+        return await cur.fetchall()
+
+async def get_session_exercise_flags(session_id: int, ue_id: int):
+    async with connect_db() as db:
+        cur = await db.execute(
+            "SELECT is_done, is_microcycle FROM session_exercises WHERE session_id=? AND user_exercise_id=?",
+            (session_id, ue_id),
+        )
+        row = await cur.fetchone()
+        return row if row else (0, 0)
 
 async def get_weight_step(user_id: int) -> float:
     async with connect_db() as db:
