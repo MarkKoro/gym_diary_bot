@@ -16,11 +16,11 @@ def subscription_kb(join_url: str):
 
 def settings_kb():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("Переименовать дни", callback_data="set:rename_day")],
-        [InlineKeyboardButton("Изменить количество тренировок в неделю", callback_data="set:days_count")],
-        [InlineKeyboardButton("Шаг веса", callback_data="set:step")],
-        [InlineKeyboardButton("Уведомления", callback_data="set:reminders")],
-        [InlineKeyboardButton("Подписка", callback_data="set:subscription")],
+        [InlineKeyboardButton("✏️ Переименовать дни", callback_data="set:rename_day")],
+        [InlineKeyboardButton("📅 Количество тренировок", callback_data="set:days_count")],
+        [InlineKeyboardButton("🏋️ Шаг веса", callback_data="set:step")],
+        [InlineKeyboardButton("⏰ Уведомления", callback_data="set:reminders")],
+        [InlineKeyboardButton("⭐ Подписка", callback_data="set:subscription")],
         [InlineKeyboardButton("⬅︎ Назад", callback_data="menu:root")],
     ])
 
@@ -147,6 +147,14 @@ def reminders_kb():
         [InlineKeyboardButton("⬅︎ Назад", callback_data="wiz:reminders:back")],
     ])
 
+
+def reminders_edit_kb():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("Изменить часовой пояс", callback_data="set:reminders:tz")],
+        [InlineKeyboardButton("Изменить время уведомлений", callback_data="set:reminders:time")],
+        [InlineKeyboardButton("⬅︎ Назад", callback_data="menu:settings")],
+    ])
+
 TIMEZONES = [
     ("Europe/Kaliningrad", "GMT+2 (Калининград)"),
     ("Europe/Moscow", "GMT+3 (Москва)"),
@@ -161,16 +169,16 @@ TIMEZONES = [
     ("Asia/Kamchatka", "GMT+12 (Камчатка)"),
     ("Europe/Paris", "GMT+1 (Париж)"),
     ("UTC", "GMT"),
-    ("Atlantic/Azores", "GMT-1"),
-    ("America/Noronha", "GMT-2"),
-    ("America/Montevideo", "GMT-3"),
-    ("America/Barbados", "GMT-4"),
-    ("America/New_York", "GMT-5"),
-    ("America/Chicago", "GMT-6"),
-    ("America/Denver", "GMT-7"),
-    ("America/Los_Angeles", "GMT-8"),
-    ("America/Anchorage", "GMT-9"),
-    ("Pacific/Honolulu", "GMT-10"),
+    ("Atlantic/Azores", "GMT-1 (Азорские острова)"),
+    ("America/Noronha", "GMT-2 (Фернанду-ди-Норонья)"),
+    ("America/Montevideo", "GMT-3 (Уругвай)"),
+    ("America/Barbados", "GMT-4 (Барбадос)"),
+    ("America/New_York", "GMT-5 (Нью-Йорк, США)"),
+    ("America/Chicago", "GMT-6 (Чикаго, США)"),
+    ("America/Denver", "GMT-7 (Денвер, США)"),
+    ("America/Los_Angeles", "GMT-8 (Лос-Анджелес, США)"),
+    ("America/Anchorage", "GMT-9 (Анкоридж, США)"),
+    ("Pacific/Honolulu", "GMT-10 (Гавайи)"),
 ]
 
 def tz_select_kb(page: int = 0, per_page: int = 6):
@@ -197,59 +205,84 @@ def reminder_time_kb():
     rows.append([InlineKeyboardButton("⬅︎ Назад", callback_data="wiz:remind:back")])
     return InlineKeyboardMarkup(rows)
 
-def day_kb(day_index: int, ex_rows: list[tuple[int, str, str]]):
+def day_kb(day_index: int, ex_rows: list[tuple[int, str, str, int]]):
+    groups: dict[str, list[tuple[int, str]]] = {}
+    for ue_id, name, group, _ in ex_rows:
+        groups.setdefault(group, []).append((ue_id, name))
     rows = []
-    for ue_id, name, _ in ex_rows:
-        rows.append([InlineKeyboardButton(f"• {name} ▸", callback_data=f"ex:view:{day_index}:{ue_id}")])
+    for group in groups.keys():
+        gname = MG_NAMES.get(group, group)
+        rows.append([InlineKeyboardButton(f"{gname} ▸", callback_data=f"day:group:{day_index}:{group}")])
     rows.append([InlineKeyboardButton("➕ Добавить упражнение", callback_data=f"day:add_ex:{day_index}")])
     rows.append([InlineKeyboardButton("🗑 Удалить упражнение", callback_data=f"day:del_ex:{day_index}")])
     rows.append([InlineKeyboardButton("⬅︎ Назад", callback_data="menu:root")])
     return InlineKeyboardMarkup(rows)
 
-def day_add_group_kb(day_index: int, custom: dict[str, str] | None = None):
+
+def day_group_kb(day_index: int, group: str, items: list[tuple[int, str, int]]):
     rows = []
-    for code, name in MG_NAMES.items():
-        if code == "other":
-            continue
-        rows.append([InlineKeyboardButton(name, callback_data=f"day:add:{day_index}:mg:{code}")])
-    if custom:
-        for code, name in custom.items():
-            rows.append([InlineKeyboardButton(name, callback_data=f"day:add:{day_index}:mg:{code}")])
-    rows.append([InlineKeyboardButton(MG_NAMES["other"], callback_data=f"day:add:{day_index}:mg:other")])
+    for ue_id, name, done in items:
+        mark = "✅" if done else "⬜"
+        rows.append([InlineKeyboardButton(f"{mark} {name} ▸", callback_data=f"ex:view:{day_index}:{ue_id}")])
     rows.append([InlineKeyboardButton("⬅︎ Назад", callback_data=f"day:open:{day_index}")])
     return InlineKeyboardMarkup(rows)
 
-def day_add_exercises_kb(day_index: int, group: str, ex_rows: list[tuple[int, str]]):
+def day_add_group_kb(day_index: int, custom: dict[str, str] | None = None, selected: set[str] | None = None):
     rows = []
+    selected = selected or set()
+    for code, name in MG_NAMES.items():
+        if code == "other":
+            continue
+        mark = "✅" if code in selected else "⬜"
+        rows.append([InlineKeyboardButton(f"{mark} {name}", callback_data=f"day:add:{day_index}:mg:{code}")])
+    if custom:
+        for code, name in custom.items():
+            mark = "✅" if code in selected else "⬜"
+            rows.append([InlineKeyboardButton(f"{mark} {name}", callback_data=f"day:add:{day_index}:mg:{code}")])
+    rows.append([InlineKeyboardButton(f"⬜ {MG_NAMES['other']}", callback_data=f"day:add:{day_index}:mg:other")])
+    rows.append([InlineKeyboardButton("⬅︎ Назад", callback_data=f"day:open:{day_index}")])
+    return InlineKeyboardMarkup(rows)
+
+def day_add_exercises_kb(day_index: int, group: str, ex_rows: list[tuple[int, str]], selected: set[int] | None = None):
+    rows = []
+    selected = selected or set()
     for ex_id, name in ex_rows:
-        rows.append([InlineKeyboardButton(name, callback_data=f"day:add:{day_index}:ex:{ex_id}")])
+        mark = "✅" if ex_id in selected else "⬜"
+        rows.append([InlineKeyboardButton(f"{mark} {name}", callback_data=f"day:add:{day_index}:ex:{ex_id}")])
     rows.append([InlineKeyboardButton("📝 Свой вариант", callback_data=f"day:add:{day_index}:custom:{group}")])
     rows.append([InlineKeyboardButton("✅ Готово", callback_data=f"day:add:{day_index}:done")])
     return InlineKeyboardMarkup(rows)
 
-def del_exercises_kb(day_index: int, ex_rows: list[tuple[int, str, str]]):
+def del_exercises_kb(day_index: int, ex_rows: list[tuple[int, str, str, int]]):
     rows = []
-    for ue_id, name, _ in ex_rows:
+    for ue_id, name, *_ in ex_rows:
         rows.append([InlineKeyboardButton(f"Удалить {name}", callback_data=f"day:del:{day_index}:{ue_id}")])
     rows.append([InlineKeyboardButton("⬅︎ Назад", callback_data=f"day:open:{day_index}")])
     return InlineKeyboardMarkup(rows)
 
-def exercise_view_kb(day_index: int, ue_id: int, step: float = 0.5):
-    def fmt(v: float) -> str:
-        return f"{v:.1f}" if v % 1 else f"{int(v)}"
-    double = step * 2
+def exercise_view_kb(day_index: int, ue_id: int):
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("＋ сет", callback_data=f"ex:addset:{day_index}:{ue_id}")],
+        [
+            InlineKeyboardButton("＋ сет", callback_data=f"ex:addset:{day_index}:{ue_id}"),
+            InlineKeyboardButton("− сет", callback_data=f"ex:delset:{day_index}:{ue_id}"),
+        ],
         [
             InlineKeyboardButton("＋1 реп", callback_data=f"ex:inc:{day_index}:{ue_id}:reps:1"),
             InlineKeyboardButton("−1 реп", callback_data=f"ex:inc:{day_index}:{ue_id}:reps:-1"),
         ],
         [
-            InlineKeyboardButton(f"＋{fmt(step)} кг", callback_data=f"ex:inc:{day_index}:{ue_id}:kg:{step}"),
-            InlineKeyboardButton(f"＋{fmt(double)} кг", callback_data=f"ex:inc:{day_index}:{ue_id}:kg:{double}"),
-            InlineKeyboardButton(f"−{fmt(step)} кг", callback_data=f"ex:inc:{day_index}:{ue_id}:kg:-{step}"),
+            InlineKeyboardButton("＋0.5 кг", callback_data=f"ex:inc:{day_index}:{ue_id}:kg:0.5"),
+            InlineKeyboardButton("＋1 кг", callback_data=f"ex:inc:{day_index}:{ue_id}:kg:1"),
+            InlineKeyboardButton("＋2.5 кг", callback_data=f"ex:inc:{day_index}:{ue_id}:kg:2.5"),
+        ],
+        [
+            InlineKeyboardButton("−0.5 кг", callback_data=f"ex:inc:{day_index}:{ue_id}:kg:-0.5"),
+            InlineKeyboardButton("−1 кг", callback_data=f"ex:inc:{day_index}:{ue_id}:kg:-1"),
+            InlineKeyboardButton("−2.5 кг", callback_data=f"ex:inc:{day_index}:{ue_id}:kg:-2.5"),
         ],
         [InlineKeyboardButton("🔥 Разминка/Рабочий", callback_data=f"ex:toggle:{day_index}:{ue_id}")],
-        [InlineKeyboardButton("↩︎ Отменить", callback_data=f"ex:undo:{day_index}:{ue_id}")],
+        [InlineKeyboardButton("📈 PROGRESS", callback_data=f"ex:progress:{day_index}:{ue_id}")],
+        [InlineKeyboardButton("🌀 Микроцикл", callback_data=f"ex:micro:{day_index}:{ue_id}")],
+        [InlineKeyboardButton("✅ Готово", callback_data=f"ex:done:{day_index}:{ue_id}")],
         [InlineKeyboardButton("⬅︎ Назад", callback_data=f"day:open:{day_index}")],
     ])

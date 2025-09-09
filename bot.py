@@ -25,8 +25,10 @@ from keyboards import (
     reminders_kb,
     reminder_time_kb,
     tz_select_kb,
+    reminders_edit_kb,
     MG_NAMES,
     day_kb,
+    day_group_kb,
     day_add_group_kb,
     day_add_exercises_kb,
     del_exercises_kb,
@@ -35,6 +37,7 @@ from keyboards import (
     rename_day_kb,
     days_count_kb,
     weight_step_kb,
+    TIMEZONES,
 )
 from settings import TG_TOKEN, SUPPORT_DEEPLINK, TG_POOL_SIZE, SUBSCRIPTION_CHAT, JOIN_URL
 from db import (
@@ -56,6 +59,8 @@ from db import (
     set_baseline,
     set_user_timezone,
     add_user_reminder,
+    get_user_timezone,
+    get_user_reminder,
     list_active_days,
     get_day_label,
     remove_user_exercise,
@@ -65,6 +70,10 @@ from db import (
     fetch_exercise_sets,
     toggle_last_set_warmup,
     remove_last_set,
+    mark_exercise_done,
+    toggle_microcycle,
+    list_recent_progress,
+    get_session_exercise_flags,
     rename_day,
     get_weight_step,
     set_weight_step,
@@ -132,12 +141,12 @@ def day_exercises_text(i: int, group: str, custom: dict[str, str] | None = None)
 def render_day_text(
     i: int,
     label: str,
-    ex_rows: list[tuple[int, str, str]],
+    ex_rows: list[tuple[int, str, str, int]],
     custom: dict[str, str] | None = None,
 ) -> str:
-    groups: dict[str, list[str]] = {}
-    for _, name, group in ex_rows:
-        groups.setdefault(group, []).append(name)
+    groups: dict[str, list[tuple[str, int]]] = {}
+    for _, name, group, done in ex_rows:
+        groups.setdefault(group, []).append((name, done))
     lines = [f"День {i} — {label}", "Упражнения:"]
     for code, names in groups.items():
         gname = MG_NAMES.get(code)
@@ -146,8 +155,9 @@ def render_day_text(
         if not gname:
             gname = code
         lines.append(f"{gname}:")
-        for n in names:
-            lines.append(f"• {n}")
+        for n, d in names:
+            mark = "✅" if d else "•"
+            lines.append(f"{mark} {n}")
     return "\n".join(lines)
 
 def baseline_text(name: str, sets: int, reps: int, weight: float) -> str:
@@ -172,12 +182,15 @@ async def render_exercise_view(user_id: int, day: int, ue_id: int):
         prev = f"{last[0]}x{last[1]} @ {last[2]:.1f}" if last else "—"
     session_id = await get_or_create_today_session(user_id, today, day)
     sets = await fetch_exercise_sets(session_id, ue_id)
+    _, micro = await get_session_exercise_flags(session_id, ue_id)
     lines = [f"{name} — День {day}", f"Прошлый раз: {prev}", ""]
     for set_no, reps, weight, warm in sets:
         prefix = "🔥 " if warm else ""
         lines.append(f"{prefix}{set_no}) {reps} x {weight:.1f}")
     if sets:
         lines.append("")
+    if micro:
+        lines.append("(Микроцикл)")
     lines.append("Нажимай кнопки — всё сохраняется автоматически.")
     return "\n".join(lines), session_id
 
@@ -210,14 +223,25 @@ async def show_exercises(q, user_id: int, day: int, group: str, context):
     )
 
 async def finish_day(q, context, user_id: int, day: int, summary: str | None = None):
-    context.user_data["current_day"] = day
-    text = f"День {day} сохранён. Перейти к Дню {day + 1}?"
-    if summary:
-        text = summary + "\n────────\n" + text
-    await q.edit_message_text(
-        text,
-        reply_markup=day_done_kb(day),
-    )
+    n = context.user_data.get("workouts_per_week", 0)
+    if day >= n:
+        days = await list_active_days(user_id)
+        text = "Отлично, супер! Мы сохранили все ваши данные. Теперь можете с удовольствием пользоваться."
+        if summary:
+            text = summary + "\n────────\n" + text
+        await q.edit_message_text(
+            text,
+            reply_markup=main_menu_kb(days, SUPPORT_DEEPLINK),
+        )
+    else:
+        context.user_data["current_day"] = day
+        text = f"День {day} сохранён. Перейти к Дню {day + 1}?"
+        if summary:
+            text = summary + "\n────────\n" + text
+        await q.edit_message_text(
+            text,
+            reply_markup=day_done_kb(day),
+        )
 
 async def advance_day(q, context, user_id: int, next_day: int):
     n = context.user_data.get("workouts_per_week", 0)
@@ -425,7 +449,18 @@ async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAUL
             if action == "custom":
                 group = parts[5]
                 context.user_data["awaiting_custom"] = (day, group)
-                await q.edit_message_text("Напиши название упражнения:")
+                kb = InlineKeyboardMarkup([[InlineKeyboardButton("⬅︎ Назад", callback_data=f"wiz:day:{day}:ex:custom_back:{group}")]])
+                await q.edit_message_text("Напиши название упражнения:", reply_markup=kb)
+                return
+            if action == "custom_back":
+                group = parts[5]
+                ex_rows = await list_exercises_by_group(group)
+                selected_ids = set(await list_user_exercise_ids(user_id, day, group))
+                custom = context.user_data.get("custom_groups", {})
+                await q.edit_message_text(
+                    day_exercises_text(day, group, custom),
+                    reply_markup=exercises_kb(day, group, ex_rows, selected_ids),
+                )
                 return
             if action == "back":
                 selected = context.user_data.setdefault("day_groups", {}).get(day, set())
@@ -602,11 +637,12 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             context.user_data["add_group"] = (day, code)
             ex_rows = await list_exercises_by_group(code)
+            selected_ids = set(await list_user_exercise_ids(user_id, day, code))
             await context.bot.edit_message_text(
                 day_exercises_text(day, code, custom),
                 chat_id=chat_id,
                 message_id=msg_id,
-                reply_markup=day_add_exercises_kb(day, code, ex_rows),
+                reply_markup=day_add_exercises_kb(day, code, ex_rows, selected_ids),
             )
         return
     if context.user_data.get("awaiting_rename"):
@@ -615,24 +651,26 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         u = update.effective_user
         user_id = await get_or_create_user(u.id, u.username)
         await rename_day(user_id, day, label)
+        await update.message.delete()
         await context.bot.edit_message_text("Настройки:", chat_id=chat_id, message_id=msg_id, reply_markup=settings_kb())
         return
     if context.user_data.get("awaiting_custom"):
         day, group = context.user_data.pop("awaiting_custom")
         name = update.message.text.strip()
+        await update.message.delete()
         ex_id = await get_or_create_exercise(name, group)
         u = update.effective_user
         user_id = await get_or_create_user(u.id, u.username)
         await add_user_exercise(user_id, day, ex_id)
         ex_rows = await list_exercises_by_group(group)
         custom = context.user_data.get("custom_groups", {})
+        selected_ids = set(await list_user_exercise_ids(user_id, day, group))
         if context.user_data.get("add_group") == (day, group):
             await update.message.reply_text(
                 day_exercises_text(day, group, custom),
-                reply_markup=day_add_exercises_kb(day, group, ex_rows),
+                reply_markup=day_add_exercises_kb(day, group, ex_rows, selected_ids),
             )
         else:
-            selected_ids = set(await list_user_exercise_ids(user_id, day, group))
             await update.message.reply_text(
                 day_exercises_text(day, group, custom),
                 reply_markup=exercises_kb(day, group, ex_rows, selected_ids),
@@ -658,7 +696,21 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if data == "menu:settings":
-        await safe_edit_message(q, "Настройки:", reply_markup=settings_kb())
+        settings = await fetch_user_settings(user_id)
+        n = settings[1] if settings else 0
+        tz = await get_user_timezone(user_id)
+        rem = await get_user_reminder(user_id)
+        tz_label = next((label for code, label in TIMEZONES if code == tz), tz)
+        rem_text = f"{rem[0]:02d}:{rem[1]:02d}" if rem else "не задано"
+        text = (
+            "Настройки:\n"
+            "✏️ Переименовать дни — изменить названия тренировочных дней.\n"
+            f"📅 Количество тренировок — сейчас {n}.\n"
+            "🏋️ Шаг веса — шаг изменения веса при добавлении сетов.\n"
+            f"⏰ Уведомления — {tz_label}, {rem_text}.\n"
+            "⭐ Подписка — информация о подписке."
+        )
+        await safe_edit_message(q, text, reply_markup=settings_kb())
         return
 
     parts = data.split(":")
@@ -691,10 +743,29 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await safe_edit_message(q, "Шаг веса обновлён.", reply_markup=settings_kb())
             return
         if action == "reminders":
-            context.user_data["from_settings"] = True
-            context.user_data["tz_page"] = 0
-            await safe_edit_message(q, "Выбери свой часовой пояс:", reply_markup=tz_select_kb(0))
-            return
+            if len(parts) == 2:
+                tz = await get_user_timezone(user_id)
+                rem = await get_user_reminder(user_id)
+                if tz and rem:
+                    tz_label = next((label for code, label in TIMEZONES if code == tz), tz)
+                    rem_text = f"{rem[0]:02d}:{rem[1]:02d}"
+                    text = f"Сейчас выбран {tz_label}, напоминания в {rem_text}."
+                    await safe_edit_message(q, text, reply_markup=reminders_edit_kb())
+                    return
+                context.user_data["from_settings"] = True
+                context.user_data["tz_page"] = 0
+                await safe_edit_message(q, "Выбери свой часовой пояс:", reply_markup=tz_select_kb(0))
+                return
+            sub = parts[2]
+            if sub == "tz":
+                context.user_data["from_settings"] = True
+                context.user_data["tz_page"] = 0
+                await safe_edit_message(q, "Выбери свой часовой пояс:", reply_markup=tz_select_kb(0))
+                return
+            if sub == "time":
+                context.user_data["from_settings"] = True
+                await safe_edit_message(q, "Во сколько напоминать в дни тренировок? Выбери время (по твоему часовому поясу)", reply_markup=reminder_time_kb())
+                return
         if action == "subscription":
             await safe_edit_message(q, "Подписка пока в разработке.", reply_markup=settings_kb())
             return
@@ -704,18 +775,41 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if action == "open":
             day = int(parts[2])
             label = await get_day_label(user_id, day)
-            ex_rows = await fetch_day_exercises(user_id, day)
+            today_str = datetime.utcnow().strftime("%Y-%m-%d")
+            ex_rows = await fetch_day_exercises(user_id, day, today_str)
             custom = await get_custom_groups(user_id, context)
-            await safe_edit_message(q, render_day_text(day, label, ex_rows, custom), reply_markup=day_kb(day, ex_rows))
+            await safe_edit_message(
+                q,
+                render_day_text(day, label, ex_rows, custom),
+                reply_markup=day_kb(day, ex_rows),
+            )
+            return
+        if action == "group":
+            day = int(parts[2])
+            group = parts[3]
+            today_str = datetime.utcnow().strftime("%Y-%m-%d")
+            ex_rows = await fetch_day_exercises(user_id, day, today_str)
+            items = [(ue_id, name, done) for ue_id, name, g, done in ex_rows if g == group]
+            custom = await get_custom_groups(user_id, context)
+            gname = MG_NAMES.get(group, custom.get(group, group))
+            lines = [f"День {day} — {gname}", "Упражнения:"]
+            for _, n, d in items:
+                mark = "✅" if d else "•"
+                lines.append(f"{mark} {n}")
+            await safe_edit_message(q, "\n".join(lines), reply_markup=day_group_kb(day, group, items))
             return
         if action == "add_ex":
             day = int(parts[2])
+            today_str = datetime.utcnow().strftime("%Y-%m-%d")
+            ex_rows = await fetch_day_exercises(user_id, day, today_str)
+            existing_groups = {g for _, _, g, _ in ex_rows}
             custom = await get_custom_groups(user_id, context)
-            await safe_edit_message(q, "Выбери группу:", reply_markup=day_add_group_kb(day, custom))
+            await safe_edit_message(q, "Выбери группу:", reply_markup=day_add_group_kb(day, custom, existing_groups))
             return
         if action == "del_ex":
             day = int(parts[2])
-            ex_rows = await fetch_day_exercises(user_id, day)
+            today_str = datetime.utcnow().strftime("%Y-%m-%d")
+            ex_rows = await fetch_day_exercises(user_id, day, today_str)
             await safe_edit_message(q, "Удалить упражнение:", reply_markup=del_exercises_kb(day, ex_rows))
             return
         if action == "add":
@@ -729,8 +823,13 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     return
                 context.user_data["add_group"] = (day, group)
                 ex_rows = await list_exercises_by_group(group)
+                selected_ids = set(await list_user_exercise_ids(user_id, day, group))
                 custom = context.user_data.get("custom_groups", {})
-                await safe_edit_message(q, day_exercises_text(day, group, custom), reply_markup=day_add_exercises_kb(day, group, ex_rows))
+                await safe_edit_message(
+                    q,
+                    day_exercises_text(day, group, custom),
+                    reply_markup=day_add_exercises_kb(day, group, ex_rows, selected_ids),
+                )
                 return
             if sub == "ex":
                 ex_id = int(parts[4])
@@ -738,28 +837,55 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 _, group = context.user_data.get("add_group", (day, None))
                 if group:
                     ex_rows = await list_exercises_by_group(group)
+                    selected_ids = set(await list_user_exercise_ids(user_id, day, group))
                     custom = context.user_data.get("custom_groups", {})
-                    await safe_edit_message(q, day_exercises_text(day, group, custom), reply_markup=day_add_exercises_kb(day, group, ex_rows))
+                    await safe_edit_message(
+                        q,
+                        day_exercises_text(day, group, custom),
+                        reply_markup=day_add_exercises_kb(day, group, ex_rows, selected_ids),
+                    )
                 return
             if sub == "custom":
                 group = parts[4]
                 context.user_data["awaiting_custom"] = (day, group)
-                await q.edit_message_text("Напиши название упражнения:")
+                kb = InlineKeyboardMarkup([
+                    [InlineKeyboardButton("⬅︎ Назад", callback_data=f"day:add:{day}:custom_back:{group}")]
+                ])
+                await q.edit_message_text("Напиши название упражнения:", reply_markup=kb)
+                return
+            if sub == "custom_back":
+                group = parts[4]
+                ex_rows = await list_exercises_by_group(group)
+                selected_ids = set(await list_user_exercise_ids(user_id, day, group))
+                custom = context.user_data.get("custom_groups", {})
+                await safe_edit_message(
+                    q,
+                    day_exercises_text(day, group, custom),
+                    reply_markup=day_add_exercises_kb(day, group, ex_rows, selected_ids),
+                )
                 return
             if sub == "done":
                 context.user_data.pop("add_group", None)
                 label = await get_day_label(user_id, day)
-                ex_rows = await fetch_day_exercises(user_id, day)
+                today_str = datetime.utcnow().strftime("%Y-%m-%d")
+                ex_rows = await fetch_day_exercises(user_id, day, today_str)
                 custom = await get_custom_groups(user_id, context)
-                await safe_edit_message(q, render_day_text(day, label, ex_rows, custom), reply_markup=day_kb(day, ex_rows))
+                await safe_edit_message(
+                    q,
+                    render_day_text(day, label, ex_rows, custom),
+                    reply_markup=day_kb(day, ex_rows),
+                )
                 return
         if action == "del":
             day = int(parts[2])
             if len(parts) == 4:
                 ue_id = int(parts[3])
                 await remove_user_exercise(user_id, day, ue_id)
-                ex_rows = await fetch_day_exercises(user_id, day)
-                await safe_edit_message(q, "Удалить упражнение:", reply_markup=del_exercises_kb(day, ex_rows))
+                today_str = datetime.utcnow().strftime("%Y-%m-%d")
+                ex_rows = await fetch_day_exercises(user_id, day, today_str)
+                await safe_edit_message(
+                    q, "Удалить упражнение:", reply_markup=del_exercises_kb(day, ex_rows)
+                )
             return
 
     if parts[0] == "ex":
@@ -767,9 +893,8 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         day = int(parts[2])
         ue_id = int(parts[3])
         if action == "view":
-            step = await get_weight_step(user_id)
             text, _ = await render_exercise_view(user_id, day, ue_id)
-            await safe_edit_message(q, text, exercise_view_kb(day, ue_id, step))
+            await safe_edit_message(q, text, exercise_view_kb(day, ue_id))
             return
         today_str = datetime.utcnow().strftime("%Y-%m-%d")
         async with user_locks[user_id]:
@@ -780,9 +905,8 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 reps = base[1] if base else 0
                 weight = base[2] if base else 0.0
                 await add_set(session_id, ue_id, reps, weight)
-                context.user_data["last_action"] = {
-                    "type": "addset", "ue_id": ue_id, "session_id": session_id, "time": asyncio.get_running_loop().time(), "day": day
-                }
+            elif action == "delset":
+                await remove_last_set(ue_id, session_id)
             elif action == "inc":
                 field = parts[4]
                 delta = float(parts[5])
@@ -794,9 +918,6 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     weight = base[2] if base else 0.0
                     await add_set(session_id, ue_id, reps, weight)
                 await inc_last_set(ue_id, session_id, "reps" if field == "reps" else "weight_kg", delta)
-                context.user_data["last_action"] = {
-                    "type": "inc", "ue_id": ue_id, "field": field, "delta": delta, "session_id": session_id, "time": asyncio.get_running_loop().time(), "day": day
-                }
             elif action == "toggle":
                 sets = await fetch_exercise_sets(session_id, ue_id)
                 if not sets:
@@ -806,24 +927,33 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     weight = base[2] if base else 0.0
                     await add_set(session_id, ue_id, reps, weight)
                 await toggle_last_set_warmup(ue_id, session_id)
-                context.user_data["last_action"] = {
-                    "type": "toggle", "ue_id": ue_id, "session_id": session_id, "time": asyncio.get_running_loop().time(), "day": day
-                }
-            elif action == "undo":
-                act = context.user_data.get("last_action")
-                if act and act.get("ue_id") == ue_id and asyncio.get_running_loop().time() - act.get("time", 0) < 60:
-                    if act["type"] == "addset":
-                        await remove_last_set(ue_id, session_id)
-                    elif act["type"] == "inc":
-                        field = act["field"]
-                        delta = -act["delta"]
-                        await inc_last_set(ue_id, session_id, "reps" if field == "reps" else "weight_kg", delta)
-                    elif act["type"] == "toggle":
-                        await toggle_last_set_warmup(ue_id, session_id)
-                    context.user_data.pop("last_action", None)
+            elif action == "done":
+                await mark_exercise_done(session_id, ue_id)
+                ex_rows = await fetch_day_exercises(user_id, day, today_str)
+                label = await get_day_label(user_id, day)
+                custom = await get_custom_groups(user_id, context)
+                await safe_edit_message(
+                    q,
+                    render_day_text(day, label, ex_rows, custom),
+                    reply_markup=day_kb(day, ex_rows),
+                )
+                return
+            elif action == "progress":
+                rows = await list_recent_progress(user_id, day, ue_id)
+                text, _ = await render_exercise_view(user_id, day, ue_id)
+                if rows:
+                    text += "\n\nПрогресс:" + "".join(
+                        f"\n{d}: {s}x{r} @ {w:.1f} кг" + (" (микро)" if m else "")
+                        for d, m, s, r, w in rows
+                    )
+                else:
+                    text += "\n\nПрогресс: нет данных"
+                await safe_edit_message(q, text, exercise_view_kb(day, ue_id))
+                return
+            elif action == "micro":
+                await toggle_microcycle(session_id, ue_id)
         text, _ = await render_exercise_view(user_id, day, ue_id)
-        step = await get_weight_step(user_id)
-        await safe_edit_message(q, text, exercise_view_kb(day, ue_id, step))
+        await safe_edit_message(q, text, exercise_view_kb(day, ue_id))
         return
 
 def main():
