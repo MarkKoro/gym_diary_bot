@@ -470,6 +470,15 @@ async def get_user_reminder(user_id: int):
         )
         return await cur.fetchone()
 
+
+async def list_users_with_reminders():
+    async with connect_db() as db:
+        cur = await db.execute(
+            "SELECT r.user_id, u.tg_id, r.hour, r.minute FROM user_reminders r "
+            "JOIN users u ON u.id = r.user_id"
+        )
+        return await cur.fetchall()
+
 async def list_active_days(user_id: int):
     async with connect_db() as db:
         cur = await db.execute(
