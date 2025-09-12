@@ -1012,13 +1012,14 @@ def main():
         .concurrent_updates(True)
         .connection_pool_size(TG_POOL_SIZE)
         .rate_limiter(AIORateLimiter())
+        .post_init(post_init)
         .build()
     )
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(menu_router))
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), text_router))
     app.add_error_handler(on_error)
-    app.run_polling(post_init=post_init)
+    app.run_polling()
 
 
 if __name__ == "__main__":
