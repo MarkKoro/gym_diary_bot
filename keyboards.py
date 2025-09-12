@@ -4,6 +4,7 @@ def main_menu_kb(days: list[tuple[int, str]], support_url: str):
     rows = []
     for idx, label in days:
         rows.append([InlineKeyboardButton(f"День {idx} — {label}", callback_data=f"day:open:{idx}")])
+    rows.append([InlineKeyboardButton("📘 Мои упражнения", callback_data="menu:library")])
     rows.append([InlineKeyboardButton("⚙︎ Настройки", callback_data="menu:settings")])
     rows.append([InlineKeyboardButton("📩 Техподдержка", url=support_url)])
     return InlineKeyboardMarkup(rows)
@@ -305,3 +306,53 @@ def exercise_view_kb(day_index: int, ue_id: int):
         [InlineKeyboardButton("✅ Готово", callback_data=f"ex:done:{day_index}:{ue_id}")],
         [InlineKeyboardButton("⬅︎ Назад", callback_data=f"day:open:{day_index}")],
     ])
+
+
+def library_menu_kb(groups: list[tuple[str, int]], custom: dict[str, str] | None = None):
+    custom = custom or {}
+    rows = []
+    for code, cnt in groups:
+        name = MG_NAMES.get(code, custom.get(code, code))
+        rows.append([
+            InlineKeyboardButton(f"{name} ({cnt})", callback_data=f"lib:group:{code}")
+        ])
+    rows.append([InlineKeyboardButton("➕ Добавить упражнение", callback_data="lib:add:start")])
+    rows.append([InlineKeyboardButton("⬅︎ Назад", callback_data="menu:root")])
+    return InlineKeyboardMarkup(rows)
+
+
+def library_group_kb(group: str, items: list[tuple[int, str]]):
+    rows = []
+    for ue_id, name in items:
+        rows.append([InlineKeyboardButton(f"🗑 {name}", callback_data=f"lib:del:{group}:{ue_id}")])
+    rows.append([InlineKeyboardButton("⬅︎ Назад", callback_data="lib:root")])
+    return InlineKeyboardMarkup(rows)
+
+
+def library_add_group_kb(custom: dict[str, str] | None = None):
+    rows = []
+    for code, name in MG_NAMES.items():
+        if code == "other":
+            continue
+        rows.append([InlineKeyboardButton(name, callback_data=f"lib:add:mg:{code}")])
+    if custom:
+        for code, name in custom.items():
+            rows.append([InlineKeyboardButton(name, callback_data=f"lib:add:mg:{code}")])
+    rows.append([InlineKeyboardButton("⬅︎ Назад", callback_data="lib:root")])
+    return InlineKeyboardMarkup(rows)
+
+
+def library_add_exercises_kb(group: str, ex_rows: list[tuple[int, str]], selected: set[int]):
+    rows = []
+    for ex_id, name in ex_rows:
+        mark = "✅" if ex_id in selected else "⬜"
+        rows.append([
+            InlineKeyboardButton(f"{mark} {name}", callback_data=f"lib:add:ex:{group}:{ex_id}")
+        ])
+    rows.append(
+        [
+            InlineKeyboardButton("✅ Готово", callback_data="lib:add:done"),
+            InlineKeyboardButton("⬅︎ Назад", callback_data="lib:add:back"),
+        ]
+    )
+    return InlineKeyboardMarkup(rows)
