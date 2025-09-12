@@ -33,6 +33,8 @@ from keyboards import (
     reminder_time_kb,
     tz_select_kb,
     reminders_edit_kb,
+    reminder_day_kb,
+    WEEKDAYS,
     MG_NAMES,
     day_kb,
     day_group_kb,
@@ -67,7 +69,8 @@ from db import (
     set_user_timezone,
     add_user_reminder,
     get_user_timezone,
-    get_user_reminder,
+    list_user_reminders,
+    clear_user_reminders,
     list_active_days,
     get_day_label,
     remove_user_exercise,
@@ -234,10 +237,16 @@ async def reminder_job(context: ContextTypes.DEFAULT_TYPE):
 
 
 async def schedule_all_reminders(app: Application):
-    for user_id, tg_id, hour, minute in await list_users_with_reminders():
+    for user_id, tg_id, dow, hour, minute in await list_users_with_reminders():
         tz = await get_user_timezone(user_id)
         tm = time(hour=hour, minute=minute, tzinfo=ZoneInfo(tz))
-        app.job_queue.run_daily(reminder_job, tm, chat_id=tg_id)
+        app.job_queue.run_daily(
+            reminder_job,
+            tm,
+            days=(dow,),
+            chat_id=tg_id,
+            name=f"rem_{user_id}_{dow}",
+        )
 
 
 async def post_init(app: Application):
@@ -588,6 +597,9 @@ async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAUL
         return
     if data == "wiz:reminders:yes":
         context.user_data["tz_page"] = 0
+        if "workouts_per_week" not in context.user_data:
+            settings = await fetch_user_settings(user_id)
+            context.user_data["workouts_per_week"] = settings[1] if settings else 0
         await q.edit_message_text("Выбери свой часовой пояс:", reply_markup=tz_select_kb(0))
         return
     if data == "wiz:reminders:no":
@@ -623,9 +635,16 @@ async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAUL
             tz = parts[3]
             context.user_data["tz"] = tz
             await set_user_timezone(user_id, tz)
+            if context.user_data.pop("edit_reminders", None):
+                await clear_user_reminders(user_id)
+                for job in context.job_queue.jobs():
+                    if job.name and job.name.startswith(f"rem_{user_id}_"):
+                        job.schedule_removal()
+            day_no = context.user_data.get("reminder_day", 1)
+            context.user_data["reminder_day"] = day_no
             await q.edit_message_text(
-                "Во сколько напоминать в дни тренировок? Выбери время (по твоему часовому поясу)",
-                reply_markup=reminder_time_kb(),
+                f"День {day_no}. В какой день недели тренировка?",
+                reply_markup=reminder_day_kb(),
             )
         elif action == "back":
             if context.user_data.get("from_settings"):
@@ -637,17 +656,51 @@ async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAUL
                     reply_markup=reminders_kb(),
                 )
         return
+    if data.startswith("wiz:rday:"):
+        action = data.split(":")[2]
+        if action == "back":
+            page = context.user_data.get("tz_page", 0)
+            await q.edit_message_text("Выбери свой часовой пояс:", reply_markup=tz_select_kb(page))
+        else:
+            context.user_data["selected_dow"] = int(action)
+            await q.edit_message_text(
+                "Во сколько напоминать в этот день? Выбери время (по твоему часовому поясу)",
+                reply_markup=reminder_time_kb(),
+            )
+        return
     if data == "wiz:remind:back":
-        page = context.user_data.get("tz_page", 0)
-        await q.edit_message_text("Выбери свой часовой пояс:", reply_markup=tz_select_kb(page))
+        day_no = context.user_data.get("reminder_day", 1)
+        await q.edit_message_text(
+            f"День {day_no}. В какой день недели тренировка?",
+            reply_markup=reminder_day_kb(),
+        )
         return
     if data.startswith("wiz:remind:"):
         _, _, hh, mm = data.split(":")
         hour, minute = int(hh), int(mm)
-        await add_user_reminder(user_id, hour, minute)
+        dow = context.user_data.get("selected_dow")
+        await add_user_reminder(user_id, dow, hour, minute)
         tz = context.user_data.get("tz", "UTC")
         reminder_time = time(hour, minute, tzinfo=ZoneInfo(tz))
-        context.job_queue.run_daily(reminder_job, reminder_time, chat_id=q.message.chat_id)
+        job_name = f"rem_{user_id}_{dow}"
+        for job in context.job_queue.get_jobs_by_name(job_name):
+            job.schedule_removal()
+        context.job_queue.run_daily(
+            reminder_job,
+            reminder_time,
+            days=(dow,),
+            chat_id=q.message.chat_id,
+            name=job_name,
+        )
+        day_no = context.user_data.get("reminder_day", 1)
+        total = context.user_data.get("workouts_per_week", 0)
+        if day_no < total:
+            context.user_data["reminder_day"] = day_no + 1
+            await q.edit_message_text(
+                f"День {day_no + 1}. В какой день недели тренировка?",
+                reply_markup=reminder_day_kb(),
+            )
+            return
         if context.user_data.get("from_settings"):
             context.user_data.pop("from_settings", None)
             await q.edit_message_text("Настройки:", reply_markup=settings_kb())
@@ -745,9 +798,13 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         settings = await fetch_user_settings(user_id)
         n = settings[1] if settings else 0
         tz = await get_user_timezone(user_id)
-        rem = await get_user_reminder(user_id)
+        rems = await list_user_reminders(user_id)
         tz_label = next((label for code, label in TIMEZONES if code == tz), tz)
-        rem_text = f"{rem[0]:02d}:{rem[1]:02d}" if rem else "не задано"
+        if rems:
+            parts = [f"{dict(WEEKDAYS)[d]} {h:02d}:{m:02d}" for d, h, m in rems]
+            rem_text = ", ".join(parts)
+        else:
+            rem_text = "не задано"
         text = (
             "Настройки:\n"
             "✏️ Переименовать дни — изменить названия тренировочных дней.\n"
@@ -777,7 +834,15 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             else:
                 n = int(parts[2])
                 await set_workouts_per_week(user_id, n)
-                await safe_edit_message(q, "Количество тренировок обновлено.", reply_markup=settings_kb())
+                rems = await list_user_reminders(user_id)
+                if len(rems) < n:
+                    context.user_data["from_settings"] = True
+                    context.user_data["tz_page"] = 0
+                    context.user_data["workouts_per_week"] = n
+                    context.user_data["reminder_day"] = len(rems) + 1
+                    await safe_edit_message(q, "Хотите настроить уведомления для новых дней?", reply_markup=reminders_kb())
+                else:
+                    await safe_edit_message(q, "Количество тренировок обновлено.", reply_markup=settings_kb())
             return
         if action == "step":
             if len(parts) == 2:
@@ -791,11 +856,12 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if action == "reminders":
             if len(parts) == 2:
                 tz = await get_user_timezone(user_id)
-                rem = await get_user_reminder(user_id)
-                if tz and rem:
+                rems = await list_user_reminders(user_id)
+                if tz and rems:
                     tz_label = next((label for code, label in TIMEZONES if code == tz), tz)
-                    rem_text = f"{rem[0]:02d}:{rem[1]:02d}"
-                    text = f"Сейчас выбран {tz_label}, напоминания в {rem_text}."
+                    parts = [f"{dict(WEEKDAYS)[d]} {h:02d}:{m:02d}" for d, h, m in rems]
+                    rem_text = ", ".join(parts)
+                    text = f"Сейчас выбран {tz_label}, напоминания: {rem_text}."
                     await safe_edit_message(q, text, reply_markup=reminders_edit_kb())
                     return
                 context.user_data["from_settings"] = True
@@ -810,7 +876,12 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 return
             if sub == "time":
                 context.user_data["from_settings"] = True
-                await safe_edit_message(q, "Во сколько напоминать в дни тренировок? Выбери время (по твоему часовому поясу)", reply_markup=reminder_time_kb())
+                context.user_data["tz_page"] = 0
+                context.user_data["edit_reminders"] = True
+                if "workouts_per_week" not in context.user_data:
+                    settings = await fetch_user_settings(user_id)
+                    context.user_data["workouts_per_week"] = settings[1] if settings else 0
+                await safe_edit_message(q, "Выбери свой часовой пояс:", reply_markup=tz_select_kb(0))
                 return
         if action == "subscription":
             await safe_edit_message(q, "Подписка пока в разработке.", reply_markup=settings_kb())

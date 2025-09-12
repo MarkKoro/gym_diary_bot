@@ -453,28 +453,34 @@ async def get_user_timezone(user_id: int):
         row = await cur.fetchone()
         return row[0] if row else "UTC"
 
-async def add_user_reminder(user_id: int, hour: int, minute: int):
+async def add_user_reminder(user_id: int, dow: int, hour: int, minute: int):
     async with connect_db() as db:
         await db.execute(
             "INSERT INTO user_reminders(user_id, dow, hour, minute) VALUES(?,?,?,?)",
-            (user_id, None, hour, minute),
+            (user_id, dow, hour, minute),
         )
         await db.commit()
 
 
-async def get_user_reminder(user_id: int):
+async def list_user_reminders(user_id: int):
     async with connect_db() as db:
         cur = await db.execute(
-            "SELECT hour, minute FROM user_reminders WHERE user_id=? ORDER BY id DESC LIMIT 1",
+            "SELECT dow, hour, minute FROM user_reminders WHERE user_id=? ORDER BY id",
             (user_id,),
         )
-        return await cur.fetchone()
+        return await cur.fetchall()
+
+
+async def clear_user_reminders(user_id: int):
+    async with connect_db() as db:
+        await db.execute("DELETE FROM user_reminders WHERE user_id=?", (user_id,))
+        await db.commit()
 
 
 async def list_users_with_reminders():
     async with connect_db() as db:
         cur = await db.execute(
-            "SELECT r.user_id, u.tg_id, r.hour, r.minute FROM user_reminders r "
+            "SELECT r.user_id, u.tg_id, r.dow, r.hour, r.minute FROM user_reminders r "
             "JOIN users u ON u.id = r.user_id"
         )
         return await cur.fetchall()

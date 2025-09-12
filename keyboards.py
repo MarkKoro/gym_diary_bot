@@ -151,7 +151,7 @@ def reminders_kb():
 def reminders_edit_kb():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("Изменить часовой пояс", callback_data="set:reminders:tz")],
-        [InlineKeyboardButton("Изменить время уведомлений", callback_data="set:reminders:time")],
+        [InlineKeyboardButton("Изменить дни и время", callback_data="set:reminders:time")],
         [InlineKeyboardButton("⬅︎ Назад", callback_data="menu:settings")],
     ])
 
@@ -203,6 +203,25 @@ def reminder_time_kb():
         t = f"{h:02d}:00"
         rows.append([InlineKeyboardButton(t, callback_data=f"wiz:remind:{t}")])
     rows.append([InlineKeyboardButton("⬅︎ Назад", callback_data="wiz:remind:back")])
+    return InlineKeyboardMarkup(rows)
+
+
+WEEKDAYS = [
+    (0, "Пн"),
+    (1, "Вт"),
+    (2, "Ср"),
+    (3, "Чт"),
+    (4, "Пт"),
+    (5, "Сб"),
+    (6, "Вс"),
+]
+
+
+def reminder_day_kb():
+    rows = []
+    for dow, label in WEEKDAYS:
+        rows.append([InlineKeyboardButton(label, callback_data=f"wiz:rday:{dow}")])
+    rows.append([InlineKeyboardButton("⬅︎ Назад", callback_data="wiz:rday:back")])
     return InlineKeyboardMarkup(rows)
 
 def day_kb(day_index: int, ex_rows: list[tuple[int, str, str, int]]):
