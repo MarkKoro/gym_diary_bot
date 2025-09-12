@@ -1,9 +1,16 @@
 import asyncio
+import logging
 from datetime import datetime, time, timedelta
 from zoneinfo import ZoneInfo
 from collections import defaultdict
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
-from telegram.error import BadRequest
+from telegram.error import (
+    BadRequest,
+    Forbidden,
+    RetryAfter,
+    TimedOut,
+    NetworkError,
+)
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -79,9 +86,11 @@ from db import (
     set_weight_step,
     add_user_muscle_group,
     list_user_muscle_groups,
+    list_users_with_reminders,
 )
 
 user_locks = defaultdict(asyncio.Lock)
+logger = logging.getLogger(__name__)
 
 async def safe_edit_message(q, text, reply_markup):
     try:
@@ -89,6 +98,24 @@ async def safe_edit_message(q, text, reply_markup):
     except BadRequest as e:
         if "not modified" not in e.message.lower():
             raise
+
+async def try_delete(msg):
+    try:
+        await msg.delete()
+    except BadRequest:
+        pass
+
+async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE):
+    exc = context.error
+    logger.warning("Unhandled error: %s", exc)
+    try:
+        raise exc
+    except Forbidden:
+        pass
+    except RetryAfter as e:
+        await asyncio.sleep(int(getattr(e, "retry_after", 3)))
+    except (TimedOut, NetworkError, BadRequest):
+        pass
 
 async def check_subscription(tg_id: int, bot) -> bool:
     try:
@@ -195,7 +222,26 @@ async def render_exercise_view(user_id: int, day: int, ue_id: int):
     return "\n".join(lines), session_id
 
 async def reminder_job(context: ContextTypes.DEFAULT_TYPE):
-    await context.bot.send_message(context.job.chat_id, "Напоминание о тренировке!")
+    try:
+        await context.bot.send_message(context.job.chat_id, "Напоминание о тренировке!")
+    except Forbidden:
+        try:
+            context.job.schedule_removal()
+        except Exception:
+            pass
+    except Exception:
+        logger.exception("Reminder job failed")
+
+
+async def schedule_all_reminders(app: Application):
+    for user_id, tg_id, hour, minute in await list_users_with_reminders():
+        tz = await get_user_timezone(user_id)
+        tm = time(hour=hour, minute=minute, tzinfo=ZoneInfo(tz))
+        app.job_queue.run_daily(reminder_job, tm, chat_id=tg_id)
+
+
+async def post_init(app: Application):
+    await schedule_all_reminders(app)
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await require_subscription(update, context):
@@ -624,7 +670,7 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         code = await add_user_muscle_group(user_id, name)
         custom = await get_custom_groups(user_id, context)
         custom[code] = name
-        await update.message.delete()
+        await try_delete(update.message)
         if mode == "wizard":
             selected = context.user_data.setdefault("day_groups", {}).setdefault(day, set())
             selected.add(code)
@@ -651,13 +697,13 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         u = update.effective_user
         user_id = await get_or_create_user(u.id, u.username)
         await rename_day(user_id, day, label)
-        await update.message.delete()
+        await try_delete(update.message)
         await context.bot.edit_message_text("Настройки:", chat_id=chat_id, message_id=msg_id, reply_markup=settings_kb())
         return
     if context.user_data.get("awaiting_custom"):
         day, group = context.user_data.pop("awaiting_custom")
         name = update.message.text.strip()
-        await update.message.delete()
+        await try_delete(update.message)
         ex_id = await get_or_create_exercise(name, group)
         u = update.effective_user
         user_id = await get_or_create_user(u.id, u.username)
@@ -971,7 +1017,8 @@ def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(menu_router))
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), text_router))
-    app.run_polling()
+    app.add_error_handler(on_error)
+    app.run_polling(post_init=post_init)
 
 
 if __name__ == "__main__":
