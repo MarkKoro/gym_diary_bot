@@ -397,6 +397,76 @@ async def toggle_user_exercise(user_id: int, day_index: int, exercise_id: int):
         await db.commit()
         return row is None
 
+
+async def copy_day_plan_to_other_days(user_id: int, src_day: int, days: int):
+    async with connect_db() as db:
+        cur = await db.execute(
+            "SELECT exercise_id FROM user_exercises WHERE user_id=? AND day_index=?",
+            (user_id, src_day),
+        )
+        ex_ids = [r[0] for r in await cur.fetchall()]
+        for d in range(1, days + 1):
+            if d == src_day:
+                continue
+            for ex_id in ex_ids:
+                try:
+                    await db.execute(
+                        "INSERT INTO user_exercises(user_id, exercise_id, day_index) VALUES(?,?,?)",
+                        (user_id, ex_id, d),
+                    )
+                except Exception:
+                    pass
+        cur = await db.execute(
+            "SELECT exercise_id, sets, reps, weight_kg FROM exercise_baseline WHERE user_id=? AND day_index=?",
+            (user_id, src_day),
+        )
+        rows = await cur.fetchall()
+        for d in range(1, days + 1):
+            if d == src_day:
+                continue
+            for ex_id, sets, reps, weight in rows:
+                await db.execute(
+                    """
+                    INSERT INTO exercise_baseline(user_id, day_index, exercise_id, sets, reps, weight_kg)
+                    VALUES(?,?,?,?,?,?)
+                    ON CONFLICT(user_id, day_index, exercise_id)
+                    DO UPDATE SET sets=excluded.sets, reps=excluded.reps, weight_kg=excluded.weight_kg
+                    """,
+                    (user_id, d, ex_id, sets, reps, weight),
+                )
+        await db.commit()
+
+
+async def list_library_groups(user_id: int):
+    async with connect_db() as db:
+        cur = await db.execute(
+            """
+            SELECT e.muscle_group, COUNT(*)
+            FROM user_exercises ue
+            JOIN exercises e ON e.id=ue.exercise_id
+            WHERE ue.user_id=? AND ue.day_index=0
+            GROUP BY e.muscle_group
+            ORDER BY e.muscle_group
+            """,
+            (user_id,),
+        )
+        return await cur.fetchall()
+
+
+async def list_library_exercises(user_id: int, group: str):
+    async with connect_db() as db:
+        cur = await db.execute(
+            """
+            SELECT ue.id, e.name
+            FROM user_exercises ue
+            JOIN exercises e ON e.id=ue.exercise_id
+            WHERE ue.user_id=? AND ue.day_index=0 AND e.muscle_group=?
+            ORDER BY e.name
+            """,
+            (user_id, group),
+        )
+        return await cur.fetchall()
+
 async def get_or_create_exercise(name: str, muscle_group: str):
     async with connect_db() as db:
         cur = await db.execute(

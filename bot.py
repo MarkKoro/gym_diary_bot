@@ -47,6 +47,10 @@ from keyboards import (
     days_count_kb,
     weight_step_kb,
     TIMEZONES,
+    library_menu_kb,
+    library_group_kb,
+    library_add_group_kb,
+    library_add_exercises_kb,
 )
 from settings import TG_TOKEN, SUPPORT_DEEPLINK, TG_POOL_SIZE, SUBSCRIPTION_CHAT, JOIN_URL
 from db import (
@@ -90,6 +94,9 @@ from db import (
     add_user_muscle_group,
     list_user_muscle_groups,
     list_users_with_reminders,
+    copy_day_plan_to_other_days,
+    list_library_groups,
+    list_library_exercises,
 )
 
 user_locks = defaultdict(asyncio.Lock)
@@ -259,7 +266,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = await get_or_create_user(u.id, u.username)
     settings = await fetch_user_settings(user_id)
     if not settings or not settings[0] or not settings[1]:
-        await update.message.reply_text("Как ты тренируешься?", reply_markup=system_kb())
+        text = (
+            "В этом боте ты ведёшь дневник тренировок: сохраняешь упражнения, "
+            "отслеживаешь прогресс и получаешь напоминания. "
+            "Всё в одном удобном месте — больше не нужно записывать данные где попало.\n\n"
+            "Нажми кнопку ниже, чтобы продолжить."
+        )
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton("Ясно, спасибо", callback_data="wiz:intro:ok")]])
+        await update.message.reply_text(text, reply_markup=kb)
         return
     days = await list_active_days(user_id)
     await update.message.reply_text(
@@ -279,6 +293,14 @@ async def show_exercises(q, user_id: int, day: int, group: str, context):
 
 async def finish_day(q, context, user_id: int, day: int, summary: str | None = None):
     n = context.user_data.get("workouts_per_week", 0)
+    system = context.user_data.get("system")
+    if system == "fullbody":
+        await copy_day_plan_to_other_days(user_id, 1, n)
+        text = "Присылать напоминания перед тренировками?"
+        if summary:
+            text = summary + "\n────────\n" + text
+        await q.edit_message_text(text, reply_markup=reminders_kb())
+        return
     if day >= n:
         days = await list_active_days(user_id)
         text = "Отлично, супер! Мы сохранили все ваши данные. Теперь можете с удовольствием пользоваться."
@@ -317,15 +339,39 @@ async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAUL
     if data == "wiz:sub:verify":
         if await check_subscription(q.from_user.id, context.bot):
             context.user_data["sub_expiry"] = datetime.utcnow() + timedelta(days=1)
-            await q.edit_message_text("Как ты тренируешься?", reply_markup=system_kb())
+            text = (
+                "В этом боте ты ведёшь дневник тренировок: сохраняешь упражнения, "
+                "отслеживаешь прогресс и получаешь напоминания. "
+                "Всё в одном удобном месте — больше не нужно записывать данные где попало.\n\n"
+                "Нажми кнопку ниже, чтобы продолжить."
+            )
+            kb = InlineKeyboardMarkup(
+                [[InlineKeyboardButton("Ясно, спасибо", callback_data="wiz:intro:ok")]]
+            )
+            await q.edit_message_text(text, reply_markup=kb)
         else:
             await q.edit_message_text(
                 "Прежде чем получить помощника, подпишись на наш канал, чтобы поддержать нас и быть в курсе новостей.",
                 reply_markup=subscription_kb(JOIN_URL),
             )
         return
+    if data == "wiz:intro:ok":
+        text = (
+            "Как ты тренируешься?\n\n"
+            "Если выбираешь Full Body, мы автоматически применим выбранные упражнения ко всем дням твоих тренировок. "
+            "Если выбираешь Split, сможешь настроить упражнения для каждого дня отдельно. "
+            "В любом случае ты всегда сможешь добавить или убрать упражнения в любой день."
+        )
+        await q.edit_message_text(text, reply_markup=system_kb())
+        return
     if data == "wiz:sys:back":
-        await q.edit_message_text("Как ты тренируешься?", reply_markup=system_kb())
+        text = (
+            "Как ты тренируешься?\n\n"
+            "Если выбираешь Full Body, мы автоматически применим выбранные упражнения ко всем дням твоих тренировок. "
+            "Если выбираешь Split, сможешь настроить упражнения для каждого дня отдельно. "
+            "В любом случае ты всегда сможешь добавить или убрать упражнения в любой день."
+        )
+        await q.edit_message_text(text, reply_markup=system_kb())
         return
     if data.startswith("wiz:sys:"):
         code = data.split(":")[2]
@@ -340,6 +386,7 @@ async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAUL
             )
             await q.edit_message_text(hint, reply_markup=kb)
             return
+        context.user_data["system"] = code
         await update_user_system(user_id, code)
         await q.edit_message_text(
             "Сколько тренировок планируешь в неделю?",
@@ -794,6 +841,12 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await safe_edit_message(q, "Главное меню:", reply_markup=main_menu_kb(days, SUPPORT_DEEPLINK))
         return
 
+    if data in ("menu:library", "lib:root"):
+        groups = await list_library_groups(user_id)
+        custom = await get_custom_groups(user_id, context)
+        await safe_edit_message(q, "Мои упражнения:", reply_markup=library_menu_kb(groups, custom))
+        return
+
     if data == "menu:settings":
         settings = await fetch_user_settings(user_id)
         n = settings[1] if settings else 0
@@ -817,6 +870,58 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     parts = data.split(":")
+    if parts[0] == "lib":
+        action = parts[1]
+        if action == "group":
+            group = parts[2]
+            items = await list_library_exercises(user_id, group)
+            await safe_edit_message(q, "Упражнения:", reply_markup=library_group_kb(group, items))
+            return
+        if action == "del":
+            group = parts[2]
+            ue_id = int(parts[3])
+            await remove_user_exercise(user_id, 0, ue_id)
+            items = await list_library_exercises(user_id, group)
+            await safe_edit_message(q, "Упражнения:", reply_markup=library_group_kb(group, items))
+            return
+        if action == "add":
+            sub = parts[2]
+            if sub == "start":
+                custom = await get_custom_groups(user_id, context)
+                await safe_edit_message(q, "Выбери группу:", reply_markup=library_add_group_kb(custom))
+                return
+            if sub == "mg":
+                group = parts[3]
+                ex_rows = await list_exercises_by_group(group)
+                selected = set(await list_user_exercise_ids(user_id, 0, group))
+                await safe_edit_message(
+                    q,
+                    "Выбери упражнения:",
+                    reply_markup=library_add_exercises_kb(group, ex_rows, selected),
+                )
+                return
+            if sub == "ex":
+                group = parts[3]
+                ex_id = int(parts[4])
+                await toggle_user_exercise(user_id, 0, ex_id)
+                ex_rows = await list_exercises_by_group(group)
+                selected = set(await list_user_exercise_ids(user_id, 0, group))
+                await safe_edit_message(
+                    q,
+                    "Выбери упражнения:",
+                    reply_markup=library_add_exercises_kb(group, ex_rows, selected),
+                )
+                return
+            if sub == "back":
+                custom = await get_custom_groups(user_id, context)
+                await safe_edit_message(q, "Выбери группу:", reply_markup=library_add_group_kb(custom))
+                return
+            if sub == "done":
+                groups = await list_library_groups(user_id)
+                custom = await get_custom_groups(user_id, context)
+                await safe_edit_message(q, "Мои упражнения:", reply_markup=library_menu_kb(groups, custom))
+                return
+
     if parts[0] == "set":
         action = parts[1]
         if action == "rename_day":
@@ -1072,6 +1177,59 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text, _ = await render_exercise_view(user_id, day, ue_id)
         await safe_edit_message(q, text, exercise_view_kb(day, ue_id))
         return
+
+    if parts[0] == "lib":
+        action = parts[1]
+        if action == "group":
+            group = parts[2]
+            items = await list_library_exercises(user_id, group)
+            await safe_edit_message(q, "Упражнения:", reply_markup=library_group_kb(group, items))
+            return
+        if action == "del":
+            group = parts[2]
+            ue_id = int(parts[3])
+            await remove_user_exercise(user_id, 0, ue_id)
+            items = await list_library_exercises(user_id, group)
+            await safe_edit_message(q, "Упражнения:", reply_markup=library_group_kb(group, items))
+            return
+        if action == "add":
+            sub = parts[2]
+            if sub == "start":
+                custom = await get_custom_groups(user_id, context)
+                await safe_edit_message(q, "Выбери группу:", reply_markup=library_add_group_kb(custom))
+                return
+            if sub == "mg":
+                group = parts[3]
+                context.user_data["lib_group"] = group
+                ex_rows = await list_exercises_by_group(group)
+                selected = set(await list_user_exercise_ids(user_id, 0, group))
+                await safe_edit_message(
+                    q,
+                    "Выбери упражнения:",
+                    reply_markup=library_add_exercises_kb(group, ex_rows, selected),
+                )
+                return
+            if sub == "ex":
+                group = parts[3]
+                ex_id = int(parts[4])
+                await toggle_user_exercise(user_id, 0, ex_id)
+                ex_rows = await list_exercises_by_group(group)
+                selected = set(await list_user_exercise_ids(user_id, 0, group))
+                await safe_edit_message(
+                    q,
+                    "Выбери упражнения:",
+                    reply_markup=library_add_exercises_kb(group, ex_rows, selected),
+                )
+                return
+            if sub == "back":
+                custom = await get_custom_groups(user_id, context)
+                await safe_edit_message(q, "Выбери группу:", reply_markup=library_add_group_kb(custom))
+                return
+            if sub == "done":
+                groups = await list_library_groups(user_id)
+                custom = await get_custom_groups(user_id, context)
+                await safe_edit_message(q, "Мои упражнения:", reply_markup=library_menu_kb(groups, custom))
+                return
 
 def main():
     asyncio.run(init_db())
