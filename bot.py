@@ -209,7 +209,7 @@ def render_baseline_progress(done: list[str], name: str, sets: int, reps: int, w
     return "\n".join(lines)
 
 async def render_exercise_view(user_id: int, day: int, ue_id: int):
-    ex_id, name = await get_exercise_info(ue_id)
+    ex_id, name, group = await get_exercise_info(ue_id)
     today = datetime.utcnow().strftime("%Y-%m-%d")
     baseline = await get_baseline(user_id, day, ex_id)
     if baseline:
@@ -219,17 +219,21 @@ async def render_exercise_view(user_id: int, day: int, ue_id: int):
         prev = f"{last[0]}x{last[1]} @ {last[2]:.1f}" if last else "—"
     session_id = await get_or_create_today_session(user_id, today, day)
     sets = await fetch_exercise_sets(session_id, ue_id)
+    if not sets and baseline:
+        for _ in range(baseline[0]):
+            await add_set(session_id, ue_id, baseline[1], baseline[2])
+        sets = await fetch_exercise_sets(session_id, ue_id)
     _, micro = await get_session_exercise_flags(session_id, ue_id)
     lines = [f"{name} — День {day}", f"Прошлый раз: {prev}", ""]
-    for set_no, reps, weight, warm in sets:
-        prefix = "🔥 " if warm else ""
-        lines.append(f"{prefix}{set_no}) {reps} x {weight:.1f}")
     if sets:
+        reps = sets[0][1]
+        weight = sets[0][2]
+        lines.append(f"{len(sets)}x{reps} @ {weight:.1f} кг")
         lines.append("")
     if micro:
         lines.append("(Микроцикл)")
     lines.append("Нажимай кнопки — всё сохраняется автоматически.")
-    return "\n".join(lines), session_id
+    return "\n".join(lines), session_id, ex_id, group
 
 async def reminder_job(context: ContextTypes.DEFAULT_TYPE):
     try:
@@ -550,8 +554,22 @@ async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAUL
                 return
             if action == "custom":
                 group = parts[5]
-                context.user_data["awaiting_custom"] = (day, group)
-                kb = InlineKeyboardMarkup([[InlineKeyboardButton("⬅︎ Назад", callback_data=f"wiz:day:{day}:ex:custom_back:{group}")]])
+                context.user_data["awaiting_custom"] = (
+                    day,
+                    group,
+                    q.message.chat_id,
+                    q.message.message_id,
+                )
+                kb = InlineKeyboardMarkup(
+                    [
+                        [
+                            InlineKeyboardButton(
+                                "⬅︎ Назад",
+                                callback_data=f"wiz:day:{day}:ex:custom_back:{group}",
+                            )
+                        ]
+                    ]
+                )
                 await q.edit_message_text("Напиши название упражнения:", reply_markup=kb)
                 return
             if action == "custom_back":
@@ -801,7 +819,7 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await context.bot.edit_message_text("Настройки:", chat_id=chat_id, message_id=msg_id, reply_markup=settings_kb())
         return
     if context.user_data.get("awaiting_custom"):
-        day, group = context.user_data.pop("awaiting_custom")
+        day, group, chat_id, msg_id = context.user_data.pop("awaiting_custom")
         name = update.message.text.strip()
         await try_delete(update.message)
         ex_id = await get_or_create_exercise(name, group)
@@ -811,16 +829,17 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ex_rows = await list_exercises_by_group(group)
         custom = context.user_data.get("custom_groups", {})
         selected_ids = set(await list_user_exercise_ids(user_id, day, group))
-        if context.user_data.get("add_group") == (day, group):
-            await update.message.reply_text(
-                day_exercises_text(day, group, custom),
-                reply_markup=day_add_exercises_kb(day, group, ex_rows, selected_ids),
-            )
-        else:
-            await update.message.reply_text(
-                day_exercises_text(day, group, custom),
-                reply_markup=exercises_kb(day, group, ex_rows, selected_ids),
-            )
+        kb = (
+            day_add_exercises_kb(day, group, ex_rows, selected_ids)
+            if context.user_data.get("add_group") == (day, group)
+            else exercises_kb(day, group, ex_rows, selected_ids)
+        )
+        await context.bot.edit_message_text(
+            day_exercises_text(day, group, custom),
+            chat_id=chat_id,
+            message_id=msg_id,
+            reply_markup=kb,
+        )
         return
 
 async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1020,6 +1039,17 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 lines.append(f"{mark} {n}")
             await safe_edit_message(q, "\n".join(lines), reply_markup=day_group_kb(day, group, items))
             return
+        if action == "microinfo":
+            day = int(parts[2])
+            desc = (
+                "Микроцикл — это недельный цикл тренировок. "
+                "Отмечая упражнение как микроцикл, ты фиксируешь, что выполняешь его в рамках текущей недели."
+            )
+            kb = InlineKeyboardMarkup(
+                [[InlineKeyboardButton("⬅︎ Назад", callback_data=f"day:open:{day}")]]
+            )
+            await q.edit_message_text("Микроцикл\n\n" + desc, reply_markup=kb)
+            return
         if action == "add_ex":
             day = int(parts[2])
             today_str = datetime.utcnow().strftime("%Y-%m-%d")
@@ -1069,10 +1099,22 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 return
             if sub == "custom":
                 group = parts[4]
-                context.user_data["awaiting_custom"] = (day, group)
-                kb = InlineKeyboardMarkup([
-                    [InlineKeyboardButton("⬅︎ Назад", callback_data=f"day:add:{day}:custom_back:{group}")]
-                ])
+                context.user_data["awaiting_custom"] = (
+                    day,
+                    group,
+                    q.message.chat_id,
+                    q.message.message_id,
+                )
+                kb = InlineKeyboardMarkup(
+                    [
+                        [
+                            InlineKeyboardButton(
+                                "⬅︎ Назад",
+                                callback_data=f"day:add:{day}:custom_back:{group}",
+                            )
+                        ]
+                    ]
+                )
                 await q.edit_message_text("Напиши название упражнения:", reply_markup=kb)
                 return
             if sub == "custom_back":
@@ -1115,14 +1157,14 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         day = int(parts[2])
         ue_id = int(parts[3])
         if action == "view":
-            text, _ = await render_exercise_view(user_id, day, ue_id)
-            await safe_edit_message(q, text, exercise_view_kb(day, ue_id))
+            text, _, _, group = await render_exercise_view(user_id, day, ue_id)
+            await safe_edit_message(q, text, exercise_view_kb(day, ue_id, group))
             return
         today_str = datetime.utcnow().strftime("%Y-%m-%d")
         async with user_locks[user_id]:
             session_id = await get_or_create_today_session(user_id, today_str, day)
             if action == "addset":
-                ex_id, _ = await get_exercise_info(ue_id)
+                ex_id, _, _ = await get_exercise_info(ue_id)
                 base = await get_baseline(user_id, day, ex_id)
                 reps = base[1] if base else 0
                 weight = base[2] if base else 0.0
@@ -1134,7 +1176,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 delta = float(parts[5])
                 sets = await fetch_exercise_sets(session_id, ue_id)
                 if not sets:
-                    ex_id, _ = await get_exercise_info(ue_id)
+                    ex_id, _, _ = await get_exercise_info(ue_id)
                     base = await get_baseline(user_id, day, ex_id)
                     reps = base[1] if base else 0
                     weight = base[2] if base else 0.0
@@ -1143,7 +1185,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             elif action == "toggle":
                 sets = await fetch_exercise_sets(session_id, ue_id)
                 if not sets:
-                    ex_id, _ = await get_exercise_info(ue_id)
+                    ex_id, _, _ = await get_exercise_info(ue_id)
                     base = await get_baseline(user_id, day, ex_id)
                     reps = base[1] if base else 0
                     weight = base[2] if base else 0.0
@@ -1162,20 +1204,27 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 return
             elif action == "progress":
                 rows = await list_recent_progress(user_id, day, ue_id)
-                text, _ = await render_exercise_view(user_id, day, ue_id)
-                if rows:
-                    text += "\n\nПрогресс:" + "".join(
-                        f"\n{d}: {s}x{r} @ {w:.1f} кг" + (" (микро)" if m else "")
-                        for d, m, s, r, w in rows
+                text, _, ex_id, group = await render_exercise_view(user_id, day, ue_id)
+                base = await get_baseline(user_id, day, ex_id)
+                prog_lines = []
+                if base:
+                    prog_lines.append(
+                        f"Базовое: {base[0]}x{base[1]} @ {base[2]:.1f} кг"
                     )
+                prog_lines.extend(
+                    f"{d}: {s}x{r} @ {w:.1f} кг" + (" (микро)" if m else "")
+                    for d, m, s, r, w in rows
+                )
+                if prog_lines:
+                    text += "\n\nПрогресс:\n" + "\n".join(prog_lines)
                 else:
                     text += "\n\nПрогресс: нет данных"
-                await safe_edit_message(q, text, exercise_view_kb(day, ue_id))
+                await safe_edit_message(q, text, exercise_view_kb(day, ue_id, group))
                 return
             elif action == "micro":
                 await toggle_microcycle(session_id, ue_id)
-        text, _ = await render_exercise_view(user_id, day, ue_id)
-        await safe_edit_message(q, text, exercise_view_kb(day, ue_id))
+        text, _, _, group = await render_exercise_view(user_id, day, ue_id)
+        await safe_edit_message(q, text, exercise_view_kb(day, ue_id, group))
         return
 
     if parts[0] == "lib":
