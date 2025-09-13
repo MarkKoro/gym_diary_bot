@@ -261,7 +261,7 @@ async def fetch_day_exercises(user_id: int, day_index: int = 1, date_str: str | 
         LEFT JOIN sessions s ON s.user_id=ue.user_id AND s.date=? AND s.day_index=ue.day_index
         LEFT JOIN session_exercises se ON se.session_id=s.id AND se.user_exercise_id=ue.id
         WHERE ue.user_id=? AND ue.day_index=?
-        ORDER BY e.muscle_group, e.name
+        ORDER BY ue.id
         """,
             (date_str, user_id, day_index),
         )
@@ -283,25 +283,27 @@ async def fetch_sets_table(session_id: int):
 async def inc_last_set(user_ex_id: int, session_id: int, field: str, delta: float):
     assert field in ("reps", "weight_kg")
     async with connect_db() as db:
-        cur = await db.execute("""
-            SELECT id, reps, weight_kg FROM sets
-            WHERE session_id=? AND user_exercise_id=?
-            ORDER BY set_no DESC LIMIT 1
-        """, (session_id, user_ex_id))
-        row = await cur.fetchone()
-        if not row:
-            # если сетов нет — создаём первый
-            await db.execute("INSERT INTO sets(session_id, user_exercise_id, set_no, reps, weight_kg) VALUES(?,?,?,?,?)",
-                             (session_id, user_ex_id, 1, 0, 0.0))
+        cur = await db.execute(
+            "SELECT id, reps, weight_kg FROM sets WHERE session_id=? AND user_exercise_id=?",
+            (session_id, user_ex_id),
+        )
+        rows = await cur.fetchall()
+        if not rows:
+            await db.execute(
+                "INSERT INTO sets(session_id, user_exercise_id, set_no, reps, weight_kg) VALUES(?,?,?,?,?)",
+                (session_id, user_ex_id, 1, 0, 0.0),
+            )
             await db.commit()
             return await inc_last_set(user_ex_id, session_id, field, delta)
-        set_id, reps, weight = row
+        current = rows[0][1] if field == "reps" else rows[0][2]
         if field == "reps":
-            reps = int(reps + delta)
-            await db.execute("UPDATE sets SET reps=? WHERE id=?", (max(reps, 0), set_id))
+            new_val = max(int(current + delta), 0)
         else:
-            weight = float(weight + delta)
-            await db.execute("UPDATE sets SET weight_kg=? WHERE id=?", (max(weight, 0.0), set_id))
+            new_val = max(float(current + delta), 0.0)
+        await db.executemany(
+            f"UPDATE sets SET {field}=? WHERE id=?",
+            [(new_val, r[0]) for r in rows],
+        )
         await db.commit()
 
 async def fetch_user_settings(user_id: int):
@@ -376,9 +378,17 @@ async def add_user_exercise(user_id: int, day_index: int, exercise_id: int):
                 "INSERT INTO user_exercises(user_id, exercise_id, day_index) VALUES(?,?,?)",
                 (user_id, exercise_id, day_index),
             )
-            await db.commit()
         except Exception:
             pass
+        if day_index != 0:
+            try:
+                await db.execute(
+                    "INSERT INTO user_exercises(user_id, exercise_id, day_index) VALUES(?,?,0)",
+                    (user_id, exercise_id),
+                )
+            except Exception:
+                pass
+        await db.commit()
 
 async def toggle_user_exercise(user_id: int, day_index: int, exercise_id: int):
     async with connect_db() as db:
@@ -394,6 +404,14 @@ async def toggle_user_exercise(user_id: int, day_index: int, exercise_id: int):
                 "INSERT INTO user_exercises(user_id, exercise_id, day_index) VALUES(?,?,?)",
                 (user_id, exercise_id, day_index),
             )
+            if day_index != 0:
+                try:
+                    await db.execute(
+                        "INSERT INTO user_exercises(user_id, exercise_id, day_index) VALUES(?,?,0)",
+                        (user_id, exercise_id),
+                    )
+                except Exception:
+                    pass
         await db.commit()
         return row is None
 
@@ -591,7 +609,12 @@ async def remove_user_exercise(user_id: int, day_index: int, ue_id: int):
 async def get_exercise_info(ue_id: int):
     async with connect_db() as db:
         cur = await db.execute(
-            "SELECT exercise_id, e.name FROM user_exercises ue JOIN exercises e ON e.id=ue.exercise_id WHERE ue.id=?",
+            """
+            SELECT ue.exercise_id, e.name, e.muscle_group
+            FROM user_exercises ue
+            JOIN exercises e ON e.id = ue.exercise_id
+            WHERE ue.id=?
+            """,
             (ue_id,),
         )
         return await cur.fetchone()
