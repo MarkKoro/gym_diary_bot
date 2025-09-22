@@ -101,8 +101,21 @@ async def init_db():
 
         CREATE TABLE IF NOT EXISTS user_prefs(
             user_id INTEGER PRIMARY KEY,
-            weight_step REAL DEFAULT 0.5
+            weight_step REAL DEFAULT 0.5,
+            recording_mode TEXT DEFAULT 'single'
         );
+
+        CREATE TABLE IF NOT EXISTS user_measurements(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            metric TEXT,
+            value REAL,
+            extra TEXT,
+            created_at TEXT
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_measurements_user_metric
+            ON user_measurements(user_id, metric, created_at);
 
         CREATE TABLE IF NOT EXISTS user_muscle_groups(
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -142,6 +155,10 @@ async def init_db():
             pass
         try:
             await db.execute("ALTER TABLE sets ADD COLUMN is_warmup INTEGER DEFAULT 0")
+        except Exception:
+            pass
+        try:
+            await db.execute("ALTER TABLE user_prefs ADD COLUMN recording_mode TEXT")
         except Exception:
             pass
         await db.commit()
@@ -255,7 +272,7 @@ async def fetch_day_exercises(user_id: int, day_index: int = 1, date_str: str | 
     async with connect_db() as db:
         cur = await db.execute(
             """
-        SELECT ue.id, e.name, e.muscle_group, IFNULL(se.is_done,0)
+        SELECT ue.id, e.name, e.muscle_group, IFNULL(se.is_done,0), ue.exercise_id
         FROM user_exercises ue
         JOIN exercises e ON e.id = ue.exercise_id
         LEFT JOIN sessions s ON s.user_id=ue.user_id AND s.date=? AND s.day_index=ue.day_index
@@ -304,6 +321,30 @@ async def inc_last_set(user_ex_id: int, session_id: int, field: str, delta: floa
             f"UPDATE sets SET {field}=? WHERE id=?",
             [(new_val, r[0]) for r in rows],
         )
+        await db.commit()
+
+async def inc_specific_set(user_ex_id: int, session_id: int, set_no: int, field: str, delta: float):
+    assert field in ("reps", "weight_kg")
+    async with connect_db() as db:
+        cur = await db.execute(
+            """
+            SELECT id, reps, weight_kg
+            FROM sets
+            WHERE session_id=? AND user_exercise_id=? AND set_no=?
+            LIMIT 1
+            """,
+            (session_id, user_ex_id, set_no),
+        )
+        row = await cur.fetchone()
+        if not row:
+            return
+        set_id, reps, weight = row
+        if field == "reps":
+            new_val = max(int(reps + delta), 0)
+            await db.execute("UPDATE sets SET reps=? WHERE id=?", (new_val, set_id))
+        else:
+            new_val = max(float(weight + delta), 0.0)
+            await db.execute("UPDATE sets SET weight_kg=? WHERE id=?", (new_val, set_id))
         await db.commit()
 
 async def fetch_user_settings(user_id: int):
@@ -659,6 +700,40 @@ async def get_last_session_summary(user_id: int, day_index: int, ue_id: int, tod
         count = (await cur.fetchone())[0]
         return count, reps, weight
 
+async def fetch_last_session_sets(user_id: int, day_index: int, ue_id: int, today: str):
+    async with connect_db() as db:
+        if day_index == 0:
+            cur = await db.execute(
+                """
+                SELECT s.id
+                FROM sessions s
+                JOIN sets st ON st.session_id=s.id AND st.user_exercise_id=?
+                WHERE s.user_id=? AND s.date<?
+                ORDER BY s.date DESC
+                LIMIT 1
+                """,
+                (ue_id, user_id, today),
+            )
+        else:
+            cur = await db.execute(
+                "SELECT id FROM sessions WHERE user_id=? AND day_index=? AND date<? ORDER BY date DESC LIMIT 1",
+                (user_id, day_index, today),
+            )
+        row = await cur.fetchone()
+        if not row:
+            return []
+        session_id = row[0]
+        cur = await db.execute(
+            """
+            SELECT set_no, reps, weight_kg
+            FROM sets
+            WHERE session_id=? AND user_exercise_id=?
+            ORDER BY set_no
+            """,
+            (session_id, ue_id),
+        )
+        return await cur.fetchall()
+
 async def fetch_exercise_sets(session_id: int, ue_id: int):
     async with connect_db() as db:
         cur = await db.execute(
@@ -720,22 +795,40 @@ async def mark_exercise_done(session_id: int, ue_id: int):
 
 async def list_recent_progress(user_id: int, day_index: int, ue_id: int, limit: int = 4):
     async with connect_db() as db:
-        cur = await db.execute(
-            """
-            SELECT s.date,
-                   COUNT(st.id) as sets,
-                   MAX(st.reps) as reps,
-                   MAX(st.weight_kg) as weight
-            FROM sessions s
-            JOIN session_exercises se ON se.session_id=s.id AND se.user_exercise_id=?
-            LEFT JOIN sets st ON st.session_id=s.id AND st.user_exercise_id=?
-            WHERE s.user_id=? AND s.day_index=? AND se.is_done=1
-            GROUP BY s.id
-            ORDER BY s.date DESC
-            LIMIT ?
-            """,
-            (ue_id, ue_id, user_id, day_index, limit),
-        )
+        if day_index == 0:
+            cur = await db.execute(
+                """
+                SELECT s.date,
+                       COUNT(st.id) as sets,
+                       MAX(st.reps) as reps,
+                       MAX(st.weight_kg) as weight
+                FROM sessions s
+                JOIN session_exercises se ON se.session_id=s.id AND se.user_exercise_id=?
+                LEFT JOIN sets st ON st.session_id=s.id AND st.user_exercise_id=?
+                WHERE s.user_id=? AND se.is_done=1
+                GROUP BY s.id
+                ORDER BY s.date DESC
+                LIMIT ?
+                """,
+                (ue_id, ue_id, user_id, limit),
+            )
+        else:
+            cur = await db.execute(
+                """
+                SELECT s.date,
+                       COUNT(st.id) as sets,
+                       MAX(st.reps) as reps,
+                       MAX(st.weight_kg) as weight
+                FROM sessions s
+                JOIN session_exercises se ON se.session_id=s.id AND se.user_exercise_id=?
+                LEFT JOIN sets st ON st.session_id=s.id AND st.user_exercise_id=?
+                WHERE s.user_id=? AND s.day_index=? AND se.is_done=1
+                GROUP BY s.id
+                ORDER BY s.date DESC
+                LIMIT ?
+                """,
+                (ue_id, ue_id, user_id, day_index, limit),
+            )
         return await cur.fetchall()
 
 async def get_weight_step(user_id: int) -> float:
@@ -757,3 +850,111 @@ async def set_weight_step(user_id: int, step: float):
             (user_id, step),
         )
         await db.commit()
+
+async def get_recording_mode(user_id: int) -> str:
+    async with connect_db() as db:
+        cur = await db.execute(
+            "SELECT recording_mode FROM user_prefs WHERE user_id=?",
+            (user_id,),
+        )
+        row = await cur.fetchone()
+        return row[0] if row and row[0] else "single"
+
+async def set_recording_mode(user_id: int, mode: str):
+    async with connect_db() as db:
+        await db.execute(
+            """
+            INSERT INTO user_prefs(user_id, recording_mode) VALUES(?,?)
+            ON CONFLICT(user_id) DO UPDATE SET recording_mode=excluded.recording_mode
+            """,
+            (user_id, mode),
+        )
+        await db.commit()
+
+
+async def add_measurement_entry(user_id: int, metric: str, value: float, extra: str | None = None):
+    async with connect_db() as db:
+        await db.execute(
+            """
+            INSERT INTO user_measurements(user_id, metric, value, extra, created_at)
+            VALUES(?,?,?,?,?)
+            """,
+            (user_id, metric, value, extra, datetime.utcnow().isoformat()),
+        )
+        await db.commit()
+
+
+async def update_last_measurement(
+    user_id: int,
+    metric: str,
+    value: float,
+    extra: str | None = None,
+) -> bool:
+    async with connect_db() as db:
+        cur = await db.execute(
+            "SELECT id FROM user_measurements WHERE user_id=? AND metric=? ORDER BY created_at DESC LIMIT 1",
+            (user_id, metric),
+        )
+        row = await cur.fetchone()
+        if not row:
+            return False
+        await db.execute(
+            "UPDATE user_measurements SET value=?, extra=?, created_at=? WHERE id=?",
+            (value, extra, datetime.utcnow().isoformat(), row[0]),
+        )
+        await db.commit()
+        return True
+
+
+async def delete_last_measurement(user_id: int, metric: str) -> bool:
+    async with connect_db() as db:
+        cur = await db.execute(
+            "SELECT id FROM user_measurements WHERE user_id=? AND metric=? ORDER BY created_at DESC LIMIT 1",
+            (user_id, metric),
+        )
+        row = await cur.fetchone()
+        if not row:
+            return False
+        await db.execute("DELETE FROM user_measurements WHERE id=?", (row[0],))
+        await db.commit()
+        return True
+
+
+async def list_measurement_metrics(user_id: int):
+    async with connect_db() as db:
+        cur = await db.execute(
+            """
+            SELECT metric, MAX(created_at)
+            FROM user_measurements
+            WHERE user_id=?
+            GROUP BY metric
+            ORDER BY MAX(created_at) DESC
+            """,
+            (user_id,),
+        )
+        return await cur.fetchall()
+
+
+async def fetch_measurement_history(user_id: int, metric: str, limit: int = 2):
+    async with connect_db() as db:
+        cur = await db.execute(
+            """
+            SELECT value, extra, created_at
+            FROM user_measurements
+            WHERE user_id=? AND metric=?
+            ORDER BY created_at DESC
+            LIMIT ?
+            """,
+            (user_id, metric, limit),
+        )
+        return await cur.fetchall()
+
+
+async def get_measurements_last_update(user_id: int) -> str | None:
+    async with connect_db() as db:
+        cur = await db.execute(
+            "SELECT MAX(created_at) FROM user_measurements WHERE user_id=?",
+            (user_id,),
+        )
+        row = await cur.fetchone()
+        return row[0] if row and row[0] else None

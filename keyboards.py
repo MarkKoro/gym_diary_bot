@@ -5,6 +5,7 @@ def main_menu_kb(days: list[tuple[int, str]], support_url: str):
     for idx, label in days:
         rows.append([InlineKeyboardButton(f"День {idx} — {label}", callback_data=f"day:open:{idx}")])
     rows.append([InlineKeyboardButton("📘 Мои упражнения", callback_data="menu:library")])
+    rows.append([InlineKeyboardButton("📏 Мои замеры", callback_data="menu:metrics")])
     rows.append([InlineKeyboardButton("⚙︎ Настройки", callback_data="menu:settings")])
     rows.append([InlineKeyboardButton("📩 Техподдержка", url=support_url)])
     return InlineKeyboardMarkup(rows)
@@ -20,6 +21,7 @@ def settings_kb():
         [InlineKeyboardButton("✏️ Переименовать дни", callback_data="set:rename_day")],
         [InlineKeyboardButton("📅 Количество тренировок", callback_data="set:days_count")],
         [InlineKeyboardButton("🏋️ Шаг веса", callback_data="set:step")],
+        [InlineKeyboardButton("📝 Выбор записи", callback_data="set:recording")],
         [InlineKeyboardButton("⏰ Уведомления", callback_data="set:reminders")],
         [InlineKeyboardButton("⭐ Подписка", callback_data="set:subscription")],
         [InlineKeyboardButton("⬅︎ Назад", callback_data="menu:root")],
@@ -225,9 +227,9 @@ def reminder_day_kb():
     rows.append([InlineKeyboardButton("⬅︎ Назад", callback_data="wiz:rday:back")])
     return InlineKeyboardMarkup(rows)
 
-def day_kb(day_index: int, ex_rows: list[tuple[int, str, str, int]]):
+def day_kb(day_index: int, ex_rows: list[tuple[int, str, str, int, int]]):
     groups: dict[str, list[tuple[int, str]]] = {}
-    for ue_id, name, group, _ in ex_rows:
+    for ue_id, name, group, _, _ in ex_rows:
         groups.setdefault(group, []).append((ue_id, name))
     rows = []
     for group in groups.keys():
@@ -273,7 +275,7 @@ def day_add_exercises_kb(day_index: int, group: str, ex_rows: list[tuple[int, st
     rows.append([InlineKeyboardButton("✅ Готово", callback_data=f"day:add:{day_index}:done")])
     return InlineKeyboardMarkup(rows)
 
-def del_exercises_kb(day_index: int, ex_rows: list[tuple[int, str, str, int]]):
+def del_exercises_kb(day_index: int, ex_rows: list[tuple[int, str, str, int, int]]):
     rows = []
     for ue_id, name, *_ in ex_rows:
         rows.append([InlineKeyboardButton(f"Удалить {name}", callback_data=f"day:del:{day_index}:{ue_id}")])
@@ -306,6 +308,63 @@ def exercise_view_kb(day_index: int, ue_id: int, group: str):
     ])
 
 
+def recording_mode_kb(current: str):
+    mark_single = "✅ " if current == "single" else ""
+    mark_flex = "✅ " if current == "flex" else ""
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton(f"{mark_single}Одинаковый вес", callback_data="set:recording:single")],
+        [InlineKeyboardButton(f"{mark_flex}Гибкая запись", callback_data="set:recording:flex")],
+        [InlineKeyboardButton("⬅︎ Назад", callback_data="menu:settings")],
+    ])
+
+
+def flex_exercise_view_kb(
+    day_index: int,
+    ue_id: int,
+    group: str,
+    sets: list[tuple[int, int, float, int]],
+    selected: int | None,
+):
+    rows: list[list[InlineKeyboardButton]] = []
+    if sets:
+        current_row: list[InlineKeyboardButton] = []
+        for set_no, *_ in sets:
+            mark = "✅" if selected == set_no else "⬜"
+            current_row.append(
+                InlineKeyboardButton(
+                    f"{mark} Сет {set_no}",
+                    callback_data=f"ex:select:{day_index}:{ue_id}:{set_no}",
+                )
+            )
+            if len(current_row) == 2:
+                rows.append(current_row)
+                current_row = []
+        if current_row:
+            rows.append(current_row)
+    rows.append([
+        InlineKeyboardButton("＋ сет", callback_data=f"ex:addset:{day_index}:{ue_id}"),
+        InlineKeyboardButton("− сет", callback_data=f"ex:delset:{day_index}:{ue_id}"),
+    ])
+    rows.append([
+        InlineKeyboardButton("＋1 реп", callback_data=f"ex:inc:{day_index}:{ue_id}:reps:1"),
+        InlineKeyboardButton("−1 реп", callback_data=f"ex:inc:{day_index}:{ue_id}:reps:-1"),
+    ])
+    rows.append([
+        InlineKeyboardButton("＋0.5 кг", callback_data=f"ex:inc:{day_index}:{ue_id}:kg:0.5"),
+        InlineKeyboardButton("＋1 кг", callback_data=f"ex:inc:{day_index}:{ue_id}:kg:1"),
+        InlineKeyboardButton("＋2.5 кг", callback_data=f"ex:inc:{day_index}:{ue_id}:kg:2.5"),
+    ])
+    rows.append([
+        InlineKeyboardButton("−0.5 кг", callback_data=f"ex:inc:{day_index}:{ue_id}:kg:-0.5"),
+        InlineKeyboardButton("−1 кг", callback_data=f"ex:inc:{day_index}:{ue_id}:kg:-1"),
+        InlineKeyboardButton("−2.5 кг", callback_data=f"ex:inc:{day_index}:{ue_id}:kg:-2.5"),
+    ])
+    rows.append([InlineKeyboardButton("📈 Прогресс", callback_data=f"ex:progress:{day_index}:{ue_id}")])
+    rows.append([InlineKeyboardButton("✅ Готово", callback_data=f"ex:done:{day_index}:{ue_id}")])
+    rows.append([InlineKeyboardButton("⬅︎ Назад", callback_data=f"day:group:{day_index}:{group}")])
+    return InlineKeyboardMarkup(rows)
+
+
 def library_menu_kb(groups: list[tuple[str, int]], custom: dict[str, str] | None = None):
     custom = custom or {}
     rows = []
@@ -320,10 +379,25 @@ def library_menu_kb(groups: list[tuple[str, int]], custom: dict[str, str] | None
 
 
 def library_group_kb(group: str, items: list[tuple[int, str]]):
+    rows: list[list[InlineKeyboardButton]] = []
+    for ue_id, name in items:
+        rows.append([InlineKeyboardButton(name, callback_data=f"lib:ex:{group}:{ue_id}")])
+    rows.append([
+        InlineKeyboardButton("➕ Добавить упражнение", callback_data=f"lib:add:start:{group}")
+    ])
+    if items:
+        rows.append([
+            InlineKeyboardButton("🗑 Удалить упражнение", callback_data=f"lib:delmenu:{group}")
+        ])
+    rows.append([InlineKeyboardButton("⬅︎ Назад", callback_data="lib:root")])
+    return InlineKeyboardMarkup(rows)
+
+
+def library_delete_kb(group: str, items: list[tuple[int, str]]):
     rows = []
     for ue_id, name in items:
         rows.append([InlineKeyboardButton(f"🗑 {name}", callback_data=f"lib:del:{group}:{ue_id}")])
-    rows.append([InlineKeyboardButton("⬅︎ Назад", callback_data="lib:root")])
+    rows.append([InlineKeyboardButton("⬅︎ Назад", callback_data=f"lib:group:{group}")])
     return InlineKeyboardMarkup(rows)
 
 
@@ -347,10 +421,127 @@ def library_add_exercises_kb(group: str, ex_rows: list[tuple[int, str]], selecte
         rows.append([
             InlineKeyboardButton(f"{mark} {name}", callback_data=f"lib:add:ex:{group}:{ex_id}")
         ])
+    rows.append([InlineKeyboardButton("📝 Свой вариант", callback_data=f"lib:add:custom:{group}")])
     rows.append(
         [
             InlineKeyboardButton("✅ Готово", callback_data="lib:add:done"),
             InlineKeyboardButton("⬅︎ Назад", callback_data="lib:add:back"),
         ]
     )
+    return InlineKeyboardMarkup(rows)
+
+
+def library_exercise_kb(ue_id: int, group: str):
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("＋ сет", callback_data=f"ex:addset:0:{ue_id}"),
+            InlineKeyboardButton("− сет", callback_data=f"ex:delset:0:{ue_id}"),
+        ],
+        [
+            InlineKeyboardButton("＋1 реп", callback_data=f"ex:inc:0:{ue_id}:reps:1"),
+            InlineKeyboardButton("−1 реп", callback_data=f"ex:inc:0:{ue_id}:reps:-1"),
+        ],
+        [
+            InlineKeyboardButton("＋0.5 кг", callback_data=f"ex:inc:0:{ue_id}:kg:0.5"),
+            InlineKeyboardButton("＋1 кг", callback_data=f"ex:inc:0:{ue_id}:kg:1"),
+            InlineKeyboardButton("＋2.5 кг", callback_data=f"ex:inc:0:{ue_id}:kg:2.5"),
+        ],
+        [
+            InlineKeyboardButton("−0.5 кг", callback_data=f"ex:inc:0:{ue_id}:kg:-0.5"),
+            InlineKeyboardButton("−1 кг", callback_data=f"ex:inc:0:{ue_id}:kg:-1"),
+            InlineKeyboardButton("−2.5 кг", callback_data=f"ex:inc:0:{ue_id}:kg:-2.5"),
+        ],
+        [InlineKeyboardButton("📈 Прогресс", callback_data=f"ex:progress:0:{ue_id}")],
+        [InlineKeyboardButton("✅ Готово", callback_data=f"ex:done:0:{ue_id}")],
+        [InlineKeyboardButton("⬅︎ Назад", callback_data=f"lib:group:{group}")],
+    ])
+
+
+def flex_library_exercise_kb(
+    ue_id: int,
+    group: str,
+    sets: list[tuple[int, int, float, int]],
+    selected: int | None,
+):
+    rows: list[list[InlineKeyboardButton]] = []
+    if sets:
+        current_row: list[InlineKeyboardButton] = []
+        for set_no, *_ in sets:
+            mark = "✅" if selected == set_no else "⬜"
+            current_row.append(
+                InlineKeyboardButton(
+                    f"{mark} Сет {set_no}",
+                    callback_data=f"ex:select:0:{ue_id}:{set_no}",
+                )
+            )
+            if len(current_row) == 2:
+                rows.append(current_row)
+                current_row = []
+        if current_row:
+            rows.append(current_row)
+    rows.append([
+        InlineKeyboardButton("＋ сет", callback_data=f"ex:addset:0:{ue_id}"),
+        InlineKeyboardButton("− сет", callback_data=f"ex:delset:0:{ue_id}"),
+    ])
+    rows.append([
+        InlineKeyboardButton("＋1 реп", callback_data=f"ex:inc:0:{ue_id}:reps:1"),
+        InlineKeyboardButton("−1 реп", callback_data=f"ex:inc:0:{ue_id}:reps:-1"),
+    ])
+    rows.append([
+        InlineKeyboardButton("＋0.5 кг", callback_data=f"ex:inc:0:{ue_id}:kg:0.5"),
+        InlineKeyboardButton("＋1 кг", callback_data=f"ex:inc:0:{ue_id}:kg:1"),
+        InlineKeyboardButton("＋2.5 кг", callback_data=f"ex:inc:0:{ue_id}:kg:2.5"),
+    ])
+    rows.append([
+        InlineKeyboardButton("−0.5 кг", callback_data=f"ex:inc:0:{ue_id}:kg:-0.5"),
+        InlineKeyboardButton("−1 кг", callback_data=f"ex:inc:0:{ue_id}:kg:-1"),
+        InlineKeyboardButton("−2.5 кг", callback_data=f"ex:inc:0:{ue_id}:kg:-2.5"),
+    ])
+    rows.append([InlineKeyboardButton("📈 Прогресс", callback_data=f"ex:progress:0:{ue_id}")])
+    rows.append([InlineKeyboardButton("✅ Готово", callback_data=f"ex:done:0:{ue_id}")])
+    rows.append([InlineKeyboardButton("⬅︎ Назад", callback_data=f"lib:group:{group}")])
+    return InlineKeyboardMarkup(rows)
+
+
+def measurements_main_kb(show_all: bool):
+    toggle = "Скрыть редкие" if show_all else "Показать ещё"
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("➕ Добавить", callback_data="measure:add"),
+            InlineKeyboardButton("✏️ Изменить", callback_data="measure:edit"),
+        ],
+        [
+            InlineKeyboardButton("🗑 Удалить", callback_data="measure:delete"),
+            InlineKeyboardButton(toggle, callback_data="measure:toggle"),
+        ],
+        [
+            InlineKeyboardButton("📊 График", callback_data="measure:graph"),
+            InlineKeyboardButton("⬅︎ Назад", callback_data="menu:root"),
+        ],
+    ])
+
+
+def measurements_category_kb(action: str, categories: list[tuple[str, str]]):
+    rows = []
+    for code, title in categories:
+        rows.append([InlineKeyboardButton(title, callback_data=f"measure:{action}:cat:{code}")])
+    rows.append([InlineKeyboardButton("⬅︎ Назад", callback_data="measure:back")])
+    return InlineKeyboardMarkup(rows)
+
+
+def measurements_metric_kb(action: str, category: str, metrics: list[tuple[str, str]]):
+    rows = []
+    for code, title in metrics:
+        rows.append(
+            [InlineKeyboardButton(title, callback_data=f"measure:{action}:item:{category}:{code}")]
+        )
+    rows.append([InlineKeyboardButton("⬅︎ Назад", callback_data=f"measure:{action}")])
+    return InlineKeyboardMarkup(rows)
+
+
+def measurements_existing_kb(action: str, metrics: list[tuple[str, str]]):
+    rows = []
+    for code, title in metrics:
+        rows.append([InlineKeyboardButton(title, callback_data=f"measure:{action}:metric:{code}")])
+    rows.append([InlineKeyboardButton("⬅︎ Назад", callback_data="measure:back")])
     return InlineKeyboardMarkup(rows)
