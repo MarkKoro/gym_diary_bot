@@ -718,24 +718,11 @@ async def mark_exercise_done(session_id: int, ue_id: int):
         )
         await db.commit()
 
-async def toggle_microcycle(session_id: int, ue_id: int):
-    async with connect_db() as db:
-        await db.execute(
-            """
-            INSERT INTO session_exercises(session_id, user_exercise_id, is_microcycle)
-            VALUES(?,?,1)
-            ON CONFLICT(session_id, user_exercise_id)
-            DO UPDATE SET is_microcycle=1-is_microcycle
-            """,
-            (session_id, ue_id),
-        )
-        await db.commit()
-
 async def list_recent_progress(user_id: int, day_index: int, ue_id: int, limit: int = 4):
     async with connect_db() as db:
         cur = await db.execute(
             """
-            SELECT s.date, se.is_microcycle,
+            SELECT s.date,
                    COUNT(st.id) as sets,
                    MAX(st.reps) as reps,
                    MAX(st.weight_kg) as weight
@@ -750,15 +737,6 @@ async def list_recent_progress(user_id: int, day_index: int, ue_id: int, limit: 
             (ue_id, ue_id, user_id, day_index, limit),
         )
         return await cur.fetchall()
-
-async def get_session_exercise_flags(session_id: int, ue_id: int):
-    async with connect_db() as db:
-        cur = await db.execute(
-            "SELECT is_done, is_microcycle FROM session_exercises WHERE session_id=? AND user_exercise_id=?",
-            (session_id, ue_id),
-        )
-        row = await cur.fetchone()
-        return row if row else (0, 0)
 
 async def get_weight_step(user_id: int) -> float:
     async with connect_db() as db:

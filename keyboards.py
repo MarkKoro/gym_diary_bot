@@ -233,7 +233,6 @@ def day_kb(day_index: int, ex_rows: list[tuple[int, str, str, int]]):
     for group in groups.keys():
         gname = MG_NAMES.get(group, group)
         rows.append([InlineKeyboardButton(f"{gname} ▸", callback_data=f"day:group:{day_index}:{group}")])
-    rows.append([InlineKeyboardButton("ℹ︎ Микроцикл", callback_data=f"day:microinfo:{day_index}")])
     rows.append([InlineKeyboardButton("➕ Добавить упражнение", callback_data=f"day:add_ex:{day_index}")])
     rows.append([InlineKeyboardButton("🗑 Удалить упражнение", callback_data=f"day:del_ex:{day_index}")])
     rows.append([InlineKeyboardButton("⬅︎ Назад", callback_data="menu:root")])
@@ -301,9 +300,7 @@ def exercise_view_kb(day_index: int, ue_id: int, group: str):
             InlineKeyboardButton("−1 кг", callback_data=f"ex:inc:{day_index}:{ue_id}:kg:-1"),
             InlineKeyboardButton("−2.5 кг", callback_data=f"ex:inc:{day_index}:{ue_id}:kg:-2.5"),
         ],
-        [InlineKeyboardButton("🔥 Разминка/Рабочий", callback_data=f"ex:toggle:{day_index}:{ue_id}")],
-        [InlineKeyboardButton("📈 PROGRESS", callback_data=f"ex:progress:{day_index}:{ue_id}")],
-        [InlineKeyboardButton("🌀 Микроцикл", callback_data=f"ex:micro:{day_index}:{ue_id}")],
+        [InlineKeyboardButton("📈 Прогресс", callback_data=f"ex:progress:{day_index}:{ue_id}")],
         [InlineKeyboardButton("✅ Готово", callback_data=f"ex:done:{day_index}:{ue_id}")],
         [InlineKeyboardButton("⬅︎ Назад", callback_data=f"day:group:{day_index}:{group}")],
     ])
