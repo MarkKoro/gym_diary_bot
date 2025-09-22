@@ -82,12 +82,9 @@ from db import (
     get_baseline,
     get_last_session_summary,
     fetch_exercise_sets,
-    toggle_last_set_warmup,
     remove_last_set,
     mark_exercise_done,
-    toggle_microcycle,
     list_recent_progress,
-    get_session_exercise_flags,
     rename_day,
     get_weight_step,
     set_weight_step,
@@ -101,13 +98,22 @@ from db import (
 
 user_locks = defaultdict(asyncio.Lock)
 logger = logging.getLogger(__name__)
+last_messages: dict[int, int] = {}
 
-async def safe_edit_message(q, text, reply_markup):
+
+def remember_message(chat_id: int | None, message_id: int | None):
+    if chat_id is None or message_id is None:
+        return
+    last_messages[chat_id] = message_id
+
+async def safe_edit_message(q, text, reply_markup=None):
     try:
         await q.edit_message_text(text, reply_markup=reply_markup)
     except BadRequest as e:
         if "not modified" not in e.message.lower():
             raise
+    finally:
+        remember_message(getattr(q.message, "chat_id", None), getattr(q.message, "message_id", None))
 
 async def try_delete(msg):
     try:
@@ -145,15 +151,17 @@ async def require_subscription(update: Update, context: ContextTypes.DEFAULT_TYP
         return True
     kb = subscription_kb(JOIN_URL)
     if update.callback_query:
-        await update.callback_query.edit_message_text(
+        await safe_edit_message(
+            update.callback_query,
             "Прежде чем получить помощника, подпишись на наш канал, чтобы поддержать нас и быть в курсе новостей.",
             reply_markup=kb,
         )
     else:
-        await update.message.reply_text(
+        msg = await update.message.reply_text(
             "Прежде чем получить помощника, подпишись на наш канал, чтобы поддержать нас и быть в курсе новостей.",
             reply_markup=kb,
         )
+        remember_message(msg.chat_id, msg.message_id)
     return False
 
 async def get_custom_groups(user_id: int, context) -> dict[str, str]:
@@ -184,21 +192,33 @@ def render_day_text(
     groups: dict[str, list[tuple[str, int]]] = {}
     for _, name, group, done in ex_rows:
         groups.setdefault(group, []).append((name, done))
-    lines = [f"День {i} — {label}", "Упражнения:"]
-    for code, names in groups.items():
+    if not groups:
+        return (
+            f"День {i} — {label}\n"
+            "Пока нет упражнений. Добавь их, чтобы запланировать тренировку."
+        )
+    lines = [
+        f"День {i} — {label}",
+        "Выбирай группу мышц, чтобы открыть упражнения и отметить выполненные подходы.",
+    ]
+    total = len(groups)
+    for idx, (code, names) in enumerate(groups.items()):
         gname = MG_NAMES.get(code)
         if not gname and custom:
             gname = custom.get(code, code)
         if not gname:
             gname = code
-        lines.append(f"{gname}:")
+        lines.append("")
+        lines.append(gname)
         for n, d in names:
             mark = "✅" if d else "•"
             lines.append(f"{mark} {n}")
+        if idx < total - 1:
+            lines.append("────────")
     return "\n".join(lines)
 
 def baseline_text(name: str, sets: int, reps: int, weight: float) -> str:
-    return f"{name} — {sets}x{reps} @ {weight:.1f} кг"
+    return f"{name} — {sets}×{reps} @ {weight:.1f} кг"
 
 def render_baseline_progress(done: list[str], name: str, sets: int, reps: int, weight: float) -> str:
     lines = list(done)
@@ -213,31 +233,53 @@ async def render_exercise_view(user_id: int, day: int, ue_id: int):
     today = datetime.utcnow().strftime("%Y-%m-%d")
     baseline = await get_baseline(user_id, day, ex_id)
     if baseline:
-        prev = f"{baseline[0]}x{baseline[1]} @ {baseline[2]:.1f}"
+        prev = f"{baseline[0]}×{baseline[1]} @ {baseline[2]:.1f}"
     else:
         last = await get_last_session_summary(user_id, day, ue_id, today)
-        prev = f"{last[0]}x{last[1]} @ {last[2]:.1f}" if last else "—"
+        prev = f"{last[0]}×{last[1]} @ {last[2]:.1f}" if last else "—"
     session_id = await get_or_create_today_session(user_id, today, day)
     sets = await fetch_exercise_sets(session_id, ue_id)
     if not sets and baseline:
         for _ in range(baseline[0]):
             await add_set(session_id, ue_id, baseline[1], baseline[2])
         sets = await fetch_exercise_sets(session_id, ue_id)
-    _, micro = await get_session_exercise_flags(session_id, ue_id)
-    lines = [f"{name} — День {day}", f"Прошлый раз: {prev}", ""]
+    lines = [
+        f"{name} — День {day}",
+        f"Прошлый раз: {prev}",
+        "",
+    ]
     if sets:
         reps = sets[0][1]
         weight = sets[0][2]
-        lines.append(f"{len(sets)}x{reps} @ {weight:.1f} кг")
+        lines.append(f"Текущая тренировка: {len(sets)}×{reps} @ {weight:.1f} кг")
         lines.append("")
-    if micro:
-        lines.append("(Микроцикл)")
-    lines.append("Нажимай кнопки — всё сохраняется автоматически.")
+    lines.append(
+        "Записывай каждый выполненный подход: добавляй сеты, меняй повторения и вес — прогресс сохранится автоматически."
+    )
     return "\n".join(lines), session_id, ex_id, group
 
 async def reminder_job(context: ContextTypes.DEFAULT_TYPE):
+    chat_id = context.job.chat_id
+    user_id = None
+    if context.job.data and isinstance(context.job.data, dict):
+        user_id = context.job.data.get("user_id")
     try:
-        await context.bot.send_message(context.job.chat_id, "Напоминание о тренировке!")
+        last_id = last_messages.pop(chat_id, None)
+        if last_id:
+            try:
+                await context.bot.delete_message(chat_id, last_id)
+            except BadRequest:
+                pass
+        reply_markup = None
+        if user_id:
+            days = await list_active_days(user_id)
+            reply_markup = main_menu_kb(days, SUPPORT_DEEPLINK)
+        text = (
+            "Напоминание о тренировке!\n"
+            "Открой нужный день и отметь новые подходы, чтобы сохранить прогресс."
+        )
+        msg = await context.bot.send_message(chat_id, text, reply_markup=reply_markup)
+        remember_message(msg.chat_id, msg.message_id)
     except Forbidden:
         try:
             context.job.schedule_removal()
@@ -257,6 +299,7 @@ async def schedule_all_reminders(app: Application):
             days=(dow,),
             chat_id=tg_id,
             name=f"rem_{user_id}_{dow}",
+            data={"user_id": user_id},
         )
 
 
@@ -277,13 +320,15 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "Нажми кнопку ниже, чтобы продолжить."
         )
         kb = InlineKeyboardMarkup([[InlineKeyboardButton("Ясно, спасибо", callback_data="wiz:intro:ok")]])
-        await update.message.reply_text(text, reply_markup=kb)
+        msg = await update.message.reply_text(text, reply_markup=kb)
+        remember_message(msg.chat_id, msg.message_id)
         return
     days = await list_active_days(user_id)
-    await update.message.reply_text(
+    msg = await update.message.reply_text(
         "Главное меню:",
         reply_markup=main_menu_kb(days, SUPPORT_DEEPLINK)
     )
+    remember_message(msg.chat_id, msg.message_id)
 
 async def show_exercises(q, user_id: int, day: int, group: str, context):
     ex_rows = await list_exercises_by_group(group)
@@ -756,6 +801,7 @@ async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAUL
             days=(dow,),
             chat_id=q.message.chat_id,
             name=job_name,
+            data={"user_id": user_id},
         )
         day_no = context.user_data.get("reminder_day", 1)
         total = context.user_data.get("workouts_per_week", 0)
@@ -798,6 +844,7 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 message_id=msg_id,
                 reply_markup=muscle_groups_kb(day, selected, custom),
             )
+            remember_message(chat_id, msg_id)
         else:
             context.user_data["add_group"] = (day, code)
             ex_rows = await list_exercises_by_group(code)
@@ -808,6 +855,7 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 message_id=msg_id,
                 reply_markup=day_add_exercises_kb(day, code, ex_rows, selected_ids),
             )
+            remember_message(chat_id, msg_id)
         return
     if context.user_data.get("awaiting_rename"):
         day, chat_id, msg_id = context.user_data.pop("awaiting_rename")
@@ -817,6 +865,7 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await rename_day(user_id, day, label)
         await try_delete(update.message)
         await context.bot.edit_message_text("Настройки:", chat_id=chat_id, message_id=msg_id, reply_markup=settings_kb())
+        remember_message(chat_id, msg_id)
         return
     if context.user_data.get("awaiting_custom"):
         day, group, chat_id, msg_id = context.user_data.pop("awaiting_custom")
@@ -840,6 +889,7 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             message_id=msg_id,
             reply_markup=kb,
         )
+        remember_message(chat_id, msg_id)
         return
 
 async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -850,6 +900,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = q.data
     u = update.effective_user
     user_id = await get_or_create_user(u.id, u.username)
+    remember_message(q.message.chat_id, q.message.message_id)
 
     if data.startswith("wiz:"):
         await wizard_router(q, data, user_id, context)
@@ -879,10 +930,12 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             rem_text = "не задано"
         text = (
             "Настройки:\n"
-            "✏️ Переименовать дни — изменить названия тренировочных дней.\n"
-            f"📅 Количество тренировок — сейчас {n}.\n"
-            "🏋️ Шаг веса — шаг изменения веса при добавлении сетов.\n"
-            f"⏰ Уведомления — {tz_label}, {rem_text}.\n"
+            "Выбирай пункт ниже, чтобы обновить дневник под себя.\n"
+            "────────\n"
+            "✏️ Переименовать дни — поменять названия тренировочных дней.\n"
+            f"📅 Количество тренировок — сейчас {n}. Укажи, сколько раз планируешь тренироваться.\n"
+            "🏋️ Шаг веса — настрой шаг изменения веса для подходов.\n"
+            f"⏰ Уведомления — {tz_label}, {rem_text}. Настрой время напоминаний.\n"
             "⭐ Подписка — информация о подписке."
         )
         await safe_edit_message(q, text, reply_markup=settings_kb())
@@ -1033,22 +1086,17 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             items = [(ue_id, name, done) for ue_id, name, g, done in ex_rows if g == group]
             custom = await get_custom_groups(user_id, context)
             gname = MG_NAMES.get(group, custom.get(group, group))
-            lines = [f"День {day} — {gname}", "Упражнения:"]
+            lines = [
+                f"День {day} — {gname}",
+                "Выбери упражнение, чтобы добавить подходы или отметить выполнение.",
+                "",
+            ]
             for _, n, d in items:
                 mark = "✅" if d else "•"
                 lines.append(f"{mark} {n}")
+            if items:
+                lines.append("────────")
             await safe_edit_message(q, "\n".join(lines), reply_markup=day_group_kb(day, group, items))
-            return
-        if action == "microinfo":
-            day = int(parts[2])
-            desc = (
-                "Микроцикл — это недельный цикл тренировок. "
-                "Отмечая упражнение как микроцикл, ты фиксируешь, что выполняешь его в рамках текущей недели."
-            )
-            kb = InlineKeyboardMarkup(
-                [[InlineKeyboardButton("⬅︎ Назад", callback_data=f"day:open:{day}")]]
-            )
-            await q.edit_message_text("Микроцикл\n\n" + desc, reply_markup=kb)
             return
         if action == "add_ex":
             day = int(parts[2])
@@ -1182,15 +1230,6 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     weight = base[2] if base else 0.0
                     await add_set(session_id, ue_id, reps, weight)
                 await inc_last_set(ue_id, session_id, "reps" if field == "reps" else "weight_kg", delta)
-            elif action == "toggle":
-                sets = await fetch_exercise_sets(session_id, ue_id)
-                if not sets:
-                    ex_id, _, _ = await get_exercise_info(ue_id)
-                    base = await get_baseline(user_id, day, ex_id)
-                    reps = base[1] if base else 0
-                    weight = base[2] if base else 0.0
-                    await add_set(session_id, ue_id, reps, weight)
-                await toggle_last_set_warmup(ue_id, session_id)
             elif action == "done":
                 await mark_exercise_done(session_id, ue_id)
                 ex_rows = await fetch_day_exercises(user_id, day, today_str)
@@ -1209,20 +1248,19 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 prog_lines = []
                 if base:
                     prog_lines.append(
-                        f"Базовое: {base[0]}x{base[1]} @ {base[2]:.1f} кг"
+                        f"Базовое: {base[0]}×{base[1]} @ {base[2]:.1f} кг"
                     )
-                prog_lines.extend(
-                    f"{d}: {s}x{r} @ {w:.1f} кг" + (" (микро)" if m else "")
-                    for d, m, s, r, w in rows
-                )
+                for d, s, r, w in rows:
+                    sets_cnt = s or 0
+                    reps_cnt = r or 0
+                    weight_val = w or 0.0
+                    prog_lines.append(f"{d}: {sets_cnt}×{reps_cnt} @ {weight_val:.1f} кг")
                 if prog_lines:
                     text += "\n\nПрогресс:\n" + "\n".join(prog_lines)
                 else:
                     text += "\n\nПрогресс: нет данных"
                 await safe_edit_message(q, text, exercise_view_kb(day, ue_id, group))
                 return
-            elif action == "micro":
-                await toggle_microcycle(session_id, ue_id)
         text, _, _, group = await render_exercise_view(user_id, day, ue_id)
         await safe_edit_message(q, text, exercise_view_kb(day, ue_id, group))
         return
