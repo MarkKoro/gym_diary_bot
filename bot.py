@@ -46,11 +46,20 @@ from keyboards import (
     rename_day_kb,
     days_count_kb,
     weight_step_kb,
+    recording_mode_kb,
+    flex_exercise_view_kb,
     TIMEZONES,
     library_menu_kb,
     library_group_kb,
     library_add_group_kb,
     library_add_exercises_kb,
+    library_delete_kb,
+    library_exercise_kb,
+    flex_library_exercise_kb,
+    measurements_main_kb,
+    measurements_category_kb,
+    measurements_metric_kb,
+    measurements_existing_kb,
 )
 from settings import TG_TOKEN, SUPPORT_DEEPLINK, TG_POOL_SIZE, SUBSCRIPTION_CHAT, JOIN_URL
 from db import (
@@ -80,7 +89,6 @@ from db import (
     remove_user_exercise,
     get_exercise_info,
     get_baseline,
-    get_last_session_summary,
     fetch_exercise_sets,
     remove_last_set,
     mark_exercise_done,
@@ -88,12 +96,22 @@ from db import (
     rename_day,
     get_weight_step,
     set_weight_step,
+    get_recording_mode,
+    set_recording_mode,
+    fetch_last_session_sets,
+    inc_specific_set,
     add_user_muscle_group,
     list_user_muscle_groups,
     list_users_with_reminders,
     copy_day_plan_to_other_days,
     list_library_groups,
     list_library_exercises,
+    add_measurement_entry,
+    update_last_measurement,
+    delete_last_measurement,
+    list_measurement_metrics,
+    fetch_measurement_history,
+    get_measurements_last_update,
 )
 
 user_locks = defaultdict(asyncio.Lock)
@@ -186,12 +204,14 @@ def day_exercises_text(i: int, group: str, custom: dict[str, str] | None = None)
 def render_day_text(
     i: int,
     label: str,
-    ex_rows: list[tuple[int, str, str, int]],
+    ex_rows: list[tuple[int, str, str, int, int]],
     custom: dict[str, str] | None = None,
+    summaries: dict[int, str] | None = None,
 ) -> str:
-    groups: dict[str, list[tuple[str, int]]] = {}
-    for _, name, group, done in ex_rows:
-        groups.setdefault(group, []).append((name, done))
+    summaries = summaries or {}
+    groups: dict[str, list[tuple[int, str, int]]] = {}
+    for ue_id, name, group, done, _ in ex_rows:
+        groups.setdefault(group, []).append((ue_id, name, done))
     if not groups:
         return (
             f"День {i} — {label}\n"
@@ -210,9 +230,13 @@ def render_day_text(
             gname = code
         lines.append("")
         lines.append(gname)
-        for n, d in names:
+        for ue_id, n, d in names:
             mark = "✅" if d else "•"
-            lines.append(f"{mark} {n}")
+            extra = summaries.get(ue_id)
+            if extra:
+                lines.append(f"{mark} {n} — {extra}")
+            else:
+                lines.append(f"{mark} {n}")
         if idx < total - 1:
             lines.append("────────")
     return "\n".join(lines)
@@ -228,35 +252,537 @@ def render_baseline_progress(done: list[str], name: str, sets: int, reps: int, w
         lines.append(baseline_text(name, sets, reps, weight))
     return "\n".join(lines)
 
-async def render_exercise_view(user_id: int, day: int, ue_id: int):
-    ex_id, name, group = await get_exercise_info(ue_id)
-    today = datetime.utcnow().strftime("%Y-%m-%d")
-    baseline = await get_baseline(user_id, day, ex_id)
-    if baseline:
-        prev = f"{baseline[0]}×{baseline[1]} @ {baseline[2]:.1f}"
+FLEX_SELECTED_KEY = "flex_selected"
+
+
+def _flex_key(day: int, ue_id: int) -> str:
+    return f"{day}:{ue_id}"
+
+
+def get_flex_selected(context, day: int, ue_id: int) -> int | None:
+    store = context.user_data.get(FLEX_SELECTED_KEY, {})
+    return store.get(_flex_key(day, ue_id))
+
+
+def set_flex_selected(context, day: int, ue_id: int, set_no: int | None):
+    store = context.user_data.setdefault(FLEX_SELECTED_KEY, {})
+    key = _flex_key(day, ue_id)
+    if set_no is None:
+        store.pop(key, None)
     else:
-        last = await get_last_session_summary(user_id, day, ue_id, today)
-        prev = f"{last[0]}×{last[1]} @ {last[2]:.1f}" if last else "—"
-    session_id = await get_or_create_today_session(user_id, today, day)
-    sets = await fetch_exercise_sets(session_id, ue_id)
-    if not sets and baseline:
-        for _ in range(baseline[0]):
-            await add_set(session_id, ue_id, baseline[1], baseline[2])
-        sets = await fetch_exercise_sets(session_id, ue_id)
+        store[key] = set_no
+
+
+MEASUREMENTS_SHOW_ALL_KEY = "measurements_show_all"
+MEASUREMENT_INPUT_KEY = "measurement_input"
+LIBRARY_CUSTOM_KEY = "library_custom_input"
+
+MEASUREMENT_CATEGORIES = [
+    ("body", "A) Масса/состав тела"),
+    ("circumference", "B) Окружности"),
+    ("records", "C) Производные/силовые контрольные"),
+    ("vitals", "D) Витальные показатели"),
+]
+
+
+def _measurement_item(
+    code: str,
+    name: str,
+    category: str,
+    unit: str,
+    precision: int = 1,
+    optional: bool = False,
+    prompt: str | None = None,
+    derived: str | None = None,
+    note: str | None = None,
+    item_type: str | None = None,
+):
+    if prompt is None:
+        lower = name.lower()
+        if unit == "см":
+            prompt = f"Введи обхват {lower} в сантиметрах (например: 32.5)."
+        elif unit == "кг":
+            prompt = f"Введи значение в килограммах (например: 50.0)."
+        elif unit == "%":
+            prompt = f"Введи значение в процентах (например: 15.0)."
+        elif unit == "повт.":
+            prompt = f"Укажи количество повторений (например: 12)."
+        elif unit == "уд/мин":
+            prompt = f"Введи значение в ударах в минуту (например: 60)."
+        elif unit == "ч":
+            prompt = f"Укажи количество часов (например: 7.5)."
+        else:
+            prompt = f"Введи значение (например: 10)."
+    item = {
+        "code": code,
+        "name": name,
+        "category": category,
+        "unit": unit,
+        "precision": precision,
+        "optional": optional,
+        "prompt": prompt,
+    }
+    if derived:
+        item["derived"] = derived
+    if note:
+        item["note"] = note
+    if item_type:
+        item["type"] = item_type
+    return item
+
+
+MEASUREMENT_ITEMS = [
+    _measurement_item(
+        "body_weight",
+        "Вес тела",
+        "body",
+        "кг",
+        prompt="Введи вес в килограммах (например: 72.5).",
+    ),
+    _measurement_item(
+        "body_fat",
+        "Процент жира",
+        "body",
+        "%",
+        prompt="Введи процент жира (например: 15.8).",
+    ),
+    _measurement_item(
+        "lean_mass",
+        "Безжировая масса",
+        "body",
+        "кг",
+        derived="lean_mass",
+        note="нужны вес и % жира",
+    ),
+    _measurement_item(
+        "water_pct",
+        "Вода",
+        "body",
+        "%",
+        optional=True,
+        prompt="Введи процент воды (например: 52.3).",
+    ),
+    _measurement_item(
+        "bmi",
+        "ИМТ",
+        "body",
+        "",
+        optional=True,
+        prompt="Введи индекс массы тела (например: 22.4).",
+    ),
+    _measurement_item("neck", "Шея", "circumference", "см"),
+    _measurement_item("shoulders", "Плечи", "circumference", "см"),
+    _measurement_item("chest", "Грудь", "circumference", "см"),
+    _measurement_item(
+        "underbust",
+        "Под грудью",
+        "circumference",
+        "см",
+        optional=True,
+    ),
+    _measurement_item("waist_narrow", "Талия (узкая)", "circumference", "см"),
+    _measurement_item("waist_navel", "Талия (пупок)", "circumference", "см"),
+    _measurement_item(
+        "abdomen",
+        "Живот",
+        "circumference",
+        "см",
+        optional=True,
+    ),
+    _measurement_item("hips", "Бёдра/таз", "circumference", "см"),
+    _measurement_item("thigh_upper", "Бедро верхнее", "circumference", "см"),
+    _measurement_item(
+        "thigh_mid",
+        "Бедро среднее",
+        "circumference",
+        "см",
+        optional=True,
+    ),
+    _measurement_item("calf", "Икроножная", "circumference", "см"),
+    _measurement_item("ankle", "Лодыжка", "circumference", "см", optional=True),
+    _measurement_item(
+        "bicep_relaxed",
+        "Плечо (расслабл.)",
+        "circumference",
+        "см",
+    ),
+    _measurement_item(
+        "bicep_flexed",
+        "Плечо (напряж.)",
+        "circumference",
+        "см",
+    ),
+    _measurement_item("forearm", "Предплечье", "circumference", "см"),
+    _measurement_item("wrist", "Запястье", "circumference", "см", optional=True),
+    _measurement_item(
+        "bench_1rm",
+        "1RM Жим лёжа",
+        "records",
+        "кг",
+        optional=True,
+        prompt="Введи одноповторный максимум в жиме лёжа (например: 95).",
+    ),
+    _measurement_item(
+        "squat_1rm",
+        "1RM Присед",
+        "records",
+        "кг",
+        optional=True,
+        prompt="Введи одноповторный максимум в приседе (например: 130).",
+    ),
+    _measurement_item(
+        "deadlift_1rm",
+        "1RM Становая",
+        "records",
+        "кг",
+        optional=True,
+        prompt="Введи одноповторный максимум в становой тяге (например: 160).",
+    ),
+    _measurement_item(
+        "pullups_max",
+        "Подтягивания",
+        "records",
+        "повт.",
+        optional=True,
+        prompt="Укажи максимум подтягиваний (например: 12).",
+    ),
+    _measurement_item(
+        "pushups_2min",
+        "Отжимания за 2 мин",
+        "records",
+        "повт.",
+        optional=True,
+        prompt="Укажи количество отжиманий за 2 минуты (например: 45).",
+    ),
+    _measurement_item(
+        "resting_hr",
+        "Пульс в покое",
+        "vitals",
+        "уд/мин",
+        prompt="Введи пульс в покое (например: 60).",
+    ),
+    _measurement_item(
+        "blood_pressure",
+        "Артериальное давление",
+        "vitals",
+        "мм рт. ст.",
+        precision=0,
+        prompt="Введи давление в формате 120/80.",
+        item_type="blood_pressure",
+    ),
+    _measurement_item(
+        "sleep_hours",
+        "Сон",
+        "vitals",
+        "ч",
+        prompt="Укажи продолжительность сна в часах (например: 7.5).",
+    ),
+]
+
+MEASUREMENT_MAP = {item["code"]: item for item in MEASUREMENT_ITEMS}
+
+
+def measurement_categories_list() -> list[tuple[str, str]]:
+    return MEASUREMENT_CATEGORIES
+
+
+def get_measurement_items(category: str) -> list[dict]:
+    return [item for item in MEASUREMENT_ITEMS if item["category"] == category]
+
+
+def get_measurement_item(code: str) -> dict | None:
+    return MEASUREMENT_MAP.get(code)
+
+
+def format_measurements_header(last_update: str | None) -> str:
+    if not last_update:
+        return "📏 Мои замеры — нет данных"
+    try:
+        dt = datetime.fromisoformat(last_update)
+        label = dt.strftime("%d.%m.%Y")
+    except Exception:
+        label = last_update.split("T")[0]
+    return f"📏 Мои замеры — {label}"
+
+
+def format_measurement_value(item: dict, entry: tuple[float, str | None, str]) -> str:
+    value, extra, _ = entry
+    if value is None:
+        return "—"
+    if item.get("type") == "blood_pressure":
+        diast = 0.0
+        if extra:
+            try:
+                diast = float(extra)
+            except (TypeError, ValueError):
+                diast = 0.0
+        value_text = f"{value:.0f}/{diast:.0f}" if extra else f"{value:.0f}"
+        unit = item.get("unit", "")
+        return f"{value_text} {unit}".strip()
+    precision = max(int(item.get("precision", 1)), 0)
+    fmt = f"{{:.{precision}f}}" if precision > 0 else "{:.0f}"
+    value_text = fmt.format(value)
+    unit = item.get("unit", "")
+    return f"{value_text} {unit}".strip()
+
+
+def format_measurement_delta(
+    item: dict,
+    current: tuple[float, str | None, str],
+    previous: tuple[float, str | None, str],
+) -> str:
+    if item.get("type") == "blood_pressure":
+        syst = current[0] - previous[0]
+        try:
+            cur_extra = float(current[1]) if current[1] is not None else 0.0
+        except (TypeError, ValueError):
+            cur_extra = 0.0
+        try:
+            prev_extra = float(previous[1]) if previous[1] is not None else 0.0
+        except (TypeError, ValueError):
+            prev_extra = 0.0
+        diast = cur_extra - prev_extra
+        unit = item.get("unit", "")
+        return f"Δ {syst:+.0f}/{diast:+.0f} {unit}".strip()
+    diff = current[0] - previous[0]
+    precision = max(int(item.get("precision", 1)), 0)
+    fmt = f"{{:+.{precision}f}}" if precision > 0 else "{:+.0f}"
+    unit = item.get("unit", "")
+    return f"Δ {fmt.format(diff)} {unit}".strip()
+
+
+def compute_lean_mass_history(
+    weight_history: list[tuple[float, str | None, str]],
+    fat_history: list[tuple[float, str | None, str]],
+) -> list[tuple[float, None, str]]:
+    if not weight_history or not fat_history:
+        return []
+    result: list[tuple[float, None, str]] = []
+    for (w_val, _, w_ts), (f_val, _, f_ts) in zip(weight_history, fat_history):
+        if w_val is None or f_val is None:
+            continue
+        ts = w_ts if w_ts >= f_ts else f_ts
+        result.append((w_val * (1 - f_val / 100.0), None, ts))
+    return result
+
+
+async def get_measurement_history(
+    user_id: int,
+    code: str,
+    cache: dict[str, list[tuple[float, str | None, str]]],
+) -> list[tuple[float, str | None, str]]:
+    if code in cache:
+        return cache[code]
+    item = get_measurement_item(code)
+    if not item:
+        cache[code] = []
+        return []
+    if item.get("derived") == "lean_mass":
+        weight_history = await get_measurement_history(user_id, "body_weight", cache)
+        fat_history = await get_measurement_history(user_id, "body_fat", cache)
+        history = compute_lean_mass_history(weight_history, fat_history)
+    else:
+        rows = await fetch_measurement_history(user_id, code, limit=5)
+        history = rows or []
+    cache[code] = history
+    return history
+
+
+def format_measurement_line(
+    item: dict,
+    history: list[tuple[float, str | None, str]],
+) -> str | None:
+    if not history:
+        note = item.get("note")
+        if note:
+            return f"{item['name']} — нет данных ({note})"
+        return f"{item['name']} — нет данных"
+    value_text = format_measurement_value(item, history[0])
+    delta_text = ""
+    if len(history) > 1:
+        delta_text = format_measurement_delta(item, history[0], history[1])
+    if delta_text:
+        return f"{item['name']} — {value_text} ({delta_text})"
+    return f"{item['name']} — {value_text}"
+
+
+def parse_measurement_input(item: dict, text: str) -> tuple[float, str | None]:
+    raw = text.strip().replace(",", ".")
+    if not raw:
+        raise ValueError("empty")
+    if item.get("type") == "blood_pressure":
+        parts = raw.replace("/", " ").split()
+        if len(parts) != 2:
+            raise ValueError("bp format")
+        syst = int(round(float(parts[0])))
+        diast = int(round(float(parts[1])))
+        return float(syst), str(diast)
+    value = float(raw)
+    return value, None
+
+
+async def build_measurements_view(
+    user_id: int, context: ContextTypes.DEFAULT_TYPE
+) -> tuple[str, InlineKeyboardMarkup]:
+    show_all = context.user_data.get(MEASUREMENTS_SHOW_ALL_KEY, False)
+    last_update = await get_measurements_last_update(user_id)
+    header = format_measurements_header(last_update)
+    cache: dict[str, list[tuple[float, str | None, str]]] = {}
+    lines: list[str] = []
+    for code, title in measurement_categories_list():
+        items = get_measurement_items(code)
+        category_lines: list[str] = []
+        for item in items:
+            history = await get_measurement_history(user_id, item["code"], cache)
+            has_data = bool(history)
+            if not has_data and item.get("optional") and not show_all:
+                continue
+            line = format_measurement_line(item, history)
+            if line:
+                category_lines.append(line)
+        if category_lines:
+            if lines:
+                lines.append("────────")
+            lines.append(title)
+            lines.extend(category_lines)
+    if not lines:
+        lines.append("Пока нет замеров. Добавь показатели, чтобы отслеживать прогресс.")
+    text = header + "\n\n" + "\n".join(lines)
+    return text, measurements_main_kb(show_all)
+
+
+def summarize_previous_sets(sets: list[tuple[int, int, float]], mode: str) -> str:
+    if not sets:
+        return ""
+    if mode == "flex":
+        return "; ".join(f"{no}) {reps}×{weight:.1f} кг" for no, reps, weight in sets)
+    reps = sets[-1][1]
+    weight = sets[-1][2]
+    return f"{len(sets)}×{reps} @ {weight:.1f} кг"
+
+
+def summarize_baseline(values: tuple[int, int, float] | None, mode: str) -> str:
+    if not values:
+        return ""
+    sets, reps, weight = values
+    if mode == "flex":
+        return "; ".join(f"{i}) {reps}×{weight:.1f} кг" for i in range(1, sets + 1))
+    return f"{sets}×{reps} @ {weight:.1f} кг"
+
+
+def format_current_training(
+    sets: list[tuple[int, int, float, int]],
+    mode: str,
+    selected: int | None,
+) -> list[str]:
+    if mode == "flex":
+        if not sets:
+            return ["Текущая тренировка: 0×0 @ 0.0 кг"]
+        lines = ["Текущая тренировка:"]
+        for set_no, reps, weight, _ in sets:
+            prefix = "▶︎ " if selected == set_no else ""
+            lines.append(f"{prefix}Сет {set_no}: {reps}×{weight:.1f} кг")
+        return lines
+    reps = sets[-1][1] if sets else 0
+    weight = sets[-1][2] if sets else 0.0
+    return [f"Текущая тренировка: {len(sets)}×{reps} @ {weight:.1f} кг"]
+
+
+async def build_summary_map(
+    user_id: int,
+    day: int,
+    ex_rows: list[tuple[int, str, str, int, int]],
+    today: str,
+    mode: str,
+) -> dict[int, str]:
+    summary: dict[int, str] = {}
+    for ue_id, _, _, _, ex_id in ex_rows:
+        last_sets = await fetch_last_session_sets(user_id, day, ue_id, today)
+        text = summarize_previous_sets(last_sets, mode)
+        if not text:
+            base = await get_baseline(user_id, day, ex_id)
+            text = summarize_baseline(base, mode)
+        if text:
+            summary[ue_id] = text
+    return summary
+
+
+async def render_library_group_text(
+    user_id: int,
+    group: str,
+    items: list[tuple[int, str]],
+    context: ContextTypes.DEFAULT_TYPE,
+) -> str:
+    custom = await get_custom_groups(user_id, context)
+    gname = MG_NAMES.get(group, custom.get(group, group))
+    if not items:
+        return (
+            f"{gname}\n"
+            "Пока нет упражнений. Нажми «Добавить упражнение», чтобы сохранить их и вести учёт."
+        )
+    mode = await get_recording_mode(user_id)
+    today = datetime.utcnow().strftime("%Y-%m-%d")
     lines = [
-        f"{name} — День {day}",
-        f"Прошлый раз: {prev}",
+        f"{gname}",
+        "Выбери упражнение, чтобы посмотреть историю и вести отдельные записи.",
         "",
     ]
-    if sets:
-        reps = sets[0][1]
-        weight = sets[0][2]
-        lines.append(f"Текущая тренировка: {len(sets)}×{reps} @ {weight:.1f} кг")
-        lines.append("")
+    for ue_id, name in items:
+        last_sets = await fetch_last_session_sets(user_id, 0, ue_id, today)
+        summary = summarize_previous_sets(last_sets, mode)
+        if not summary:
+            ex_id, _, _ = await get_exercise_info(ue_id)
+            base = await get_baseline(user_id, 0, ex_id)
+            summary = summarize_baseline(base, mode)
+        if summary:
+            lines.append(f"• {name} — {summary}")
+        else:
+            lines.append(f"• {name}")
+    lines.append("────────")
+    lines.append("Используй «Добавить упражнение», чтобы пополнить библиотеку.")
+    return "\n".join(lines)
+
+
+async def render_exercise_view(
+    user_id: int,
+    day: int,
+    ue_id: int,
+    selected_set: int | None = None,
+):
+    ex_id, name, group = await get_exercise_info(ue_id)
+    today = datetime.utcnow().strftime("%Y-%m-%d")
+    mode = await get_recording_mode(user_id)
+    session_id = await get_or_create_today_session(user_id, today, day)
+    sets = await fetch_exercise_sets(session_id, ue_id)
+    baseline = await get_baseline(user_id, day, ex_id)
+    last_sets = await fetch_last_session_sets(user_id, day, ue_id, today)
+    if mode == "flex" and not sets:
+        if last_sets:
+            for _, reps, weight in last_sets:
+                await add_set(session_id, ue_id, reps, weight)
+        elif baseline:
+            for _ in range(baseline[0]):
+                await add_set(session_id, ue_id, baseline[1], baseline[2])
+        sets = await fetch_exercise_sets(session_id, ue_id)
+    prev_text = summarize_previous_sets(last_sets, mode)
+    if not prev_text:
+        prev_text = summarize_baseline(baseline, mode) or "—"
+    if mode == "flex" and sets:
+        if selected_set is None or all(set_no != selected_set for set_no, *_ in sets):
+            selected_set = sets[0][0]
+    lines = [
+        name,
+        "",
+        f"В прошлый раз: {prev_text}",
+        "",
+    ]
+    current_lines = format_current_training(sets, mode, selected_set)
+    lines.extend(current_lines)
+    lines.append("")
     lines.append(
-        "Записывай каждый выполненный подход: добавляй сеты, меняй повторения и вес — прогресс сохранится автоматически."
+        "«Отметь количество сделанных сетов и повторений. Если меняешь вес, укажи изменения.»"
     )
-    return "\n".join(lines), session_id, ex_id, group
+    return "\n".join(lines), session_id, ex_id, group, sets, mode, selected_set
 
 async def reminder_job(context: ContextTypes.DEFAULT_TYPE):
     chat_id = context.job.chat_id
@@ -826,6 +1352,65 @@ async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAUL
 async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await require_subscription(update, context):
         return
+    input_state = context.user_data.get(MEASUREMENT_INPUT_KEY)
+    if input_state:
+        item = get_measurement_item(input_state.get("metric"))
+        if not item:
+            context.user_data.pop(MEASUREMENT_INPUT_KEY, None)
+            return
+        try:
+            value, extra = parse_measurement_input(item, update.message.text)
+        except Exception:
+            await update.message.reply_text(
+                "Не удалось распознать значение. Используй пример на экране и попробуй ещё раз."
+            )
+            return
+        u = update.effective_user
+        user_id = await get_or_create_user(u.id, u.username)
+        action = input_state.get("action")
+        if action == "add":
+            await add_measurement_entry(user_id, item["code"], value, extra)
+        else:
+            updated = await update_last_measurement(user_id, item["code"], value, extra)
+            if not updated:
+                await add_measurement_entry(user_id, item["code"], value, extra)
+        await try_delete(update.message)
+        chat_id = input_state.get("chat_id")
+        msg_id = input_state.get("message_id")
+        context.user_data.pop(MEASUREMENT_INPUT_KEY, None)
+        if chat_id and msg_id:
+            text, kb = await build_measurements_view(user_id, context)
+            await context.bot.edit_message_text(
+                text,
+                chat_id=chat_id,
+                message_id=msg_id,
+                reply_markup=kb,
+            )
+            remember_message(chat_id, msg_id)
+        return
+    lib_custom = context.user_data.get(LIBRARY_CUSTOM_KEY)
+    if lib_custom:
+        group, chat_id, msg_id = lib_custom
+        name = update.message.text.strip()
+        if not name:
+            await update.message.reply_text("Название не должно быть пустым. Попробуй ещё раз.")
+            return
+        context.user_data.pop(LIBRARY_CUSTOM_KEY, None)
+        await try_delete(update.message)
+        ex_id = await get_or_create_exercise(name, group)
+        u = update.effective_user
+        user_id = await get_or_create_user(u.id, u.username)
+        await add_user_exercise(user_id, 0, ex_id)
+        ex_rows = await list_exercises_by_group(group)
+        selected = set(await list_user_exercise_ids(user_id, 0, group))
+        await context.bot.edit_message_text(
+            "Выбери упражнения:",
+            chat_id=chat_id,
+            message_id=msg_id,
+            reply_markup=library_add_exercises_kb(group, ex_rows, selected),
+        )
+        remember_message(chat_id, msg_id)
+        return
     if context.user_data.get("awaiting_group_name"):
         day, chat_id, msg_id, mode = context.user_data.pop("awaiting_group_name")
         name = update.message.text.strip()
@@ -912,9 +1497,16 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if data in ("menu:library", "lib:root"):
+        context.user_data.pop(LIBRARY_CUSTOM_KEY, None)
         groups = await list_library_groups(user_id)
         custom = await get_custom_groups(user_id, context)
         await safe_edit_message(q, "Мои упражнения:", reply_markup=library_menu_kb(groups, custom))
+        return
+
+    if data == "menu:metrics":
+        context.user_data.pop(MEASUREMENT_INPUT_KEY, None)
+        text, kb = await build_measurements_view(user_id, context)
+        await safe_edit_message(q, text, kb)
         return
 
     if data == "menu:settings":
@@ -935,10 +1527,149 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "✏️ Переименовать дни — поменять названия тренировочных дней.\n"
             f"📅 Количество тренировок — сейчас {n}. Укажи, сколько раз планируешь тренироваться.\n"
             "🏋️ Шаг веса — настрой шаг изменения веса для подходов.\n"
+            "📝 Выбор записи — выбери между единым и гибким учётом подходов.\n"
             f"⏰ Уведомления — {tz_label}, {rem_text}. Настрой время напоминаний.\n"
             "⭐ Подписка — информация о подписке."
         )
         await safe_edit_message(q, text, reply_markup=settings_kb())
+        return
+
+    if data == "measure:back":
+        context.user_data.pop(MEASUREMENT_INPUT_KEY, None)
+        text, kb = await build_measurements_view(user_id, context)
+        await safe_edit_message(q, text, kb)
+        return
+
+    if data == "measure:toggle":
+        context.user_data.pop(MEASUREMENT_INPUT_KEY, None)
+        current = context.user_data.get(MEASUREMENTS_SHOW_ALL_KEY, False)
+        context.user_data[MEASUREMENTS_SHOW_ALL_KEY] = not current
+        text, kb = await build_measurements_view(user_id, context)
+        await safe_edit_message(q, text, kb)
+        return
+
+    if data == "measure:graph":
+        await q.answer("Графики появятся позже.", show_alert=True)
+        return
+
+    if data == "measure:add":
+        context.user_data.pop(MEASUREMENT_INPUT_KEY, None)
+        categories = measurement_categories_list()
+        await safe_edit_message(
+            q,
+            "Выбери категорию:",
+            reply_markup=measurements_category_kb("add", categories),
+        )
+        return
+
+    if data.startswith("measure:add:cat:"):
+        context.user_data.pop(MEASUREMENT_INPUT_KEY, None)
+        parts = data.split(":")
+        category = parts[3]
+        metrics = [
+            (item["code"], item["name"])
+            for item in get_measurement_items(category)
+            if not item.get("derived")
+        ]
+        if not metrics:
+            await q.answer("Нет показателей для ввода.", show_alert=True)
+            return
+        await safe_edit_message(
+            q,
+            "Выбери показатель:",
+            reply_markup=measurements_metric_kb("add", category, metrics),
+        )
+        return
+
+    if data.startswith("measure:add:item:"):
+        parts = data.split(":")
+        category = parts[3]
+        code = parts[4]
+        item = get_measurement_item(code)
+        if not item or item.get("derived"):
+            await q.answer()
+            return
+        context.user_data[MEASUREMENT_INPUT_KEY] = {
+            "action": "add",
+            "metric": code,
+            "chat_id": q.message.chat_id,
+            "message_id": q.message.message_id,
+            "category": category,
+        }
+        kb = InlineKeyboardMarkup(
+            [[InlineKeyboardButton("⬅︎ Назад", callback_data=f"measure:add:cat:{category}")]]
+        )
+        await q.edit_message_text(item["prompt"], reply_markup=kb)
+        return
+
+    if data == "measure:edit":
+        context.user_data.pop(MEASUREMENT_INPUT_KEY, None)
+        rows = await list_measurement_metrics(user_id)
+        metrics = []
+        for code, _ in rows:
+            item = get_measurement_item(code)
+            if item and not item.get("derived"):
+                metrics.append((code, item["name"]))
+        if not metrics:
+            await q.answer("Пока нечего изменять.", show_alert=True)
+            return
+        await safe_edit_message(
+            q,
+            "Что изменить?",
+            reply_markup=measurements_existing_kb("edit", metrics),
+        )
+        return
+
+    if data.startswith("measure:edit:metric:"):
+        parts = data.split(":")
+        code = parts[3]
+        item = get_measurement_item(code)
+        if not item:
+            await q.answer()
+            return
+        history = await fetch_measurement_history(user_id, code, limit=1)
+        prefix = ""
+        if history:
+            prefix = f"Текущее значение — {format_measurement_value(item, history[0])}.\n\n"
+        context.user_data[MEASUREMENT_INPUT_KEY] = {
+            "action": "edit",
+            "metric": code,
+            "chat_id": q.message.chat_id,
+            "message_id": q.message.message_id,
+        }
+        kb = InlineKeyboardMarkup(
+            [[InlineKeyboardButton("⬅︎ Назад", callback_data="measure:edit")]]
+        )
+        await q.edit_message_text(prefix + item["prompt"], reply_markup=kb)
+        return
+
+    if data == "measure:delete":
+        context.user_data.pop(MEASUREMENT_INPUT_KEY, None)
+        rows = await list_measurement_metrics(user_id)
+        metrics = []
+        for code, _ in rows:
+            item = get_measurement_item(code)
+            if item:
+                metrics.append((code, item["name"]))
+        if not metrics:
+            await q.answer("Пока нечего удалять.", show_alert=True)
+            return
+        await safe_edit_message(
+            q,
+            "Что удалить? Удалим только последнее значение.",
+            reply_markup=measurements_existing_kb("delete", metrics),
+        )
+        return
+
+    if data.startswith("measure:delete:metric:"):
+        parts = data.split(":")
+        code = parts[3]
+        removed = await delete_last_measurement(user_id, code)
+        if not removed:
+            await q.answer("Нет данных для удаления.", show_alert=True)
+            return
+        text, kb = await build_measurements_view(user_id, context)
+        await safe_edit_message(q, text, kb)
         return
 
     parts = data.split(":")
@@ -947,23 +1678,57 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if action == "group":
             group = parts[2]
             items = await list_library_exercises(user_id, group)
-            await safe_edit_message(q, "Упражнения:", reply_markup=library_group_kb(group, items))
+            text = await render_library_group_text(user_id, group, items, context)
+            await safe_edit_message(q, text, reply_markup=library_group_kb(group, items))
+            return
+        if action == "ex":
+            group = parts[2]
+            ue_id = int(parts[3])
+            selected = get_flex_selected(context, 0, ue_id)
+            text, _, _, _, sets, mode_view, new_selected = await render_exercise_view(
+                user_id, 0, ue_id, selected
+            )
+            if mode_view == "flex":
+                set_flex_selected(context, 0, ue_id, new_selected)
+                kb = flex_library_exercise_kb(ue_id, group, sets, new_selected)
+            else:
+                set_flex_selected(context, 0, ue_id, None)
+                kb = library_exercise_kb(ue_id, group)
+            await safe_edit_message(q, text, kb)
+            return
+        if action == "delmenu":
+            group = parts[2]
+            items = await list_library_exercises(user_id, group)
+            await safe_edit_message(
+                q,
+                "Удалить упражнение:",
+                reply_markup=library_delete_kb(group, items),
+            )
             return
         if action == "del":
             group = parts[2]
             ue_id = int(parts[3])
             await remove_user_exercise(user_id, 0, ue_id)
             items = await list_library_exercises(user_id, group)
-            await safe_edit_message(q, "Упражнения:", reply_markup=library_group_kb(group, items))
+            await safe_edit_message(
+                q,
+                "Удалить упражнение:",
+                reply_markup=library_delete_kb(group, items),
+            )
             return
         if action == "add":
             sub = parts[2]
             if sub == "start":
+                target = None
+                if len(parts) > 3:
+                    target = ("group", parts[3])
+                context.user_data["lib_return"] = target
                 custom = await get_custom_groups(user_id, context)
                 await safe_edit_message(q, "Выбери группу:", reply_markup=library_add_group_kb(custom))
                 return
             if sub == "mg":
                 group = parts[3]
+                context.user_data.pop(LIBRARY_CUSTOM_KEY, None)
                 ex_rows = await list_exercises_by_group(group)
                 selected = set(await list_user_exercise_ids(user_id, 0, group))
                 await safe_edit_message(
@@ -974,6 +1739,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 return
             if sub == "ex":
                 group = parts[3]
+                context.user_data.pop(LIBRARY_CUSTOM_KEY, None)
                 ex_id = int(parts[4])
                 await toggle_user_exercise(user_id, 0, ex_id)
                 ex_rows = await list_exercises_by_group(group)
@@ -984,14 +1750,47 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     reply_markup=library_add_exercises_kb(group, ex_rows, selected),
                 )
                 return
+            if sub == "custom":
+                group = parts[3]
+                context.user_data[LIBRARY_CUSTOM_KEY] = (
+                    group,
+                    q.message.chat.id,
+                    q.message.message_id,
+                )
+                kb = InlineKeyboardMarkup(
+                    [[InlineKeyboardButton("⬅︎ Назад", callback_data=f"lib:add:mg:{group}")]]
+                )
+                await q.edit_message_text("Как назвать упражнение?", reply_markup=kb)
+                remember_message(q.message.chat.id, q.message.message_id)
+                return
             if sub == "back":
+                context.user_data.pop(LIBRARY_CUSTOM_KEY, None)
                 custom = await get_custom_groups(user_id, context)
-                await safe_edit_message(q, "Выбери группу:", reply_markup=library_add_group_kb(custom))
+                target = context.user_data.get("lib_return")
+                if target and target[0] == "group":
+                    group = target[1]
+                    items = await list_library_exercises(user_id, group)
+                    text = await render_library_group_text(user_id, group, items, context)
+                    await safe_edit_message(q, text, reply_markup=library_group_kb(group, items))
+                else:
+                    await safe_edit_message(
+                        q, "Выбери группу:", reply_markup=library_add_group_kb(custom)
+                    )
                 return
             if sub == "done":
-                groups = await list_library_groups(user_id)
-                custom = await get_custom_groups(user_id, context)
-                await safe_edit_message(q, "Мои упражнения:", reply_markup=library_menu_kb(groups, custom))
+                context.user_data.pop(LIBRARY_CUSTOM_KEY, None)
+                target = context.user_data.pop("lib_return", None)
+                if target and target[0] == "group":
+                    group = target[1]
+                    items = await list_library_exercises(user_id, group)
+                    text = await render_library_group_text(user_id, group, items, context)
+                    await safe_edit_message(q, text, reply_markup=library_group_kb(group, items))
+                else:
+                    groups = await list_library_groups(user_id)
+                    custom = await get_custom_groups(user_id, context)
+                    await safe_edit_message(
+                        q, "Мои упражнения:", reply_markup=library_menu_kb(groups, custom)
+                    )
                 return
 
     if parts[0] == "set":
@@ -1029,6 +1828,26 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 step = float(parts[2])
                 await set_weight_step(user_id, step)
                 await safe_edit_message(q, "Шаг веса обновлён.", reply_markup=settings_kb())
+            return
+        if action == "recording":
+            if len(parts) == 2:
+                mode = await get_recording_mode(user_id)
+                await safe_edit_message(
+                    q,
+                    "Выбери, как фиксировать подходы:",
+                    reply_markup=recording_mode_kb(mode),
+                )
+            else:
+                mode = parts[2]
+                if mode not in ("single", "flex"):
+                    return
+                await set_recording_mode(user_id, mode)
+                label = "Гибкая запись" if mode == "flex" else "Одинаковый вес"
+                await safe_edit_message(
+                    q,
+                    f"Режим записи обновлён: {label}.",
+                    reply_markup=recording_mode_kb(mode),
+                )
             return
         if action == "reminders":
             if len(parts) == 2:
@@ -1072,9 +1891,11 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             today_str = datetime.utcnow().strftime("%Y-%m-%d")
             ex_rows = await fetch_day_exercises(user_id, day, today_str)
             custom = await get_custom_groups(user_id, context)
+            mode = await get_recording_mode(user_id)
+            summaries = await build_summary_map(user_id, day, ex_rows, today_str, mode)
             await safe_edit_message(
                 q,
-                render_day_text(day, label, ex_rows, custom),
+                render_day_text(day, label, ex_rows, custom, summaries),
                 reply_markup=day_kb(day, ex_rows),
             )
             return
@@ -1083,7 +1904,13 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             group = parts[3]
             today_str = datetime.utcnow().strftime("%Y-%m-%d")
             ex_rows = await fetch_day_exercises(user_id, day, today_str)
-            items = [(ue_id, name, done) for ue_id, name, g, done in ex_rows if g == group]
+            mode = await get_recording_mode(user_id)
+            summaries = await build_summary_map(user_id, day, ex_rows, today_str, mode)
+            items = [
+                (ue_id, name, done, summaries.get(ue_id))
+                for ue_id, name, g, done, _ in ex_rows
+                if g == group
+            ]
             custom = await get_custom_groups(user_id, context)
             gname = MG_NAMES.get(group, custom.get(group, group))
             lines = [
@@ -1091,18 +1918,25 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "Выбери упражнение, чтобы добавить подходы или отметить выполнение.",
                 "",
             ]
-            for _, n, d in items:
+            for _, n, d, info in items:
                 mark = "✅" if d else "•"
-                lines.append(f"{mark} {n}")
+                if info:
+                    lines.append(f"{mark} {n} — {info}")
+                else:
+                    lines.append(f"{mark} {n}")
             if items:
                 lines.append("────────")
-            await safe_edit_message(q, "\n".join(lines), reply_markup=day_group_kb(day, group, items))
+            await safe_edit_message(
+                q,
+                "\n".join(lines),
+                reply_markup=day_group_kb(day, group, [(i, n, d) for i, n, d, _ in items]),
+            )
             return
         if action == "add_ex":
             day = int(parts[2])
             today_str = datetime.utcnow().strftime("%Y-%m-%d")
             ex_rows = await fetch_day_exercises(user_id, day, today_str)
-            existing_groups = {g for _, _, g, _ in ex_rows}
+            existing_groups = {g for _, _, g, _, _ in ex_rows}
             custom = await get_custom_groups(user_id, context)
             await safe_edit_message(q, "Выбери группу:", reply_markup=day_add_group_kb(day, custom, existing_groups))
             return
@@ -1182,9 +2016,11 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 today_str = datetime.utcnow().strftime("%Y-%m-%d")
                 ex_rows = await fetch_day_exercises(user_id, day, today_str)
                 custom = await get_custom_groups(user_id, context)
+                mode = await get_recording_mode(user_id)
+                summaries = await build_summary_map(user_id, day, ex_rows, today_str, mode)
                 await safe_edit_message(
                     q,
-                    render_day_text(day, label, ex_rows, custom),
+                    render_day_text(day, label, ex_rows, custom, summaries),
                     reply_markup=day_kb(day, ex_rows),
                 )
                 return
@@ -1204,11 +2040,51 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         action = parts[1]
         day = int(parts[2])
         ue_id = int(parts[3])
+        selected = get_flex_selected(context, day, ue_id)
+        is_library = day == 0
+        if action == "select":
+            set_no = int(parts[4])
+            text, _, _, group, sets, mode, new_selected = await render_exercise_view(
+                user_id, day, ue_id, set_no
+            )
+            if mode == "flex":
+                set_flex_selected(context, day, ue_id, new_selected)
+                kb = (
+                    flex_library_exercise_kb(ue_id, group, sets, new_selected)
+                    if is_library
+                    else flex_exercise_view_kb(day, ue_id, group, sets, new_selected)
+                )
+            else:
+                set_flex_selected(context, day, ue_id, None)
+                kb = (
+                    library_exercise_kb(ue_id, group)
+                    if is_library
+                    else exercise_view_kb(day, ue_id, group)
+                )
+            await safe_edit_message(q, text, kb)
+            return
         if action == "view":
-            text, _, _, group = await render_exercise_view(user_id, day, ue_id)
-            await safe_edit_message(q, text, exercise_view_kb(day, ue_id, group))
+            text, _, _, group, sets, mode, new_selected = await render_exercise_view(
+                user_id, day, ue_id, selected
+            )
+            if mode == "flex":
+                set_flex_selected(context, day, ue_id, new_selected)
+                kb = (
+                    flex_library_exercise_kb(ue_id, group, sets, new_selected)
+                    if is_library
+                    else flex_exercise_view_kb(day, ue_id, group, sets, new_selected)
+                )
+            else:
+                set_flex_selected(context, day, ue_id, None)
+                kb = (
+                    library_exercise_kb(ue_id, group)
+                    if is_library
+                    else exercise_view_kb(day, ue_id, group)
+                )
+            await safe_edit_message(q, text, kb)
             return
         today_str = datetime.utcnow().strftime("%Y-%m-%d")
+        mode = await get_recording_mode(user_id)
         async with user_locks[user_id]:
             session_id = await get_or_create_today_session(user_id, today_str, day)
             if action == "addset":
@@ -1216,9 +2092,24 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 base = await get_baseline(user_id, day, ex_id)
                 reps = base[1] if base else 0
                 weight = base[2] if base else 0.0
+                if mode == "flex":
+                    sets = await fetch_exercise_sets(session_id, ue_id)
+                    if sets:
+                        reps = sets[-1][1]
+                        weight = sets[-1][2]
                 await add_set(session_id, ue_id, reps, weight)
+                if mode == "flex":
+                    sets = await fetch_exercise_sets(session_id, ue_id)
+                    if sets:
+                        set_flex_selected(context, day, ue_id, sets[-1][0])
             elif action == "delset":
                 await remove_last_set(ue_id, session_id)
+                if mode == "flex":
+                    sets = await fetch_exercise_sets(session_id, ue_id)
+                    if sets:
+                        set_flex_selected(context, day, ue_id, sets[-1][0])
+                    else:
+                        set_flex_selected(context, day, ue_id, None)
             elif action == "inc":
                 field = parts[4]
                 delta = float(parts[5])
@@ -1229,21 +2120,45 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     reps = base[1] if base else 0
                     weight = base[2] if base else 0.0
                     await add_set(session_id, ue_id, reps, weight)
-                await inc_last_set(ue_id, session_id, "reps" if field == "reps" else "weight_kg", delta)
+                    sets = await fetch_exercise_sets(session_id, ue_id)
+                target = "reps" if field == "reps" else "weight_kg"
+                if mode == "flex":
+                    selected = get_flex_selected(context, day, ue_id)
+                    if selected is None and sets:
+                        selected = sets[-1][0]
+                        set_flex_selected(context, day, ue_id, selected)
+                    if selected is not None:
+                        await inc_specific_set(ue_id, session_id, selected, target, delta)
+                else:
+                    await inc_last_set(ue_id, session_id, target, delta)
             elif action == "done":
                 await mark_exercise_done(session_id, ue_id)
-                ex_rows = await fetch_day_exercises(user_id, day, today_str)
-                label = await get_day_label(user_id, day)
-                custom = await get_custom_groups(user_id, context)
-                await safe_edit_message(
-                    q,
-                    render_day_text(day, label, ex_rows, custom),
-                    reply_markup=day_kb(day, ex_rows),
-                )
+                if is_library:
+                    _, _, group = await get_exercise_info(ue_id)
+                    items = await list_library_exercises(user_id, group)
+                    text = await render_library_group_text(user_id, group, items, context)
+                    await safe_edit_message(q, text, reply_markup=library_group_kb(group, items))
+                else:
+                    ex_rows = await fetch_day_exercises(user_id, day, today_str)
+                    custom = await get_custom_groups(user_id, context)
+                    label = await get_day_label(user_id, day)
+                    mode_view = await get_recording_mode(user_id)
+                    summaries = await build_summary_map(user_id, day, ex_rows, today_str, mode_view)
+                    await safe_edit_message(
+                        q,
+                        render_day_text(day, label, ex_rows, custom, summaries),
+                        reply_markup=day_kb(day, ex_rows),
+                    )
                 return
             elif action == "progress":
                 rows = await list_recent_progress(user_id, day, ue_id)
-                text, _, ex_id, group = await render_exercise_view(user_id, day, ue_id)
+                text, _, ex_id, group, sets, mode_view, new_selected = await render_exercise_view(
+                    user_id, day, ue_id, get_flex_selected(context, day, ue_id)
+                )
+                if mode_view == "flex":
+                    set_flex_selected(context, day, ue_id, new_selected)
+                else:
+                    set_flex_selected(context, day, ue_id, None)
                 base = await get_baseline(user_id, day, ex_id)
                 prog_lines = []
                 if base:
@@ -1259,64 +2174,36 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     text += "\n\nПрогресс:\n" + "\n".join(prog_lines)
                 else:
                     text += "\n\nПрогресс: нет данных"
-                await safe_edit_message(q, text, exercise_view_kb(day, ue_id, group))
+                kb = (
+                    flex_library_exercise_kb(ue_id, group, sets, new_selected)
+                    if mode_view == "flex" and is_library
+                    else flex_exercise_view_kb(day, ue_id, group, sets, new_selected)
+                    if mode_view == "flex"
+                    else library_exercise_kb(ue_id, group)
+                    if is_library
+                    else exercise_view_kb(day, ue_id, group)
+                )
+                await safe_edit_message(q, text, kb)
                 return
-        text, _, _, group = await render_exercise_view(user_id, day, ue_id)
-        await safe_edit_message(q, text, exercise_view_kb(day, ue_id, group))
+        text, _, _, group, sets, mode_view, new_selected = await render_exercise_view(
+            user_id, day, ue_id, get_flex_selected(context, day, ue_id)
+        )
+        if mode_view == "flex":
+            set_flex_selected(context, day, ue_id, new_selected)
+            kb = (
+                flex_library_exercise_kb(ue_id, group, sets, new_selected)
+                if is_library
+                else flex_exercise_view_kb(day, ue_id, group, sets, new_selected)
+            )
+        else:
+            set_flex_selected(context, day, ue_id, None)
+            kb = (
+                library_exercise_kb(ue_id, group)
+                if is_library
+                else exercise_view_kb(day, ue_id, group)
+            )
+        await safe_edit_message(q, text, kb)
         return
-
-    if parts[0] == "lib":
-        action = parts[1]
-        if action == "group":
-            group = parts[2]
-            items = await list_library_exercises(user_id, group)
-            await safe_edit_message(q, "Упражнения:", reply_markup=library_group_kb(group, items))
-            return
-        if action == "del":
-            group = parts[2]
-            ue_id = int(parts[3])
-            await remove_user_exercise(user_id, 0, ue_id)
-            items = await list_library_exercises(user_id, group)
-            await safe_edit_message(q, "Упражнения:", reply_markup=library_group_kb(group, items))
-            return
-        if action == "add":
-            sub = parts[2]
-            if sub == "start":
-                custom = await get_custom_groups(user_id, context)
-                await safe_edit_message(q, "Выбери группу:", reply_markup=library_add_group_kb(custom))
-                return
-            if sub == "mg":
-                group = parts[3]
-                context.user_data["lib_group"] = group
-                ex_rows = await list_exercises_by_group(group)
-                selected = set(await list_user_exercise_ids(user_id, 0, group))
-                await safe_edit_message(
-                    q,
-                    "Выбери упражнения:",
-                    reply_markup=library_add_exercises_kb(group, ex_rows, selected),
-                )
-                return
-            if sub == "ex":
-                group = parts[3]
-                ex_id = int(parts[4])
-                await toggle_user_exercise(user_id, 0, ex_id)
-                ex_rows = await list_exercises_by_group(group)
-                selected = set(await list_user_exercise_ids(user_id, 0, group))
-                await safe_edit_message(
-                    q,
-                    "Выбери упражнения:",
-                    reply_markup=library_add_exercises_kb(group, ex_rows, selected),
-                )
-                return
-            if sub == "back":
-                custom = await get_custom_groups(user_id, context)
-                await safe_edit_message(q, "Выбери группу:", reply_markup=library_add_group_kb(custom))
-                return
-            if sub == "done":
-                groups = await list_library_groups(user_id)
-                custom = await get_custom_groups(user_id, context)
-                await safe_edit_message(q, "Мои упражнения:", reply_markup=library_menu_kb(groups, custom))
-                return
 
 def main():
     asyncio.run(init_db())
