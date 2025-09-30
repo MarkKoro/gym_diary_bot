@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import math
 from datetime import datetime, time, timedelta
 from zoneinfo import ZoneInfo
 from collections import defaultdict
@@ -66,6 +67,7 @@ from db import (
     init_db,
     get_or_create_user,
     get_or_create_today_session,
+    get_session_for_day,
     fetch_day_exercises,
     add_set,
     inc_last_set,
@@ -90,9 +92,12 @@ from db import (
     get_exercise_info,
     get_baseline,
     fetch_exercise_sets,
+    get_session_last_values,
     remove_last_set,
     mark_exercise_done,
     list_recent_progress,
+    count_exercise_progress_entries,
+    list_last_done_dates,
     rename_day,
     get_weight_step,
     set_weight_step,
@@ -104,6 +109,7 @@ from db import (
     list_user_muscle_groups,
     list_users_with_reminders,
     copy_day_plan_to_other_days,
+    ensure_library_history,
     list_library_groups,
     list_library_exercises,
     add_measurement_entry,
@@ -112,11 +118,14 @@ from db import (
     list_measurement_metrics,
     fetch_measurement_history,
     get_measurements_last_update,
+    get_exercise_details,
+    apply_sets_template,
 )
 
 user_locks = defaultdict(asyncio.Lock)
 logger = logging.getLogger(__name__)
 last_messages: dict[int, int] = {}
+PROGRESS_PAGE_SIZE = 5
 
 
 def remember_message(chat_id: int | None, message_id: int | None):
@@ -207,11 +216,13 @@ def render_day_text(
     ex_rows: list[tuple[int, str, str, int, int]],
     custom: dict[str, str] | None = None,
     summaries: dict[int, str] | None = None,
+    last_done: dict[int, str] | None = None,
 ) -> str:
     summaries = summaries or {}
-    groups: dict[str, list[tuple[int, str, int]]] = {}
-    for ue_id, name, group, done, _ in ex_rows:
-        groups.setdefault(group, []).append((ue_id, name, done))
+    last_done = last_done or {}
+    groups: dict[str, list[tuple[int, str, int, int]]] = {}
+    for ue_id, name, group, done, ex_id in ex_rows:
+        groups.setdefault(group, []).append((ue_id, name, done, ex_id))
     if not groups:
         return (
             f"День {i} — {label}\n"
@@ -230,13 +241,11 @@ def render_day_text(
             gname = code
         lines.append("")
         lines.append(gname)
-        for ue_id, n, d in names:
+        for ue_id, n, d, ex_id in names:
             mark = "✅" if d else "•"
             extra = summaries.get(ue_id)
-            if extra:
-                lines.append(f"{mark} {n} — {extra}")
-            else:
-                lines.append(f"{mark} {n}")
+            last = last_done.get(ex_id)
+            lines.append(compose_exercise_line(mark, n, extra, last))
         if idx < total - 1:
             lines.append("────────")
     return "\n".join(lines)
@@ -252,7 +261,79 @@ def render_baseline_progress(done: list[str], name: str, sets: int, reps: int, w
         lines.append(baseline_text(name, sets, reps, weight))
     return "\n".join(lines)
 
+INSTANT_BASE_KEY = "instant_baseline"
 FLEX_SELECTED_KEY = "flex_selected"
+
+
+def render_instant_baseline(name: str, sets: int, reps: int, weight: float) -> str:
+    lines = [
+        name,
+        "",
+        "Настрой количество сетов, повторений и рабочий вес для этого упражнения.",
+        "Используй кнопки с крупным шагом, чтобы быстрее указать значения.",
+        "",
+        f"Сейчас: {sets}×{reps} @ {weight:.1f} кг",
+    ]
+    return "\n".join(lines)
+
+
+def instant_baseline_view(info: dict) -> tuple[str, InlineKeyboardMarkup]:
+    sets, reps, weight = info["values"]
+    text = render_instant_baseline(info["name"], sets, reps, weight)
+    kb = baseline_kb(
+        info["day"],
+        sets,
+        reps,
+        weight,
+        prefix=f"ib:{info['source']}",
+        include_skip_all=False,
+    )
+    return text, kb
+
+
+async def start_instant_baseline(
+    context: ContextTypes.DEFAULT_TYPE,
+    user_id: int,
+    day: int,
+    exercise_id: int,
+    source: str,
+    group: str,
+    edit_func,
+) -> bool:
+    row = await get_exercise_details(exercise_id)
+    if not row:
+        return False
+    name, default_group = row
+    if not group:
+        group = default_group
+    existing = await get_baseline(user_id, day, exercise_id)
+    values = list(existing) if existing else [0, 0, 0.0]
+    info = {
+        "source": source,
+        "day": day,
+        "group": group,
+        "exercise_id": exercise_id,
+        "name": name,
+        "values": values,
+    }
+    context.user_data.pop(INSTANT_BASE_KEY, None)
+    context.user_data[INSTANT_BASE_KEY] = info
+    text, kb = instant_baseline_view(info)
+    await edit_func(text, kb)
+    return True
+
+
+async def finish_instant_baseline(q, context, user_id: int, info: dict):
+    source = info.get("source")
+    day = info.get("day")
+    group = info.get("group")
+    context.user_data.pop(INSTANT_BASE_KEY, None)
+    if source == "wiz":
+        await show_exercises(q, user_id, day, group, context)
+    elif source == "day":
+        await show_day_add_exercises_view(q, user_id, day, group, context)
+    else:
+        await show_day_group_view(q, user_id, day, group, context)
 
 
 def _flex_key(day: int, ue_id: int) -> str:
@@ -670,6 +751,39 @@ def summarize_baseline(values: tuple[int, int, float] | None, mode: str) -> str:
     return f"{sets}×{reps} @ {weight:.1f} кг"
 
 
+def format_last_done_label(date_str: str, reference: datetime | None = None) -> str:
+    if not date_str:
+        return ""
+    reference = reference or datetime.now()
+    try:
+        parsed = datetime.strptime(date_str, "%Y-%m-%d")
+    except ValueError:
+        return date_str
+    fmt = "%d.%m" if parsed.year == reference.year else "%d.%m.%Y"
+    return parsed.strftime(fmt)
+
+
+def build_last_done_dict(rows: list[tuple[int, str]]) -> dict[int, str]:
+    reference = datetime.now()
+    result: dict[int, str] = {}
+    for ex_id, date_str in rows:
+        if not date_str:
+            continue
+        result[ex_id] = format_last_done_label(date_str, reference)
+    return result
+
+
+def compose_exercise_line(mark: str, name: str, summary: str | None, last_done: str | None) -> str:
+    details = []
+    if last_done:
+        details.append(f"последний раз {last_done}")
+    if summary:
+        details.append(summary)
+    if details:
+        return f"{mark} {name} — {' — '.join(details)}"
+    return f"{mark} {name}"
+
+
 def format_current_training(
     sets: list[tuple[int, int, float, int]],
     mode: str,
@@ -696,16 +810,58 @@ async def build_summary_map(
     mode: str,
 ) -> dict[int, str]:
     summary: dict[int, str] = {}
+    session_id = await get_session_for_day(user_id, today, day)
     for ue_id, _, _, _, ex_id in ex_rows:
-        last_sets = await fetch_last_session_sets(user_id, day, ue_id, today)
-        text = summarize_previous_sets(last_sets, mode)
+        text = ""
+        if session_id:
+            current_sets = await fetch_exercise_sets(session_id, ue_id)
+            filtered = [(no, reps, weight) for no, reps, weight, warm in current_sets if not warm]
+            if filtered:
+                text = summarize_previous_sets(filtered, mode)
         if not text:
-            base = await get_baseline(user_id, day, ex_id)
-            text = summarize_baseline(base, mode)
+            last_sets = await fetch_last_session_sets(user_id, day, ue_id, today)
+            text = summarize_previous_sets(last_sets, mode)
+            if not text:
+                base = await get_baseline(user_id, day, ex_id)
+                text = summarize_baseline(base, mode)
         if text:
             summary[ue_id] = text
     return summary
 
+
+
+async def show_day_group_view(q, user_id: int, day: int, group: str, context):
+    today_str = datetime.utcnow().strftime("%Y-%m-%d")
+    ex_rows = await fetch_day_exercises(user_id, day, today_str)
+    mode = await get_recording_mode(user_id)
+    summaries = await build_summary_map(user_id, day, ex_rows, today_str, mode)
+    last_done_rows = await list_last_done_dates(user_id)
+    last_done_map = build_last_done_dict(last_done_rows)
+    custom = await get_custom_groups(user_id, context)
+    gname = MG_NAMES.get(group, custom.get(group, group))
+    lines = [
+        f"День {day} — {gname}",
+        "Выбери упражнение, чтобы добавить подходы или отметить выполнение.",
+        "",
+    ]
+    items: list[tuple[int, str, int]] = []
+    for ue_id, name, g, done, ex_id in ex_rows:
+        if g != group:
+            continue
+        mark = "✅" if done else "•"
+        info = summaries.get(ue_id)
+        last = last_done_map.get(ex_id)
+        lines.append(compose_exercise_line(mark, name, info, last))
+        items.append((ue_id, name, done))
+    if items:
+        lines.append("────────")
+    else:
+        lines.append("Пока нет упражнений. Добавь их, чтобы заполнить этот раздел.")
+    await safe_edit_message(
+        q,
+        "\n".join(lines),
+        reply_markup=day_group_kb(day, group, items),
+    )
 
 async def render_library_group_text(
     user_id: int,
@@ -722,22 +878,22 @@ async def render_library_group_text(
         )
     mode = await get_recording_mode(user_id)
     today = datetime.utcnow().strftime("%Y-%m-%d")
+    last_done_rows = await list_last_done_dates(user_id)
+    last_done_map = build_last_done_dict(last_done_rows)
     lines = [
         f"{gname}",
         "Выбери упражнение, чтобы посмотреть историю и вести отдельные записи.",
         "",
     ]
     for ue_id, name in items:
+        ex_id, _, _ = await get_exercise_info(ue_id)
         last_sets = await fetch_last_session_sets(user_id, 0, ue_id, today)
         summary = summarize_previous_sets(last_sets, mode)
         if not summary:
-            ex_id, _, _ = await get_exercise_info(ue_id)
             base = await get_baseline(user_id, 0, ex_id)
             summary = summarize_baseline(base, mode)
-        if summary:
-            lines.append(f"• {name} — {summary}")
-        else:
-            lines.append(f"• {name}")
+        last = last_done_map.get(ex_id)
+        lines.append(compose_exercise_line("•", name, summary, last))
     lines.append("────────")
     lines.append("Используй «Добавить упражнение», чтобы пополнить библиотеку.")
     return "\n".join(lines)
@@ -864,6 +1020,16 @@ async def show_exercises(q, user_id: int, day: int, group: str, context):
         q,
         day_exercises_text(day, group, custom),
         exercises_kb(day, group, ex_rows, selected_ids),
+    )
+
+async def show_day_add_exercises_view(q, user_id: int, day: int, group: str, context):
+    ex_rows = await list_exercises_by_group(group)
+    selected_ids = set(await list_user_exercise_ids(user_id, day, group))
+    custom = context.user_data.get("custom_groups", {})
+    await safe_edit_message(
+        q,
+        day_exercises_text(day, group, custom),
+        reply_markup=day_add_exercises_kb(day, group, ex_rows, selected_ids),
     )
 
 async def finish_day(q, context, user_id: int, day: int, summary: str | None = None):
@@ -1119,8 +1285,23 @@ async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAUL
             action = parts[4]
             if action == "add":
                 ex_id = int(parts[5])
-                await toggle_user_exercise(user_id, day, ex_id)
+                added = await toggle_user_exercise(user_id, day, ex_id)
                 group = context.user_data["group_list"][context.user_data["group_idx"]]
+                if added:
+                    async def edit_instant(text, kb):
+                        await safe_edit_message(q, text, kb)
+
+                    started = await start_instant_baseline(
+                        context,
+                        user_id,
+                        day,
+                        ex_id,
+                        "wiz",
+                        group,
+                        edit_instant,
+                    )
+                    if started:
+                        return
                 await show_exercises(q, user_id, day, group, context)
                 return
             if action == "custom":
@@ -1459,22 +1640,41 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ex_id = await get_or_create_exercise(name, group)
         u = update.effective_user
         user_id = await get_or_create_user(u.id, u.username)
+        selected_ids = set(await list_user_exercise_ids(user_id, day, group))
+        existed = ex_id in selected_ids
         await add_user_exercise(user_id, day, ex_id)
+        source = "day" if context.user_data.get("add_group") == (day, group) else "wiz"
+
+        async def edit_instant(text, kb):
+            await context.bot.edit_message_text(
+                text,
+                chat_id=chat_id,
+                message_id=msg_id,
+                reply_markup=kb,
+            )
+            remember_message(chat_id, msg_id)
+
+        if not existed:
+            started = await start_instant_baseline(
+                context,
+                user_id,
+                day,
+                ex_id,
+                source,
+                group,
+                edit_instant,
+            )
+            if started:
+                return
+
         ex_rows = await list_exercises_by_group(group)
         custom = context.user_data.get("custom_groups", {})
-        selected_ids = set(await list_user_exercise_ids(user_id, day, group))
         kb = (
             day_add_exercises_kb(day, group, ex_rows, selected_ids)
-            if context.user_data.get("add_group") == (day, group)
+            if source == "day"
             else exercises_kb(day, group, ex_rows, selected_ids)
         )
-        await context.bot.edit_message_text(
-            day_exercises_text(day, group, custom),
-            chat_id=chat_id,
-            message_id=msg_id,
-            reply_markup=kb,
-        )
-        remember_message(chat_id, msg_id)
+        await edit_instant(day_exercises_text(day, group, custom), kb)
         return
 
 async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1487,6 +1687,45 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = await get_or_create_user(u.id, u.username)
     remember_message(q.message.chat_id, q.message.message_id)
 
+    if data.startswith("ib:"):
+        parts = data.split(":")
+        if len(parts) < 3:
+            return
+        info = context.user_data.get(INSTANT_BASE_KEY)
+        if not info or info.get("source") != parts[1]:
+            context.user_data.pop(INSTANT_BASE_KEY, None)
+            await q.answer()
+            return
+        action = parts[2]
+        values = info["values"]
+        if action == "inc" and len(parts) >= 5:
+            field = parts[3]
+            delta = float(parts[4])
+            if field == "sets":
+                values[0] = max(0, values[0] + int(delta))
+            elif field == "reps":
+                values[1] = max(0, values[1] + int(delta))
+            elif field == "kg":
+                values[2] = max(0.0, values[2] + delta)
+            text, kb = instant_baseline_view(info)
+            await safe_edit_message(q, text, kb)
+            return
+        if action == "ready":
+            await set_baseline(
+                user_id,
+                info["day"],
+                info["exercise_id"],
+                values[0],
+                values[1],
+                values[2],
+            )
+            await finish_instant_baseline(q, context, user_id, info)
+            return
+        if action in ("skip", "back"):
+            await finish_instant_baseline(q, context, user_id, info)
+            return
+        return
+
     if data.startswith("wiz:"):
         await wizard_router(q, data, user_id, context)
         return
@@ -1498,6 +1737,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if data in ("menu:library", "lib:root"):
         context.user_data.pop(LIBRARY_CUSTOM_KEY, None)
+        await ensure_library_history(user_id)
         groups = await list_library_groups(user_id)
         custom = await get_custom_groups(user_id, context)
         await safe_edit_message(q, "Мои упражнения:", reply_markup=library_menu_kb(groups, custom))
@@ -1893,44 +2133,18 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             custom = await get_custom_groups(user_id, context)
             mode = await get_recording_mode(user_id)
             summaries = await build_summary_map(user_id, day, ex_rows, today_str, mode)
+            last_done_rows = await list_last_done_dates(user_id)
+            last_done_map = build_last_done_dict(last_done_rows)
             await safe_edit_message(
                 q,
-                render_day_text(day, label, ex_rows, custom, summaries),
+                render_day_text(day, label, ex_rows, custom, summaries, last_done_map),
                 reply_markup=day_kb(day, ex_rows),
             )
             return
         if action == "group":
             day = int(parts[2])
             group = parts[3]
-            today_str = datetime.utcnow().strftime("%Y-%m-%d")
-            ex_rows = await fetch_day_exercises(user_id, day, today_str)
-            mode = await get_recording_mode(user_id)
-            summaries = await build_summary_map(user_id, day, ex_rows, today_str, mode)
-            items = [
-                (ue_id, name, done, summaries.get(ue_id))
-                for ue_id, name, g, done, _ in ex_rows
-                if g == group
-            ]
-            custom = await get_custom_groups(user_id, context)
-            gname = MG_NAMES.get(group, custom.get(group, group))
-            lines = [
-                f"День {day} — {gname}",
-                "Выбери упражнение, чтобы добавить подходы или отметить выполнение.",
-                "",
-            ]
-            for _, n, d, info in items:
-                mark = "✅" if d else "•"
-                if info:
-                    lines.append(f"{mark} {n} — {info}")
-                else:
-                    lines.append(f"{mark} {n}")
-            if items:
-                lines.append("────────")
-            await safe_edit_message(
-                q,
-                "\n".join(lines),
-                reply_markup=day_group_kb(day, group, [(i, n, d) for i, n, d, _ in items]),
-            )
+            await show_day_group_view(q, user_id, day, group, context)
             return
         if action == "add_ex":
             day = int(parts[2])
@@ -1956,28 +2170,42 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     await q.edit_message_text("Укажи группу мышц, которой хочешь заниматься.")
                     return
                 context.user_data["add_group"] = (day, group)
-                ex_rows = await list_exercises_by_group(group)
-                selected_ids = set(await list_user_exercise_ids(user_id, day, group))
-                custom = context.user_data.get("custom_groups", {})
-                await safe_edit_message(
-                    q,
-                    day_exercises_text(day, group, custom),
-                    reply_markup=day_add_exercises_kb(day, group, ex_rows, selected_ids),
-                )
+                await show_day_add_exercises_view(q, user_id, day, group, context)
                 return
             if sub == "ex":
                 ex_id = int(parts[4])
-                await add_user_exercise(user_id, day, ex_id)
-                _, group = context.user_data.get("add_group", (day, None))
+                stored_day, group = context.user_data.get("add_group", (day, None))
+                if stored_day != day:
+                    group = None
+                selected_ids: set[int] = set()
                 if group:
-                    ex_rows = await list_exercises_by_group(group)
                     selected_ids = set(await list_user_exercise_ids(user_id, day, group))
-                    custom = context.user_data.get("custom_groups", {})
-                    await safe_edit_message(
-                        q,
-                        day_exercises_text(day, group, custom),
-                        reply_markup=day_add_exercises_kb(day, group, ex_rows, selected_ids),
+                existed = bool(group and ex_id in selected_ids)
+                await add_user_exercise(user_id, day, ex_id)
+                if not existed:
+                    if not group:
+                        details = await get_exercise_details(ex_id)
+                        if details:
+                            _, detected_group = details
+                            group = detected_group
+                            context.user_data["add_group"] = (day, group)
+
+                    async def edit_instant(text, kb):
+                        await safe_edit_message(q, text, kb)
+
+                    started = await start_instant_baseline(
+                        context,
+                        user_id,
+                        day,
+                        ex_id,
+                        "day",
+                        group,
+                        edit_instant,
                     )
+                    if started:
+                        return
+                if group:
+                    await show_day_add_exercises_view(q, user_id, day, group, context)
                 return
             if sub == "custom":
                 group = parts[4]
@@ -2001,14 +2229,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 return
             if sub == "custom_back":
                 group = parts[4]
-                ex_rows = await list_exercises_by_group(group)
-                selected_ids = set(await list_user_exercise_ids(user_id, day, group))
-                custom = context.user_data.get("custom_groups", {})
-                await safe_edit_message(
-                    q,
-                    day_exercises_text(day, group, custom),
-                    reply_markup=day_add_exercises_kb(day, group, ex_rows, selected_ids),
-                )
+                await show_day_add_exercises_view(q, user_id, day, group, context)
                 return
             if sub == "done":
                 context.user_data.pop("add_group", None)
@@ -2018,9 +2239,11 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 custom = await get_custom_groups(user_id, context)
                 mode = await get_recording_mode(user_id)
                 summaries = await build_summary_map(user_id, day, ex_rows, today_str, mode)
+                last_done_rows = await list_last_done_dates(user_id)
+                last_done_map = build_last_done_dict(last_done_rows)
                 await safe_edit_message(
                     q,
-                    render_day_text(day, label, ex_rows, custom, summaries),
+                    render_day_text(day, label, ex_rows, custom, summaries, last_done_map),
                     reply_markup=day_kb(day, ex_rows),
                 )
                 return
@@ -2087,16 +2310,40 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         mode = await get_recording_mode(user_id)
         async with user_locks[user_id]:
             session_id = await get_or_create_today_session(user_id, today_str, day)
-            if action == "addset":
+            if action == "fill":
                 ex_id, _, _ = await get_exercise_info(ue_id)
-                base = await get_baseline(user_id, day, ex_id)
-                reps = base[1] if base else 0
-                weight = base[2] if base else 0.0
-                if mode == "flex":
-                    sets = await fetch_exercise_sets(session_id, ue_id)
-                    if sets:
-                        reps = sets[-1][1]
-                        weight = sets[-1][2]
+                template_sets = await fetch_last_session_sets(user_id, day, ue_id, today_str)
+                template: list[tuple[int | float | None, int | float | None]] = []
+                if template_sets:
+                    template = [(reps, weight) for _, reps, weight in template_sets]
+                else:
+                    base = await get_baseline(user_id, day, ex_id)
+                    if base:
+                        template = [(base[1], base[2]) for _ in range(base[0])]
+                if template:
+                    await apply_sets_template(session_id, ue_id, template)
+                    if mode == "flex":
+                        sets = await fetch_exercise_sets(session_id, ue_id)
+                        if sets:
+                            set_flex_selected(context, day, ue_id, sets[0][0])
+                        else:
+                            set_flex_selected(context, day, ue_id, None)
+                elif mode == "flex":
+                    set_flex_selected(context, day, ue_id, None)
+            elif action == "addset":
+                sets = await fetch_exercise_sets(session_id, ue_id)
+                if sets:
+                    reps = sets[-1][1]
+                    weight = sets[-1][2]
+                else:
+                    stored = await get_session_last_values(session_id, ue_id)
+                    if stored:
+                        reps, weight = stored
+                    else:
+                        ex_id, _, _ = await get_exercise_info(ue_id)
+                        base = await get_baseline(user_id, day, ex_id)
+                        reps = base[1] if base else 0
+                        weight = base[2] if base else 0.0
                 await add_set(session_id, ue_id, reps, weight)
                 if mode == "flex":
                     sets = await fetch_exercise_sets(session_id, ue_id)
@@ -2115,10 +2362,14 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 delta = float(parts[5])
                 sets = await fetch_exercise_sets(session_id, ue_id)
                 if not sets:
-                    ex_id, _, _ = await get_exercise_info(ue_id)
-                    base = await get_baseline(user_id, day, ex_id)
-                    reps = base[1] if base else 0
-                    weight = base[2] if base else 0.0
+                    stored = await get_session_last_values(session_id, ue_id)
+                    if stored:
+                        reps, weight = stored
+                    else:
+                        ex_id, _, _ = await get_exercise_info(ue_id)
+                        base = await get_baseline(user_id, day, ex_id)
+                        reps = base[1] if base else 0
+                        weight = base[2] if base else 0.0
                     await add_set(session_id, ue_id, reps, weight)
                     sets = await fetch_exercise_sets(session_id, ue_id)
                 target = "reps" if field == "reps" else "weight_kg"
@@ -2133,25 +2384,38 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     await inc_last_set(ue_id, session_id, target, delta)
             elif action == "done":
                 await mark_exercise_done(session_id, ue_id)
+                ex_info = await get_exercise_info(ue_id)
+                if not ex_info:
+                    return
+                _, _, group = ex_info
                 if is_library:
-                    _, _, group = await get_exercise_info(ue_id)
                     items = await list_library_exercises(user_id, group)
                     text = await render_library_group_text(user_id, group, items, context)
                     await safe_edit_message(q, text, reply_markup=library_group_kb(group, items))
                 else:
-                    ex_rows = await fetch_day_exercises(user_id, day, today_str)
-                    custom = await get_custom_groups(user_id, context)
-                    label = await get_day_label(user_id, day)
-                    mode_view = await get_recording_mode(user_id)
-                    summaries = await build_summary_map(user_id, day, ex_rows, today_str, mode_view)
-                    await safe_edit_message(
-                        q,
-                        render_day_text(day, label, ex_rows, custom, summaries),
-                        reply_markup=day_kb(day, ex_rows),
-                    )
+                    await show_day_group_view(q, user_id, day, group, context)
                 return
             elif action == "progress":
-                rows = await list_recent_progress(user_id, day, ue_id)
+                page = 0
+                if len(parts) > 4:
+                    try:
+                        page = max(int(parts[4]), 0)
+                    except ValueError:
+                        page = 0
+                total_entries = await count_exercise_progress_entries(user_id, day, ue_id)
+                total_pages = max(1, math.ceil(total_entries / PROGRESS_PAGE_SIZE)) if total_entries else 1
+                if total_entries:
+                    page = min(page, total_pages - 1)
+                else:
+                    page = 0
+                offset = page * PROGRESS_PAGE_SIZE
+                rows = await list_recent_progress(
+                    user_id,
+                    day,
+                    ue_id,
+                    PROGRESS_PAGE_SIZE,
+                    offset,
+                )
                 text, _, ex_id, group, sets, mode_view, new_selected = await render_exercise_view(
                     user_id, day, ue_id, get_flex_selected(context, day, ue_id)
                 )
@@ -2171,7 +2435,10 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     weight_val = w or 0.0
                     prog_lines.append(f"{d}: {sets_cnt}×{reps_cnt} @ {weight_val:.1f} кг")
                 if prog_lines:
-                    text += "\n\nПрогресс:\n" + "\n".join(prog_lines)
+                    header = "Прогресс"
+                    if total_pages > 1:
+                        header += f" (страница {page + 1}/{total_pages})"
+                    text += "\n\n" + header + ":\n" + "\n".join(prog_lines)
                 else:
                     text += "\n\nПрогресс: нет данных"
                 kb = (
@@ -2183,6 +2450,30 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     if is_library
                     else exercise_view_kb(day, ue_id, group)
                 )
+                base_rows = [row[:] for row in kb.inline_keyboard]
+                nav_rows: list[list[InlineKeyboardButton]] = []
+                if total_entries > PROGRESS_PAGE_SIZE:
+                    nav_row: list[InlineKeyboardButton] = []
+                    if page > 0:
+                        nav_row.append(
+                            InlineKeyboardButton(
+                                "⬅︎ Раньше",
+                                callback_data=f"ex:progress:{day}:{ue_id}:{page - 1}",
+                            )
+                        )
+                    if (page + 1) * PROGRESS_PAGE_SIZE < total_entries:
+                        nav_row.append(
+                            InlineKeyboardButton(
+                                "Позже ➡︎",
+                                callback_data=f"ex:progress:{day}:{ue_id}:{page + 1}",
+                            )
+                        )
+                    if nav_row:
+                        nav_rows.append(nav_row)
+                if nav_rows:
+                    kb = InlineKeyboardMarkup(nav_rows + base_rows)
+                else:
+                    kb = InlineKeyboardMarkup(base_rows)
                 await safe_edit_message(q, text, kb)
                 return
         text, _, _, group, sets, mode_view, new_selected = await render_exercise_view(
