@@ -107,31 +107,45 @@ def exercises_kb(day_index: int, group: str, ex_rows: list[tuple[int,str]], sele
     ])
     return InlineKeyboardMarkup(rows)
 
-def baseline_kb(day_index: int, sets: int, reps: int, weight: float):
+def baseline_kb(
+    day_index: int,
+    sets: int,
+    reps: int,
+    weight: float,
+    prefix: str = "wiz:base",
+    include_skip_all: bool = True,
+):
     def btn(label: str, cb: str):
         return InlineKeyboardButton(label, callback_data=cb)
+
+    def cb(*parts: str) -> str:
+        return ":".join((prefix, *parts))
+
     rows = [
-        [btn("＋1 сет", "wiz:base:inc:sets:1"), btn("−1 сет", "wiz:base:inc:sets:-1")],
-        [btn("＋5 повт", "wiz:base:inc:reps:5"), btn("−5 повт", "wiz:base:inc:reps:-5")],
-        [btn("＋1 повт", "wiz:base:inc:reps:1"), btn("−1 повт", "wiz:base:inc:reps:-1")],
+        [btn("＋1 сет", cb("inc", "sets", "1")), btn("−1 сет", cb("inc", "sets", "-1"))],
+        [btn("＋5 повт", cb("inc", "reps", "5")), btn("−5 повт", cb("inc", "reps", "-5"))],
+        [btn("＋1 повт", cb("inc", "reps", "1")), btn("−1 повт", cb("inc", "reps", "-1"))],
         [
-            btn("＋0.5 кг", "wiz:base:inc:kg:0.5"),
-            btn("＋1 кг", "wiz:base:inc:kg:1"),
-            btn("＋5 кг", "wiz:base:inc:kg:5"),
-            btn("＋10 кг", "wiz:base:inc:kg:10"),
-            btn("＋25 кг", "wiz:base:inc:kg:25"),
+            btn("＋0.5 кг", cb("inc", "kg", "0.5")),
+            btn("＋1 кг", cb("inc", "kg", "1")),
+            btn("＋5 кг", cb("inc", "kg", "5")),
+            btn("＋10 кг", cb("inc", "kg", "10")),
+            btn("＋25 кг", cb("inc", "kg", "25")),
+            btn("＋50 кг", cb("inc", "kg", "50")),
         ],
         [
-            btn("−0.5 кг", "wiz:base:inc:kg:-0.5"),
-            btn("−1 кг", "wiz:base:inc:kg:-1"),
-            btn("−5 кг", "wiz:base:inc:kg:-5"),
-            btn("−10 кг", "wiz:base:inc:kg:-10"),
-            btn("−25 кг", "wiz:base:inc:kg:-25"),
+            btn("−0.5 кг", cb("inc", "kg", "-0.5")),
+            btn("−1 кг", cb("inc", "kg", "-1")),
+            btn("−5 кг", cb("inc", "kg", "-5")),
+            btn("−10 кг", cb("inc", "kg", "-10")),
+            btn("−25 кг", cb("inc", "kg", "-25")),
+            btn("−50 кг", cb("inc", "kg", "-50")),
         ],
-        [btn("✅ Готово", "wiz:base:ready"), btn("⬅︎ Назад", "wiz:base:back")],
-        [btn("⏭ Пропустить это упражнение", "wiz:base:skip")],
-        [btn("⏭ Пропустить настройку веса", f"wiz:day:{day_index}:baseline:skip_all")],
+        [btn("✅ Готово", cb("ready")), btn("⬅︎ Назад", cb("back"))],
+        [btn("⏭ Пропустить это упражнение", cb("skip"))],
     ]
+    if include_skip_all:
+        rows.append([btn("⏭ Пропустить настройку веса", f"wiz:day:{day_index}:baseline:skip_all")])
     return InlineKeyboardMarkup(rows)
 
 def day_done_kb(day_index: int):
@@ -284,6 +298,7 @@ def del_exercises_kb(day_index: int, ex_rows: list[tuple[int, str, str, int, int
 
 def exercise_view_kb(day_index: int, ue_id: int, group: str):
     return InlineKeyboardMarkup([
+        [InlineKeyboardButton("Все сеты", callback_data=f"ex:fill:{day_index}:{ue_id}")],
         [
             InlineKeyboardButton("＋ сет", callback_data=f"ex:addset:{day_index}:{ue_id}"),
             InlineKeyboardButton("− сет", callback_data=f"ex:delset:{day_index}:{ue_id}"),
@@ -296,11 +311,17 @@ def exercise_view_kb(day_index: int, ue_id: int, group: str):
             InlineKeyboardButton("＋0.5 кг", callback_data=f"ex:inc:{day_index}:{ue_id}:kg:0.5"),
             InlineKeyboardButton("＋1 кг", callback_data=f"ex:inc:{day_index}:{ue_id}:kg:1"),
             InlineKeyboardButton("＋2.5 кг", callback_data=f"ex:inc:{day_index}:{ue_id}:kg:2.5"),
+            InlineKeyboardButton("＋10 кг", callback_data=f"ex:inc:{day_index}:{ue_id}:kg:10"),
+            InlineKeyboardButton("＋25 кг", callback_data=f"ex:inc:{day_index}:{ue_id}:kg:25"),
+            InlineKeyboardButton("＋50 кг", callback_data=f"ex:inc:{day_index}:{ue_id}:kg:50"),
         ],
         [
             InlineKeyboardButton("−0.5 кг", callback_data=f"ex:inc:{day_index}:{ue_id}:kg:-0.5"),
             InlineKeyboardButton("−1 кг", callback_data=f"ex:inc:{day_index}:{ue_id}:kg:-1"),
             InlineKeyboardButton("−2.5 кг", callback_data=f"ex:inc:{day_index}:{ue_id}:kg:-2.5"),
+            InlineKeyboardButton("−10 кг", callback_data=f"ex:inc:{day_index}:{ue_id}:kg:-10"),
+            InlineKeyboardButton("−25 кг", callback_data=f"ex:inc:{day_index}:{ue_id}:kg:-25"),
+            InlineKeyboardButton("−50 кг", callback_data=f"ex:inc:{day_index}:{ue_id}:kg:-50"),
         ],
         [InlineKeyboardButton("📈 Прогресс", callback_data=f"ex:progress:{day_index}:{ue_id}")],
         [InlineKeyboardButton("✅ Готово", callback_data=f"ex:done:{day_index}:{ue_id}")],
@@ -341,6 +362,7 @@ def flex_exercise_view_kb(
                 current_row = []
         if current_row:
             rows.append(current_row)
+    rows.append([InlineKeyboardButton("Все сеты", callback_data=f"ex:fill:{day_index}:{ue_id}")])
     rows.append([
         InlineKeyboardButton("＋ сет", callback_data=f"ex:addset:{day_index}:{ue_id}"),
         InlineKeyboardButton("− сет", callback_data=f"ex:delset:{day_index}:{ue_id}"),
@@ -433,6 +455,7 @@ def library_add_exercises_kb(group: str, ex_rows: list[tuple[int, str]], selecte
 
 def library_exercise_kb(ue_id: int, group: str):
     return InlineKeyboardMarkup([
+        [InlineKeyboardButton("Все сеты", callback_data=f"ex:fill:0:{ue_id}")],
         [
             InlineKeyboardButton("＋ сет", callback_data=f"ex:addset:0:{ue_id}"),
             InlineKeyboardButton("− сет", callback_data=f"ex:delset:0:{ue_id}"),
@@ -479,6 +502,7 @@ def flex_library_exercise_kb(
                 current_row = []
         if current_row:
             rows.append(current_row)
+    rows.append([InlineKeyboardButton("Все сеты", callback_data=f"ex:fill:0:{ue_id}")])
     rows.append([
         InlineKeyboardButton("＋ сет", callback_data=f"ex:addset:0:{ue_id}"),
         InlineKeyboardButton("− сет", callback_data=f"ex:delset:0:{ue_id}"),
