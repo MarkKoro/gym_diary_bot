@@ -56,6 +56,12 @@ DEFAULT_EXERCISES: Sequence[tuple[str, str]] = [
     ("Разгибание гантели из-за головы", "triceps"),
     ("Отжимания на скамье", "triceps"),
     ("Разгибание рук в наклоне", "triceps"),
+    ("Скручивания", "core"),
+    ("Подъём ног лёжа", "core"),
+    ("Подъём колен в висе", "core"),
+    ("Русский твист", "core"),
+    ("Касания пяток", "core"),
+    ("Скручивания на скамье", "core"),
 ]
 
 KB_EXERCISES: Sequence[tuple[str, str]] = tuple((name, "kb") for name in KB_EXERCISE_NAMES)
