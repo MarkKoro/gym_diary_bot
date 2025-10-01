@@ -1,13 +1,16 @@
 import asyncio
 import logging
 import math
+from dataclasses import dataclass
 from datetime import datetime, time, timedelta
 from zoneinfo import ZoneInfo
 from collections import defaultdict
+import re
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.error import (
     BadRequest,
     Forbidden,
+    MessageNotModified,
     RetryAfter,
     TimedOut,
     NetworkError,
@@ -48,7 +51,7 @@ from keyboards import (
     days_count_kb,
     weight_step_kb,
     recording_mode_kb,
-    day_view_mode_kb,
+    ui_preferences_kb,
     flex_exercise_view_kb,
     TIMEZONES,
     library_menu_kb,
@@ -105,8 +108,10 @@ from db import (
     set_weight_step,
     get_recording_mode,
     set_recording_mode,
-    get_day_view_mode,
-    set_day_view_mode,
+    get_ui_preferences,
+    set_ui_mode,
+    set_ui_emoji_enabled,
+    set_ui_verbose_level,
     fetch_last_session_sets,
     inc_specific_set,
     add_user_muscle_group,
@@ -125,12 +130,13 @@ from db import (
     get_measurements_last_update,
     get_exercise_details,
     apply_sets_template,
-    get_exercise_scheme,
     set_exercise_scheme,
     detach_user_exercise,
     user_has_library_exercise,
     METCON_EXERCISE_NAMES,
 )
+from text_utils import normalize_whitespace
+from ui_texts import t, e
 
 user_locks = defaultdict(asyncio.Lock)
 logger = logging.getLogger(__name__)
@@ -144,6 +150,97 @@ FOR_TIME_EXERCISE_NAME = "Меткон — For Time (кастом)"
 FOR_TIME_METRIC = "wod_time_sec"
 AMRAP_SCHEME_KEY = "awaiting_amrap_scheme"
 FOR_TIME_INPUT_KEY = "awaiting_for_time_result"
+
+EMOJI_RE = re.compile(
+    "["
+    "\U0001F300-\U0001F6FF"
+    "\U0001F700-\U0001F77F"
+    "\U0001F780-\U0001F7FF"
+    "\U0001F800-\U0001F8FF"
+    "\U0001F900-\U0001F9FF"
+    "\U0001FA00-\U0001FA6F"
+    "\U0001FA70-\U0001FAFF"
+    "\u2600-\u26FF"
+    "\u2700-\u27BF"
+    "\u23F0-\u23FA"
+    "\u24C2"
+    "\u25A0-\u25FF"
+    "\u2B00-\u2BFF"
+    "]"
+)
+
+
+@dataclass(frozen=True)
+class UiPreferences:
+    mode: str = "detailed"
+    emoji_enabled: bool = True
+    verbose_level: int = 0
+
+
+async def load_ui_preferences(user_id: int) -> UiPreferences:
+    mode, emoji, verbose = await get_ui_preferences(user_id)
+    return UiPreferences(mode=mode, emoji_enabled=bool(emoji), verbose_level=1 if verbose else 0)
+
+
+def emoji_for(prefs: UiPreferences, key: str) -> str:
+    if not prefs.emoji_enabled:
+        return ""
+    return e(key)
+
+
+def status_icon(prefs: UiPreferences, done: bool) -> str:
+    return emoji_for(prefs, "done" if done else "generic")
+
+
+def maybe_hint(lines: list[str], prefs: UiPreferences, text: str):
+    """Append a short hint if verbose mode is enabled."""
+
+    if prefs.verbose_level:
+        lines.append(text)
+
+
+def strip_emoji(text: str) -> str:
+    cleaned = EMOJI_RE.sub("", text)
+    cleaned = cleaned.replace("\uFE0F", "").replace("\u200D", "")
+    return cleaned
+
+
+def apply_text_preferences(text: str, prefs: UiPreferences) -> str:
+    if prefs.emoji_enabled or not text:
+        return text
+    processed: list[str] = []
+    for line in text.splitlines():
+        cleaned = strip_emoji(line)
+        cleaned = re.sub(r"\s{2,}", " ", cleaned)
+        if cleaned.strip():
+            if line.startswith(" "):
+                leading = len(line) - len(line.lstrip(" "))
+                cleaned = (" " * leading) + cleaned.strip()
+            else:
+                cleaned = cleaned.strip()
+        else:
+            cleaned = ""
+        processed.append(cleaned)
+    return "\n".join(processed)
+
+
+def apply_markup_preferences(markup: InlineKeyboardMarkup | None, prefs: UiPreferences):
+    if prefs.emoji_enabled or markup is None:
+        return markup
+    for row in markup.inline_keyboard:
+        for button in row:
+            cleaned = strip_emoji(button.text)
+            cleaned = re.sub(r"\s{2,}", " ", cleaned).strip()
+            button.text = cleaned or button.text.strip()
+    return markup
+
+
+def prepare_ui_output(
+    text: str,
+    markup: InlineKeyboardMarkup | None,
+    prefs: UiPreferences,
+) -> tuple[str, InlineKeyboardMarkup | None]:
+    return apply_text_preferences(text, prefs), apply_markup_preferences(markup, prefs)
 
 
 def resolve_group(name: str, group: str) -> str:
@@ -160,6 +257,21 @@ def format_weight_value(value: float) -> str:
 
 def filter_work_sets(sets: list[tuple[int, int, float, int]]) -> list[tuple[int, int, float]]:
     return [(no, reps, weight) for no, reps, weight, warm in sets if not warm]
+
+
+def build_strength_summary_from_sets(
+    sets: list[tuple[int, int, float, int]]
+) -> dict[str, int | float]:
+    work_sets = filter_work_sets(sets)
+    if not work_sets:
+        return {"sets_count": 0, "last_reps": 0, "last_weight": 0.0}
+    last_reps = int(work_sets[-1][1] or 0)
+    last_weight = float(work_sets[-1][2] or 0.0)
+    return {
+        "sets_count": len(work_sets),
+        "last_reps": last_reps,
+        "last_weight": last_weight,
+    }
 
 
 def pluralize_sets(count: int) -> str:
@@ -204,10 +316,10 @@ def format_kb_summary(
     last_sets: list[tuple[int, int, float]],
 ) -> str:
     if current_sets:
-        return f"Сделано {format_kb_done(current_sets)}"
+        return f"{t('MADE')} {format_kb_done(current_sets)}"
     if last_sets:
-        return f"Прошлый раз: {format_kb_previous(last_sets)}"
-    return "Сделано 0 сетов"
+        return f"{t('LAST_TIME')}: {format_kb_previous(last_sets)}"
+    return f"{t('MADE')} 0 сетов"
 
 
 def parse_amrap_sets(sets: list[tuple[int, int, float, int]]) -> tuple[int, int]:
@@ -239,10 +351,10 @@ def format_amrap_summary(
     last_extra: int,
 ) -> str:
     if current_rounds or current_extra:
-        return f"Сделано: {format_amrap_done(current_rounds, current_extra)}"
+        return t("AMRAP_LINE", rounds=current_rounds, extra=current_extra)
     if last_rounds or last_extra:
-        return f"Прошлый раз: {format_amrap_done(last_rounds, last_extra)}"
-    return "Сделано: 0 раундов"
+        return f"{t('LAST_TIME')}: {format_amrap_done(last_rounds, last_extra)}"
+    return t("AMRAP_LINE", rounds=0, extra=0)
 
 
 def parse_duration_input(text: str) -> int:
@@ -302,13 +414,34 @@ def remember_message(chat_id: int | None, message_id: int | None):
     last_messages[chat_id] = message_id
 
 async def safe_edit_message(q, text, reply_markup=None):
+    chat_id = getattr(q.message, "chat_id", None)
+    message_id = getattr(q.message, "message_id", None)
     try:
         await q.edit_message_text(text, reply_markup=reply_markup)
+    except MessageNotModified:
+        remember_message(chat_id, message_id)
+        return
     except BadRequest as e:
-        if "not modified" not in e.message.lower():
-            raise
-    finally:
-        remember_message(getattr(q.message, "chat_id", None), getattr(q.message, "message_id", None))
+        message = (e.message or "").lower()
+        if "not modified" in message:
+            remember_message(chat_id, message_id)
+            return
+        if (
+            "message to edit not found" in message
+            or "message identifier is not valid" in message
+            or "chat not found" in message
+        ):
+            if chat_id is None:
+                raise
+            bot = getattr(q, "bot", None) or getattr(q.message, "bot", None)
+            if bot is None:
+                raise
+            new_msg = await bot.send_message(chat_id, text, reply_markup=reply_markup)
+            remember_message(chat_id, new_msg.message_id)
+            q.message = new_msg
+            return
+        raise
+    remember_message(chat_id, message_id)
 
 async def try_delete(msg):
     try:
@@ -367,8 +500,23 @@ async def get_custom_groups(user_id: int, context) -> dict[str, str]:
         context.user_data["custom_groups"] = groups
     return groups
 
+
+KB_PAGE_STATE = "kb_catalog_pages"
+
+
+def get_kb_page(context, scope: str, group: str, day: int | None = None) -> int:
+    store = context.user_data.get(KB_PAGE_STATE)
+    if not store:
+        return 0
+    return store.get((scope, day, group), 0)
+
+
+def set_kb_page(context, scope: str, group: str, page: int, day: int | None = None):
+    store = context.user_data.setdefault(KB_PAGE_STATE, {})
+    store[(scope, day, group)] = page
+
 def day_groups_text(i: int) -> str:
-    return f"День {i}. Что тренируешь в этот день? Выбери группы, затем «Далее»."
+    return f"{t('DAY')} {i}. Что тренируешь в этот день? Выбери группы, затем «Далее»."
 
 def day_exercises_text(i: int, group: str, custom: dict[str, str] | None = None) -> str:
     name = MG_NAMES.get(group)
@@ -376,7 +524,7 @@ def day_exercises_text(i: int, group: str, custom: dict[str, str] | None = None)
         name = custom.get(group, group)
     if not name:
         name = group
-    return f"День {i} — {name}. Выбери упражнения или добавь своё. Потом жми «Готово»."
+    return f"{t('DAY')} {i} — {name}. Выбери упражнения или добавь своё. Потом жми «{t('DONE')}»."
 
 def render_day_text(
     i: int,
@@ -385,22 +533,24 @@ def render_day_text(
     custom: dict[str, str] | None = None,
     summaries: dict[int, str] | None = None,
     last_done: dict[int, str] | None = None,
+    prefs: UiPreferences | None = None,
 ) -> str:
     summaries = summaries or {}
     last_done = last_done or {}
+    prefs = prefs or UiPreferences()
     groups: dict[str, list[tuple[int, str, int, int]]] = {}
     for ue_id, name, group, done, ex_id in ex_rows:
         resolved = resolve_group(name, group)
         groups.setdefault(resolved, []).append((ue_id, name, done, ex_id))
     if not groups:
         return (
-            f"День {i} — {label}\n"
+            f"{t('DAY')} {i} — {label}\n"
             "Пока нет упражнений. Добавь их, чтобы запланировать тренировку."
         )
     lines = [
-        f"День {i} — {label}",
-        "Выбирай группу мышц, чтобы открыть упражнения и отметить выполненные подходы.",
+        f"{t('DAY')} {i} — {label}",
     ]
+    maybe_hint(lines, prefs, "Подсказка: открой группу, чтобы отметить подходы.")
     total = len(groups)
     for idx, (code, names) in enumerate(groups.items()):
         gname = MG_NAMES.get(code)
@@ -411,7 +561,7 @@ def render_day_text(
         lines.append("")
         lines.append(gname)
         for ue_id, n, d, ex_id in names:
-            mark = "✅" if d else "•"
+            mark = status_icon(prefs, bool(d))
             extra = summaries.get(ue_id)
             last = last_done.get(ex_id)
             lines.append(compose_exercise_line(mark, n, extra, last))
@@ -754,13 +904,13 @@ def get_measurement_item(code: str) -> dict | None:
 
 def format_measurements_header(last_update: str | None) -> str:
     if not last_update:
-        return "📏 Мои замеры — нет данных"
+        return f"{t('MEAS_TITLE')} — {t('EMPTY_MEAS')}"
     try:
         dt = datetime.fromisoformat(last_update)
         label = dt.strftime("%d.%m.%Y")
     except Exception:
         label = last_update.split("T")[0]
-    return f"📏 Мои замеры — {label}"
+    return f"{t('MEAS_TITLE')} — {label}"
 
 
 def format_measurement_value(item: dict, entry: tuple[float, str | None, str]) -> str:
@@ -968,9 +1118,10 @@ def compose_exercise_line(mark: str, name: str, summary: str | None, last_done: 
         details.append(last_done)
     if summary:
         details.append(summary)
+    prefix = f"{mark} " if mark else ""
     if details:
-        return f"{mark} {name} — {' — '.join(details)}"
-    return f"{mark} {name}"
+        return f"{prefix}{name} — {' — '.join(details)}".strip()
+    return f"{prefix}{name}".strip()
 
 
 def build_prev_label(prev_summary: str | None, prev_date: str | None) -> str:
@@ -982,7 +1133,7 @@ def build_prev_label(prev_summary: str | None, prev_date: str | None) -> str:
         return summary
     if date:
         return date
-    return "—"
+    return t("NOT_FIXED")
 
 
 def format_plan_value(
@@ -990,23 +1141,24 @@ def format_plan_value(
     group_key: str,
 ) -> str:
     if not baseline:
-        return "не задан"
+        return t("NOT_SET")
     if group_key == "kb":
         value = format_kb_plan(baseline)
-        return value if value != "—" else "не задан"
+        return value if value != "—" else t("NOT_SET")
     sets, reps, weight = baseline
     return f"{sets}×{reps}@{format_weight_value(weight)} кг"
 
 
-def format_strength_done(summary: dict[str, int | float] | None) -> str:
-    if not summary or not summary.get("sets_count"):
-        return "Сделано 0 сетов"
-    count = int(summary["sets_count"] or 0)
+def format_strength_done_value(summary: dict[str, int | float] | None) -> str:
+    if not summary:
+        return "0 (последний 0×0)"
+    count = int(summary.get("sets_count") or 0)
     reps = int(summary.get("last_reps") or 0)
     weight = float(summary.get("last_weight") or 0.0)
-    return (
-        f"Сделано {count} {pluralize_sets(count)} (последний {reps}×{format_weight_value(weight)} кг)"
-    )
+    weight_text = format_weight_value(weight)
+    if count <= 0:
+        return f"0 (последний {reps}×{weight_text})"
+    return f"{count} (последний {reps}×{weight_text})"
 
 
 async def get_user_local_date(user_id: int) -> str:
@@ -1115,6 +1267,7 @@ async def build_day_sheet_message(
     user_id: int,
     day_index: int,
     page: int,
+    prefs: UiPreferences,
 ) -> tuple[str, InlineKeyboardMarkup, int, int]:
     date_str = await get_user_local_date(user_id)
     items = await fetch_day_sheet_data(user_id, day_index, date_str)
@@ -1127,18 +1280,14 @@ async def build_day_sheet_message(
     start = page * DAY_SHEET_PAGE_SIZE
     end = start + DAY_SHEET_PAGE_SIZE
     visible = items[start:end]
-    header = f"День {day_index}"
+    header = f"{t('DAY')} {day_index}"
     if label:
         header += f" — {label}"
     lines = [header]
-    lines.append(
-        "Компактный лист дня: фиксируй подходы, раунды и замеры прямо отсюда без переходов.",
-    )
-    lines.append(
-        f"«＋ сет» добавляет рабочий подход, «＋1» меняет повторения, «＋{step_label}кг» и «−{step_label}кг» сдвигают вес на твой шаг.",
-    )
-    lines.append(
-        "Кнопка «Готово» отмечает упражнение выполненным, ничего не создаётся автоматически.",
+    maybe_hint(
+        lines,
+        prefs,
+        f"Подсказка: кнопки «{t('ADD_SET')}», «{t('ADD_REP')}» и «{t('ADD_W', step=step_label)}» помогают вести учёт прямо здесь.",
     )
     if not visible:
         lines.append("")
@@ -1149,6 +1298,8 @@ async def build_day_sheet_message(
     for item in visible:
         name = str(item["name"])
         group_key = str(item["group_key"])
+        mark = status_icon(prefs, bool(item.get("is_done_today")))
+        prefix = f"{mark} " if mark else ""
         ue_id = int(item["ue_id"])
         prev_label = build_prev_label(
             item.get("prev_summary"),
@@ -1159,14 +1310,14 @@ async def build_day_sheet_message(
             rounds = int(summary.get("rounds") or 0)
             extra = int(summary.get("extra") or 0)
             lines.append(
-                f"• {name} — Сделано: {rounds} раундов + {extra} повт."
+                f"{prefix}{t('METCON_TITLE')} — {t('AMRAP_TITLE')} — {t('AMRAP_LINE', rounds=rounds, extra=extra)}"
             )
             kb_rows.append(
                 [
-                    InlineKeyboardButton("＋ сет", callback_data=f"ex:addset:{day_index}:{ue_id}"),
-                    InlineKeyboardButton("＋1", callback_data=f"ex:inc:{day_index}:{ue_id}:reps:1"),
+                    InlineKeyboardButton(t("ADD_SET"), callback_data=f"ex:addset:{day_index}:{ue_id}"),
+                    InlineKeyboardButton(t("ADD_REP"), callback_data=f"ex:inc:{day_index}:{ue_id}:reps:1"),
                     InlineKeyboardButton("−1", callback_data=f"ex:inc:{day_index}:{ue_id}:reps:-1"),
-                    InlineKeyboardButton("Готово", callback_data=f"ex:done:{day_index}:{ue_id}"),
+                    InlineKeyboardButton(t("DONE"), callback_data=f"ex:done:{day_index}:{ue_id}"),
                 ]
             )
         elif group_key == "metcon" and name == FOR_TIME_EXERCISE_NAME:
@@ -1175,45 +1326,47 @@ async def build_day_sheet_message(
             if seconds is not None:
                 result = format_duration_value(int(seconds))
             else:
-                result = "не зафиксирован"
-            lines.append(f"• {name} — Результат: {result}")
+                result = t("NOT_FIXED")
+            lines.append(
+                f"{prefix}{t('METCON_TITLE')} — {t('FOR_TIME_TITLE')} — {t('FTIME_LINE', time=result)}"
+            )
             kb_rows.append(
                 [
-                    InlineKeyboardButton("Готово", callback_data=f"ex:done:{day_index}:{ue_id}"),
-                    InlineKeyboardButton("История", callback_data=f"ex:progress:{day_index}:{ue_id}"),
+                    InlineKeyboardButton(t("DONE"), callback_data=f"ex:done:{day_index}:{ue_id}"),
+                    InlineKeyboardButton(t("HISTORY"), callback_data=f"ex:progress:{day_index}:{ue_id}"),
                 ]
             )
         else:
             plan_text = format_plan_value(item.get("baseline"), group_key)
-            done_text = format_strength_done(item.get("today_summary"))
+            done_text = format_strength_done_value(item.get("today_summary"))
             lines.append(
-                f"• {name} — Прошлый раз: {prev_label} | План: {plan_text} | {done_text}"
+                f"{prefix}{name} — {t('LAST_TIME')}: {prev_label} | {t('PLAN')}: {plan_text} | {t('MADE')}: {done_text}"
             )
             step_cb = f"{step_value:g}"
             kb_rows.append(
                 [
-                    InlineKeyboardButton("＋ сет", callback_data=f"ex:addset:{day_index}:{ue_id}"),
-                    InlineKeyboardButton("＋1", callback_data=f"ex:inc:{day_index}:{ue_id}:reps:1"),
+                    InlineKeyboardButton(t("ADD_SET"), callback_data=f"ex:addset:{day_index}:{ue_id}"),
+                    InlineKeyboardButton(t("ADD_REP"), callback_data=f"ex:inc:{day_index}:{ue_id}:reps:1"),
                     InlineKeyboardButton(
-                        f"＋{step_label}кг",
+                        t("ADD_W", step=step_label),
                         callback_data=f"ex:inc:{day_index}:{ue_id}:kg:{step_cb}",
                     ),
                     InlineKeyboardButton(
-                        f"−{step_label}кг",
+                        t("SUB_W", step=step_label),
                         callback_data=f"ex:inc:{day_index}:{ue_id}:kg:{-step_value}",
                     ),
-                    InlineKeyboardButton("Готово", callback_data=f"ex:done:{day_index}:{ue_id}"),
+                    InlineKeyboardButton(t("DONE"), callback_data=f"ex:done:{day_index}:{ue_id}"),
                 ]
             )
     if total_pages > 1:
         nav_row: list[InlineKeyboardButton] = []
         if page > 0:
             nav_row.append(
-                InlineKeyboardButton("⬅️", callback_data=f"day:sheet:{day_index}:p:{page - 1}")
+                InlineKeyboardButton(t("PREV"), callback_data=f"day:sheet:{day_index}:p:{page - 1}")
             )
         if page < total_pages - 1:
             nav_row.append(
-                InlineKeyboardButton("➡️", callback_data=f"day:sheet:{day_index}:p:{page + 1}")
+                InlineKeyboardButton(t("NEXT"), callback_data=f"day:sheet:{day_index}:p:{page + 1}")
             )
         if nav_row:
             kb_rows.append(nav_row)
@@ -1221,12 +1374,12 @@ async def build_day_sheet_message(
         kb_rows.append(
             [
                 InlineKeyboardButton(
-                    "✅ Завершить день",
+                    t("CLOSE_DAY"),
                     callback_data=f"day:sheetdone:{day_index}:{page}",
                 )
             ]
         )
-    kb_rows.append([InlineKeyboardButton("↩ Главное меню", callback_data="menu:root")])
+    kb_rows.append([InlineKeyboardButton(t("BACK"), callback_data="menu:root")])
     text = "\n".join(lines)
     return text, InlineKeyboardMarkup(kb_rows), page, total_pages
 
@@ -1237,8 +1390,11 @@ async def render_day_sheet_from_callback(
     user_id: int,
     day_index: int,
     page: int,
+    prefs: UiPreferences | None = None,
 ) -> int:
-    text, kb, page, _ = await build_day_sheet_message(user_id, day_index, page)
+    prefs = prefs or await load_ui_preferences(user_id)
+    text, kb, page, _ = await build_day_sheet_message(user_id, day_index, page, prefs)
+    text, kb = prepare_ui_output(text, kb, prefs)
     chat_id = q.message.chat_id
     message_id = q.message.message_id
     try:
@@ -1263,8 +1419,11 @@ async def render_day_sheet_by_id(
     user_id: int,
     day_index: int,
     page: int,
+    prefs: UiPreferences | None = None,
 ):
-    text, kb, page, _ = await build_day_sheet_message(user_id, day_index, page)
+    prefs = prefs or await load_ui_preferences(user_id)
+    text, kb, page, _ = await build_day_sheet_message(user_id, day_index, page, prefs)
+    text, kb = prepare_ui_output(text, kb, prefs)
     try:
         await context.bot.edit_message_text(
             text,
@@ -1282,6 +1441,37 @@ async def render_day_sheet_by_id(
         new_msg = await context.bot.send_message(chat_id, text, reply_markup=kb)
         remember_message(chat_id, new_msg.message_id)
         set_sheet_context(context, new_msg.chat_id, new_msg.message_id, day_index, page)
+
+
+async def send_day_cards_view(
+    q,
+    user_id: int,
+    day: int,
+    context: ContextTypes.DEFAULT_TYPE,
+    prefs: UiPreferences,
+):
+    clear_sheet_context(context, q.message.chat_id, q.message.message_id)
+    label = await get_day_label(user_id, day)
+    today_str = await get_user_local_date(user_id)
+    ex_rows = await fetch_day_exercises(user_id, day, today_str)
+    custom = await get_custom_groups(user_id, context)
+    mode = await get_recording_mode(user_id)
+    summaries = await build_summary_map(user_id, day, ex_rows, today_str, mode)
+    last_done_rows = await list_last_done_dates(user_id)
+    last_done_map = build_last_done_dict(last_done_rows)
+    text = render_day_text(
+        day,
+        label,
+        ex_rows,
+        custom,
+        summaries,
+        last_done_map,
+        prefs,
+    )
+    kb = day_kb(day, ex_rows)
+    text, kb = prepare_ui_output(text, kb, prefs)
+    await safe_edit_message(q, text, reply_markup=kb)
+
 
 def format_current_training(
     sets: list[tuple[int, int, float, int]],
@@ -1321,7 +1511,7 @@ async def build_summary_map(
             last_sets = await fetch_last_session_sets(user_id, day, ue_id, today)
             base = await get_baseline(user_id, day, ex_id)
             plan = format_kb_plan(base)
-            plan_part = f"План {plan}" if plan != "—" else "План —"
+            plan_part = f"{t('PLAN')} {plan}" if plan != "—" else f"{t('PLAN')} —"
             done_part = format_kb_summary(work_sets, last_sets)
             text = f"{plan_part} | {done_part}"
         elif resolved == "metcon" and name == AMRAP_EXERCISE_NAME:
@@ -1337,9 +1527,9 @@ async def build_summary_map(
                 if value is not None:
                     seconds = int(round(value))
             if seconds is not None:
-                text = f"Результат: {format_duration_value(seconds)}"
+                text = t("FTIME_LINE", time=format_duration_value(seconds))
             else:
-                text = "Результат: не зафиксирован"
+                text = t("FTIME_LINE", time=t("NOT_FIXED"))
         else:
             filtered = [
                 (no, reps, weight)
@@ -1360,7 +1550,14 @@ async def build_summary_map(
 
 
 
-async def show_day_group_view(q, user_id: int, day: int, group: str, context):
+async def show_day_group_view(
+    q,
+    user_id: int,
+    day: int,
+    group: str,
+    context,
+    prefs: UiPreferences | None = None,
+):
     today_str = await get_user_local_date(user_id)
     ex_rows = await fetch_day_exercises(user_id, day, today_str)
     mode = await get_recording_mode(user_id)
@@ -1369,17 +1566,16 @@ async def show_day_group_view(q, user_id: int, day: int, group: str, context):
     last_done_map = build_last_done_dict(last_done_rows)
     custom = await get_custom_groups(user_id, context)
     gname = MG_NAMES.get(group, custom.get(group, group))
-    lines = [
-        f"День {day} — {gname}",
-        "Выбери упражнение, чтобы добавить подходы или отметить выполнение.",
-        "",
-    ]
+    prefs = prefs or await load_ui_preferences(user_id)
+    lines = [f"{t('DAY')} {day} — {gname}"]
+    maybe_hint(lines, prefs, "Подсказка: отметь подходы прямо из списка.")
+    lines.append("")
     items: list[tuple[int, str, int]] = []
     for ue_id, name, g, done, ex_id in ex_rows:
         resolved = resolve_group(name, g)
         if resolved != group:
             continue
-        mark = "✅" if done else "•"
+        mark = status_icon(prefs, bool(done))
         info = summaries.get(ue_id)
         last = last_done_map.get(ex_id)
         lines.append(compose_exercise_line(mark, name, info, last))
@@ -1388,18 +1584,19 @@ async def show_day_group_view(q, user_id: int, day: int, group: str, context):
         lines.append("────────")
     else:
         lines.append("Пока нет упражнений. Добавь их, чтобы заполнить этот раздел.")
-    await safe_edit_message(
-        q,
-        "\n".join(lines),
-        reply_markup=day_group_kb(day, group, items),
-    )
+    text = "\n".join(lines)
+    kb = day_group_kb(day, group, items)
+    text, kb = prepare_ui_output(text, kb, prefs)
+    await safe_edit_message(q, text, reply_markup=kb)
 
 async def render_library_group_text(
     user_id: int,
     group: str,
     items: list[tuple[int, str]],
     context: ContextTypes.DEFAULT_TYPE,
+    prefs: UiPreferences | None = None,
 ) -> str:
+    prefs = prefs or await load_ui_preferences(user_id)
     custom = await get_custom_groups(user_id, context)
     gname = MG_NAMES.get(group, custom.get(group, group))
     if not items:
@@ -1411,11 +1608,9 @@ async def render_library_group_text(
     today = datetime.utcnow().strftime("%Y-%m-%d")
     last_done_rows = await list_last_done_dates(user_id)
     last_done_map = build_last_done_dict(last_done_rows)
-    lines = [
-        f"{gname}",
-        "Выбери упражнение, чтобы посмотреть историю и вести отдельные записи.",
-        "",
-    ]
+    lines = [f"{gname}"]
+    maybe_hint(lines, prefs, "Выбери упражнение, чтобы посмотреть историю и вести отдельные записи.")
+    lines.append("")
     for ue_id, name in items:
         ex_id, _, ex_group = await get_exercise_info(ue_id)
         resolved_group = resolve_group(name, ex_group)
@@ -1425,9 +1620,9 @@ async def render_library_group_text(
             if rows and rows[0][0] is not None:
                 seconds = int(round(rows[0][0]))
             summary = (
-                f"Результат: {format_duration_value(seconds)}"
+                t("FTIME_LINE", time=format_duration_value(seconds))
                 if seconds is not None
-                else "Результат: не зафиксирован"
+                else t("FTIME_LINE", time=t("NOT_FIXED"))
             )
         else:
             last_sets = await fetch_last_session_sets(user_id, 0, ue_id, today)
@@ -1436,9 +1631,9 @@ async def render_library_group_text(
                 base = await get_baseline(user_id, 0, ex_id)
                 summary = summarize_baseline(base, mode)
         last = last_done_map.get(ex_id)
-        lines.append(compose_exercise_line("•", name, summary, last))
+        lines.append(compose_exercise_line(e("generic"), name, summary, last))
     lines.append("────────")
-    lines.append("Используй «Добавить упражнение», чтобы пополнить библиотеку.")
+    maybe_hint(lines, prefs, "Используй «Добавить упражнение», чтобы пополнить библиотеку.")
     return "\n".join(lines)
 
 
@@ -1449,15 +1644,16 @@ async def show_library_exercise_view(
     ue_id: int,
     context: ContextTypes.DEFAULT_TYPE,
 ):
+    prefs = await load_ui_preferences(user_id)
     selected = get_flex_selected(context, 0, ue_id)
     text, _, ex_id, name, resolved_group, sets, mode_view, new_selected = await render_exercise_view(
-        user_id, 0, ue_id, selected
+        user_id, 0, ue_id, selected, prefs=prefs
     )
     attachments = await list_exercise_day_links(user_id, ex_id)
     if attachments:
         attach_lines = ["Прикреплено к дням:"]
         for day_idx, label in attachments:
-            title = f"День {day_idx}"
+            title = f"{t('DAY')} {day_idx}"
             if label:
                 title = f"{title} — {label}"
             attach_lines.append(f"• {title}")
@@ -1487,6 +1683,7 @@ async def show_library_exercise_view(
             for_time_mode,
             can_detach=bool(attachments),
         )
+    full_text, kb = prepare_ui_output(full_text, kb, prefs)
     await safe_edit_message(q, full_text, reply_markup=kb)
     return ex_id, resolved_group
 
@@ -1496,6 +1693,7 @@ async def render_exercise_view(
     day: int,
     ue_id: int,
     selected_set: int | None = None,
+    prefs: UiPreferences | None = None,
 ):
     ex_id, name, raw_group = await get_exercise_info(ue_id)
     group = resolve_group(name, raw_group)
@@ -1505,6 +1703,7 @@ async def render_exercise_view(
     sets = await fetch_exercise_sets(session_id, ue_id)
     baseline = await get_baseline(user_id, day, ex_id)
     last_sets = await fetch_last_session_sets(user_id, day, ue_id, today)
+    prefs = prefs or await load_ui_preferences(user_id)
     auto_fill_allowed = (
         mode == "flex"
         and not sets
@@ -1523,87 +1722,78 @@ async def render_exercise_view(
     if mode == "flex" and sets:
         if selected_set is None or all(set_no != selected_set for set_no, *_ in sets):
             selected_set = sets[0][0]
+    icon_key = "strength"
     if group == "kb":
-        work_sets = filter_work_sets(sets)
+        icon_key = "kb"
+    elif group == "metcon":
+        icon_key = "metcon"
+    icon = emoji_for(prefs, icon_key)
+    title = f"{icon} {name}" if icon else name
+    if group == "kb":
+        summary = build_strength_summary_from_sets(sets)
         prev_text = format_kb_previous(last_sets)
-        plan_text = format_kb_plan(baseline)
-        done_text = format_kb_done(work_sets)
-        step = await get_weight_step(user_id)
+        if not prev_text or prev_text == "—":
+            prev_text = t("NOT_FIXED")
+        plan_text = format_plan_value(baseline, "kb")
+        done_text = format_strength_done_value(summary)
         lines = [
-            name,
+            title,
             "",
-            f"Прошлый раз: {prev_text}",
-            f"План на сегодня: {plan_text}",
-            f"Сделано: {done_text}",
+            f"{t('LAST_TIME')}: {prev_text}",
+            f"{t('PLAN')}: {plan_text}",
+            f"{t('MADE')}: {done_text}",
         ]
-        lines.append("")
-        lines.append(
-            f"шаг: {format_weight_value(step)} кг — кнопки «＋/−шаг кг» прибавляют и убавляют именно его."
-        )
-        lines.append(
-            "Каждый сет фиксирует один рабочий подход. Для левой/правой стороны или связки 2× добавь сеты отдельно."
-        )
         return "\n".join(lines), session_id, ex_id, name, group, sets, mode, selected_set
     if group == "metcon" and name == AMRAP_EXERCISE_NAME:
         rounds, extra = parse_amrap_sets(sets)
         last_rounds, last_extra = parse_amrap_history(last_sets)
-        scheme = await get_exercise_scheme(user_id, day, ex_id)
-        scheme_text = scheme if scheme else "—"
+        last_text = (
+            t("AMRAP_RESULT", rounds=last_rounds, extra=last_extra)
+            if last_rounds or last_extra
+            else t("NOT_FIXED")
+        )
+        current_text = t("AMRAP_RESULT", rounds=rounds, extra=extra)
         lines = [
-            name,
+            title,
             "",
-            f"Схема: {scheme_text}",
-            "Формат: AMRAP",
-            f"Сделано: {format_amrap_done(rounds, extra)}",
+            f"{t('LAST_TIME')}: {last_text}",
+            f"{t('PLAN')}: {t('NOT_SET')}",
+            f"{t('MADE')}: {current_text}",
         ]
-        if last_rounds or last_extra:
-            lines.append(f"Прошлый раз: {format_amrap_done(last_rounds, last_extra)}")
-        lines.append("")
-        lines.append("Подсказка: «＋ сет» = раунд, «＋1 повтор» = доп.повтор")
         return "\n".join(lines), session_id, ex_id, name, group, sets, mode, selected_set
     if group == "metcon" and name == FOR_TIME_EXERCISE_NAME:
         rows = await fetch_measurement_history(user_id, FOR_TIME_METRIC, limit=1)
         seconds = None
-        timestamp = None
         if rows:
-            value, _, created_at = rows[0]
+            value = rows[0][0]
             if value is not None:
                 seconds = int(round(value))
-            timestamp = created_at
-        tz_name = await get_user_timezone(user_id)
-        tz = ZoneInfo(tz_name) if tz_name else ZoneInfo("UTC")
-        lines = [
-            name,
-            "",
-            "Формат: For Time",
-        ]
         if seconds is not None:
-            lines.append(f"Результат: {format_duration_value(seconds)}")
-            if timestamp:
-                lines.append(f"Дата: {format_measurement_timestamp(timestamp, tz)}")
+            result_text = t("FTIME_RESULT", time=format_duration_value(seconds))
         else:
-            lines.append("Результат: не зафиксирован")
-        lines.append("")
-        lines.append("Нажми «✅ Готово», чтобы ввести время.")
+            result_text = t("NOT_FIXED")
+        lines = [
+            title,
+            "",
+            f"{t('LAST_TIME')}: {result_text}",
+            f"{t('PLAN')}: {t('NOT_SET')}",
+            f"{t('MADE')}: {result_text}",
+        ]
         return "\n".join(lines), session_id, ex_id, name, group, sets, mode, selected_set
     prev_text = summarize_previous_sets(last_sets, mode)
     if not prev_text:
-        prev_text = summarize_baseline(baseline, mode) or "—"
+        prev_text = summarize_baseline(baseline, mode)
+    prev_text = prev_text or t("NOT_FIXED")
+    plan_text = format_plan_value(baseline, group)
+    summary = build_strength_summary_from_sets(sets)
+    done_text = format_strength_done_value(summary)
     lines = [
-        name,
+        title,
         "",
-        f"В прошлый раз: {prev_text}",
-        "",
+        f"{t('LAST_TIME')}: {prev_text}",
+        f"{t('PLAN')}: {plan_text}",
+        f"{t('MADE')}: {done_text}",
     ]
-    current_lines = format_current_training(sets, mode, selected_set)
-    lines.extend(current_lines)
-    lines.append("")
-    lines.append(
-        "Каждый сет фиксирует рабочий подход: «＋ сет» добавляет новый, «＋1» меняет повторы, кнопки веса используют выбранный шаг."
-    )
-    lines.append(
-        "Если работаешь парами (левая/правая, разные грифы и т.п.), добавь отдельные сеты — бот свяжет их в журнале."
-    )
     return "\n".join(lines), session_id, ex_id, name, group, sets, mode, selected_set
 
 
@@ -1612,12 +1802,14 @@ async def build_for_time_history_view(
     day: int,
     ue_id: int,
     back_callback: str | None = None,
+    prefs: UiPreferences | None = None,
 ):
     ex_id, name, raw_group = await get_exercise_info(ue_id)
     rows = await fetch_measurement_history(user_id, FOR_TIME_METRIC, limit=10)
     tz_name = await get_user_timezone(user_id)
     tz = ZoneInfo(tz_name) if tz_name else ZoneInfo("UTC")
-    lines = [name, "", "История результатов:"]
+    prefs = prefs or await load_ui_preferences(user_id)
+    lines = [name, "", f"{t('HISTORY')} результатов:"]
     has_entries = False
     for value, _, created_at in rows:
         if value is None:
@@ -1627,9 +1819,9 @@ async def build_for_time_history_view(
         lines.append(f"{format_measurement_timestamp(created_at, tz)} — {format_duration_value(seconds)}")
     if has_entries:
         lines.append("")
-        lines.append("Используй «Изменить», чтобы скорректировать последнее значение.")
+        maybe_hint(lines, prefs, "Подсказка: используй «Изменить», чтобы скорректировать последнее значение.")
     else:
-        lines.append("История пуста. Добавь время через «✅ Готово».")
+        maybe_hint(lines, prefs, f"Подсказка: добавь время через «{t('DONE')}».")
     back_cb = back_callback or f"ex:view:{day}:{ue_id}"
     kb_rows = []
     if has_entries:
@@ -1639,7 +1831,7 @@ async def build_for_time_history_view(
         kb_rows.append(
             [InlineKeyboardButton("🗑 Удалить", callback_data=f"ex:timedel:{day}:{ue_id}")]
         )
-    kb_rows.append([InlineKeyboardButton("⬅︎ Назад", callback_data=back_cb)])
+    kb_rows.append([InlineKeyboardButton(t("BACK"), callback_data=back_cb)])
     return "\n".join(lines), InlineKeyboardMarkup(kb_rows)
 
 async def reminder_job(context: ContextTypes.DEFAULT_TYPE):
@@ -1709,29 +1901,52 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     days = await list_active_days(user_id)
     msg = await update.message.reply_text(
-        "Главное меню:",
+        f"{t('MAIN_TITLE')}:",
         reply_markup=main_menu_kb(days, SUPPORT_DEEPLINK)
     )
     remember_message(msg.chat_id, msg.message_id)
 
-async def show_exercises(q, user_id: int, day: int, group: str, context):
+async def show_exercises(
+    q,
+    user_id: int,
+    day: int,
+    group: str,
+    context,
+    page: int | None = None,
+):
     ex_rows = await list_exercises_by_group(group)
     selected_ids = set(await list_user_exercise_ids(user_id, day, group))
     custom = context.user_data.get("custom_groups", {})
+    requested_page = page if page is not None else get_kb_page(context, "wiz", group, day)
+    kb, actual_page, _ = exercises_kb(day, group, ex_rows, selected_ids, page=requested_page)
+    set_kb_page(context, "wiz", group, actual_page, day)
     await safe_edit_message(
         q,
         day_exercises_text(day, group, custom),
-        exercises_kb(day, group, ex_rows, selected_ids),
+        kb,
     )
 
-async def show_day_add_exercises_view(q, user_id: int, day: int, group: str, context):
+
+async def show_day_add_exercises_view(
+    q,
+    user_id: int,
+    day: int,
+    group: str,
+    context,
+    page: int | None = None,
+):
     ex_rows = await list_exercises_by_group(group)
     selected_ids = set(await list_user_exercise_ids(user_id, day, group))
     custom = context.user_data.get("custom_groups", {})
+    requested_page = page if page is not None else get_kb_page(context, "day", group, day)
+    kb, actual_page, _ = day_add_exercises_kb(
+        day, group, ex_rows, selected_ids, page=requested_page
+    )
+    set_kb_page(context, "day", group, actual_page, day)
     await safe_edit_message(
         q,
         day_exercises_text(day, group, custom),
-        reply_markup=day_add_exercises_kb(day, group, ex_rows, selected_ids),
+        reply_markup=kb,
     )
 
 async def finish_day(q, context, user_id: int, day: int, summary: str | None = None):
@@ -1755,7 +1970,7 @@ async def finish_day(q, context, user_id: int, day: int, summary: str | None = N
         )
     else:
         context.user_data["current_day"] = day
-        text = f"День {day} сохранён. Перейти к Дню {day + 1}?"
+        text = f"{t('DAY')} {day} сохранён. Перейти к {t('DAY')} {day + 1}?"
         if summary:
             text = summary + "\n────────\n" + text
         await q.edit_message_text(
@@ -1825,7 +2040,7 @@ async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAUL
                 "Если не уверен, выбери «Другое»."
             )
             kb = InlineKeyboardMarkup(
-                [[InlineKeyboardButton("⬅︎ Назад", callback_data="wiz:sys:back")]]
+                [[InlineKeyboardButton(t("BACK"), callback_data="wiz:sys:back")]]
             )
             await q.edit_message_text(hint, reply_markup=kb)
             return
@@ -1985,6 +2200,11 @@ async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAUL
             return
         if parts[3] == "ex":
             action = parts[4]
+            if action == "page":
+                group = parts[5]
+                requested_page = int(parts[6]) if len(parts) > 6 else 0
+                await show_exercises(q, user_id, day, group, context, page=requested_page)
+                return
             if action == "add":
                 ex_id = int(parts[5])
                 added = await toggle_user_exercise(user_id, day, ex_id)
@@ -2018,7 +2238,7 @@ async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAUL
                     [
                         [
                             InlineKeyboardButton(
-                                "⬅︎ Назад",
+                                t("BACK"),
                                 callback_data=f"wiz:day:{day}:ex:custom_back:{group}",
                             )
                         ]
@@ -2028,13 +2248,7 @@ async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAUL
                 return
             if action == "custom_back":
                 group = parts[5]
-                ex_rows = await list_exercises_by_group(group)
-                selected_ids = set(await list_user_exercise_ids(user_id, day, group))
-                custom = context.user_data.get("custom_groups", {})
-                await q.edit_message_text(
-                    day_exercises_text(day, group, custom),
-                    reply_markup=exercises_kb(day, group, ex_rows, selected_ids),
-                )
+                await show_exercises(q, user_id, day, group, context)
                 return
             if action == "back":
                 selected = context.user_data.setdefault("day_groups", {}).get(day, set())
@@ -2110,7 +2324,7 @@ async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAUL
     if data == "wiz:finish_no":
         day = context.user_data.get("confirm_finish_day", 1)
         await q.edit_message_text(
-            f"День {day} сохранён. Перейти к Дню {day + 1}?",
+            f"{t('DAY')} {day} сохранён. Перейти к {t('DAY')} {day + 1}?",
             reply_markup=day_done_kb(day),
         )
         return
@@ -2139,7 +2353,7 @@ async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAUL
         else:
             day = context.user_data.get("current_day", 1)
             await q.edit_message_text(
-                f"День {day} сохранён. Перейти к Дню {day + 1}?",
+                f"{t('DAY')} {day} сохранён. Перейти к {t('DAY')} {day + 1}?",
                 reply_markup=day_done_kb(day),
             )
         return
@@ -2162,7 +2376,7 @@ async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAUL
             day_no = context.user_data.get("reminder_day", 1)
             context.user_data["reminder_day"] = day_no
             await q.edit_message_text(
-                f"День {day_no}. В какой день недели тренировка?",
+                f"{t('DAY')} {day_no}. В какой день недели тренировка?",
                 reply_markup=reminder_day_kb(),
             )
         elif action == "back":
@@ -2190,7 +2404,7 @@ async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAUL
     if data == "wiz:remind:back":
         day_no = context.user_data.get("reminder_day", 1)
         await q.edit_message_text(
-            f"День {day_no}. В какой день недели тренировка?",
+            f"{t('DAY')} {day_no}. В какой день недели тренировка?",
             reply_markup=reminder_day_kb(),
         )
         return
@@ -2217,7 +2431,7 @@ async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAUL
         if day_no < total:
             context.user_data["reminder_day"] = day_no + 1
             await q.edit_message_text(
-                f"День {day_no + 1}. В какой день недели тренировка?",
+                f"{t('DAY')} {day_no + 1}. В какой день недели тренировка?",
                 reply_markup=reminder_day_kb(),
             )
             return
@@ -2269,6 +2483,7 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         msg_id = for_time_state.get("message_id")
         sheet_info = for_time_state.get("sheet")
         if chat_id and msg_id:
+            prefs = await load_ui_preferences(user_id)
             if sheet_info:
                 target_day = int(sheet_info.get("day", day))
                 target_page = int(sheet_info.get("page", 0))
@@ -2277,11 +2492,11 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
                 return
             elif mode == "edit":
-                text, kb = await build_for_time_history_view(user_id, day, ue_id)
+                text, kb = await build_for_time_history_view(user_id, day, ue_id, prefs=prefs)
             else:
                 selected = get_flex_selected(context, day, ue_id)
                 text, _, _, name, group, sets, mode_view, new_selected = await render_exercise_view(
-                    user_id, day, ue_id, selected
+                    user_id, day, ue_id, selected, prefs=prefs
                 )
                 if mode_view == "flex":
                     set_flex_selected(context, day, ue_id, new_selected)
@@ -2313,6 +2528,7 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             amrap_mode,
                             for_time_mode,
                         )
+            text, kb = prepare_ui_output(text, kb, prefs)
             await context.bot.edit_message_text(
                 text,
                 chat_id=chat_id,
@@ -2376,8 +2592,9 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         await set_exercise_scheme(user_id, day, ex_id, new_scheme or None)
         selected = get_flex_selected(context, day, ue_id)
+        prefs = await load_ui_preferences(user_id)
         text_view, _, _, name, group, sets, mode_view, new_selected = await render_exercise_view(
-            user_id, day, ue_id, selected
+            user_id, day, ue_id, selected, prefs=prefs
         )
         is_library = day == 0
         if mode_view == "flex":
@@ -2412,6 +2629,7 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     group == "metcon" and name == FOR_TIME_EXERCISE_NAME,
                 )
         if chat_id and msg_id:
+            text_view, kb = prepare_ui_output(text_view, kb, prefs)
             await context.bot.edit_message_text(
                 text_view,
                 chat_id=chat_id,
@@ -2423,8 +2641,7 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
     lib_custom = context.user_data.get(LIBRARY_CUSTOM_KEY)
     if lib_custom:
         group, chat_id, msg_id = lib_custom
-        raw_name = update.message.text or ""
-        name = " ".join(raw_name.split())
+        name = normalize_whitespace(update.message.text or "")
         if not name:
             await update.message.reply_text("Название не должно быть пустым. Попробуй ещё раз.")
             return
@@ -2438,17 +2655,26 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await add_user_exercise(user_id, 0, ex_id)
         ex_rows = await list_exercises_by_group(group)
         selected = set(await list_user_exercise_ids(user_id, 0, group))
+        requested_page = get_kb_page(context, "lib", group)
+        kb, page_value, _ = library_add_exercises_kb(
+            group, ex_rows, selected, page=requested_page
+        )
+        set_kb_page(context, "lib", group, page_value)
         await context.bot.edit_message_text(
             "Выбери упражнения:",
             chat_id=chat_id,
             message_id=msg_id,
-            reply_markup=library_add_exercises_kb(group, ex_rows, selected),
+            reply_markup=kb,
         )
         remember_message(chat_id, msg_id)
         return
     if context.user_data.get("awaiting_group_name"):
         day, chat_id, msg_id, mode = context.user_data.pop("awaiting_group_name")
-        name = update.message.text.strip()
+        name = normalize_whitespace(update.message.text or "")
+        if not name:
+            context.user_data["awaiting_group_name"] = (day, chat_id, msg_id, mode)
+            await update.message.reply_text("Название не должно быть пустым.")
+            return
         u = update.effective_user
         user_id = await get_or_create_user(u.id, u.username)
         code = await add_user_muscle_group(user_id, name)
@@ -2469,11 +2695,16 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context.user_data["add_group"] = (day, code)
             ex_rows = await list_exercises_by_group(code)
             selected_ids = set(await list_user_exercise_ids(user_id, day, code))
+            requested_page = get_kb_page(context, "day", code, day)
+            kb, page_value, _ = day_add_exercises_kb(
+                day, code, ex_rows, selected_ids, page=requested_page
+            )
+            set_kb_page(context, "day", code, page_value, day)
             await context.bot.edit_message_text(
                 day_exercises_text(day, code, custom),
                 chat_id=chat_id,
                 message_id=msg_id,
-                reply_markup=day_add_exercises_kb(day, code, ex_rows, selected_ids),
+                reply_markup=kb,
             )
             remember_message(chat_id, msg_id)
         return
@@ -2489,7 +2720,11 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     if context.user_data.get("awaiting_custom"):
         day, group, chat_id, msg_id = context.user_data.pop("awaiting_custom")
-        name = update.message.text.strip()
+        name = normalize_whitespace(update.message.text or "")
+        if not name:
+            context.user_data["awaiting_custom"] = (day, group, chat_id, msg_id)
+            await update.message.reply_text("Название не должно быть пустым.")
+            return
         await try_delete(update.message)
         ex_id = await get_or_create_exercise(name, group)
         u = update.effective_user
@@ -2523,11 +2758,18 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         ex_rows = await list_exercises_by_group(group)
         custom = context.user_data.get("custom_groups", {})
-        kb = (
-            day_add_exercises_kb(day, group, ex_rows, selected_ids)
-            if source == "day"
-            else exercises_kb(day, group, ex_rows, selected_ids)
-        )
+        if source == "day":
+            requested_page = get_kb_page(context, "day", group, day)
+            kb, page_value, _ = day_add_exercises_kb(
+                day, group, ex_rows, selected_ids, page=requested_page
+            )
+            set_kb_page(context, "day", group, page_value, day)
+        else:
+            requested_page = get_kb_page(context, "wiz", group, day)
+            kb, page_value, _ = exercises_kb(
+                day, group, ex_rows, selected_ids, page=requested_page
+            )
+            set_kb_page(context, "wiz", group, page_value, day)
         await edit_instant(day_exercises_text(day, group, custom), kb)
         return
 
@@ -2537,6 +2779,8 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await require_subscription(update, context):
         return
     data = q.data
+    if data == "noop":
+        return
     u = update.effective_user
     user_id = await get_or_create_user(u.id, u.username)
     remember_message(q.message.chat_id, q.message.message_id)
@@ -2586,7 +2830,11 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if data == "menu:root":
         days = await list_active_days(user_id)
-        await safe_edit_message(q, "Главное меню:", reply_markup=main_menu_kb(days, SUPPORT_DEEPLINK))
+        prefs = await load_ui_preferences(user_id)
+        text = f"{t('MAIN_TITLE')}:"
+        kb = main_menu_kb(days, SUPPORT_DEEPLINK)
+        text, kb = prepare_ui_output(text, kb, prefs)
+        await safe_edit_message(q, text, reply_markup=kb)
         return
 
     if data in ("menu:library", "lib:root"):
@@ -2594,12 +2842,18 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await ensure_library_history(user_id)
         groups = await list_library_groups(user_id)
         custom = await get_custom_groups(user_id, context)
-        await safe_edit_message(q, "Мои упражнения:", reply_markup=library_menu_kb(groups, custom))
+        prefs = await load_ui_preferences(user_id)
+        text = "Мои упражнения:"
+        kb = library_menu_kb(groups, custom)
+        text, kb = prepare_ui_output(text, kb, prefs)
+        await safe_edit_message(q, text, reply_markup=kb)
         return
 
     if data == "menu:metrics":
         context.user_data.pop(MEASUREMENT_INPUT_KEY, None)
+        prefs = await load_ui_preferences(user_id)
         text, kb = await build_measurements_view(user_id, context)
+        text, kb = prepare_ui_output(text, kb, prefs)
         await safe_edit_message(q, text, kb)
         return
 
@@ -2613,22 +2867,28 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parts = [f"{dict(WEEKDAYS)[d]} {h:02d}:{m:02d}" for d, h, m in rems]
             rem_text = ", ".join(parts)
         else:
-            rem_text = "не задано"
+            rem_text = t("NOT_SET")
+        prefs = await load_ui_preferences(user_id)
+        mode_label = "Компактный" if prefs.mode == "compact" else "Подробный"
+        emoji_label = "включены" if prefs.emoji_enabled else "выключены"
+        verbose_label = "краткие пояснения" if prefs.verbose_level else "короткие подписи"
         text = (
             "Настройки:\n"
             "Выбирай пункт ниже, чтобы обновить дневник под себя.\n"
             "────────\n"
             "✏️ Переименовать дни — поменять названия тренировочных дней.\n"
             f"📅 Количество тренировок — сейчас {n}. Укажи, сколько раз планируешь тренироваться.\n"
-            "🗂 Режим дня — переключай компактный лист или подробный классический вид.\n"
-            "🏋️ Шаг веса — задай шаг изменения (0.5/1/2/5 кг). Кнопки «＋/−шаг кг» используют это значение во всех упражнениях для прибавки и убавки веса.\n"
+            f"🎨 Оформление интерфейса — режим {mode_label.lower()}, эмодзи {emoji_label}, пояснения: {verbose_label}.\n"
+            f"🏋️ Шаг веса — задай шаг изменения (0.5/1/2/5 кг). Кнопки «{t('ADD_W', step='шаг ')}» и «{t('SUB_W', step='шаг ')}» используют это значение во всех упражнениях для прибавки и убавки веса.\n"
             "📝 Выбор записи — расскажи боту, как фиксировать подходы. Бот хранит каждый рабочий сет, в том числе парные (левая/правая, две гири подряд).\n"
             "   • Одинаковый вес — каждый сет с одной схемой повторов и веса.\n"
             "   • Гибкая запись — настраивай вес и повторы отдельно для каждого подхода.\n"
             f"⏰ Уведомления — {tz_label}, {rem_text}. Настрой время напоминаний.\n"
             "⭐ Подписка — информация о подписке."
         )
-        await safe_edit_message(q, text, reply_markup=settings_kb())
+        kb = settings_kb()
+        text, kb = prepare_ui_output(text, kb, prefs)
+        await safe_edit_message(q, text, reply_markup=kb)
         return
 
     if data == "measure:back":
@@ -2694,7 +2954,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "category": category,
         }
         kb = InlineKeyboardMarkup(
-            [[InlineKeyboardButton("⬅︎ Назад", callback_data=f"measure:add:cat:{category}")]]
+            [[InlineKeyboardButton(t("BACK"), callback_data=f"measure:add:cat:{category}")]]
         )
         await q.edit_message_text(item["prompt"], reply_markup=kb)
         return
@@ -2735,7 +2995,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "message_id": q.message.message_id,
         }
         kb = InlineKeyboardMarkup(
-            [[InlineKeyboardButton("⬅︎ Назад", callback_data="measure:edit")]]
+            [[InlineKeyboardButton(t("BACK"), callback_data="measure:edit")]]
         )
         await q.edit_message_text(prefix + item["prompt"], reply_markup=kb)
         return
@@ -2772,11 +3032,14 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
     parts = data.split(":")
     if parts[0] == "lib":
         action = parts[1]
+        prefs = await load_ui_preferences(user_id)
         if action == "group":
             group = parts[2]
             items = await list_library_exercises(user_id, group)
-            text = await render_library_group_text(user_id, group, items, context)
-            await safe_edit_message(q, text, reply_markup=library_group_kb(group, items))
+            text = await render_library_group_text(user_id, group, items, context, prefs=prefs)
+            kb = library_group_kb(group, items)
+            text, kb = prepare_ui_output(text, kb, prefs)
+            await safe_edit_message(q, text, reply_markup=kb)
             return
         if action == "ex":
             group = parts[2]
@@ -2859,18 +3122,34 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     target = ("group", parts[3])
                 context.user_data["lib_return"] = target
                 custom = await get_custom_groups(user_id, context)
-                await safe_edit_message(q, "Выбери группу:", reply_markup=library_add_group_kb(custom))
+                kb = library_add_group_kb(custom)
+                text, kb = prepare_ui_output("Выбери группу:", kb, prefs)
+                await safe_edit_message(q, text, reply_markup=kb)
                 return
             if sub == "mg":
                 group = parts[3]
                 context.user_data.pop(LIBRARY_CUSTOM_KEY, None)
                 ex_rows = await list_exercises_by_group(group)
                 selected = set(await list_user_exercise_ids(user_id, 0, group))
-                await safe_edit_message(
-                    q,
-                    "Выбери упражнения:",
-                    reply_markup=library_add_exercises_kb(group, ex_rows, selected),
+                requested_page = get_kb_page(context, "lib", group)
+                kb, page_value, _ = library_add_exercises_kb(
+                    group, ex_rows, selected, page=requested_page
                 )
+                set_kb_page(context, "lib", group, page_value)
+                text, kb = prepare_ui_output("Выбери упражнения:", kb, prefs)
+                await safe_edit_message(q, text, reply_markup=kb)
+                return
+            if sub == "page":
+                group = parts[3]
+                requested_page = int(parts[4]) if len(parts) > 4 else 0
+                ex_rows = await list_exercises_by_group(group)
+                selected = set(await list_user_exercise_ids(user_id, 0, group))
+                kb, page_value, _ = library_add_exercises_kb(
+                    group, ex_rows, selected, page=requested_page
+                )
+                set_kb_page(context, "lib", group, page_value)
+                text, kb = prepare_ui_output("Выбери упражнения:", kb, prefs)
+                await safe_edit_message(q, text, reply_markup=kb)
                 return
             if sub == "ex":
                 group = parts[3]
@@ -2879,11 +3158,13 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await toggle_user_exercise(user_id, 0, ex_id)
                 ex_rows = await list_exercises_by_group(group)
                 selected = set(await list_user_exercise_ids(user_id, 0, group))
-                await safe_edit_message(
-                    q,
-                    "Выбери упражнения:",
-                    reply_markup=library_add_exercises_kb(group, ex_rows, selected),
+                requested_page = get_kb_page(context, "lib", group)
+                kb, page_value, _ = library_add_exercises_kb(
+                    group, ex_rows, selected, page=requested_page
                 )
+                set_kb_page(context, "lib", group, page_value)
+                text, kb = prepare_ui_output("Выбери упражнения:", kb, prefs)
+                await safe_edit_message(q, text, reply_markup=kb)
                 return
             if sub == "custom":
                 group = parts[3]
@@ -2893,7 +3174,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     q.message.message_id,
                 )
                 kb = InlineKeyboardMarkup(
-                    [[InlineKeyboardButton("⬅︎ Назад", callback_data=f"lib:add:mg:{group}")]]
+                    [[InlineKeyboardButton(t("BACK"), callback_data=f"lib:add:mg:{group}")]]
                 )
                 await q.edit_message_text("Как назвать упражнение?", reply_markup=kb)
                 remember_message(q.message.chat.id, q.message.message_id)
@@ -2905,12 +3186,14 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 if target and target[0] == "group":
                     group = target[1]
                     items = await list_library_exercises(user_id, group)
-                    text = await render_library_group_text(user_id, group, items, context)
-                    await safe_edit_message(q, text, reply_markup=library_group_kb(group, items))
+                    text = await render_library_group_text(user_id, group, items, context, prefs=prefs)
+                    kb = library_group_kb(group, items)
+                    text, kb = prepare_ui_output(text, kb, prefs)
+                    await safe_edit_message(q, text, reply_markup=kb)
                 else:
-                    await safe_edit_message(
-                        q, "Выбери группу:", reply_markup=library_add_group_kb(custom)
-                    )
+                    kb = library_add_group_kb(custom)
+                    text, kb = prepare_ui_output("Выбери группу:", kb, prefs)
+                    await safe_edit_message(q, text, reply_markup=kb)
                 return
             if sub == "done":
                 context.user_data.pop(LIBRARY_CUSTOM_KEY, None)
@@ -2918,14 +3201,16 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 if target and target[0] == "group":
                     group = target[1]
                     items = await list_library_exercises(user_id, group)
-                    text = await render_library_group_text(user_id, group, items, context)
-                    await safe_edit_message(q, text, reply_markup=library_group_kb(group, items))
+                    text = await render_library_group_text(user_id, group, items, context, prefs=prefs)
+                    kb = library_group_kb(group, items)
+                    text, kb = prepare_ui_output(text, kb, prefs)
+                    await safe_edit_message(q, text, reply_markup=kb)
                 else:
                     groups = await list_library_groups(user_id)
                     custom = await get_custom_groups(user_id, context)
-                    await safe_edit_message(
-                        q, "Мои упражнения:", reply_markup=library_menu_kb(groups, custom)
-                    )
+                    kb = library_menu_kb(groups, custom)
+                    text, kb = prepare_ui_output("Мои упражнения:", kb, prefs)
+                    await safe_edit_message(q, text, reply_markup=kb)
                 return
 
     if parts[0] == "set":
@@ -3004,31 +3289,58 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     reply_markup=recording_mode_kb(mode),
                 )
             return
-        if action == "dayview":
+        if action == "ui":
+            prefs = await load_ui_preferences(user_id)
             if len(parts) == 2:
-                mode = await get_day_view_mode(user_id)
+                current_mode = "Компактный" if prefs.mode == "compact" else "Подробный"
+                emoji_state = "Эмодзи включены" if prefs.emoji_enabled else "Эмодзи выключены"
+                verbose_state = (
+                    "Пояснения включены" if prefs.verbose_level else "Подписи короткие"
+                )
                 text = (
-                    "Выбери режим показа тренировочного дня:\n"
-                    "Компактный — один экран с мини-панелями действий без переходов.\n"
-                    "Подробный — классические карточки упражнений с полной информацией."
+                    "Оформление интерфейса:\n"
+                    "Выбери варианты ниже, чтобы настроить внешний вид сообщений.\n"
+                    "────────\n"
+                    f"Режим показа: {current_mode}.\n"
+                    f"Эмодзи: {emoji_state}.\n"
+                    f"Пояснения: {verbose_state}."
                 )
-                await safe_edit_message(q, text, reply_markup=day_view_mode_kb(mode))
-            else:
-                mode = parts[2]
-                if mode not in ("compact", "detailed"):
+                kb = ui_preferences_kb(prefs.mode, prefs.emoji_enabled, prefs.verbose_level)
+                text, kb = prepare_ui_output(text, kb, prefs)
+                await safe_edit_message(q, text, reply_markup=kb)
+                return
+            if len(parts) >= 4:
+                sub = parts[2]
+                value = parts[3]
+                if sub == "mode" and value in {"compact", "detailed"}:
+                    await set_ui_mode(user_id, value)
+                    prefs = await load_ui_preferences(user_id)
+                    label = "Компактный лист" if value == "compact" else "Подробный режим"
+                    hint = (
+                        "Дни будут открываться в виде списка с быстрыми действиями."
+                        if value == "compact"
+                        else "Возвращаются подробные карточки упражнений."
+                    )
+                    msg = f"Режим интерфейса обновлён: {label}. {hint}"
+                elif sub == "emoji" and value in {"0", "1"}:
+                    await set_ui_emoji_enabled(user_id, value == "1")
+                    prefs = await load_ui_preferences(user_id)
+                    state = "Эмодзи включены" if prefs.emoji_enabled else "Эмодзи отключены"
+                    msg = f"Настройка эмодзи обновлена: {state}."
+                elif sub == "verbose" and value in {"0", "1"}:
+                    await set_ui_verbose_level(user_id, int(value))
+                    prefs = await load_ui_preferences(user_id)
+                    state = (
+                        "Теперь добавляем краткие пояснения."
+                        if prefs.verbose_level
+                        else "Выбраны короткие подписи."
+                    )
+                    msg = f"Настройка пояснений обновлена. {state}"
+                else:
                     return
-                await set_day_view_mode(user_id, mode)
-                label = "Компактный" if mode == "compact" else "Подробный"
-                hint = (
-                    "Теперь дни будут открываться в виде компактного списка с быстрыми действиями."
-                    if mode == "compact"
-                    else "Возвращается подробный режим с карточками упражнений."
-                )
-                await safe_edit_message(
-                    q,
-                    f"Режим показа дня обновлён: {label}. {hint}",
-                    reply_markup=day_view_mode_kb(mode),
-                )
+                kb = ui_preferences_kb(prefs.mode, prefs.emoji_enabled, prefs.verbose_level)
+                msg, kb = prepare_ui_output(msg, kb, prefs)
+                await safe_edit_message(q, msg, reply_markup=kb)
             return
         if action == "reminders":
             if len(parts) == 2:
@@ -3068,24 +3380,11 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         action = parts[1]
         if action == "open":
             day = int(parts[2])
-            view_mode = await get_day_view_mode(user_id)
-            if view_mode == "compact":
-                await render_day_sheet_from_callback(q, context, user_id, day, 0)
+            prefs = await load_ui_preferences(user_id)
+            if prefs.mode == "compact":
+                await render_day_sheet_from_callback(q, context, user_id, day, 0, prefs=prefs)
                 return
-            clear_sheet_context(context, q.message.chat_id, q.message.message_id)
-            label = await get_day_label(user_id, day)
-            today_str = await get_user_local_date(user_id)
-            ex_rows = await fetch_day_exercises(user_id, day, today_str)
-            custom = await get_custom_groups(user_id, context)
-            mode = await get_recording_mode(user_id)
-            summaries = await build_summary_map(user_id, day, ex_rows, today_str, mode)
-            last_done_rows = await list_last_done_dates(user_id)
-            last_done_map = build_last_done_dict(last_done_rows)
-            await safe_edit_message(
-                q,
-                render_day_text(day, label, ex_rows, custom, summaries, last_done_map),
-                reply_markup=day_kb(day, ex_rows),
-            )
+            await send_day_cards_view(q, user_id, day, context, prefs)
             return
         if action == "sheet":
             day = int(parts[2])
@@ -3106,7 +3405,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 session_id = await get_or_create_today_session(user_id, today_local, day)
                 for ue_id, *_ in ex_rows:
                     await mark_exercise_done(session_id, ue_id)
-            await q.answer("День отмечен выполненным.")
+            await q.answer(f"{t('DAY')} отмечен выполненным.")
             await render_day_sheet_from_callback(q, context, user_id, day, page)
             return
         if action == "group":
@@ -3143,6 +3442,14 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     return
                 context.user_data["add_group"] = (day, group)
                 await show_day_add_exercises_view(q, user_id, day, group, context)
+                return
+            if sub == "page":
+                group = parts[4]
+                requested_page = int(parts[5]) if len(parts) > 5 else 0
+                context.user_data["add_group"] = (day, group)
+                await show_day_add_exercises_view(
+                    q, user_id, day, group, context, page=requested_page
+                )
                 return
             if sub == "ex":
                 ex_id = int(parts[4])
@@ -3191,7 +3498,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     [
                         [
                             InlineKeyboardButton(
-                                "⬅︎ Назад",
+                                t("BACK"),
                                 callback_data=f"day:add:{day}:custom_back:{group}",
                             )
                         ]
@@ -3205,19 +3512,11 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 return
             if sub == "done":
                 context.user_data.pop("add_group", None)
-                label = await get_day_label(user_id, day)
-                today_str = await get_user_local_date(user_id)
-                ex_rows = await fetch_day_exercises(user_id, day, today_str)
-                custom = await get_custom_groups(user_id, context)
-                mode = await get_recording_mode(user_id)
-                summaries = await build_summary_map(user_id, day, ex_rows, today_str, mode)
-                last_done_rows = await list_last_done_dates(user_id)
-                last_done_map = build_last_done_dict(last_done_rows)
-                await safe_edit_message(
-                    q,
-                    render_day_text(day, label, ex_rows, custom, summaries, last_done_map),
-                    reply_markup=day_kb(day, ex_rows),
-                )
+                prefs = await load_ui_preferences(user_id)
+                if prefs.mode == "compact":
+                    await render_day_sheet_from_callback(q, context, user_id, day, 0, prefs=prefs)
+                else:
+                    await send_day_cards_view(q, user_id, day, context, prefs)
                 return
         if action == "del":
             day = int(parts[2])
@@ -3240,6 +3539,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         sheet_context = get_sheet_context(context, q.message.chat_id, q.message.message_id)
         sheet_day = int(sheet_context.get("day")) if sheet_context else None
         sheet_page = int(sheet_context.get("page")) if sheet_context else 0
+        prefs = await load_ui_preferences(user_id)
         if action in {"view", "select", "progress"}:
             context.user_data.pop(FOR_TIME_INPUT_KEY, None)
         if action == "amrapscheme":
@@ -3254,7 +3554,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 q.message.message_id,
             )
             kb = InlineKeyboardMarkup(
-                [[InlineKeyboardButton("⬅︎ Назад", callback_data=f"ex:view:{day}:{ue_id}")]]
+                [[InlineKeyboardButton(t("BACK"), callback_data=f"ex:view:{day}:{ue_id}")]]
             )
             await safe_edit_message(
                 q,
@@ -3265,7 +3565,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if action == "select":
             set_no = int(parts[4])
             text, _, _, name, group, sets, mode, new_selected = await render_exercise_view(
-                user_id, day, ue_id, set_no
+                user_id, day, ue_id, set_no, prefs=prefs
             )
             if mode == "flex":
                 set_flex_selected(context, day, ue_id, new_selected)
@@ -3298,11 +3598,12 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         amrap_mode,
                         for_time_mode,
                     )
+            text, kb = prepare_ui_output(text, kb, prefs)
             await safe_edit_message(q, text, kb)
             return
         if action == "view":
             text, _, _, name, group, sets, mode, new_selected = await render_exercise_view(
-                user_id, day, ue_id, selected
+                user_id, day, ue_id, selected, prefs=prefs
             )
             if mode == "flex":
                 set_flex_selected(context, day, ue_id, new_selected)
@@ -3335,6 +3636,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         amrap_mode,
                         for_time_mode,
                     )
+            text, kb = prepare_ui_output(text, kb, prefs)
             await safe_edit_message(q, text, kb)
             return
         today_str = await get_user_local_date(user_id)
@@ -3503,7 +3805,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         clear_sheet_context(context, q.message.chat_id, q.message.message_id)
                     context.user_data[FOR_TIME_INPUT_KEY] = state
                     kb = InlineKeyboardMarkup(
-                        [[InlineKeyboardButton("⬅︎ Назад", callback_data=f"ex:view:{day}:{ue_id}")]]
+                        [[InlineKeyboardButton(t("BACK"), callback_data=f"ex:view:{day}:{ue_id}")]]
                     )
                     await safe_edit_message(
                         q,
@@ -3521,8 +3823,10 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     return
                 if is_library:
                     items = await list_library_exercises(user_id, group)
-                    text = await render_library_group_text(user_id, group, items, context)
-                    await safe_edit_message(q, text, reply_markup=library_group_kb(group, items))
+                    text = await render_library_group_text(user_id, group, items, context, prefs=prefs)
+                    kb = library_group_kb(group, items)
+                    text, kb = prepare_ui_output(text, kb, prefs)
+                    await safe_edit_message(q, text, reply_markup=kb)
                 else:
                     await show_day_group_view(q, user_id, day, group, context)
                 return
@@ -3532,7 +3836,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     back_cb = None
                     if sheet_context and not is_library:
                         back_cb = f"day:sheet:{sheet_day if sheet_day is not None else day}:p:{sheet_page}"
-                    text, kb = await build_for_time_history_view(user_id, day, ue_id, back_cb)
+                    text, kb = await build_for_time_history_view(user_id, day, ue_id, back_cb, prefs=prefs)
                     if sheet_context and not is_library and back_cb:
                         set_sheet_context(
                             context,
@@ -3541,6 +3845,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             sheet_day if sheet_day is not None else day,
                             sheet_page,
                         )
+                    text, kb = prepare_ui_output(text, kb, prefs)
                     await safe_edit_message(q, text, kb)
                     return
                 page = 0
@@ -3564,7 +3869,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     offset,
                 )
                 text, _, ex_id, name, group, sets, mode_view, new_selected = await render_exercise_view(
-                    user_id, day, ue_id, get_flex_selected(context, day, ue_id)
+                    user_id, day, ue_id, get_flex_selected(context, day, ue_id), prefs=prefs
                 )
                 if mode_view == "flex":
                     set_flex_selected(context, day, ue_id, new_selected)
@@ -3639,6 +3944,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     kb = InlineKeyboardMarkup(nav_rows + base_rows)
                 else:
                     kb = InlineKeyboardMarkup(base_rows)
+                text, kb = prepare_ui_output(text, kb, prefs)
                 await safe_edit_message(q, text, kb)
                 return
             elif action == "timeedit":
@@ -3668,7 +3974,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     clear_sheet_context(context, q.message.chat_id, q.message.message_id)
                 context.user_data[FOR_TIME_INPUT_KEY] = state
                 kb = InlineKeyboardMarkup(
-                    [[InlineKeyboardButton("⬅︎ Назад", callback_data=back_target)]]
+                    [[InlineKeyboardButton(t("BACK"), callback_data=back_target)]]
                 )
                 await safe_edit_message(
                     q,
@@ -3688,7 +3994,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 back_cb = None
                 if sheet_context and not is_library:
                     back_cb = f"day:sheet:{sheet_day if sheet_day is not None else day}:p:{sheet_page}"
-                text, kb = await build_for_time_history_view(user_id, day, ue_id, back_cb)
+                text, kb = await build_for_time_history_view(user_id, day, ue_id, back_cb, prefs=prefs)
                 if sheet_context and not is_library and back_cb:
                     set_sheet_context(
                         context,
@@ -3697,10 +4003,11 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         sheet_day if sheet_day is not None else day,
                         sheet_page,
                     )
+                text, kb = prepare_ui_output(text, kb, prefs)
                 await safe_edit_message(q, text, kb)
                 return
         text, _, _, name, group, sets, mode_view, new_selected = await render_exercise_view(
-            user_id, day, ue_id, get_flex_selected(context, day, ue_id)
+            user_id, day, ue_id, get_flex_selected(context, day, ue_id), prefs=prefs
         )
         if mode_view == "flex":
             set_flex_selected(context, day, ue_id, new_selected)
@@ -3734,6 +4041,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     amrap_mode,
                     group == "metcon" and name == FOR_TIME_EXERCISE_NAME,
                 )
+        text, kb = prepare_ui_output(text, kb, prefs)
         await safe_edit_message(q, text, kb)
         return
 

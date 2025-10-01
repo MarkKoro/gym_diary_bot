@@ -3,6 +3,7 @@ from datetime import datetime, timedelta
 from contextlib import asynccontextmanager
 from typing import Sequence
 from settings import DB_PATH, TRIAL_DAYS, DB_POOL_SIZE
+from kb_catalog import KB_EXERCISE_NAMES
 
 
 DEFAULT_EXERCISES: Sequence[tuple[str, str]] = [
@@ -57,25 +58,7 @@ DEFAULT_EXERCISES: Sequence[tuple[str, str]] = [
     ("Разгибание рук в наклоне", "triceps"),
 ]
 
-KB_EXERCISES: Sequence[tuple[str, str]] = [
-    ("Маятник (гиря)", "kb"),
-    ("Махи гирей (русские)", "kb"),
-    ("Махи гирей (американские)", "kb"),
-    ("Золотник (рывок гирей) левая", "kb"),
-    ("Золотник (рывок гирей) правая", "kb"),
-    ("Толчок гирь (2×)", "kb"),
-    ("Толчок гири одной рукой левая", "kb"),
-    ("Толчок гири одной рукой правая", "kb"),
-    ("Жим гири стоя левая", "kb"),
-    ("Жим гири стоя правая", "kb"),
-    ("Тяга гири в наклоне левая", "kb"),
-    ("Тяга гири в наклоне правая", "kb"),
-    ("Присед с гирей у груди (Goblet)", "kb"),
-    ("Присед с двумя гирями (2×)", "kb"),
-    ("Тяга гири из пола (Deadlift)", "kb"),
-    ("Турецкий подъём (левая)", "kb"),
-    ("Турецкий подъём (правая)", "kb"),
-]
+KB_EXERCISES: Sequence[tuple[str, str]] = tuple((name, "kb") for name in KB_EXERCISE_NAMES)
 
 METCON_EXERCISES: Sequence[tuple[str, str]] = [
     ("Меткон — AMRAP (кастом)", "metcon"),
@@ -127,6 +110,12 @@ async def connect_db():
     async with _db_semaphore:
         async with aiosqlite.connect(DB_PATH) as db:
             yield db
+
+
+async def _column_exists(db, table: str, column: str) -> bool:
+    cur = await db.execute(f"PRAGMA table_info({table})")
+    rows = await cur.fetchall()
+    return any(row[1] == column for row in rows)
 
 async def init_db():
     async with connect_db() as db:
@@ -222,7 +211,10 @@ async def init_db():
             user_id INTEGER PRIMARY KEY,
             weight_step REAL DEFAULT 0.5,
             recording_mode TEXT DEFAULT 'single',
-            day_view_mode TEXT DEFAULT 'detailed'
+            day_view_mode TEXT DEFAULT 'detailed',
+            ui_mode TEXT CHECK(ui_mode IN ('compact','detailed')) DEFAULT 'detailed',
+            ui_emoji_enabled INTEGER CHECK(ui_emoji_enabled IN (0,1)) DEFAULT 1,
+            ui_verbose_level INTEGER CHECK(ui_verbose_level IN (0,1)) DEFAULT 0
         );
 
         CREATE TABLE IF NOT EXISTS user_measurements(
@@ -285,6 +277,27 @@ async def init_db():
             await db.execute("ALTER TABLE user_prefs ADD COLUMN day_view_mode TEXT")
         except Exception:
             pass
+        if not await _column_exists(db, "user_prefs", "ui_mode"):
+            await db.execute(
+                "ALTER TABLE user_prefs ADD COLUMN ui_mode TEXT CHECK(ui_mode IN ('compact','detailed')) DEFAULT 'detailed'"
+            )
+        if not await _column_exists(db, "user_prefs", "ui_emoji_enabled"):
+            await db.execute(
+                "ALTER TABLE user_prefs ADD COLUMN ui_emoji_enabled INTEGER CHECK(ui_emoji_enabled IN (0,1)) DEFAULT 1"
+            )
+        if not await _column_exists(db, "user_prefs", "ui_verbose_level"):
+            await db.execute(
+                "ALTER TABLE user_prefs ADD COLUMN ui_verbose_level INTEGER CHECK(ui_verbose_level IN (0,1)) DEFAULT 0"
+            )
+        await db.execute(
+            "UPDATE user_prefs SET ui_mode = CASE WHEN ui_mode IN ('compact','detailed') THEN ui_mode ELSE COALESCE(day_view_mode, 'detailed') END"
+        )
+        await db.execute(
+            "UPDATE user_prefs SET ui_emoji_enabled = CASE WHEN ui_emoji_enabled IN (0,1) THEN ui_emoji_enabled ELSE 1 END"
+        )
+        await db.execute(
+            "UPDATE user_prefs SET ui_verbose_level = CASE WHEN ui_verbose_level IN (0,1) THEN ui_verbose_level ELSE 0 END"
+        )
         try:
             await db.execute("ALTER TABLE user_exercises ADD COLUMN is_archived INTEGER DEFAULT 0")
         except Exception:
@@ -1344,24 +1357,83 @@ async def set_recording_mode(user_id: int, mode: str):
         await db.commit()
 
 
-async def get_day_view_mode(user_id: int) -> str:
+async def get_ui_preferences(user_id: int) -> tuple[str, int, int]:
     async with connect_db() as db:
         cur = await db.execute(
-            "SELECT day_view_mode FROM user_prefs WHERE user_id=?",
+            """
+            SELECT ui_mode, ui_emoji_enabled, ui_verbose_level, day_view_mode
+            FROM user_prefs WHERE user_id=?
+            """,
             (user_id,),
         )
         row = await cur.fetchone()
-        return row[0] if row and row[0] else "detailed"
+    mode = "detailed"
+    emoji = 1
+    verbose = 0
+    if row:
+        stored_mode, stored_emoji, stored_verbose, legacy_mode = row
+        if stored_mode in ("compact", "detailed"):
+            mode = stored_mode
+        elif legacy_mode in ("compact", "detailed"):
+            mode = legacy_mode
+        if stored_emoji in (0, 1):
+            emoji = int(stored_emoji)
+        if stored_verbose in (0, 1):
+            verbose = int(stored_verbose)
+    return mode, emoji, verbose
+
+
+async def set_ui_mode(user_id: int, mode: str):
+    async with connect_db() as db:
+        await db.execute(
+            """
+            INSERT INTO user_prefs(user_id, ui_mode, day_view_mode) VALUES(?,?,?)
+            ON CONFLICT(user_id) DO UPDATE SET ui_mode=excluded.ui_mode, day_view_mode=excluded.day_view_mode
+            """,
+            (user_id, mode, mode),
+        )
+        await db.commit()
+
+
+async def set_ui_emoji_enabled(user_id: int, enabled: bool):
+    value = 1 if enabled else 0
+    async with connect_db() as db:
+        await db.execute(
+            """
+            INSERT INTO user_prefs(user_id, ui_emoji_enabled) VALUES(?,?)
+            ON CONFLICT(user_id) DO UPDATE SET ui_emoji_enabled=excluded.ui_emoji_enabled
+            """,
+            (user_id, value),
+        )
+        await db.commit()
+
+
+async def set_ui_verbose_level(user_id: int, level: int):
+    safe_level = 1 if level else 0
+    async with connect_db() as db:
+        await db.execute(
+            """
+            INSERT INTO user_prefs(user_id, ui_verbose_level) VALUES(?,?)
+            ON CONFLICT(user_id) DO UPDATE SET ui_verbose_level=excluded.ui_verbose_level
+            """,
+            (user_id, safe_level),
+        )
+        await db.commit()
+
+
+async def get_day_view_mode(user_id: int) -> str:
+    mode, _, _ = await get_ui_preferences(user_id)
+    return mode
 
 
 async def set_day_view_mode(user_id: int, mode: str):
     async with connect_db() as db:
         await db.execute(
             """
-            INSERT INTO user_prefs(user_id, day_view_mode) VALUES(?,?)
-            ON CONFLICT(user_id) DO UPDATE SET day_view_mode=excluded.day_view_mode
+            INSERT INTO user_prefs(user_id, ui_mode, day_view_mode) VALUES(?,?,?)
+            ON CONFLICT(user_id) DO UPDATE SET ui_mode=excluded.ui_mode, day_view_mode=excluded.day_view_mode
             """,
-            (user_id, mode),
+            (user_id, mode, mode),
         )
         await db.commit()
 
