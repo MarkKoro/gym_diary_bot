@@ -4,6 +4,121 @@ from contextlib import asynccontextmanager
 from typing import Sequence
 from settings import DB_PATH, TRIAL_DAYS, DB_POOL_SIZE
 
+
+DEFAULT_EXERCISES: Sequence[tuple[str, str]] = [
+    ("Жим лёжа", "chest"),
+    ("Жим гантелей", "chest"),
+    ("Жим штанги на наклонной скамье", "chest"),
+    ("Отжимания", "chest"),
+    ("Разводка гантелей", "chest"),
+    ("Пуловер", "chest"),
+    ("Отжимания на брусьях", "chest"),
+    ("Жим в тренажёре", "chest"),
+    ("Сведение рук в тренажёре", "chest"),
+    ("Тяга в наклоне", "back"),
+    ("Подтягивания", "back"),
+    ("Тяга штанги к поясу", "back"),
+    ("Становая тяга", "back"),
+    ("Тяга верхнего блока", "back"),
+    ("Тяга нижнего блока", "back"),
+    ("Гиперэкстензия", "back"),
+    ("Тяга гантели в наклоне", "back"),
+    ("Тяга Т-грифа", "back"),
+    ("Присед", "legs"),
+    ("Выпады", "legs"),
+    ("Болгарские выпады", "legs"),
+    ("Румынская тяга", "legs"),
+    ("Жим ногами", "legs"),
+    ("Сгибание ног", "legs"),
+    ("Разгибание ног", "legs"),
+    ("Подъём на носки", "legs"),
+    ("Гакк-присед", "legs"),
+    ("Приседания с собственным весом", "legs"),
+    ("Жим над головой", "shoulders"),
+    ("Подъём гантелей в стороны", "shoulders"),
+    ("Подъём гантелей перед собой", "shoulders"),
+    ("Жим Арнольда", "shoulders"),
+    ("Жим над головой сидя", "shoulders"),
+    ("Тяга к подбородку", "shoulders"),
+    ("Махи гантелями в наклоне", "shoulders"),
+    ("Подъём на бицепс", "biceps"),
+    ("Молотки", "biceps"),
+    ("Подъём EZ-штанги", "biceps"),
+    ("Концентрированный подъём", "biceps"),
+    ("Сгибание в блоке", "biceps"),
+    ("Подъём штанги на бицепс", "biceps"),
+    ("Подъём гантелей сидя на бицепс", "biceps"),
+    ("Жим узким хватом", "triceps"),
+    ("Разгибание на блоке", "triceps"),
+    ("Французский жим", "triceps"),
+    ("Отжимания на брусьях узким хватом", "triceps"),
+    ("Разгибание гантели из-за головы", "triceps"),
+    ("Отжимания на скамье", "triceps"),
+    ("Разгибание рук в наклоне", "triceps"),
+]
+
+KB_EXERCISES: Sequence[tuple[str, str]] = [
+    ("Маятник (гиря)", "kb"),
+    ("Махи гирей (русские)", "kb"),
+    ("Махи гирей (американские)", "kb"),
+    ("Золотник (рывок гирей) левая", "kb"),
+    ("Золотник (рывок гирей) правая", "kb"),
+    ("Толчок гирь (2×)", "kb"),
+    ("Толчок гири одной рукой левая", "kb"),
+    ("Толчок гири одной рукой правая", "kb"),
+    ("Жим гири стоя левая", "kb"),
+    ("Жим гири стоя правая", "kb"),
+    ("Тяга гири в наклоне левая", "kb"),
+    ("Тяга гири в наклоне правая", "kb"),
+    ("Присед с гирей у груди (Goblet)", "kb"),
+    ("Присед с двумя гирями (2×)", "kb"),
+    ("Тяга гири из пола (Deadlift)", "kb"),
+    ("Турецкий подъём (левая)", "kb"),
+    ("Турецкий подъём (правая)", "kb"),
+]
+
+METCON_EXERCISES: Sequence[tuple[str, str]] = [
+    ("Меткон — AMRAP (кастом)", "metcon"),
+    ("Меткон — For Time (кастом)", "metcon"),
+    ("Бёрпи", "metcon"),
+    ("Трастеры (штанга)", "metcon"),
+    ("Подтягивания", "metcon"),
+    ("Подъёмы носков к перекладине", "metcon"),
+    ("Отжимания", "metcon"),
+    ("Приседания с собственным весом", "metcon"),
+    ("Прыжки на тумбу", "metcon"),
+    ("Двойные прыжки на скакалке", "metcon"),
+    ("Гребля (ккал)", "metcon"),
+    ("Велотренажёр (ккал)", "metcon"),
+    ("Бег (метры)", "metcon"),
+    ("Лыжный эргометр (ккал)", "metcon"),
+]
+
+METCON_EXERCISE_NAMES = {name for name, _ in METCON_EXERCISES}
+DEFAULT_EXERCISE_NAMES = {name for name, _ in DEFAULT_EXERCISES}
+METCON_SHARED_NAMES = METCON_EXERCISE_NAMES & DEFAULT_EXERCISE_NAMES
+
+SCHEME_SENTINEL = -1
+
+
+async def _seed_exercises(db, exercises: Sequence[tuple[str, str]], update_group: bool = True):
+    for name, mg in exercises:
+        cur = await db.execute(
+            "SELECT muscle_group FROM exercises WHERE name=?",
+            (name,),
+        )
+        row = await cur.fetchone()
+        if not row:
+            await db.execute(
+                "INSERT INTO exercises(name, muscle_group) VALUES(?,?)",
+                (name, mg),
+            )
+        elif row[0] != mg and update_group:
+            await db.execute(
+                "UPDATE exercises SET muscle_group=? WHERE name=?",
+                (mg, name),
+            )
+
 # Ограничиваем число одновременных операций с базой
 _db_semaphore = asyncio.BoundedSemaphore(DB_POOL_SIZE)
 
@@ -106,7 +221,8 @@ async def init_db():
         CREATE TABLE IF NOT EXISTS user_prefs(
             user_id INTEGER PRIMARY KEY,
             weight_step REAL DEFAULT 0.5,
-            recording_mode TEXT DEFAULT 'single'
+            recording_mode TEXT DEFAULT 'single',
+            day_view_mode TEXT DEFAULT 'detailed'
         );
 
         CREATE TABLE IF NOT EXISTS user_measurements(
@@ -166,6 +282,10 @@ async def init_db():
         except Exception:
             pass
         try:
+            await db.execute("ALTER TABLE user_prefs ADD COLUMN day_view_mode TEXT")
+        except Exception:
+            pass
+        try:
             await db.execute("ALTER TABLE user_exercises ADD COLUMN is_archived INTEGER DEFAULT 0")
         except Exception:
             pass
@@ -179,56 +299,9 @@ async def init_db():
             pass
         await db.commit()
 
-        default_exercises = [
-            ("Жим лёжа", "chest"),
-            ("Жим гантелей", "chest"),
-            ("Отжимания", "chest"),
-            ("Разводка гантелей", "chest"),
-            ("Пуловер", "chest"),
-            ("Отжимания на брусьях", "chest"),
-            ("Жим в тренажёре", "chest"),
-            ("Сведение рук в тренажёре", "chest"),
-            ("Тяга в наклоне", "back"),
-            ("Подтягивания", "back"),
-            ("Становая тяга", "back"),
-            ("Тяга верхнего блока", "back"),
-            ("Тяга нижнего блока", "back"),
-            ("Гиперэкстензия", "back"),
-            ("Тяга гантели в наклоне", "back"),
-            ("Тяга Т-грифа", "back"),
-            ("Присед", "legs"),
-            ("Выпады", "legs"),
-            ("Румынская тяга", "legs"),
-            ("Жим ногами", "legs"),
-            ("Сгибание ног", "legs"),
-            ("Разгибание ног", "legs"),
-            ("Подъём на носки", "legs"),
-            ("Гакк-присед", "legs"),
-            ("Жим над головой", "shoulders"),
-            ("Подъём гантелей в стороны", "shoulders"),
-            ("Подъём гантелей перед собой", "shoulders"),
-            ("Жим Арнольда", "shoulders"),
-            ("Жим над головой сидя", "shoulders"),
-            ("Тяга к подбородку", "shoulders"),
-            ("Подъём на бицепс", "biceps"),
-            ("Молотки", "biceps"),
-            ("Подъём EZ-штанги", "biceps"),
-            ("Концентрированный подъём", "biceps"),
-            ("Сгибание в блоке", "biceps"),
-            ("Жим узким хватом", "triceps"),
-            ("Разгибание на блоке", "triceps"),
-            ("Французский жим", "triceps"),
-            ("Отжимания на брусьях узким хватом", "triceps"),
-            ("Разгибание гантели из-за головы", "triceps"),
-        ]
-        for name, mg in default_exercises:
-            try:
-                await db.execute(
-                    "INSERT INTO exercises(name, muscle_group) VALUES(?,?)",
-                    (name, mg),
-                )
-            except Exception:
-                pass
+        await _seed_exercises(db, DEFAULT_EXERCISES)
+        await _seed_exercises(db, KB_EXERCISES)
+        await _seed_exercises(db, METCON_EXERCISES, update_group=False)
         await db.commit()
 
 async def get_or_create_user(tg_id: int, username: str|None):
@@ -494,10 +567,20 @@ async def set_workouts_per_week(user_id: int, n: int):
 
 async def list_exercises_by_group(group: str):
     async with connect_db() as db:
-        cur = await db.execute(
-            "SELECT id, name FROM exercises WHERE muscle_group=? ORDER BY name",
-            (group,),
-        )
+        if group == "metcon" and METCON_SHARED_NAMES:
+            placeholders = ",".join("?" for _ in METCON_SHARED_NAMES)
+            query = (
+                "SELECT id, name FROM exercises "
+                "WHERE muscle_group=? OR name IN (" + placeholders + ") "
+                "ORDER BY name"
+            )
+            params: tuple = (group, *METCON_SHARED_NAMES)
+            cur = await db.execute(query, params)
+        else:
+            cur = await db.execute(
+                "SELECT id, name FROM exercises WHERE muscle_group=? ORDER BY name",
+                (group,),
+            )
         return await cur.fetchall()
 
 async def get_exercise_details(exercise_id: int):
@@ -510,15 +593,30 @@ async def get_exercise_details(exercise_id: int):
 
 async def list_user_exercise_ids(user_id: int, day_index: int, group: str):
     async with connect_db() as db:
-        cur = await db.execute(
-            """
-            SELECT e.id
-            FROM user_exercises ue
-            JOIN exercises e ON e.id = ue.exercise_id
-            WHERE ue.user_id=? AND ue.day_index=? AND e.muscle_group=? AND ue.is_archived=0
-            """,
-            (user_id, day_index, group),
-        )
+        if group == "metcon" and METCON_SHARED_NAMES:
+            placeholders = ",".join("?" for _ in METCON_SHARED_NAMES)
+            query = (
+                """
+                SELECT e.id
+                FROM user_exercises ue
+                JOIN exercises e ON e.id = ue.exercise_id
+                WHERE ue.user_id=? AND ue.day_index=? AND ue.is_archived=0
+                  AND (e.muscle_group=? OR e.name IN ("""
+                + placeholders
+                + "))"
+            )
+            params: tuple = (user_id, day_index, group, *METCON_SHARED_NAMES)
+            cur = await db.execute(query, params)
+        else:
+            cur = await db.execute(
+                """
+                SELECT e.id
+                FROM user_exercises ue
+                JOIN exercises e ON e.id = ue.exercise_id
+                WHERE ue.user_id=? AND ue.day_index=? AND e.muscle_group=? AND ue.is_archived=0
+                """,
+                (user_id, day_index, group),
+            )
         rows = await cur.fetchall()
         return [r[0] for r in rows]
 
@@ -659,15 +757,34 @@ async def ensure_library_history(user_id: int):
                 SELECT exercise_id
                 FROM exercise_baseline
                 WHERE user_id=?
+                UNION
+                SELECT exercise_id
+                FROM user_exercises
+                WHERE user_id=? AND day_index>0
             )
             """,
-            (user_id, user_id, user_id),
+            (user_id, user_id, user_id, user_id),
         )
         rows = await cur.fetchall()
         if not rows:
             return
         ex_ids = [r[0] for r in rows if r and r[0] is not None]
         if not ex_ids:
+            return
+        missing: list[int] = []
+        for ex_id in ex_ids:
+            cur = await db.execute(
+                """
+                SELECT 1
+                FROM user_exercises
+                WHERE user_id=? AND exercise_id=? AND day_index=0
+                LIMIT 1
+                """,
+                (user_id, ex_id),
+            )
+            if await cur.fetchone() is None:
+                missing.append(ex_id)
+        if not missing:
             return
         await db.executemany(
             """
@@ -676,7 +793,7 @@ async def ensure_library_history(user_id: int):
             ON CONFLICT(user_id, exercise_id, day_index)
             DO UPDATE SET is_archived=0
             """,
-            [(user_id, ex_id) for ex_id in ex_ids],
+            [(user_id, ex_id) for ex_id in missing],
         )
         await db.commit()
 
@@ -685,31 +802,66 @@ async def list_library_groups(user_id: int):
     async with connect_db() as db:
         cur = await db.execute(
             """
-            SELECT e.muscle_group, COUNT(*)
+            SELECT e.muscle_group, e.name
             FROM user_exercises ue
             JOIN exercises e ON e.id=ue.exercise_id
             WHERE ue.user_id=? AND ue.day_index=0 AND ue.is_archived=0
-            GROUP BY e.muscle_group
-            ORDER BY e.muscle_group
             """,
             (user_id,),
         )
-        return await cur.fetchall()
+        rows = await cur.fetchall()
+    counters: dict[str, int] = {}
+    for group, name in rows:
+        resolved = "metcon" if name in METCON_EXERCISE_NAMES else group
+        counters[resolved] = counters.get(resolved, 0) + 1
+    return sorted(counters.items())
 
 
 async def list_library_exercises(user_id: int, group: str):
     async with connect_db() as db:
+        if group == "metcon" and METCON_SHARED_NAMES:
+            placeholders = ",".join("?" for _ in METCON_SHARED_NAMES)
+            query = (
+                """
+                SELECT ue.id, e.name
+                FROM user_exercises ue
+                JOIN exercises e ON e.id=ue.exercise_id
+                WHERE ue.user_id=? AND ue.day_index=0 AND ue.is_archived=0
+                  AND (e.muscle_group=? OR e.name IN ("""
+                + placeholders
+                + "))"
+                " ORDER BY e.name"
+            )
+            params: tuple = (user_id, group, *METCON_SHARED_NAMES)
+            cur = await db.execute(query, params)
+        else:
+            cur = await db.execute(
+                """
+                SELECT ue.id, e.name
+                FROM user_exercises ue
+                JOIN exercises e ON e.id=ue.exercise_id
+                WHERE ue.user_id=? AND ue.day_index=0 AND e.muscle_group=? AND ue.is_archived=0
+                ORDER BY e.name
+                """,
+                (user_id, group),
+            )
+        return await cur.fetchall()
+
+
+async def list_exercise_day_links(user_id: int, exercise_id: int):
+    async with connect_db() as db:
         cur = await db.execute(
             """
-            SELECT ue.id, e.name
+            SELECT ue.day_index, COALESCE(ud.label, '')
             FROM user_exercises ue
-            JOIN exercises e ON e.id=ue.exercise_id
-            WHERE ue.user_id=? AND ue.day_index=0 AND e.muscle_group=? AND ue.is_archived=0
-            ORDER BY e.name
+            LEFT JOIN user_days ud ON ud.user_id=ue.user_id AND ud.day_index=ue.day_index
+            WHERE ue.user_id=? AND ue.exercise_id=? AND ue.day_index>0 AND ue.is_archived=0
+            ORDER BY ue.day_index
             """,
-            (user_id, group),
+            (user_id, exercise_id),
         )
-        return await cur.fetchall()
+        rows = await cur.fetchall()
+        return [(day_idx, label or "") for day_idx, label in rows]
 
 async def get_or_create_exercise(name: str, muscle_group: str):
     async with connect_db() as db:
@@ -728,6 +880,21 @@ async def get_or_create_exercise(name: str, muscle_group: str):
         cur = await db.execute("SELECT last_insert_rowid()")
         return (await cur.fetchone())[0]
 
+
+async def user_has_library_exercise(user_id: int, name: str) -> bool:
+    async with connect_db() as db:
+        cur = await db.execute(
+            """
+            SELECT 1
+            FROM user_exercises ue
+            JOIN exercises e ON e.id = ue.exercise_id
+            WHERE ue.user_id=? AND ue.day_index=0 AND ue.is_archived=0 AND e.name=?
+            LIMIT 1
+            """,
+            (user_id, name),
+        )
+        return await cur.fetchone() is not None
+
 async def list_day_exercises(user_id: int, day_index: int):
     async with connect_db() as db:
         cur = await db.execute(
@@ -741,6 +908,19 @@ async def list_day_exercises(user_id: int, day_index: int):
             (user_id, day_index),
         )
         return await cur.fetchall()
+
+
+async def detach_user_exercise(user_id: int, day_index: int, exercise_id: int):
+    async with connect_db() as db:
+        await db.execute(
+            """
+            UPDATE user_exercises
+            SET is_archived=1
+            WHERE user_id=? AND day_index=? AND exercise_id=?
+            """,
+            (user_id, day_index, exercise_id),
+        )
+        await db.commit()
 
 async def set_baseline(user_id: int, day_index: int, exercise_id: int, sets: int, reps: int, weight: float):
     async with connect_db() as db:
@@ -848,17 +1028,59 @@ async def get_exercise_info(ue_id: int):
 async def get_baseline(user_id: int, day_index: int, exercise_id: int):
     async with connect_db() as db:
         cur = await db.execute(
-            "SELECT sets, reps, weight_kg FROM exercise_baseline WHERE user_id=? AND day_index=? AND exercise_id=?",
+            "SELECT sets, reps, weight_kg FROM exercise_baseline "
+            "WHERE user_id=? AND day_index=? AND exercise_id=? AND sets>=0",
             (user_id, day_index, exercise_id),
         )
         row = await cur.fetchone()
         if row:
             return row
         cur = await db.execute(
-            "SELECT sets, reps, weight_kg FROM exercise_baseline WHERE user_id=? AND exercise_id=? ORDER BY day_index LIMIT 1",
+            "SELECT sets, reps, weight_kg FROM exercise_baseline "
+            "WHERE user_id=? AND exercise_id=? AND sets>=0 ORDER BY day_index LIMIT 1",
             (user_id, exercise_id),
         )
         return await cur.fetchone()
+
+async def get_exercise_scheme(user_id: int, day_index: int, exercise_id: int) -> str | None:
+    async with connect_db() as db:
+        cur = await db.execute(
+            "SELECT weight_kg FROM exercise_baseline "
+            "WHERE user_id=? AND day_index=? AND exercise_id=? AND sets=?",
+            (user_id, day_index, exercise_id, SCHEME_SENTINEL),
+        )
+        row = await cur.fetchone()
+        if row and row[0]:
+            return str(row[0])
+        cur = await db.execute(
+            "SELECT weight_kg FROM exercise_baseline "
+            "WHERE user_id=? AND exercise_id=? AND sets=? ORDER BY day_index LIMIT 1",
+            (user_id, exercise_id, SCHEME_SENTINEL),
+        )
+        row = await cur.fetchone()
+        if row and row[0]:
+            return str(row[0])
+        return None
+
+async def set_exercise_scheme(user_id: int, day_index: int, exercise_id: int, text: str | None):
+    async with connect_db() as db:
+        cleaned = text.strip() if text else ""
+        if cleaned:
+            await db.execute(
+                """
+                INSERT INTO exercise_baseline(user_id, day_index, exercise_id, sets, reps, weight_kg)
+                VALUES(?,?,?,?,?,?)
+                ON CONFLICT(user_id, day_index, exercise_id)
+                DO UPDATE SET sets=excluded.sets, reps=excluded.reps, weight_kg=excluded.weight_kg
+                """,
+                (user_id, day_index, exercise_id, SCHEME_SENTINEL, 0, cleaned),
+            )
+        else:
+            await db.execute(
+                "DELETE FROM exercise_baseline WHERE user_id=? AND day_index=? AND exercise_id=? AND sets=?",
+                (user_id, day_index, exercise_id, SCHEME_SENTINEL),
+            )
+        await db.commit()
 
 async def get_last_session_summary(user_id: int, day_index: int, ue_id: int, today: str):
     async with connect_db() as db:
@@ -1116,6 +1338,28 @@ async def set_recording_mode(user_id: int, mode: str):
             """
             INSERT INTO user_prefs(user_id, recording_mode) VALUES(?,?)
             ON CONFLICT(user_id) DO UPDATE SET recording_mode=excluded.recording_mode
+            """,
+            (user_id, mode),
+        )
+        await db.commit()
+
+
+async def get_day_view_mode(user_id: int) -> str:
+    async with connect_db() as db:
+        cur = await db.execute(
+            "SELECT day_view_mode FROM user_prefs WHERE user_id=?",
+            (user_id,),
+        )
+        row = await cur.fetchone()
+        return row[0] if row and row[0] else "detailed"
+
+
+async def set_day_view_mode(user_id: int, mode: str):
+    async with connect_db() as db:
+        await db.execute(
+            """
+            INSERT INTO user_prefs(user_id, day_view_mode) VALUES(?,?)
+            ON CONFLICT(user_id) DO UPDATE SET day_view_mode=excluded.day_view_mode
             """,
             (user_id, mode),
         )
