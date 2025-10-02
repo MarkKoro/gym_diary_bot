@@ -1,7 +1,7 @@
 import asyncio
 import logging
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, time, timedelta, UTC
 from zoneinfo import ZoneInfo
 from collections import defaultdict
@@ -46,6 +46,10 @@ from keyboards import (
     del_exercises_kb,
     exercise_view_kb,
     settings_kb,
+    edit_day_select_kb,
+    edit_day_mode_kb,
+    edit_day_strength_kb,
+    edit_day_special_kb,
     rename_day_kb,
     days_count_kb,
     weight_step_kb,
@@ -59,7 +63,6 @@ from keyboards import (
     library_add_exercises_kb,
     library_delete_kb,
     library_exercise_kb,
-    library_day_select_kb,
     flex_library_exercise_kb,
     measurements_main_kb,
     measurements_category_kb,
@@ -130,7 +133,6 @@ from db import (
     get_exercise_details,
     apply_sets_template,
     set_exercise_scheme,
-    detach_user_exercise,
     user_has_library_exercise,
     METCON_EXERCISE_NAMES,
 )
@@ -191,11 +193,53 @@ def status_icon(prefs: UiPreferences, done: bool) -> str:
     return emoji_for(prefs, "done" if done else "generic")
 
 
-def maybe_hint(lines: list[str], prefs: UiPreferences, text: str):
-    """Append a short hint if verbose mode is enabled."""
+def maybe_hint(lines: list[str], prefs: UiPreferences, text: str | tuple[str, str]):
+    """Append a hint respecting the chosen verbosity level."""
 
+    short_text = ""
+    full_text = ""
+    if isinstance(text, tuple):
+        short_text, full_text = text
+    else:
+        full_text = text
     if prefs.verbose_level:
-        lines.append(text)
+        if full_text:
+            lines.append(full_text)
+    elif short_text:
+        lines.append(short_text)
+
+
+def build_main_menu_text(prefs: UiPreferences) -> str:
+    lines = [f"{t('MAIN_TITLE')}:", ""]
+    lines.append("Выбирай тренировочный день или другой раздел, чтобы вести дневник.")
+    if prefs.verbose_level:
+        lines.append("Ниже — подробное описание разделов, чтобы быстро сориентироваться.")
+    else:
+        lines.append("Ниже — краткое напоминание о назначении каждого раздела.")
+    lines.append("────────")
+    if prefs.verbose_level:
+        lines.append(
+            "Дни тренировок — открой нужный, чтобы отмечать подходы и просматривать прошлые результаты. Здесь же можно добавлять упражнения из любых групп мышц."
+        )
+        lines.append(
+            "Мои упражнения — личная библиотека с описаниями и историей. Добавляй упражнения через день тренировки, чтобы они появлялись здесь для быстрого доступа."
+        )
+        lines.append(
+            "Мои замеры — сохраняй динамику тела и контрольных показателей. Последние записи отображаются списком, чтобы видеть прогресс без лишних переходов."
+        )
+        lines.append(
+            "Настройки — настрой расписание, напоминания и внешний вид интерфейса. Здесь же выбираются краткие или обычные пояснения и отключаются эмодзи."
+        )
+        lines.append(
+            "Техподдержка — напиши, если что-то не работает или есть вопросы. Мы ответим прямо в чате и поможем настроить дневник."
+        )
+    else:
+        lines.append("Дни тренировок — открой нужный, чтобы отметить подходы и увидеть прогресс.")
+        lines.append("Мои упражнения — личная библиотека с описаниями и историей.")
+        lines.append("Мои замеры — записывай изменения тела и контрольных показателей.")
+        lines.append("Настройки — меняй расписание, напоминания и оформление.")
+        lines.append("Техподдержка — быстро связаться с нами, если нужна помощь.")
+    return "\n".join(lines)
 
 
 def strip_emoji(text: str) -> str:
@@ -273,16 +317,16 @@ def format_weight_value(value: float) -> str:
 
 
 def format_sets_value(sets: int, reps: int, weight: float, with_weight: bool) -> str:
-    base = f"{sets}×{reps}"
-    if with_weight:
-        return f"{base} @ {weight:.1f} кг"
-    return base
+    base = f"{sets}×{reps} повт."
+    if not with_weight:
+        return base
+    return f"{base} при {format_weight_value(weight)} кг"
 
 
 def format_flex_value(reps: int, weight: float, with_weight: bool) -> str:
     if with_weight:
-        return f"{reps}×{weight:.1f} кг"
-    return f"{reps}"
+        return f"{reps} повт. при {format_weight_value(weight)} кг"
+    return f"{reps} повт."
 
 
 def filter_work_sets(sets: list[tuple[int, int, float, int]]) -> list[tuple[int, int, float]]:
@@ -317,7 +361,7 @@ def format_kb_previous(last_sets: list[tuple[int, int, float]]) -> str:
         return "—"
     total_reps = sum(max(reps, 0) for _, reps, _ in last_sets)
     best = max(last_sets, key=lambda item: (item[2], item[1]))
-    best_text = f"{best[1]}×{format_weight_value(best[2])} кг"
+    best_text = f"{best[1]} повт. при {format_weight_value(best[2])} кг"
     if total_reps:
         return f"Всего {total_reps} повт., лучший {best_text}"
     return f"Лучший {best_text}"
@@ -327,7 +371,7 @@ def format_kb_plan(baseline: tuple[int, int, float] | None) -> str:
     if not baseline:
         return "—"
     sets, reps, weight = baseline
-    return f"{sets}×{reps}@{format_weight_value(weight)} кг"
+    return f"{sets}×{reps} повт. при {format_weight_value(weight)} кг"
 
 
 def format_kb_done(sets: list[tuple[int, int, float]]) -> str:
@@ -337,7 +381,7 @@ def format_kb_done(sets: list[tuple[int, int, float]]) -> str:
     reps = sets[-1][1]
     weight = sets[-1][2]
     return (
-        f"{count} {pluralize_sets(count)} (последний {reps}×{format_weight_value(weight)} кг)"
+        f"{count} {pluralize_sets(count)} (последний {reps} повт. при {format_weight_value(weight)} кг)"
     )
 
 
@@ -577,7 +621,14 @@ def render_day_text(
     lines = [
         f"{t('DAY')} {i} — {label}",
     ]
-    maybe_hint(lines, prefs, "Подсказка: открой группу, чтобы отметить подходы.")
+    maybe_hint(
+        lines,
+        prefs,
+        (
+            "Открой нужную группу, чтобы отметить подходы.",
+            "Открой нужную группу, чтобы отметить подходы. После отметки показатели обновятся прямо в списке и покажут актуальный результат.",
+        ),
+    )
     total = len(groups)
     for idx, (code, names) in enumerate(groups.items()):
         gname = MG_NAMES.get(code)
@@ -619,27 +670,73 @@ def render_baseline_progress(
 
 INSTANT_BASE_KEY = "instant_baseline"
 FLEX_SELECTED_KEY = "flex_selected"
+FILL_EDITOR_KEY = "fill_editor"
+
+
+@dataclass
+class FillEditorState:
+    mode: str
+    day: int
+    ue_id: int
+    is_library: bool
+    with_weight: bool
+    kind: str
+    name: str
+    group: str
+    sheet_day: int | None
+    sheet_page: int
+    selected_before: int | None
+    summary_sets: int = 0
+    summary_reps: int = 0
+    summary_weight: float = 0.0
+    sets: list[dict[str, float]] = field(default_factory=list)
+    pointer: int = 0
+    default_reps: int = 0
+    default_weight: float = 0.0
 
 
 def render_instant_baseline(
-    name: str, sets: int, reps: int, weight: float, *, with_weight: bool = True
+    name: str,
+    sets: int,
+    reps: int,
+    weight: float,
+    *,
+    with_weight: bool = True,
+    kind: str = "reps",
 ) -> str:
-    lines = [
-        name,
-        "",
-        "Настрой количество сетов, повторений и рабочий вес для этого упражнения.",
-        "Используй кнопки с крупным шагом, чтобы быстрее указать значения.",
-        "",
-        f"Сейчас: {format_sets_value(sets, reps, weight, with_weight)}",
-    ]
+    lines = [name, ""]
+    if with_weight:
+        lines.extend(
+            [
+                "Настрой количество сетов, повторений и рабочий вес для этого упражнения.",
+                "Используй кнопки с крупным шагом, чтобы быстрее указать значения.",
+            ]
+        )
+    elif kind == "duration":
+        lines.extend(
+            [
+                "Настрой количество подходов и длительность удержания.",
+                "Используй кнопки, чтобы быстро изменить время в секундах.",
+            ]
+        )
+    else:
+        lines.extend(
+            [
+                "Настрой количество сетов и повторений для этого упражнения.",
+                "Используй кнопки, чтобы быстро скорректировать повторения.",
+            ]
+        )
+    lines.append("")
+    lines.append(f"Сейчас: {format_sets_value(sets, reps, weight, with_weight)}")
     return "\n".join(lines)
 
 
 def instant_baseline_view(info: dict) -> tuple[str, InlineKeyboardMarkup]:
     sets, reps, weight = info["values"]
     with_weight = info.get("with_weight", True)
+    kind = info.get("kind", "reps")
     text = render_instant_baseline(
-        info["name"], sets, reps, weight, with_weight=with_weight
+        info["name"], sets, reps, weight, with_weight=with_weight, kind=kind
     )
     kb = baseline_kb(
         info["day"],
@@ -671,7 +768,7 @@ async def start_instant_baseline(
     resolved_group = resolve_group(name, group)
     existing = await get_baseline(user_id, day, exercise_id)
     values = list(existing) if existing else [0, 0, 0.0]
-    with_weight, _ = get_display_flags(resolved_group, name)
+    with_weight, kind = get_display_flags(resolved_group, name)
     if not with_weight:
         values[2] = 0.0
     info = {
@@ -683,6 +780,7 @@ async def start_instant_baseline(
         "values": values,
         "with_weight": with_weight,
         "resolved_group": resolved_group,
+        "kind": kind,
     }
     context.user_data.pop(INSTANT_BASE_KEY, None)
     context.user_data[INSTANT_BASE_KEY] = info
@@ -721,6 +819,555 @@ def set_flex_selected(context, day: int, ue_id: int, set_no: int | None):
     else:
         store[key] = set_no
 
+
+def get_fill_state(
+    context: ContextTypes.DEFAULT_TYPE, chat_id: int, message_id: int
+) -> FillEditorState | None:
+    store = context.user_data.get(FILL_EDITOR_KEY)
+    if not store:
+        return None
+    return store.get((chat_id, message_id))
+
+
+def set_fill_state(
+    context: ContextTypes.DEFAULT_TYPE,
+    chat_id: int,
+    message_id: int,
+    state: FillEditorState,
+):
+    store = context.user_data.setdefault(FILL_EDITOR_KEY, {})
+    store[(chat_id, message_id)] = state
+
+
+def clear_fill_state(context: ContextTypes.DEFAULT_TYPE, chat_id: int, message_id: int):
+    store = context.user_data.get(FILL_EDITOR_KEY)
+    if not store:
+        return
+    store.pop((chat_id, message_id), None)
+    if not store:
+        context.user_data.pop(FILL_EDITOR_KEY, None)
+
+
+def _fill_icon_key(group: str) -> str:
+    if group == "kb":
+        return "kb"
+    if group == "metcon":
+        return "metcon"
+    return "strength"
+
+
+def _format_single_value(state: FillEditorState) -> str:
+    sets = max(state.summary_sets, 0)
+    reps = max(state.summary_reps, 0)
+    if state.kind == "duration":
+        return f"{sets}×{reps} сек"
+    if state.with_weight:
+        weight = format_weight_value(max(state.summary_weight, 0.0))
+        return f"{sets}×{reps} повт. при {weight} кг"
+    return f"{sets}×{reps} повт."
+
+
+def render_fill_editor(state: FillEditorState, prefs: UiPreferences) -> str:
+    icon = emoji_for(prefs, _fill_icon_key(state.group)) if prefs.emoji_enabled else ""
+    title = f"{icon} {state.name}".strip() if icon else state.name
+    lines = [title, ""]
+    if state.mode == "single":
+        if state.with_weight:
+            lines.append(
+                "Укажи количество рабочих сетов, повторения последнего и рабочий вес."
+            )
+            lines.append(
+                "Кнопки ниже помогут быстро записать итоговую нагрузку за тренировку."
+            )
+            lines.append(
+                "Каждый сет сохранится с одинаковыми значениями — удобно, когда весь воркаут выполнен в одном темпе."
+            )
+        elif state.kind == "duration":
+            lines.append(
+                "Укажи, сколько подходов выполнил и сколько секунд держалась позиция в последнем."
+            )
+            lines.append(
+                "Используй кнопки, чтобы мгновенно выставить суммарное время."
+            )
+            lines.append(
+                "Сохранится указанное количество подходов, и каждый получит последнюю длительность."
+            )
+        else:
+            lines.append(
+                "Укажи, сколько рабочих сетов сделал и сколько повторений было в последнем."
+            )
+            lines.append(
+                "Кнопки позволяют за пару нажатий обновить запись без лишнего набора текста."
+            )
+            lines.append(
+                "Сохранится указанное количество подходов с одинаковым числом повторений."
+            )
+        lines.append("")
+        lines.append(f"Текущее значение: {_format_single_value(state)}")
+        return "\n".join(lines)
+
+    lines.append(
+        "Редактируй каждый сет отдельно: переключайся между ними стрелками и меняй показатели кнопками ниже."
+    )
+    lines.append(
+        "Так можно переписать весь результат тренировки, не переходя в другие экраны."
+    )
+    lines.append("Текущий сет помечен стрелкой ▶︎ слева от строки.")
+    lines.append("")
+    if not state.sets:
+        lines.append("Сетов пока нет. Добавь первый, чтобы записать подход.")
+    else:
+        for idx, item in enumerate(state.sets, start=1):
+            prefix = "▶︎ " if idx - 1 == state.pointer else ""
+            reps = int(max(item.get("reps", 0), 0))
+            if state.kind == "duration":
+                value = f"{reps} сек"
+            else:
+                value = f"{reps} повт."
+            if state.with_weight:
+                weight = format_weight_value(max(item.get("weight", 0.0), 0.0))
+                value = f"{reps} повт. при {weight} кг"
+            lines.append(f"{prefix}Сет {idx}: {value}")
+    return "\n".join(lines)
+
+
+def _single_unit(kind: str) -> str:
+    return "сек" if kind == "duration" else "повт"
+
+
+def _single_major_step(kind: str) -> int:
+    return 10 if kind == "duration" else 5
+
+
+def _build_single_fill_keyboard(state: FillEditorState) -> InlineKeyboardMarkup:
+    unit = _single_unit(state.kind)
+    major = _single_major_step(state.kind)
+    rows: list[list[InlineKeyboardButton]] = [
+        [
+            InlineKeyboardButton("＋1 сет", callback_data="fill:single:inc:sets:1"),
+            InlineKeyboardButton("−1 сет", callback_data="fill:single:inc:sets:-1"),
+        ],
+        [
+            InlineKeyboardButton(
+                f"＋{major} {unit}", callback_data=f"fill:single:inc:reps:{major}"
+            ),
+            InlineKeyboardButton(
+                f"−{major} {unit}", callback_data=f"fill:single:inc:reps:-{major}"
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                f"＋1 {unit}", callback_data="fill:single:inc:reps:1"
+            ),
+            InlineKeyboardButton(
+                f"−1 {unit}", callback_data="fill:single:inc:reps:-1"
+            ),
+        ],
+    ]
+    if state.with_weight:
+        rows.extend(
+            [
+                [
+                    InlineKeyboardButton(
+                        "＋0.5 кг", callback_data="fill:single:inc:kg:0.5"
+                    ),
+                    InlineKeyboardButton(
+                        "＋1 кг", callback_data="fill:single:inc:kg:1"
+                    ),
+                    InlineKeyboardButton(
+                        "＋5 кг", callback_data="fill:single:inc:kg:5"
+                    ),
+                ],
+                [
+                    InlineKeyboardButton(
+                        "−0.5 кг", callback_data="fill:single:inc:kg:-0.5"
+                    ),
+                    InlineKeyboardButton(
+                        "−1 кг", callback_data="fill:single:inc:kg:-1"
+                    ),
+                    InlineKeyboardButton(
+                        "−5 кг", callback_data="fill:single:inc:kg:-5"
+                    ),
+                ],
+            ]
+        )
+    rows.append(
+        [
+            InlineKeyboardButton("Сохранить", callback_data="fill:single:apply"),
+            InlineKeyboardButton("Отмена", callback_data="fill:single:cancel"),
+        ]
+    )
+    return InlineKeyboardMarkup(rows)
+
+
+def _build_flex_fill_keyboard(state: FillEditorState) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    if state.sets:
+        rows.append(
+            [
+                InlineKeyboardButton("◀︎ Сет", callback_data="fill:flex:nav:-1"),
+                InlineKeyboardButton(
+                    f"Сет {state.pointer + 1}/{len(state.sets)}",
+                    callback_data="noop",
+                ),
+                InlineKeyboardButton("Сет ▶︎", callback_data="fill:flex:nav:1"),
+            ]
+        )
+    rows.append(
+        [
+            InlineKeyboardButton("＋ сет", callback_data="fill:flex:add"),
+            InlineKeyboardButton("− сет", callback_data="fill:flex:del"),
+        ]
+    )
+    unit = _single_unit(state.kind)
+    major = _single_major_step(state.kind)
+    rows.append(
+        [
+            InlineKeyboardButton(
+                f"＋{major} {unit}", callback_data=f"fill:flex:inc:reps:{major}"
+            ),
+            InlineKeyboardButton(
+                f"−{major} {unit}", callback_data=f"fill:flex:inc:reps:-{major}"
+            ),
+        ]
+    )
+    rows.append(
+        [
+            InlineKeyboardButton(
+                f"＋1 {unit}", callback_data="fill:flex:inc:reps:1"
+            ),
+            InlineKeyboardButton(
+                f"−1 {unit}", callback_data="fill:flex:inc:reps:-1"
+            ),
+        ]
+    )
+    if state.with_weight:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    "＋0.5 кг", callback_data="fill:flex:inc:kg:0.5"
+                ),
+                InlineKeyboardButton(
+                    "＋1 кг", callback_data="fill:flex:inc:kg:1"
+                ),
+                InlineKeyboardButton(
+                    "＋5 кг", callback_data="fill:flex:inc:kg:5"
+                ),
+            ]
+        )
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    "−0.5 кг", callback_data="fill:flex:inc:kg:-0.5"
+                ),
+                InlineKeyboardButton(
+                    "−1 кг", callback_data="fill:flex:inc:kg:-1"
+                ),
+                InlineKeyboardButton(
+                    "−5 кг", callback_data="fill:flex:inc:kg:-5"
+                ),
+            ]
+        )
+    rows.append(
+        [
+            InlineKeyboardButton("Сохранить", callback_data="fill:flex:apply"),
+            InlineKeyboardButton("Отмена", callback_data="fill:flex:cancel"),
+        ]
+    )
+    return InlineKeyboardMarkup(rows)
+
+
+def build_fill_keyboard(state: FillEditorState) -> InlineKeyboardMarkup:
+    return (
+        _build_single_fill_keyboard(state)
+        if state.mode == "single"
+        else _build_flex_fill_keyboard(state)
+    )
+
+
+async def finish_fill_editor(
+    q,
+    context: ContextTypes.DEFAULT_TYPE,
+    user_id: int,
+    state: FillEditorState,
+    prefs: UiPreferences,
+):
+    clear_fill_state(context, q.message.chat_id, q.message.message_id)
+    if state.is_library:
+        await show_library_exercise_view(q, user_id, state.group, state.ue_id, context)
+        return
+    selected = get_flex_selected(context, state.day, state.ue_id)
+    text, _, _, name, group, sets, mode_view, new_selected = await render_exercise_view(
+        user_id, state.day, state.ue_id, selected, prefs=prefs
+    )
+    with_weight, kind = get_display_flags(group, name)
+    if mode_view == "flex":
+        set_flex_selected(context, state.day, state.ue_id, new_selected)
+        kb = flex_exercise_view_kb(
+            state.day,
+            state.ue_id,
+            group,
+            sets,
+            new_selected,
+            with_weight=with_weight,
+            kind=kind,
+        )
+    else:
+        set_flex_selected(context, state.day, state.ue_id, None)
+        step_value = await get_weight_step(user_id) if group == "kb" else None
+        amrap_mode = group == "metcon" and name == AMRAP_EXERCISE_NAME
+        for_time_mode = group == "metcon" and name == FOR_TIME_EXERCISE_NAME
+        kb = exercise_view_kb(
+            state.day,
+            state.ue_id,
+            group,
+            step_value,
+            amrap_mode,
+            for_time_mode,
+            with_weight=with_weight,
+            kind=kind,
+        )
+    text, kb = prepare_ui_output(text, kb, prefs)
+    await safe_edit_message(q, text, kb)
+
+
+async def apply_fill_changes(
+    q,
+    context: ContextTypes.DEFAULT_TYPE,
+    user_id: int,
+    state: FillEditorState,
+    prefs: UiPreferences,
+):
+    today_str = await get_user_local_date(user_id)
+    session_id = await get_or_create_today_session(user_id, today_str, state.day)
+    if state.mode == "single":
+        reps = max(state.summary_reps, 0)
+        weight = max(state.summary_weight, 0.0) if state.with_weight else 0.0
+        template = [(reps, weight) for _ in range(max(state.summary_sets, 0))]
+    else:
+        template = [
+            (
+                int(max(item.get("reps", 0), 0)),
+                float(max(item.get("weight", 0.0), 0.0)) if state.with_weight else 0.0,
+            )
+            for item in state.sets
+        ]
+    await apply_sets_template(session_id, state.ue_id, template)
+    if state.mode == "flex":
+        if template:
+            sets = await fetch_exercise_sets(session_id, state.ue_id)
+            if sets:
+                target_index = min(state.pointer, len(sets) - 1)
+                set_flex_selected(context, state.day, state.ue_id, sets[target_index][0])
+            else:
+                set_flex_selected(context, state.day, state.ue_id, None)
+        else:
+            set_flex_selected(context, state.day, state.ue_id, None)
+    else:
+        set_flex_selected(context, state.day, state.ue_id, None)
+    await finish_fill_editor(q, context, user_id, state, prefs)
+
+async def open_fill_editor(
+    q,
+    context: ContextTypes.DEFAULT_TYPE,
+    user_id: int,
+    day: int,
+    ue_id: int,
+    session_id: int,
+    mode: str,
+    is_library: bool,
+    sheet_day: int | None,
+    sheet_page: int,
+    selected_before: int | None,
+    prefs: UiPreferences,
+):
+    ex_id, name, raw_group = await get_exercise_info(ue_id)
+    group = resolve_group(name, raw_group)
+    with_weight, kind = get_display_flags(group, name)
+    baseline = await get_baseline(user_id, day, ex_id)
+    last_values = await get_session_last_values(session_id, ue_id)
+    sets_rows = await fetch_exercise_sets(session_id, ue_id)
+    work_sets = filter_work_sets(sets_rows)
+    default_reps = 0
+    default_weight = 0.0
+    if baseline:
+        default_reps = max(baseline[1], 0)
+        if with_weight:
+            default_weight = max(baseline[2], 0.0)
+    elif last_values:
+        default_reps = max(last_values[0], 0)
+        if with_weight:
+            default_weight = max(last_values[1], 0.0)
+
+    if mode == "flex":
+        sets_payload: list[dict[str, float]] = [
+            {
+                "reps": int(max(reps, 0)),
+                "weight": float(max(weight, 0.0)) if with_weight else 0.0,
+            }
+            for _, reps, weight in work_sets
+        ]
+        if not sets_payload:
+            if baseline and baseline[0] > 0:
+                sets_payload = [
+                    {
+                        "reps": max(baseline[1], 0),
+                        "weight": baseline[2] if with_weight else 0.0,
+                    }
+                    for _ in range(baseline[0])
+                ]
+            elif default_reps or default_weight:
+                sets_payload = [
+                    {
+                        "reps": default_reps,
+                        "weight": default_weight if with_weight else 0.0,
+                    }
+                ]
+        pointer = 0
+        if sets_payload and selected_before:
+            pointer = min(max(selected_before - 1, 0), len(sets_payload) - 1)
+        state = FillEditorState(
+            mode="flex",
+            day=day,
+            ue_id=ue_id,
+            is_library=is_library,
+            with_weight=with_weight,
+            kind=kind,
+            name=name,
+            group=group,
+            sheet_day=sheet_day,
+            sheet_page=sheet_page,
+            selected_before=selected_before,
+            sets=sets_payload,
+            pointer=pointer,
+            default_reps=default_reps,
+            default_weight=default_weight if with_weight else 0.0,
+        )
+    else:
+        summary_sets = len(work_sets)
+        summary_reps = int(work_sets[-1][1]) if work_sets else default_reps
+        summary_weight = (
+            float(work_sets[-1][2]) if work_sets and with_weight else default_weight
+        )
+        if summary_sets == 0 and baseline:
+            summary_sets = max(baseline[0], 0)
+            summary_reps = max(baseline[1], 0)
+            summary_weight = baseline[2] if with_weight else 0.0
+        if not with_weight:
+            summary_weight = 0.0
+        state = FillEditorState(
+            mode="single",
+            day=day,
+            ue_id=ue_id,
+            is_library=is_library,
+            with_weight=with_weight,
+            kind=kind,
+            name=name,
+            group=group,
+            sheet_day=sheet_day,
+            sheet_page=sheet_page,
+            selected_before=selected_before,
+            summary_sets=max(summary_sets, 0),
+            summary_reps=max(summary_reps, 0),
+            summary_weight=max(summary_weight, 0.0),
+            default_reps=default_reps,
+            default_weight=default_weight if with_weight else 0.0,
+        )
+    clear_fill_state(context, q.message.chat_id, q.message.message_id)
+    set_fill_state(context, q.message.chat_id, q.message.message_id, state)
+    text = render_fill_editor(state, prefs)
+    kb = build_fill_keyboard(state)
+    text, kb = prepare_ui_output(text, kb, prefs)
+    await safe_edit_message(q, text, kb)
+
+async def handle_fill_callback(
+    q,
+    context: ContextTypes.DEFAULT_TYPE,
+    user_id: int,
+    data: str,
+    prefs: UiPreferences,
+):
+    state = get_fill_state(context, q.message.chat_id, q.message.message_id)
+    parts = data.split(":")
+    if not state or len(parts) < 3:
+        await q.answer()
+        return
+    mode = parts[1]
+    action = parts[2]
+    if state.mode != mode:
+        await q.answer()
+        return
+    if mode == "single":
+        if action == "inc" and len(parts) >= 5:
+            field = parts[3]
+            delta = float(parts[4])
+            if field == "sets":
+                state.summary_sets = max(0, state.summary_sets + int(delta))
+            elif field == "reps":
+                state.summary_reps = max(0, state.summary_reps + int(delta))
+            elif field == "kg" and state.with_weight:
+                state.summary_weight = max(0.0, state.summary_weight + delta)
+        elif action == "apply":
+            await apply_fill_changes(q, context, user_id, state, prefs)
+            return
+        elif action == "cancel":
+            await finish_fill_editor(q, context, user_id, state, prefs)
+            return
+        text = render_fill_editor(state, prefs)
+        kb = build_fill_keyboard(state)
+        text, kb = prepare_ui_output(text, kb, prefs)
+        await safe_edit_message(q, text, kb)
+        await q.answer()
+        return
+
+    if action == "nav" and len(parts) >= 4 and state.sets:
+        delta = int(parts[3])
+        state.pointer = max(0, min(state.pointer + delta, len(state.sets) - 1))
+    elif action == "add":
+        base_reps = state.sets[state.pointer]["reps"] if state.sets else state.default_reps
+        base_weight = (
+            state.sets[state.pointer]["weight"] if state.sets else state.default_weight
+        )
+        insert_at = state.pointer + 1 if state.sets else 0
+        state.sets.insert(
+            insert_at,
+            {
+                "reps": int(max(base_reps, 0)),
+                "weight": float(max(base_weight, 0.0)) if state.with_weight else 0.0,
+            },
+        )
+        state.pointer = insert_at
+    elif action == "del" and state.sets:
+        state.sets.pop(state.pointer)
+        if state.pointer >= len(state.sets):
+            state.pointer = max(0, len(state.sets) - 1)
+    elif action == "inc" and len(parts) >= 5:
+        target = parts[3]
+        delta = float(parts[4])
+        if not state.sets:
+            state.sets.append(
+                {
+                    "reps": int(max(state.default_reps, 0)),
+                    "weight": float(max(state.default_weight, 0.0)) if state.with_weight else 0.0,
+                }
+            )
+            state.pointer = 0
+        current = state.sets[state.pointer]
+        if target == "reps":
+            current["reps"] = max(0, int(current.get("reps", 0) + delta))
+        elif target == "kg" and state.with_weight:
+            current["weight"] = max(0.0, float(current.get("weight", 0.0) + delta))
+    elif action == "apply":
+        await apply_fill_changes(q, context, user_id, state, prefs)
+        return
+    elif action == "cancel":
+        await finish_fill_editor(q, context, user_id, state, prefs)
+        return
+    text = render_fill_editor(state, prefs)
+    kb = build_fill_keyboard(state)
+    text, kb = prepare_ui_output(text, kb, prefs)
+    await safe_edit_message(q, text, kb)
+    await q.answer()
 
 MEASUREMENTS_SHOW_ALL_KEY = "measurements_show_all"
 MEASUREMENT_INPUT_KEY = "measurement_input"
@@ -1207,33 +1854,40 @@ def format_plan_value(
         value = format_kb_plan(baseline)
         return value if value != "—" else t("NOT_SET")
     sets, reps, weight = baseline
-    if not with_weight:
-        return f"{sets}×{reps}"
-    return f"{sets}×{reps}@{format_weight_value(weight)} кг"
+    return format_sets_value(sets, reps, weight, with_weight)
 
 
 def format_strength_done_value(
     summary: dict[str, int | float] | None, *, with_weight: bool = True
 ) -> str:
     if not summary:
-        detail = "0" if not with_weight else "0×0"
+        detail = "0 повт." if not with_weight else "0 повт. при 0 кг"
         return f"0 (последний {detail})"
     count = int(summary.get("sets_count") or 0)
     reps = int(summary.get("last_reps") or 0)
     weight = float(summary.get("last_weight") or 0.0)
     if with_weight:
-        detail = f"{reps}×{format_weight_value(weight)}"
+        detail = f"{reps} повт. при {format_weight_value(weight)} кг"
     else:
-        detail = f"{reps}"
+        detail = f"{reps} повт."
     if count <= 0:
         return f"0 (последний {detail})"
     return f"{count} (последний {detail})"
 
 
+def resolve_user_zone(tz_name: str | None) -> ZoneInfo:
+    if not tz_name:
+        return ZoneInfo("UTC")
+    try:
+        return ZoneInfo(tz_name)
+    except Exception:
+        return ZoneInfo("UTC")
+
+
 async def get_user_local_date(user_id: int) -> str:
     tz_name = await get_user_timezone(user_id)
-    tz = ZoneInfo(tz_name) if tz_name else ZoneInfo("UTC")
-    return datetime.now(tz).strftime("%Y-%m-%d")
+    zone = resolve_user_zone(tz_name)
+    return datetime.now(zone).strftime("%Y-%m-%d")
 
 
 async def fetch_day_sheet_data(
@@ -1354,15 +2008,22 @@ async def build_day_sheet_message(
     start = page * DAY_SHEET_PAGE_SIZE
     end = start + DAY_SHEET_PAGE_SIZE
     visible = items[start:end]
+    any_with_weight = any(bool(item.get("with_weight", True)) for item in items)
     header = f"{t('DAY')} {day_index}"
     if label:
         header += f" — {label}"
     lines = [header]
-    maybe_hint(
-        lines,
-        prefs,
-        f"Подсказка: кнопки «{t('ADD_SET')}», «{t('ADD_REP')}» и «{t('ADD_W', step=step_label)}» помогают вести учёт прямо здесь.",
+    weight_hint = (
+        f"Фиксируй подходы кнопками «{t('ADD_SET')}» и «{t('ADD_REP')}».",
+        f"Фиксируй подходы кнопками «{t('ADD_SET')}» и «{t('ADD_REP')}». Кнопки «{t('ADD_W', step=step_label)}» меняют рабочий вес во всех карточках, так что учёт ведётся без переходов по меню.",
     )
+    simple_hint = (
+        f"Фиксируй подходы кнопками «{t('ADD_SET')}» и «{t('ADD_REP')}».",
+        "Фиксируй подходы кнопками «{add_set}» и «{add_rep}». Для упражнений на время используй кнопку «{done}» внутри карточки, чтобы сохранить результат за секунды.".format(
+            add_set=t('ADD_SET'), add_rep=t('ADD_REP'), done=t('DONE')
+        ),
+    )
+    maybe_hint(lines, prefs, weight_hint if any_with_weight else simple_hint)
     if not visible:
         lines.append("")
         lines.append(
@@ -1689,7 +2350,14 @@ async def show_day_group_view(
     gname = MG_NAMES.get(group, custom.get(group, group))
     prefs = prefs or await load_ui_preferences(user_id)
     lines = [f"{t('DAY')} {day} — {gname}"]
-    maybe_hint(lines, prefs, "Подсказка: отметь подходы прямо из списка.")
+    maybe_hint(
+        lines,
+        prefs,
+        (
+            "Отмечай подходы прямо в списке упражнений.",
+            "Отмечай подходы прямо в списке упражнений. После сохранения строка обновится и покажет актуальный объём и последний рабочий сет.",
+        ),
+    )
     lines.append("")
     items: list[tuple[int, str, int]] = []
     for ue_id, name, g, done, ex_id in ex_rows:
@@ -1730,7 +2398,14 @@ async def render_library_group_text(
     last_done_rows = await list_last_done_dates(user_id)
     last_done_map = build_last_done_dict(last_done_rows)
     lines = [f"{gname}"]
-    maybe_hint(lines, prefs, "Выбери упражнение, чтобы посмотреть историю и вести отдельные записи.")
+    maybe_hint(
+        lines,
+        prefs,
+        (
+            "Открой упражнение, чтобы посмотреть детали.",
+            "Открой упражнение, чтобы посмотреть детали. Там доступна история и быстрые кнопки для записи новых подходов.",
+        ),
+    )
     lines.append("")
     for ue_id, name in items:
         ex_id, _, ex_group = await get_exercise_info(ue_id)
@@ -1759,7 +2434,14 @@ async def render_library_group_text(
         last = last_done_map.get(ex_id)
         lines.append(compose_exercise_line(e("generic"), name, summary, last))
     lines.append("────────")
-    maybe_hint(lines, prefs, "Используй «Добавить упражнение», чтобы пополнить библиотеку.")
+    maybe_hint(
+        lines,
+        prefs,
+        (
+            "Добавь новые упражнения через «Добавить упражнение».",
+            "Добавь новые упражнения через «Добавить упражнение». После сохранения их можно прикрепить к тренировочным дням прямо из расписания.",
+        ),
+    )
     return "\n".join(lines)
 
 
@@ -1784,8 +2466,14 @@ async def show_library_exercise_view(
             if label:
                 title = f"{title} — {label}"
             attach_lines.append(f"• {title}")
+        attach_lines.append(
+            "Чтобы изменить список дней, открой нужный день и редактируй упражнения прямо в расписании."
+        )
     else:
-        attach_lines = ["Прикреплено к дням: не прикреплено"]
+        attach_lines = [
+            "Пока не прикреплено ни к одному дню.",
+            "Добавь упражнение через нужный день тренировок, чтобы видеть его в расписании.",
+        ]
     full_text = text + "\n\n" + "\n".join(attach_lines)
     if mode_view == "flex":
         set_flex_selected(context, 0, ue_id, new_selected)
@@ -1794,7 +2482,6 @@ async def show_library_exercise_view(
             group,
             sets,
             new_selected,
-            can_detach=bool(attachments),
             with_weight=with_weight,
             kind=kind,
         )
@@ -1810,7 +2497,6 @@ async def show_library_exercise_view(
             step_value,
             amrap_mode,
             for_time_mode,
-            can_detach=bool(attachments),
             with_weight=with_weight,
             kind=kind,
         )
@@ -1939,7 +2625,7 @@ async def build_for_time_history_view(
     ex_id, name, raw_group = await get_exercise_info(ue_id)
     rows = await fetch_measurement_history(user_id, FOR_TIME_METRIC, limit=10)
     tz_name = await get_user_timezone(user_id)
-    tz = ZoneInfo(tz_name) if tz_name else ZoneInfo("UTC")
+    tz = resolve_user_zone(tz_name)
     prefs = prefs or await load_ui_preferences(user_id)
     lines = [name, "", f"{t('HISTORY')} результатов:"]
     has_entries = False
@@ -1951,9 +2637,23 @@ async def build_for_time_history_view(
         lines.append(f"{format_measurement_timestamp(created_at, tz)} — {format_duration_value(seconds)}")
     if has_entries:
         lines.append("")
-        maybe_hint(lines, prefs, "Подсказка: используй «Изменить», чтобы скорректировать последнее значение.")
+        maybe_hint(
+            lines,
+            prefs,
+            (
+                "Используй «Изменить», если нужно скорректировать последнее время.",
+                "Используй «Изменить», если нужно скорректировать последнее время. Так можно поправить результат, не создавая новую запись.",
+            ),
+        )
     else:
-        maybe_hint(lines, prefs, f"Подсказка: добавь время через «{t('DONE')}».")
+        maybe_hint(
+            lines,
+            prefs,
+            (
+                f"Добавь время через «{t('DONE')}».",
+                f"Добавь время через «{t('DONE')}». Значение сразу появится в списке и сохранится в истории тренировки.",
+            ),
+        )
     back_cb = back_callback or f"ex:view:{day}:{ue_id}"
     kb_rows = []
     if has_entries:
@@ -1999,8 +2699,9 @@ async def reminder_job(context: ContextTypes.DEFAULT_TYPE):
 
 async def schedule_all_reminders(app: Application):
     for user_id, tg_id, dow, hour, minute in await list_users_with_reminders():
-        tz = await get_user_timezone(user_id)
-        tm = time(hour=hour, minute=minute, tzinfo=ZoneInfo(tz))
+        tz_code = await get_user_timezone(user_id)
+        zone = resolve_user_zone(tz_code)
+        tm = time(hour=hour, minute=minute, tzinfo=zone)
         app.job_queue.run_daily(
             reminder_job,
             tm,
@@ -2032,10 +2733,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         remember_message(msg.chat_id, msg.message_id)
         return
     days = await list_active_days(user_id)
-    msg = await update.message.reply_text(
-        f"{t('MAIN_TITLE')}:",
-        reply_markup=main_menu_kb(days, SUPPORT_DEEPLINK)
-    )
+    prefs = await load_ui_preferences(user_id)
+    text = build_main_menu_text(prefs)
+    kb = main_menu_kb(days, SUPPORT_DEEPLINK)
+    text, kb = prepare_ui_output(text, kb, prefs)
+    msg = await update.message.reply_text(text, reply_markup=kb)
     remember_message(msg.chat_id, msg.message_id)
 
 async def show_exercises(
@@ -2629,7 +3331,8 @@ async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAUL
         dow = context.user_data.get("selected_dow")
         await add_user_reminder(user_id, dow, hour, minute)
         tz = context.user_data.get("tz", "UTC")
-        reminder_time = time(hour, minute, tzinfo=ZoneInfo(tz))
+        zone = resolve_user_zone(tz)
+        reminder_time = time(hour, minute, tzinfo=zone)
         job_name = f"rem_{user_id}_{dow}"
         for job in context.job_queue.get_jobs_by_name(job_name):
             job.schedule_removal()
@@ -3089,7 +3792,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data == "menu:root":
         days = await list_active_days(user_id)
         prefs = await load_ui_preferences(user_id)
-        text = f"{t('MAIN_TITLE')}:"
+        text = build_main_menu_text(prefs)
         kb = main_menu_kb(days, SUPPORT_DEEPLINK)
         text, kb = prepare_ui_output(text, kb, prefs)
         await safe_edit_message(q, text, reply_markup=kb)
@@ -3129,12 +3832,13 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         prefs = await load_ui_preferences(user_id)
         mode_label = "Компактный" if prefs.mode == "compact" else "Подробный"
         emoji_label = "включены" if prefs.emoji_enabled else "выключены"
-        verbose_label = "краткие пояснения" if prefs.verbose_level else "короткие подписи"
+        verbose_label = "обычные пояснения" if prefs.verbose_level else "краткие пояснения"
         text = (
             "Настройки:\n"
             "Выбирай пункт ниже, чтобы обновить дневник под себя.\n"
             "────────\n"
             "✏️ Переименовать дни — поменять названия тренировочных дней.\n"
+            "🔁 Изменить день — переключи тип тренировки (силовая, гири, кроссфит, воркаут) и открой подходящие упражнения. После переключения можно добавлять упражнения из любых групп.\n"
             f"📅 Количество тренировок — сейчас {n}. Укажи, сколько раз планируешь тренироваться.\n"
             f"🎨 Оформление интерфейса — режим {mode_label.lower()}, эмодзи {emoji_label}, пояснения: {verbose_label}.\n"
             f"🏋️ Шаг веса — задай шаг изменения (0.5/1/2/5 кг). Кнопки «{t('ADD_W', step='шаг ')}» и «{t('SUB_W', step='шаг ')}» используют это значение во всех упражнениях для прибавки и убавки веса.\n"
@@ -3288,6 +3992,10 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     parts = data.split(":")
+    if parts[0] == "fill":
+        prefs = await load_ui_preferences(user_id)
+        await handle_fill_callback(q, context, user_id, data, prefs)
+        return
     if parts[0] == "lib":
         action = parts[1]
         prefs = await load_ui_preferences(user_id)
@@ -3302,54 +4010,6 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if action == "ex":
             group = parts[2]
             ue_id = int(parts[3])
-            await show_library_exercise_view(q, user_id, group, ue_id, context)
-            return
-        if action == "attachmenu":
-            group = parts[2]
-            ue_id = int(parts[3])
-            ex_id, name, _ = await get_exercise_info(ue_id)
-            days = await list_active_days(user_id)
-            if not days:
-                await q.answer("Нет активных дней для прикрепления.", show_alert=True)
-                return
-            text = f"К какому дню прикрепить «{name}»?"
-            await safe_edit_message(
-                q,
-                text,
-                reply_markup=library_day_select_kb("attach", group, ue_id, days),
-            )
-            return
-        if action == "attach":
-            group = parts[2]
-            ue_id = int(parts[3])
-            day_idx = int(parts[4])
-            ex_id, _, _ = await get_exercise_info(ue_id)
-            await add_user_exercise(user_id, day_idx, ex_id)
-            await q.answer(f"Добавлено в день {day_idx}.")
-            await show_library_exercise_view(q, user_id, group, ue_id, context)
-            return
-        if action == "detachmenu":
-            group = parts[2]
-            ue_id = int(parts[3])
-            ex_id, name, _ = await get_exercise_info(ue_id)
-            links = await list_exercise_day_links(user_id, ex_id)
-            if not links:
-                await q.answer("Ещё не прикреплено ни к одному дню.", show_alert=True)
-                return
-            text = f"От какого дня открепить «{name}»?"
-            await safe_edit_message(
-                q,
-                text,
-                reply_markup=library_day_select_kb("detach", group, ue_id, links),
-            )
-            return
-        if action == "detach":
-            group = parts[2]
-            ue_id = int(parts[3])
-            day_idx = int(parts[4])
-            ex_id, _, _ = await get_exercise_info(ue_id)
-            await detach_user_exercise(user_id, day_idx, ex_id)
-            await q.answer(f"Откреплено от дня {day_idx}.")
             await show_library_exercise_view(q, user_id, group, ue_id, context)
             return
         if action == "delmenu":
@@ -3482,6 +4142,52 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 context.user_data["awaiting_rename"] = (day, q.message.chat.id, q.message.message_id)
                 await safe_edit_message(q, f"Новое название для Дня {day}:")
             return
+        if action == "edit_day":
+            prefs = await load_ui_preferences(user_id)
+            if len(parts) == 2:
+                days = await list_active_days(user_id)
+                text = "Какой день изменить?"
+                kb = edit_day_select_kb(days)
+                text, kb = prepare_ui_output(text, kb, prefs)
+                await safe_edit_message(q, text, reply_markup=kb)
+            else:
+                day = int(parts[2])
+                label = await get_day_label(user_id, day) or f"{t('DAY')} {day}"
+                if len(parts) == 3:
+                    text = (
+                        f"{t('DAY')} {day} — {label}.\n"
+                        "Выбери основной тип тренировки. Силовая откроет группы мышц, остальные режимы сразу ведут в свой каталог. После выбора можно добавлять упражнения из любых групп через меню дня."
+                    )
+                    kb = edit_day_mode_kb(day)
+                else:
+                    mode = parts[3]
+                    if mode == "strength":
+                        text = (
+                            f"{t('DAY')} {day} — {label}.\n"
+                            "Открой список групп мышц, выбери нужные и добавь упражнения. В любой момент можешь расширить тренировку другими направлениями через «Добавить упражнение»."
+                        )
+                        kb = edit_day_strength_kb(day)
+                    elif mode in {"kb", "metcon", "workout"}:
+                        labels = {
+                            "kb": "Каталог гиревых упражнений",
+                            "metcon": "Каталог кроссфита",
+                            "workout": "Каталог воркаута",
+                        }
+                        descriptions = {
+                            "kb": "Подбери упражнения с гирями. После добавления можно дополнять день силовыми или другими упражнениями.",
+                            "metcon": "Открой подборку кроссфит-упражнений и собери тренировку. Другие группы всегда доступны через меню дня.",
+                            "workout": "Выбери упражнения для воркаута. При желании добавляй силовые или гиревые упражнения через «Добавить упражнение».",
+                        }
+                        text = (
+                            f"{t('DAY')} {day} — {label}.\n"
+                            f"{descriptions[mode]}"
+                        )
+                        kb = edit_day_special_kb(day, mode, labels[mode])
+                    else:
+                        return
+                text, kb = prepare_ui_output(text, kb, prefs)
+                await safe_edit_message(q, text, reply_markup=kb)
+            return
         if action == "days_count":
             if len(parts) == 2:
                 await safe_edit_message(q, "Сколько тренировок планируешь в неделю?", reply_markup=days_count_kb())
@@ -3553,7 +4259,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 current_mode = "Компактный" if prefs.mode == "compact" else "Подробный"
                 emoji_state = "Эмодзи включены" if prefs.emoji_enabled else "Эмодзи выключены"
                 verbose_state = (
-                    "Пояснения включены" if prefs.verbose_level else "Подписи короткие"
+                    "Обычные пояснения" if prefs.verbose_level else "Краткие пояснения"
                 )
                 text = (
                     "Оформление интерфейса:\n"
@@ -3589,9 +4295,9 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     await set_ui_verbose_level(user_id, int(value))
                     prefs = await load_ui_preferences(user_id)
                     state = (
-                        "Теперь добавляем краткие пояснения."
+                        "Теперь включены обычные пояснения."
                         if prefs.verbose_level
-                        else "Выбраны короткие подписи."
+                        else "Выбраны краткие пояснения."
                     )
                     msg = f"Настройка пояснений обновлена. {state}"
                 else:
@@ -3942,25 +4648,21 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         async with user_locks[user_id]:
             session_id = await get_or_create_today_session(user_id, today_str, day)
             if action == "fill":
-                ex_id, _, _ = await get_exercise_info(ue_id)
-                template_sets = await fetch_last_session_sets(user_id, day, ue_id, today_str)
-                template: list[tuple[int | float | None, int | float | None]] = []
-                if template_sets:
-                    template = [(reps, weight) for _, reps, weight in template_sets]
-                else:
-                    base = await get_baseline(user_id, day, ex_id)
-                    if base:
-                        template = [(base[1], base[2]) for _ in range(base[0])]
-                if template:
-                    await apply_sets_template(session_id, ue_id, template)
-                    if mode == "flex":
-                        sets = await fetch_exercise_sets(session_id, ue_id)
-                        if sets:
-                            set_flex_selected(context, day, ue_id, sets[0][0])
-                        else:
-                            set_flex_selected(context, day, ue_id, None)
-                elif mode == "flex":
-                    set_flex_selected(context, day, ue_id, None)
+                await open_fill_editor(
+                    q,
+                    context,
+                    user_id,
+                    day,
+                    ue_id,
+                    session_id,
+                    mode,
+                    is_library,
+                    sheet_day,
+                    sheet_page,
+                    selected,
+                    prefs,
+                )
+                return
             elif action == "addset":
                 ex_id, ex_name, ex_group = await get_exercise_info(ue_id)
                 resolved_group = resolve_group(ex_name, ex_group)
