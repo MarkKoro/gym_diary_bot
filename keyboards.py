@@ -24,6 +24,7 @@ def subscription_kb(join_url: str):
 def settings_kb():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("✏️ Переименовать дни", callback_data="set:rename_day")],
+        [InlineKeyboardButton("🔁 Изменить день", callback_data="set:edit_day")],
         [InlineKeyboardButton("📅 Количество тренировок", callback_data="set:days_count")],
         [InlineKeyboardButton("🎨 Оформление интерфейса", callback_data="set:ui")],
         [InlineKeyboardButton("🏋️ Шаг веса", callback_data="set:step")],
@@ -41,6 +42,72 @@ def rename_day_kb(days: list[tuple[int, str]]):
         )
     rows.append([InlineKeyboardButton(t("BACK"), callback_data="menu:settings")])
     return InlineKeyboardMarkup(rows)
+
+
+def edit_day_select_kb(days: list[tuple[int, str]]):
+    rows = []
+    for idx, label in days:
+        rows.append(
+            [InlineKeyboardButton(f"{t('DAY')} {idx} — {label}", callback_data=f"set:edit_day:{idx}")]
+        )
+    rows.append([InlineKeyboardButton(t("BACK"), callback_data="menu:settings")])
+    return InlineKeyboardMarkup(rows)
+
+
+def edit_day_mode_kb(day_index: int):
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton(
+                    "💪 Силовая", callback_data=f"set:edit_day:{day_index}:strength"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    "🥇 Гири", callback_data=f"set:edit_day:{day_index}:kb"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    "⚡️ Кроссфит", callback_data=f"set:edit_day:{day_index}:metcon"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    "🤸 Воркаут", callback_data=f"set:edit_day:{day_index}:workout"
+                )
+            ],
+            [InlineKeyboardButton(t("BACK"), callback_data="set:edit_day")],
+        ]
+    )
+
+
+def edit_day_strength_kb(day_index: int):
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton(
+                    "🗂 Выбрать группы", callback_data=f"day:add_ex:{day_index}"
+                )
+            ],
+            [InlineKeyboardButton("📋 Открыть день", callback_data=f"day:open:{day_index}")],
+            [InlineKeyboardButton(t("BACK"), callback_data=f"set:edit_day:{day_index}")],
+        ]
+    )
+
+
+def edit_day_special_kb(day_index: int, group: str, label: str):
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton(
+                    label, callback_data=f"day:add:{day_index}:mg:{group}"
+                )
+            ],
+            [InlineKeyboardButton("📋 Открыть день", callback_data=f"day:open:{day_index}")],
+            [InlineKeyboardButton(t("BACK"), callback_data=f"set:edit_day:{day_index}")],
+        ]
+    )
 
 def days_count_kb():
     rows = []
@@ -88,11 +155,11 @@ def ui_preferences_kb(mode: str, emoji_enabled: bool, verbose_level: int):
             ],
             [
                 InlineKeyboardButton(
-                    f"{_option_marker(verbose_level == 0)} Коротко",
+                    f"{_option_marker(verbose_level == 0)} Краткие",
                     callback_data="set:ui:verbose:0",
                 ),
                 InlineKeyboardButton(
-                    f"{_option_marker(verbose_level == 1)} Краткие пояснения",
+                    f"{_option_marker(verbose_level == 1)} Обычные",
                     callback_data="set:ui:verbose:1",
                 ),
             ],
@@ -840,29 +907,15 @@ def library_exercise_kb(
     weight_step: float | None = None,
     is_amrap: bool = False,
     is_for_time: bool = False,
-    can_detach: bool = True,
     *,
     with_weight: bool = True,
     kind: str = "reps",
 ):
-    attach_row = [
-        InlineKeyboardButton(
-            "📅 Прикрепить к дню", callback_data=f"lib:attachmenu:{group}:{ue_id}"
-        )
-    ]
-    detach_row = [
-        InlineKeyboardButton(
-            "🚫 Открепить от дня", callback_data=f"lib:detachmenu:{group}:{ue_id}"
-        )
-    ]
     if is_for_time:
         rows = [
             [InlineKeyboardButton(t("DONE"), callback_data=f"ex:done:0:{ue_id}")],
             [InlineKeyboardButton(t("HISTORY"), callback_data=f"ex:progress:0:{ue_id}")],
-            attach_row,
         ]
-        if can_detach:
-            rows.append(detach_row)
         rows.append([InlineKeyboardButton(t("BACK"), callback_data=f"lib:group:{group}")])
         return InlineKeyboardMarkup(rows)
     if is_amrap:
@@ -885,10 +938,7 @@ def library_exercise_kb(
             ],
             [InlineKeyboardButton(t("HISTORY"), callback_data=f"ex:progress:0:{ue_id}")],
             [InlineKeyboardButton(t("DONE"), callback_data=f"ex:done:0:{ue_id}")],
-            attach_row,
         ]
-        if can_detach:
-            rows.append(detach_row)
         rows.append([InlineKeyboardButton(t("BACK"), callback_data=f"lib:group:{group}")])
         return InlineKeyboardMarkup(rows)
     add_label, sub_label = _rep_button_labels(kind)
@@ -941,32 +991,7 @@ def library_exercise_kb(
         )
     rows.append([InlineKeyboardButton("📈 Прогресс", callback_data=f"ex:progress:0:{ue_id}")])
     rows.append([InlineKeyboardButton(t("DONE"), callback_data=f"ex:done:0:{ue_id}")])
-    rows.append(attach_row)
-    if can_detach:
-        rows.append(detach_row)
     rows.append([InlineKeyboardButton(t("BACK"), callback_data=f"lib:group:{group}")])
-    return InlineKeyboardMarkup(rows)
-
-
-def library_day_select_kb(
-    action: str,
-    group: str,
-    ue_id: int,
-    days: list[tuple[int, str]],
-):
-    rows = []
-    for idx, label in days:
-        title = f"{t('DAY')} {idx}"
-        if label:
-            title = f"{title} — {label}"
-        rows.append(
-            [
-                InlineKeyboardButton(
-                    title, callback_data=f"lib:{action}:{group}:{ue_id}:{idx}"
-                )
-            ]
-        )
-    rows.append([InlineKeyboardButton(t("BACK"), callback_data=f"lib:ex:{group}:{ue_id}")])
     return InlineKeyboardMarkup(rows)
 
 
@@ -975,7 +1000,6 @@ def flex_library_exercise_kb(
     group: str,
     sets: list[tuple[int, int, float, int]],
     selected: int | None,
-    can_detach: bool = True,
     *,
     with_weight: bool = True,
     kind: str = "reps",
@@ -1040,17 +1064,8 @@ def flex_library_exercise_kb(
         ])
     rows.append([InlineKeyboardButton("📈 Прогресс", callback_data=f"ex:progress:0:{ue_id}")])
     rows.append([InlineKeyboardButton(t("DONE"), callback_data=f"ex:done:0:{ue_id}")])
-    rows.append(
-        [InlineKeyboardButton("📅 Прикрепить к дню", callback_data=f"lib:attachmenu:{group}:{ue_id}")]
-    )
-    if can_detach:
-        rows.append(
-            [InlineKeyboardButton("🚫 Открепить от дня", callback_data=f"lib:detachmenu:{group}:{ue_id}")]
-        )
     rows.append([InlineKeyboardButton(t("BACK"), callback_data=f"lib:group:{group}")])
     return InlineKeyboardMarkup(rows)
-
-
 def measurements_main_kb(show_all: bool):
     toggle = "Скрыть редкие" if show_all else "Показать ещё"
     return InlineKeyboardMarkup([
