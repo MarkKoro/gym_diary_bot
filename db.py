@@ -1,5 +1,5 @@
 import aiosqlite, asyncio
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, UTC
 from contextlib import asynccontextmanager
 from typing import Sequence
 from settings import DB_PATH, TRIAL_DAYS, DB_POOL_SIZE
@@ -346,10 +346,10 @@ async def get_or_create_user(tg_id: int, username: str|None):
         row = await cur.fetchone()
         if row:
             return row[0]
-        trial_until = (datetime.utcnow() + timedelta(days=TRIAL_DAYS)).isoformat()
+        trial_until = (datetime.now(UTC) + timedelta(days=TRIAL_DAYS)).isoformat()
         await db.execute(
             "INSERT INTO users(tg_id, username, created_at, trial_until) VALUES(?,?,?,?)",
-            (tg_id, username, datetime.utcnow().isoformat(), trial_until)
+            (tg_id, username, datetime.now(UTC).isoformat(), trial_until)
         )
         await db.commit()
         cur = await db.execute("SELECT id FROM users WHERE tg_id=?", (tg_id,))
@@ -402,7 +402,7 @@ async def get_session_for_day(user_id: int, date_str: str, day_index: int) -> in
         return row[0] if row else None
 
 async def fetch_day_exercises(user_id: int, day_index: int = 1, date_str: str | None = None):
-    date_str = date_str or datetime.utcnow().strftime("%Y-%m-%d")
+    date_str = date_str or datetime.now(UTC).strftime("%Y-%m-%d")
     async with connect_db() as db:
         cur = await db.execute(
             """
@@ -1261,7 +1261,7 @@ async def mark_exercise_done(session_id: int, ue_id: int):
             (
                 session_id,
                 ue_id,
-                datetime.utcnow().isoformat(),
+                datetime.now(UTC).isoformat(),
                 last_reps,
                 last_weight,
             ),
@@ -1468,7 +1468,7 @@ async def add_measurement_entry(user_id: int, metric: str, value: float, extra: 
             INSERT INTO user_measurements(user_id, metric, value, extra, created_at)
             VALUES(?,?,?,?,?)
             """,
-            (user_id, metric, value, extra, datetime.utcnow().isoformat()),
+            (user_id, metric, value, extra, datetime.now(UTC).isoformat()),
         )
         await db.commit()
 
@@ -1489,7 +1489,7 @@ async def update_last_measurement(
             return False
         await db.execute(
             "UPDATE user_measurements SET value=?, extra=?, created_at=? WHERE id=?",
-            (value, extra, datetime.utcnow().isoformat(), row[0]),
+            (value, extra, datetime.now(UTC).isoformat(), row[0]),
         )
         await db.commit()
         return True
