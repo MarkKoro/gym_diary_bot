@@ -83,6 +83,22 @@ METCON_EXERCISES: Sequence[tuple[str, str]] = [
     ("Лыжный эргометр (ккал)", "metcon"),
 ]
 
+WORKOUT_EXERCISES: Sequence[tuple[str, str]] = [
+    ("Подтягивания (воркаут, прямой хват)", "workout"),
+    ("Подтягивания (воркаут, обратный хват)", "workout"),
+    ("Подтягивания (воркаут, широкий хват)", "workout"),
+    ("Австралийские подтягивания (воркаут)", "workout"),
+    ("Выход силой на турник (воркаут)", "workout"),
+    ("Отжимания на брусьях (воркаут)", "workout"),
+    ("Отжимания от пола (воркаут)", "workout"),
+    ("Отжимания узким хватом (воркаут)", "workout"),
+    ("Пистолетик (левая) (воркаут)", "workout"),
+    ("Пистолетик (правая) (воркаут)", "workout"),
+    ("Удержание L-sit на брусьях (сек) (воркаут)", "workout"),
+    ("Удержание уголка в висе (сек) (воркаут)", "workout"),
+    ("Стойка на руках у стены (сек) (воркаут)", "workout"),
+]
+
 METCON_EXERCISE_NAMES = {name for name, _ in METCON_EXERCISES}
 DEFAULT_EXERCISE_NAMES = {name for name, _ in DEFAULT_EXERCISES}
 METCON_SHARED_NAMES = METCON_EXERCISE_NAMES & DEFAULT_EXERCISE_NAMES
@@ -321,6 +337,7 @@ async def init_db():
         await _seed_exercises(db, DEFAULT_EXERCISES)
         await _seed_exercises(db, KB_EXERCISES)
         await _seed_exercises(db, METCON_EXERCISES, update_group=False)
+        await _seed_exercises(db, WORKOUT_EXERCISES, update_group=False)
         await db.commit()
 
 async def get_or_create_user(tg_id: int, username: str|None):
@@ -918,7 +935,7 @@ async def list_day_exercises(user_id: int, day_index: int):
     async with connect_db() as db:
         cur = await db.execute(
             """
-            SELECT e.id, e.name
+            SELECT e.id, e.name, e.muscle_group
             FROM user_exercises ue
             JOIN exercises e ON e.id = ue.exercise_id
             WHERE ue.user_id=? AND ue.day_index=? AND ue.is_archived=0
