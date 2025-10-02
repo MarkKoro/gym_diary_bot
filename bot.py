@@ -10,7 +10,6 @@ from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.error import (
     BadRequest,
     Forbidden,
-    MessageNotModified,
     RetryAfter,
     TimedOut,
     NetworkError,
@@ -442,9 +441,6 @@ async def safe_edit_message(q, text, reply_markup=None):
     message_id = getattr(q.message, "message_id", None)
     try:
         await q.edit_message_text(text, reply_markup=reply_markup)
-    except MessageNotModified:
-        remember_message(chat_id, message_id)
-        return
     except BadRequest as e:
         message = (e.message or "").lower()
         if "not modified" in message:
