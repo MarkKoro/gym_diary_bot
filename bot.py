@@ -2,7 +2,7 @@ import asyncio
 import logging
 import math
 from dataclasses import dataclass
-from datetime import datetime, time, timedelta
+from datetime import datetime, time, timedelta, UTC
 from zoneinfo import ZoneInfo
 from collections import defaultdict
 import re
@@ -224,14 +224,21 @@ def apply_text_preferences(text: str, prefs: UiPreferences) -> str:
 
 
 def apply_markup_preferences(markup: InlineKeyboardMarkup | None, prefs: UiPreferences):
-    if prefs.emoji_enabled or markup is None:
+    if markup is None or prefs.emoji_enabled:
         return markup
+
+    new_rows: list[list[InlineKeyboardButton]] = []
     for row in markup.inline_keyboard:
+        new_row: list[InlineKeyboardButton] = []
         for button in row:
             cleaned = strip_emoji(button.text)
             cleaned = re.sub(r"\s{2,}", " ", cleaned).strip()
-            button.text = cleaned or button.text.strip()
-    return markup
+            button_data = button.to_dict()
+            button_data["text"] = cleaned or button.text.strip()
+            new_row.append(InlineKeyboardButton(**button_data))
+        new_rows.append(new_row)
+
+    return InlineKeyboardMarkup(new_rows)
 
 
 def prepare_ui_output(
@@ -489,7 +496,7 @@ async def check_subscription(tg_id: int, bot) -> bool:
         return False
 
 async def require_subscription(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
-    now = datetime.utcnow()
+    now = datetime.now(UTC)
     exp = context.user_data.get("sub_expiry")
     if exp and exp > now:
         return True
@@ -1719,7 +1726,7 @@ async def render_library_group_text(
             "Пока нет упражнений. Нажми «Добавить упражнение», чтобы сохранить их и вести учёт."
         )
     mode = await get_recording_mode(user_id)
-    today = datetime.utcnow().strftime("%Y-%m-%d")
+    today = datetime.now(UTC).strftime("%Y-%m-%d")
     last_done_rows = await list_last_done_dates(user_id)
     last_done_map = build_last_done_dict(last_done_rows)
     lines = [f"{gname}"]
@@ -1821,7 +1828,7 @@ async def render_exercise_view(
 ):
     ex_id, name, raw_group = await get_exercise_info(ue_id)
     group = resolve_group(name, raw_group)
-    today = datetime.utcnow().strftime("%Y-%m-%d")
+    today = datetime.now(UTC).strftime("%Y-%m-%d")
     mode = await get_recording_mode(user_id)
     session_id = await get_or_create_today_session(user_id, today, day)
     sets = await fetch_exercise_sets(session_id, ue_id)
@@ -2125,7 +2132,7 @@ async def advance_day(q, context, user_id: int, next_day: int):
 async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAULT_TYPE):
     if data == "wiz:sub:verify":
         if await check_subscription(q.from_user.id, context.bot):
-            context.user_data["sub_expiry"] = datetime.utcnow() + timedelta(days=1)
+            context.user_data["sub_expiry"] = datetime.now(UTC) + timedelta(days=1)
             text = (
                 "В этом боте ты ведёшь дневник тренировок: сохраняешь упражнения, "
                 "отслеживаешь прогресс и получаешь напоминания. "
