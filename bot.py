@@ -249,10 +249,34 @@ def resolve_group(name: str, group: str) -> str:
     return group
 
 
+def _is_duration_name(name: str) -> bool:
+    lower = name.lower()
+    return "(сек" in lower or "удержание" in lower or "стойка" in lower
+
+
+def get_display_flags(group: str, name: str) -> tuple[bool, str]:
+    with_weight = group != "workout"
+    kind = "duration" if not with_weight and _is_duration_name(name) else "reps"
+    return with_weight, kind
+
+
 def format_weight_value(value: float) -> str:
     if abs(value - round(value)) < 1e-6:
         return str(int(round(value)))
     return f"{value:.1f}"
+
+
+def format_sets_value(sets: int, reps: int, weight: float, with_weight: bool) -> str:
+    base = f"{sets}×{reps}"
+    if with_weight:
+        return f"{base} @ {weight:.1f} кг"
+    return base
+
+
+def format_flex_value(reps: int, weight: float, with_weight: bool) -> str:
+    if with_weight:
+        return f"{reps}×{weight:.1f} кг"
+    return f"{reps}"
 
 
 def filter_work_sets(sets: list[tuple[int, int, float, int]]) -> list[tuple[int, int, float]]:
@@ -569,36 +593,51 @@ def render_day_text(
             lines.append("────────")
     return "\n".join(lines)
 
-def baseline_text(name: str, sets: int, reps: int, weight: float) -> str:
-    return f"{name} — {sets}×{reps} @ {weight:.1f} кг"
+def baseline_text(
+    name: str, sets: int, reps: int, weight: float, *, with_weight: bool = True
+) -> str:
+    return f"{name} — {format_sets_value(sets, reps, weight, with_weight)}"
 
-def render_baseline_progress(done: list[str], name: str, sets: int, reps: int, weight: float) -> str:
+def render_baseline_progress(
+    done: list[str],
+    name: str,
+    sets: int,
+    reps: int,
+    weight: float,
+    *,
+    with_weight: bool = True,
+) -> str:
     lines = list(done)
     if name:
         if lines:
             lines.append("────────")
-        lines.append(baseline_text(name, sets, reps, weight))
+        lines.append(baseline_text(name, sets, reps, weight, with_weight=with_weight))
     return "\n".join(lines)
 
 INSTANT_BASE_KEY = "instant_baseline"
 FLEX_SELECTED_KEY = "flex_selected"
 
 
-def render_instant_baseline(name: str, sets: int, reps: int, weight: float) -> str:
+def render_instant_baseline(
+    name: str, sets: int, reps: int, weight: float, *, with_weight: bool = True
+) -> str:
     lines = [
         name,
         "",
         "Настрой количество сетов, повторений и рабочий вес для этого упражнения.",
         "Используй кнопки с крупным шагом, чтобы быстрее указать значения.",
         "",
-        f"Сейчас: {sets}×{reps} @ {weight:.1f} кг",
+        f"Сейчас: {format_sets_value(sets, reps, weight, with_weight)}",
     ]
     return "\n".join(lines)
 
 
 def instant_baseline_view(info: dict) -> tuple[str, InlineKeyboardMarkup]:
     sets, reps, weight = info["values"]
-    text = render_instant_baseline(info["name"], sets, reps, weight)
+    with_weight = info.get("with_weight", True)
+    text = render_instant_baseline(
+        info["name"], sets, reps, weight, with_weight=with_weight
+    )
     kb = baseline_kb(
         info["day"],
         sets,
@@ -606,6 +645,7 @@ def instant_baseline_view(info: dict) -> tuple[str, InlineKeyboardMarkup]:
         weight,
         prefix=f"ib:{info['source']}",
         include_skip_all=False,
+        with_weight=with_weight,
     )
     return text, kb
 
@@ -625,8 +665,12 @@ async def start_instant_baseline(
     name, default_group = row
     if not group:
         group = default_group
+    resolved_group = resolve_group(name, group)
     existing = await get_baseline(user_id, day, exercise_id)
     values = list(existing) if existing else [0, 0, 0.0]
+    with_weight, _ = get_display_flags(resolved_group, name)
+    if not with_weight:
+        values[2] = 0.0
     info = {
         "source": source,
         "day": day,
@@ -634,6 +678,8 @@ async def start_instant_baseline(
         "exercise_id": exercise_id,
         "name": name,
         "values": values,
+        "with_weight": with_weight,
+        "resolved_group": resolved_group,
     }
     context.user_data.pop(INSTANT_BASE_KEY, None)
     context.user_data[INSTANT_BASE_KEY] = info
@@ -1071,23 +1117,33 @@ async def build_measurements_view(
     return text, measurements_main_kb(show_all)
 
 
-def summarize_previous_sets(sets: list[tuple[int, int, float]], mode: str) -> str:
+def summarize_previous_sets(
+    sets: list[tuple[int, int, float]], mode: str, *, with_weight: bool = True
+) -> str:
     if not sets:
         return ""
     if mode == "flex":
-        return "; ".join(f"{no}) {reps}×{weight:.1f} кг" for no, reps, weight in sets)
+        return "; ".join(
+            f"{no}) {format_flex_value(reps, weight, with_weight)}"
+            for no, reps, weight in sets
+        )
     reps = sets[-1][1]
     weight = sets[-1][2]
-    return f"{len(sets)}×{reps} @ {weight:.1f} кг"
+    return format_sets_value(len(sets), reps, weight, with_weight)
 
 
-def summarize_baseline(values: tuple[int, int, float] | None, mode: str) -> str:
+def summarize_baseline(
+    values: tuple[int, int, float] | None, mode: str, *, with_weight: bool = True
+) -> str:
     if not values:
         return ""
     sets, reps, weight = values
     if mode == "flex":
-        return "; ".join(f"{i}) {reps}×{weight:.1f} кг" for i in range(1, sets + 1))
-    return f"{sets}×{reps} @ {weight:.1f} кг"
+        return "; ".join(
+            f"{i}) {format_flex_value(reps, weight, with_weight)}"
+            for i in range(1, sets + 1)
+        )
+    return format_sets_value(sets, reps, weight, with_weight)
 
 
 def format_last_done_label(date_str: str, reference: datetime | None = None) -> str:
@@ -1139,6 +1195,8 @@ def build_prev_label(prev_summary: str | None, prev_date: str | None) -> str:
 def format_plan_value(
     baseline: tuple[int, int, float] | None,
     group_key: str,
+    *,
+    with_weight: bool = True,
 ) -> str:
     if not baseline:
         return t("NOT_SET")
@@ -1146,19 +1204,27 @@ def format_plan_value(
         value = format_kb_plan(baseline)
         return value if value != "—" else t("NOT_SET")
     sets, reps, weight = baseline
+    if not with_weight:
+        return f"{sets}×{reps}"
     return f"{sets}×{reps}@{format_weight_value(weight)} кг"
 
 
-def format_strength_done_value(summary: dict[str, int | float] | None) -> str:
+def format_strength_done_value(
+    summary: dict[str, int | float] | None, *, with_weight: bool = True
+) -> str:
     if not summary:
-        return "0 (последний 0×0)"
+        detail = "0" if not with_weight else "0×0"
+        return f"0 (последний {detail})"
     count = int(summary.get("sets_count") or 0)
     reps = int(summary.get("last_reps") or 0)
     weight = float(summary.get("last_weight") or 0.0)
-    weight_text = format_weight_value(weight)
+    if with_weight:
+        detail = f"{reps}×{format_weight_value(weight)}"
+    else:
+        detail = f"{reps}"
     if count <= 0:
-        return f"0 (последний {reps}×{weight_text})"
-    return f"{count} (последний {reps}×{weight_text})"
+        return f"0 (последний {detail})"
+    return f"{count} (последний {detail})"
 
 
 async def get_user_local_date(user_id: int) -> str:
@@ -1181,6 +1247,7 @@ async def fetch_day_sheet_data(
     last_for_time: int | None = None
     for ue_id, name, group, done_flag, ex_id in ex_rows:
         resolved_group = resolve_group(name, group)
+        with_weight, kind = get_display_flags(resolved_group, name)
         baseline = await get_baseline(user_id, day_index, ex_id)
         today_sets_full = []
         if session_id:
@@ -1198,6 +1265,8 @@ async def fetch_day_sheet_data(
             "today_summary": None,
             "amrap_summary": None,
             "fortime_summary": None,
+            "with_weight": with_weight,
+            "kind": kind,
         }
         if resolved_group == "metcon" and name == AMRAP_EXERCISE_NAME:
             rounds, extra = parse_amrap_sets(today_sets_full)
@@ -1227,7 +1296,9 @@ async def fetch_day_sheet_data(
             if resolved_group == "kb":
                 entry["prev_summary"] = format_kb_previous(last_sets)
             else:
-                entry["prev_summary"] = summarize_previous_sets(last_sets, mode)
+                entry["prev_summary"] = summarize_previous_sets(
+                    last_sets, mode, with_weight=with_weight
+                )
         data.append(entry)
     return data
 
@@ -1298,6 +1369,8 @@ async def build_day_sheet_message(
     for item in visible:
         name = str(item["name"])
         group_key = str(item["group_key"])
+        with_weight = bool(item.get("with_weight", True))
+        kind = str(item.get("kind", "reps"))
         mark = status_icon(prefs, bool(item.get("is_done_today")))
         prefix = f"{mark} " if mark else ""
         ue_id = int(item["ue_id"])
@@ -1337,27 +1410,66 @@ async def build_day_sheet_message(
                 ]
             )
         else:
-            plan_text = format_plan_value(item.get("baseline"), group_key)
-            done_text = format_strength_done_value(item.get("today_summary"))
+            plan_text = format_plan_value(
+                item.get("baseline"), group_key, with_weight=with_weight
+            )
+            done_text = format_strength_done_value(
+                item.get("today_summary"), with_weight=with_weight
+            )
             lines.append(
                 f"{prefix}{name} — {t('LAST_TIME')}: {prev_label} | {t('PLAN')}: {plan_text} | {t('MADE')}: {done_text}"
             )
             step_cb = f"{step_value:g}"
-            kb_rows.append(
-                [
-                    InlineKeyboardButton(t("ADD_SET"), callback_data=f"ex:addset:{day_index}:{ue_id}"),
-                    InlineKeyboardButton(t("ADD_REP"), callback_data=f"ex:inc:{day_index}:{ue_id}:reps:1"),
-                    InlineKeyboardButton(
-                        t("ADD_W", step=step_label),
-                        callback_data=f"ex:inc:{day_index}:{ue_id}:kg:{step_cb}",
-                    ),
-                    InlineKeyboardButton(
-                        t("SUB_W", step=step_label),
-                        callback_data=f"ex:inc:{day_index}:{ue_id}:kg:{-step_value}",
-                    ),
-                    InlineKeyboardButton(t("DONE"), callback_data=f"ex:done:{day_index}:{ue_id}"),
-                ]
+            base_cb = f"ex:inc:{day_index}:{ue_id}"
+            add_label = t("ADD_REP") if kind != "duration" else f"{t('ADD_REP')} сек"
+            sub_label = "−1" if kind != "duration" else "−1 сек"
+            row: list[InlineKeyboardButton] = [
+                InlineKeyboardButton(t("ADD_SET"), callback_data=f"ex:addset:{day_index}:{ue_id}"),
+                InlineKeyboardButton(
+                    add_label,
+                    callback_data=f"{base_cb}:reps:1",
+                ),
+            ]
+            row.append(
+                InlineKeyboardButton(sub_label, callback_data=f"{base_cb}:reps:-1")
             )
+            if kind == "duration":
+                row.append(
+                    InlineKeyboardButton(t("DONE"), callback_data=f"ex:done:{day_index}:{ue_id}")
+                )
+                kb_rows.append(row)
+                kb_rows.append(
+                    [
+                        InlineKeyboardButton("＋5 сек", callback_data=f"{base_cb}:reps:5"),
+                        InlineKeyboardButton("＋10 сек", callback_data=f"{base_cb}:reps:10"),
+                    ]
+                )
+                kb_rows.append(
+                    [
+                        InlineKeyboardButton("−5 сек", callback_data=f"{base_cb}:reps:-5"),
+                        InlineKeyboardButton("−10 сек", callback_data=f"{base_cb}:reps:-10"),
+                    ]
+                )
+                continue
+            else:
+                if with_weight:
+                    row.extend(
+                        [
+                            InlineKeyboardButton(
+                                t("ADD_W", step=step_label),
+                                callback_data=f"{base_cb}:kg:{step_cb}",
+                            ),
+                            InlineKeyboardButton(
+                                t("SUB_W", step=step_label),
+                                callback_data=f"{base_cb}:kg:{-step_value}",
+                            ),
+                        ]
+                    )
+                row.append(
+                    InlineKeyboardButton(t("DONE"), callback_data=f"ex:done:{day_index}:{ue_id}")
+                )
+                kb_rows.append(row)
+                continue
     if total_pages > 1:
         nav_row: list[InlineKeyboardButton] = []
         if page > 0:
@@ -1471,18 +1583,23 @@ def format_current_training(
     sets: list[tuple[int, int, float, int]],
     mode: str,
     selected: int | None,
+    *,
+    with_weight: bool = True,
 ) -> list[str]:
     if mode == "flex":
         if not sets:
-            return ["Текущая тренировка: 0×0 @ 0.0 кг"]
+            empty = format_sets_value(0, 0, 0.0, with_weight)
+            return [f"Текущая тренировка: {empty}"]
         lines = ["Текущая тренировка:"]
         for set_no, reps, weight, _ in sets:
             prefix = "▶︎ " if selected == set_no else ""
-            lines.append(f"{prefix}Сет {set_no}: {reps}×{weight:.1f} кг")
+            lines.append(f"{prefix}Сет {set_no}: {format_flex_value(reps, weight, with_weight)}")
         return lines
     reps = sets[-1][1] if sets else 0
     weight = sets[-1][2] if sets else 0.0
-    return [f"Текущая тренировка: {len(sets)}×{reps} @ {weight:.1f} кг"]
+    return [
+        f"Текущая тренировка: {format_sets_value(len(sets), reps, weight, with_weight)}"
+    ]
 
 
 async def build_summary_map(
@@ -1496,6 +1613,7 @@ async def build_summary_map(
     session_id = await get_session_for_day(user_id, today, day)
     for ue_id, name, group, _, ex_id in ex_rows:
         resolved = resolve_group(name, group)
+        with_weight, _ = get_display_flags(resolved, name)
         text = ""
         current_sets_full: list[tuple[int, int, float, int]] = []
         if session_id:
@@ -1531,13 +1649,19 @@ async def build_summary_map(
                 if not warm
             ]
             if filtered:
-                text = summarize_previous_sets(filtered, mode)
+                text = summarize_previous_sets(
+                    filtered, mode, with_weight=with_weight
+                )
             if not text:
                 last_sets = await fetch_last_session_sets(user_id, day, ue_id, today)
-                text = summarize_previous_sets(last_sets, mode)
+                text = summarize_previous_sets(
+                    last_sets, mode, with_weight=with_weight
+                )
                 if not text:
                     base = await get_baseline(user_id, day, ex_id)
-                    text = summarize_baseline(base, mode)
+                    text = summarize_baseline(
+                        base, mode, with_weight=with_weight
+                    )
         if text:
             summary[ue_id] = text
     return summary
@@ -1620,10 +1744,15 @@ async def render_library_group_text(
             )
         else:
             last_sets = await fetch_last_session_sets(user_id, 0, ue_id, today)
-            summary = summarize_previous_sets(last_sets, mode)
+            with_weight, _ = get_display_flags(resolved_group, name)
+            summary = summarize_previous_sets(
+                last_sets, mode, with_weight=with_weight
+            )
             if not summary:
                 base = await get_baseline(user_id, 0, ex_id)
-                summary = summarize_baseline(base, mode)
+                summary = summarize_baseline(
+                    base, mode, with_weight=with_weight
+                )
         last = last_done_map.get(ex_id)
         lines.append(compose_exercise_line(e("generic"), name, summary, last))
     lines.append("────────")
@@ -1643,6 +1772,7 @@ async def show_library_exercise_view(
     text, _, ex_id, name, resolved_group, sets, mode_view, new_selected = await render_exercise_view(
         user_id, 0, ue_id, selected, prefs=prefs
     )
+    with_weight, kind = get_display_flags(resolved_group, name)
     attachments = await list_exercise_day_links(user_id, ex_id)
     if attachments:
         attach_lines = ["Прикреплено к дням:"]
@@ -1662,6 +1792,8 @@ async def show_library_exercise_view(
             sets,
             new_selected,
             can_detach=bool(attachments),
+            with_weight=with_weight,
+            kind=kind,
         )
     else:
         set_flex_selected(context, 0, ue_id, None)
@@ -1676,6 +1808,8 @@ async def show_library_exercise_view(
             amrap_mode,
             for_time_mode,
             can_detach=bool(attachments),
+            with_weight=with_weight,
+            kind=kind,
         )
     full_text, kb = prepare_ui_output(full_text, kb, prefs)
     await safe_edit_message(q, full_text, reply_markup=kb)
@@ -1698,6 +1832,7 @@ async def render_exercise_view(
     baseline = await get_baseline(user_id, day, ex_id)
     last_sets = await fetch_last_session_sets(user_id, day, ue_id, today)
     prefs = prefs or await load_ui_preferences(user_id)
+    with_weight, _ = get_display_flags(group, name)
     auto_fill_allowed = (
         mode == "flex"
         and not sets
@@ -1774,13 +1909,13 @@ async def render_exercise_view(
             f"{t('MADE')}: {result_text}",
         ]
         return "\n".join(lines), session_id, ex_id, name, group, sets, mode, selected_set
-    prev_text = summarize_previous_sets(last_sets, mode)
+    prev_text = summarize_previous_sets(last_sets, mode, with_weight=with_weight)
     if not prev_text:
-        prev_text = summarize_baseline(baseline, mode)
+        prev_text = summarize_baseline(baseline, mode, with_weight=with_weight)
     prev_text = prev_text or t("NOT_FIXED")
-    plan_text = format_plan_value(baseline, group)
+    plan_text = format_plan_value(baseline, group, with_weight=with_weight)
     summary = build_strength_summary_from_sets(sets)
-    done_text = format_strength_done_value(summary)
+    done_text = format_strength_done_value(summary, with_weight=with_weight)
     lines = [
         title,
         "",
@@ -2071,12 +2206,20 @@ async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAUL
         action = parts[2]
         day = context.user_data.get("baseline_day")
         idx = context.user_data.get("baseline_idx", 0)
-        ex_id, name = context.user_data["baseline_list"][idx]
+        baseline_list: list[tuple[int, str, str]] = context.user_data.get(
+            "baseline_list", []
+        )
+        if not baseline_list:
+            return
+        ex_id, name, ex_group = baseline_list[idx]
         vals_map = context.user_data.setdefault("baseline_values", {})
         if ex_id not in vals_map:
             existing = await get_baseline(user_id, day, ex_id)
             vals_map[ex_id] = list(existing) if existing else [0, 0, 0.0]
         values = vals_map[ex_id]
+        with_weight, _ = get_display_flags(ex_group, name)
+        if not with_weight:
+            values[2] = 0.0
         done = context.user_data.setdefault("baseline_done", [])
         if action == "inc":
             field = parts[3]
@@ -2085,22 +2228,44 @@ async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAUL
                 values[0] = max(0, values[0] + int(delta))
             elif field == "reps":
                 values[1] = max(0, values[1] + int(delta))
-            elif field == "kg":
+            elif field == "kg" and with_weight:
                 values[2] = max(0.0, values[2] + delta)
-            await safe_edit_message(q, render_baseline_progress(done, name, *values), baseline_kb(day, *values))
+            await safe_edit_message(
+                q,
+                render_baseline_progress(
+                    done, name, *values, with_weight=with_weight
+                ),
+                baseline_kb(day, *values, with_weight=with_weight),
+            )
             return
         if action == "ready":
-            await set_baseline(user_id, day, ex_id, values[0], values[1], values[2])
-            done.append(f"{baseline_text(name, *values)} ✅")
+            await set_baseline(
+                user_id,
+                day,
+                ex_id,
+                values[0],
+                values[1],
+                values[2] if with_weight else 0.0,
+            )
+            done.append(f"{baseline_text(name, *values, with_weight=with_weight)} ✅")
             idx += 1
-            if idx < len(context.user_data["baseline_list"]):
+            if idx < len(baseline_list):
                 context.user_data["baseline_idx"] = idx
-                ex_id, name = context.user_data["baseline_list"][idx]
+                ex_id, name, ex_group = baseline_list[idx]
                 if ex_id not in vals_map:
                     existing = await get_baseline(user_id, day, ex_id)
                     vals_map[ex_id] = list(existing) if existing else [0, 0, 0.0]
                 values = vals_map[ex_id]
-                await safe_edit_message(q, render_baseline_progress(done, name, *values), baseline_kb(day, *values))
+                next_with_weight, _ = get_display_flags(ex_group, name)
+                if not next_with_weight:
+                    values[2] = 0.0
+                await safe_edit_message(
+                    q,
+                    render_baseline_progress(
+                        done, name, *values, with_weight=next_with_weight
+                    ),
+                    baseline_kb(day, *values, with_weight=next_with_weight),
+                )
             else:
                 summary = "\n".join(done)
                 context.user_data.pop("baseline_day", None)
@@ -2112,14 +2277,23 @@ async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAUL
             return
         if action == "skip":
             idx += 1
-            if idx < len(context.user_data["baseline_list"]):
+            if idx < len(baseline_list):
                 context.user_data["baseline_idx"] = idx
-                ex_id, name = context.user_data["baseline_list"][idx]
+                ex_id, name, ex_group = baseline_list[idx]
                 if ex_id not in vals_map:
                     existing = await get_baseline(user_id, day, ex_id)
                     vals_map[ex_id] = list(existing) if existing else [0, 0, 0.0]
                 values = vals_map[ex_id]
-                await safe_edit_message(q, render_baseline_progress(done, name, *values), baseline_kb(day, *values))
+                next_with_weight, _ = get_display_flags(ex_group, name)
+                if not next_with_weight:
+                    values[2] = 0.0
+                await safe_edit_message(
+                    q,
+                    render_baseline_progress(
+                        done, name, *values, with_weight=next_with_weight
+                    ),
+                    baseline_kb(day, *values, with_weight=next_with_weight),
+                )
             else:
                 summary = "\n".join(done)
                 context.user_data.pop("baseline_day", None)
@@ -2135,9 +2309,18 @@ async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAUL
                 context.user_data["baseline_idx"] = idx
                 if done:
                     done.pop()
-                ex_id, name = context.user_data["baseline_list"][idx]
+                ex_id, name, ex_group = baseline_list[idx]
                 values = vals_map[ex_id]
-                await safe_edit_message(q, render_baseline_progress(done, name, *values), baseline_kb(day, *values))
+                prev_with_weight, _ = get_display_flags(ex_group, name)
+                if not prev_with_weight:
+                    values[2] = 0.0
+                await safe_edit_message(
+                    q,
+                    render_baseline_progress(
+                        done, name, *values, with_weight=prev_with_weight
+                    ),
+                    baseline_kb(day, *values, with_weight=prev_with_weight),
+                )
             else:
                 context.user_data.pop("baseline_day", None)
                 context.user_data.pop("baseline_list", None)
@@ -2272,22 +2455,33 @@ async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAUL
                     context.user_data["group_idx"] = idx
                     await show_exercises(q, user_id, day, groups[idx], context)
                 else:
-                    exs = await list_day_exercises(user_id, day)
-                    if exs:
+                    ex_rows = await list_day_exercises(user_id, day)
+                    if ex_rows:
+                        exs = [
+                            (ex_id, name, resolve_group(name, group_code))
+                            for ex_id, name, group_code in ex_rows
+                        ]
                         context.user_data["baseline_day"] = day
                         context.user_data["baseline_list"] = exs
                         context.user_data["baseline_idx"] = 0
                         context.user_data["baseline_values"] = {}
                         context.user_data["baseline_done"] = []
-                        ex_id, name = exs[0]
+                        ex_id, name, ex_group = exs[0]
                         vals_map = context.user_data["baseline_values"]
                         existing = await get_baseline(user_id, day, ex_id)
                         vals_map[ex_id] = list(existing) if existing else [0, 0, 0.0]
                         vals = vals_map[ex_id]
+                        first_with_weight, _ = get_display_flags(ex_group, name)
+                        if not first_with_weight:
+                            vals[2] = 0.0
                         await safe_edit_message(
                             q,
-                            render_baseline_progress([], name, *vals),
-                            reply_markup=baseline_kb(day, *vals),
+                            render_baseline_progress(
+                                [], name, *vals, with_weight=first_with_weight
+                            ),
+                            reply_markup=baseline_kb(
+                                day, *vals, with_weight=first_with_weight
+                            ),
                         )
                     else:
                         await finish_day(q, context, user_id, day)
@@ -2518,12 +2712,28 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 text, _, _, name, group, sets, mode_view, new_selected = await render_exercise_view(
                     user_id, day, ue_id, selected, prefs=prefs
                 )
+                with_weight, kind = get_display_flags(group, name)
                 if mode_view == "flex":
                     set_flex_selected(context, day, ue_id, new_selected)
                     kb = (
-                        flex_library_exercise_kb(ue_id, group, sets, new_selected)
+                        flex_library_exercise_kb(
+                            ue_id,
+                            group,
+                            sets,
+                            new_selected,
+                            with_weight=with_weight,
+                            kind=kind,
+                        )
                         if is_library
-                        else flex_exercise_view_kb(day, ue_id, group, sets, new_selected)
+                        else flex_exercise_view_kb(
+                            day,
+                            ue_id,
+                            group,
+                            sets,
+                            new_selected,
+                            with_weight=with_weight,
+                            kind=kind,
+                        )
                     )
                 else:
                     set_flex_selected(context, day, ue_id, None)
@@ -2538,6 +2748,8 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             step_value,
                             amrap_mode,
                             for_time_mode,
+                            with_weight=with_weight,
+                            kind=kind,
                         )
                     else:
                         kb = exercise_view_kb(
@@ -2547,6 +2759,8 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             step_value,
                             amrap_mode,
                             for_time_mode,
+                            with_weight=with_weight,
+                            kind=kind,
                         )
             text, kb = prepare_ui_output(text, kb, prefs)
             await context.bot.edit_message_text(
@@ -2617,12 +2831,28 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             user_id, day, ue_id, selected, prefs=prefs
         )
         is_library = day == 0
+        with_weight, kind = get_display_flags(group, name)
         if mode_view == "flex":
             set_flex_selected(context, day, ue_id, new_selected)
             kb = (
-                flex_library_exercise_kb(ue_id, group, sets, new_selected)
+                flex_library_exercise_kb(
+                    ue_id,
+                    group,
+                    sets,
+                    new_selected,
+                    with_weight=with_weight,
+                    kind=kind,
+                )
                 if is_library
-                else flex_exercise_view_kb(day, ue_id, group, sets, new_selected)
+                else flex_exercise_view_kb(
+                    day,
+                    ue_id,
+                    group,
+                    sets,
+                    new_selected,
+                    with_weight=with_weight,
+                    kind=kind,
+                )
             )
         else:
             set_flex_selected(context, day, ue_id, None)
@@ -2637,6 +2867,8 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     step_value,
                     amrap_mode,
                     for_time_mode,
+                    with_weight=with_weight,
+                    kind=kind,
                 )
             else:
                 step_value = await get_weight_step(user_id) if group == "kb" else None
@@ -2647,6 +2879,8 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     step_value,
                     group == "metcon" and name == AMRAP_EXERCISE_NAME,
                     group == "metcon" and name == FOR_TIME_EXERCISE_NAME,
+                    with_weight=with_weight,
+                    kind=kind,
                 )
         if chat_id and msg_id:
             text_view, kb = prepare_ui_output(text_view, kb, prefs)
@@ -2816,6 +3050,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         action = parts[2]
         values = info["values"]
+        with_weight = info.get("with_weight", True)
         if action == "inc" and len(parts) >= 5:
             field = parts[3]
             delta = float(parts[4])
@@ -2823,7 +3058,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 values[0] = max(0, values[0] + int(delta))
             elif field == "reps":
                 values[1] = max(0, values[1] + int(delta))
-            elif field == "kg":
+            elif field == "kg" and with_weight:
                 values[2] = max(0.0, values[2] + delta)
             text, kb = instant_baseline_view(info)
             await safe_edit_message(q, text, kb)
@@ -2835,7 +3070,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 info["exercise_id"],
                 values[0],
                 values[1],
-                values[2],
+                values[2] if with_weight else 0.0,
             )
             await finish_instant_baseline(q, context, user_id, info)
             return
@@ -3587,12 +3822,28 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             text, _, _, name, group, sets, mode, new_selected = await render_exercise_view(
                 user_id, day, ue_id, set_no, prefs=prefs
             )
+            with_weight, kind = get_display_flags(group, name)
             if mode == "flex":
                 set_flex_selected(context, day, ue_id, new_selected)
                 kb = (
-                    flex_library_exercise_kb(ue_id, group, sets, new_selected)
+                    flex_library_exercise_kb(
+                        ue_id,
+                        group,
+                        sets,
+                        new_selected,
+                        with_weight=with_weight,
+                        kind=kind,
+                    )
                     if is_library
-                    else flex_exercise_view_kb(day, ue_id, group, sets, new_selected)
+                    else flex_exercise_view_kb(
+                        day,
+                        ue_id,
+                        group,
+                        sets,
+                        new_selected,
+                        with_weight=with_weight,
+                        kind=kind,
+                    )
                 )
             else:
                 set_flex_selected(context, day, ue_id, None)
@@ -3607,6 +3858,8 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         step_value,
                         amrap_mode,
                         for_time_mode,
+                        with_weight=with_weight,
+                        kind=kind,
                     )
                 else:
                     step_value = await get_weight_step(user_id) if group == "kb" else None
@@ -3617,6 +3870,8 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         step_value,
                         amrap_mode,
                         for_time_mode,
+                        with_weight=with_weight,
+                        kind=kind,
                     )
             text, kb = prepare_ui_output(text, kb, prefs)
             await safe_edit_message(q, text, kb)
@@ -3625,12 +3880,28 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             text, _, _, name, group, sets, mode, new_selected = await render_exercise_view(
                 user_id, day, ue_id, selected, prefs=prefs
             )
+            with_weight, kind = get_display_flags(group, name)
             if mode == "flex":
                 set_flex_selected(context, day, ue_id, new_selected)
                 kb = (
-                    flex_library_exercise_kb(ue_id, group, sets, new_selected)
+                    flex_library_exercise_kb(
+                        ue_id,
+                        group,
+                        sets,
+                        new_selected,
+                        with_weight=with_weight,
+                        kind=kind,
+                    )
                     if is_library
-                    else flex_exercise_view_kb(day, ue_id, group, sets, new_selected)
+                    else flex_exercise_view_kb(
+                        day,
+                        ue_id,
+                        group,
+                        sets,
+                        new_selected,
+                        with_weight=with_weight,
+                        kind=kind,
+                    )
                 )
             else:
                 set_flex_selected(context, day, ue_id, None)
@@ -3645,6 +3916,8 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         step_value,
                         amrap_mode,
                         for_time_mode,
+                        with_weight=with_weight,
+                        kind=kind,
                     )
                 else:
                     step_value = await get_weight_step(user_id) if group == "kb" else None
@@ -3655,6 +3928,8 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         step_value,
                         amrap_mode,
                         for_time_mode,
+                        with_weight=with_weight,
+                        kind=kind,
                     )
             text, kb = prepare_ui_output(text, kb, prefs)
             await safe_edit_message(q, text, kb)
@@ -3779,6 +4054,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 sets = await fetch_exercise_sets(session_id, ue_id)
                 ex_id, ex_name, ex_group = await get_exercise_info(ue_id)
                 resolved_group = resolve_group(ex_name, ex_group)
+                with_weight, _ = get_display_flags(resolved_group, ex_name)
                 if not sets:
                     stored = await get_session_last_values(session_id, ue_id)
                     if stored and resolved_group != "kb":
@@ -3790,6 +4066,9 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     await add_set(session_id, ue_id, reps, weight)
                     sets = await fetch_exercise_sets(session_id, ue_id)
                 target = "reps" if field == "reps" else "weight_kg"
+                if target == "weight_kg" and not with_weight:
+                    await q.answer()
+                    return
                 if mode == "flex":
                     selected = get_flex_selected(context, day, ue_id)
                     if selected is None and sets:
@@ -3891,6 +4170,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 text, _, ex_id, name, group, sets, mode_view, new_selected = await render_exercise_view(
                     user_id, day, ue_id, get_flex_selected(context, day, ue_id), prefs=prefs
                 )
+                with_weight, kind = get_display_flags(group, name)
                 if mode_view == "flex":
                     set_flex_selected(context, day, ue_id, new_selected)
                 else:
@@ -3899,13 +4179,15 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 prog_lines = []
                 if base:
                     prog_lines.append(
-                        f"Базовое: {base[0]}×{base[1]} @ {base[2]:.1f} кг"
+                        f"Базовое: {format_sets_value(base[0], base[1], base[2], with_weight)}"
                     )
                 for d, s, r, w in rows:
                     sets_cnt = s or 0
                     reps_cnt = r or 0
                     weight_val = w or 0.0
-                    prog_lines.append(f"{d}: {sets_cnt}×{reps_cnt} @ {weight_val:.1f} кг")
+                    prog_lines.append(
+                        f"{d}: {format_sets_value(sets_cnt, reps_cnt, weight_val, with_weight)}"
+                    )
                 if prog_lines:
                     header = "Прогресс"
                     if total_pages > 1:
@@ -3914,9 +4196,24 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 else:
                     text += "\n\nПрогресс: нет данных"
                 if mode_view == "flex" and is_library:
-                    kb = flex_library_exercise_kb(ue_id, group, sets, new_selected)
+                    kb = flex_library_exercise_kb(
+                        ue_id,
+                        group,
+                        sets,
+                        new_selected,
+                        with_weight=with_weight,
+                        kind=kind,
+                    )
                 elif mode_view == "flex":
-                    kb = flex_exercise_view_kb(day, ue_id, group, sets, new_selected)
+                    kb = flex_exercise_view_kb(
+                        day,
+                        ue_id,
+                        group,
+                        sets,
+                        new_selected,
+                        with_weight=with_weight,
+                        kind=kind,
+                    )
                 elif is_library:
                     step_value = await get_weight_step(user_id) if group == "kb" else None
                     amrap_mode = group == "metcon" and name == AMRAP_EXERCISE_NAME
@@ -3928,6 +4225,8 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         step_value,
                         amrap_mode,
                         for_time_mode,
+                        with_weight=with_weight,
+                        kind=kind,
                     )
                 else:
                     step_value = await get_weight_step(user_id) if group == "kb" else None
@@ -3939,6 +4238,8 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         step_value,
                         amrap_mode,
                         group == "metcon" and name == FOR_TIME_EXERCISE_NAME,
+                        with_weight=with_weight,
+                        kind=kind,
                     )
                 base_rows = [row[:] for row in kb.inline_keyboard]
                 nav_rows: list[list[InlineKeyboardButton]] = []
@@ -4026,41 +4327,61 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 text, kb = prepare_ui_output(text, kb, prefs)
                 await safe_edit_message(q, text, kb)
                 return
-        text, _, _, name, group, sets, mode_view, new_selected = await render_exercise_view(
-            user_id, day, ue_id, get_flex_selected(context, day, ue_id), prefs=prefs
+    text, _, _, name, group, sets, mode_view, new_selected = await render_exercise_view(
+        user_id, day, ue_id, get_flex_selected(context, day, ue_id), prefs=prefs
+    )
+    with_weight, kind = get_display_flags(group, name)
+    if mode_view == "flex":
+        set_flex_selected(context, day, ue_id, new_selected)
+        kb = (
+            flex_library_exercise_kb(
+                ue_id,
+                group,
+                sets,
+                new_selected,
+                with_weight=with_weight,
+                kind=kind,
+            )
+            if is_library
+            else flex_exercise_view_kb(
+                day,
+                ue_id,
+                group,
+                sets,
+                new_selected,
+                with_weight=with_weight,
+                kind=kind,
+            )
         )
-        if mode_view == "flex":
-            set_flex_selected(context, day, ue_id, new_selected)
-            kb = (
-                flex_library_exercise_kb(ue_id, group, sets, new_selected)
-                if is_library
-                else flex_exercise_view_kb(day, ue_id, group, sets, new_selected)
+    else:
+        set_flex_selected(context, day, ue_id, None)
+        if is_library:
+            step_value = await get_weight_step(user_id) if group == "kb" else None
+            amrap_mode = group == "metcon" and name == AMRAP_EXERCISE_NAME
+            for_time_mode = group == "metcon" and name == FOR_TIME_EXERCISE_NAME
+            kb = library_exercise_kb(
+                ue_id,
+                group,
+                name,
+                step_value,
+                amrap_mode,
+                for_time_mode,
+                with_weight=with_weight,
+                kind=kind,
             )
         else:
-            set_flex_selected(context, day, ue_id, None)
-            if is_library:
-                step_value = await get_weight_step(user_id) if group == "kb" else None
-                amrap_mode = group == "metcon" and name == AMRAP_EXERCISE_NAME
-                for_time_mode = group == "metcon" and name == FOR_TIME_EXERCISE_NAME
-                kb = library_exercise_kb(
-                    ue_id,
-                    group,
-                    name,
-                    step_value,
-                    amrap_mode,
-                    for_time_mode,
-                )
-            else:
-                step_value = await get_weight_step(user_id) if group == "kb" else None
-                amrap_mode = group == "metcon" and name == AMRAP_EXERCISE_NAME
-                kb = exercise_view_kb(
-                    day,
-                    ue_id,
-                    group,
-                    step_value,
-                    amrap_mode,
-                    group == "metcon" and name == FOR_TIME_EXERCISE_NAME,
-                )
+            step_value = await get_weight_step(user_id) if group == "kb" else None
+            amrap_mode = group == "metcon" and name == AMRAP_EXERCISE_NAME
+            kb = exercise_view_kb(
+                day,
+                ue_id,
+                group,
+                step_value,
+                amrap_mode,
+                group == "metcon" and name == FOR_TIME_EXERCISE_NAME,
+                with_weight=with_weight,
+                kind=kind,
+            )
         text, kb = prepare_ui_output(text, kb, prefs)
         await safe_edit_message(q, text, kb)
         return
