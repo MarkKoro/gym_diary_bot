@@ -323,10 +323,16 @@ def format_sets_value(sets: int, reps: int, weight: float, with_weight: bool) ->
     return f"{base} при {format_weight_value(weight)} кг"
 
 
-def format_flex_value(reps: int, weight: float, with_weight: bool) -> str:
+def format_flex_value(
+    reps: int, weight: float, with_weight: bool, kind: str = "reps"
+) -> str:
+    if kind == "duration":
+        return f"{reps} сек"
+    reps = max(int(reps), 0)
     if with_weight:
-        return f"{reps} повт. при {format_weight_value(weight)} кг"
-    return f"{reps} повт."
+        formatted = format_weight_value(max(weight, 0.0))
+        return f"{reps}x{formatted} кг"
+    return f"{reps}x"
 
 
 def filter_work_sets(sets: list[tuple[int, int, float, int]]) -> list[tuple[int, int, float]]:
@@ -906,28 +912,51 @@ def render_fill_editor(state: FillEditorState, prefs: UiPreferences) -> str:
         lines.append(f"Текущее значение: {_format_single_value(state)}")
         return "\n".join(lines)
 
+    if state.kind == "duration":
+        lines.append(
+            "Редактируй каждый сет отдельно: переключайся между ними стрелками и меняй показатели кнопками ниже."
+        )
+        lines.append(
+            "Так можно переписать весь результат тренировки, не переходя в другие экраны."
+        )
+        lines.append("Текущий сет помечен стрелкой ▶︎ слева от строки.")
+        lines.append("")
+        if not state.sets:
+            lines.append("Сетов пока нет. Добавь первый, чтобы записать подход.")
+        else:
+            for idx, item in enumerate(state.sets, start=1):
+                prefix = "▶︎ " if idx - 1 == state.pointer else ""
+                reps = int(max(item.get("reps", 0), 0))
+                value = format_flex_value(reps, 0.0, False, "duration")
+                lines.append(f"{prefix}{idx}. {value}")
+        return "\n".join(lines)
+
+    if not state.sets:
+        lines.append(
+            "Задай пример: сколько сетов, повторов и килограммов у тебя было в прошлый раз или планируется сегодня."
+        )
+        lines.append(
+            "Введи точные числа — кнопки ниже помогут быстро выставить повторы и вес."
+        )
+        lines.append("")
+        lines.append("Когда будешь готов, нажми «＋ сет» и начни фиксировать подходы один за другим.")
+        return "\n".join(lines)
+
+    lines.append("Теперь запиши каждый сет своим чередом.")
     lines.append(
-        "Редактируй каждый сет отдельно: переключайся между ними стрелками и меняй показатели кнопками ниже."
+        "Заполни количество повторений и килограмм в текущей строке: стрелки листают сеты, кнопки снизу меняют значения."
     )
     lines.append(
-        "Так можно переписать весь результат тренировки, не переходя в другие экраны."
+        "Нажимай «＋ сет», чтобы добавить следующий — новые строки копируют предыдущие значения для быстрой правки."
     )
     lines.append("Текущий сет помечен стрелкой ▶︎ слева от строки.")
     lines.append("")
-    if not state.sets:
-        lines.append("Сетов пока нет. Добавь первый, чтобы записать подход.")
-    else:
-        for idx, item in enumerate(state.sets, start=1):
-            prefix = "▶︎ " if idx - 1 == state.pointer else ""
-            reps = int(max(item.get("reps", 0), 0))
-            if state.kind == "duration":
-                value = f"{reps} сек"
-            else:
-                value = f"{reps} повт."
-            if state.with_weight:
-                weight = format_weight_value(max(item.get("weight", 0.0), 0.0))
-                value = f"{reps} повт. при {weight} кг"
-            lines.append(f"{prefix}Сет {idx}: {value}")
+    for idx, item in enumerate(state.sets, start=1):
+        prefix = "▶︎ " if idx - 1 == state.pointer else ""
+        reps = int(max(item.get("reps", 0), 0))
+        weight = float(max(item.get("weight", 0.0), 0.0)) if state.with_weight else 0.0
+        value = format_flex_value(reps, weight, state.with_weight, state.kind)
+        lines.append(f"{prefix}{idx}. {value}")
     return "\n".join(lines)
 
 
@@ -1768,13 +1797,17 @@ async def build_measurements_view(
 
 
 def summarize_previous_sets(
-    sets: list[tuple[int, int, float]], mode: str, *, with_weight: bool = True
+    sets: list[tuple[int, int, float]],
+    mode: str,
+    *,
+    with_weight: bool = True,
+    kind: str = "reps",
 ) -> str:
     if not sets:
         return ""
     if mode == "flex":
-        return "; ".join(
-            f"{no}) {format_flex_value(reps, weight, with_weight)}"
+        return " · ".join(
+            f"{no}. {format_flex_value(reps, weight, with_weight, kind)}"
             for no, reps, weight in sets
         )
     reps = sets[-1][1]
@@ -1783,14 +1816,18 @@ def summarize_previous_sets(
 
 
 def summarize_baseline(
-    values: tuple[int, int, float] | None, mode: str, *, with_weight: bool = True
+    values: tuple[int, int, float] | None,
+    mode: str,
+    *,
+    with_weight: bool = True,
+    kind: str = "reps",
 ) -> str:
     if not values:
         return ""
     sets, reps, weight = values
     if mode == "flex":
-        return "; ".join(
-            f"{i}) {format_flex_value(reps, weight, with_weight)}"
+        return " · ".join(
+            f"{i}. {format_flex_value(reps, weight, with_weight, kind)}"
             for i in range(1, sets + 1)
         )
     return format_sets_value(sets, reps, weight, with_weight)
@@ -1954,7 +1991,7 @@ async def fetch_day_sheet_data(
                 entry["prev_summary"] = format_kb_previous(last_sets)
             else:
                 entry["prev_summary"] = summarize_previous_sets(
-                    last_sets, mode, with_weight=with_weight
+                    last_sets, mode, with_weight=with_weight, kind=kind
                 )
         data.append(entry)
     return data
@@ -2249,6 +2286,7 @@ def format_current_training(
     selected: int | None,
     *,
     with_weight: bool = True,
+    kind: str = "reps",
 ) -> list[str]:
     if mode == "flex":
         if not sets:
@@ -2257,7 +2295,8 @@ def format_current_training(
         lines = ["Текущая тренировка:"]
         for set_no, reps, weight, _ in sets:
             prefix = "▶︎ " if selected == set_no else ""
-            lines.append(f"{prefix}Сет {set_no}: {format_flex_value(reps, weight, with_weight)}")
+            value = format_flex_value(reps, weight, with_weight, kind)
+            lines.append(f"{prefix}{set_no}. {value}")
         return lines
     reps = sets[-1][1] if sets else 0
     weight = sets[-1][2] if sets else 0.0
@@ -2314,17 +2353,17 @@ async def build_summary_map(
             ]
             if filtered:
                 text = summarize_previous_sets(
-                    filtered, mode, with_weight=with_weight
+                    filtered, mode, with_weight=with_weight, kind=kind
                 )
             if not text:
                 last_sets = await fetch_last_session_sets(user_id, day, ue_id, today)
                 text = summarize_previous_sets(
-                    last_sets, mode, with_weight=with_weight
+                    last_sets, mode, with_weight=with_weight, kind=kind
                 )
                 if not text:
                     base = await get_baseline(user_id, day, ex_id)
                     text = summarize_baseline(
-                        base, mode, with_weight=with_weight
+                        base, mode, with_weight=with_weight, kind=kind
                     )
         if text:
             summary[ue_id] = text
@@ -2422,14 +2461,14 @@ async def render_library_group_text(
             )
         else:
             last_sets = await fetch_last_session_sets(user_id, 0, ue_id, today)
-            with_weight, _ = get_display_flags(resolved_group, name)
+            with_weight, kind = get_display_flags(resolved_group, name)
             summary = summarize_previous_sets(
-                last_sets, mode, with_weight=with_weight
+                last_sets, mode, with_weight=with_weight, kind=kind
             )
             if not summary:
                 base = await get_baseline(user_id, 0, ex_id)
                 summary = summarize_baseline(
-                    base, mode, with_weight=with_weight
+                    base, mode, with_weight=with_weight, kind=kind
                 )
         last = last_done_map.get(ex_id)
         lines.append(compose_exercise_line(e("generic"), name, summary, last))
@@ -2521,7 +2560,7 @@ async def render_exercise_view(
     baseline = await get_baseline(user_id, day, ex_id)
     last_sets = await fetch_last_session_sets(user_id, day, ue_id, today)
     prefs = prefs or await load_ui_preferences(user_id)
-    with_weight, _ = get_display_flags(group, name)
+    with_weight, kind = get_display_flags(group, name)
     auto_fill_allowed = (
         mode == "flex"
         and not sets
@@ -2598,9 +2637,13 @@ async def render_exercise_view(
             f"{t('MADE')}: {result_text}",
         ]
         return "\n".join(lines), session_id, ex_id, name, group, sets, mode, selected_set
-    prev_text = summarize_previous_sets(last_sets, mode, with_weight=with_weight)
+    prev_text = summarize_previous_sets(
+        last_sets, mode, with_weight=with_weight, kind=kind
+    )
     if not prev_text:
-        prev_text = summarize_baseline(baseline, mode, with_weight=with_weight)
+        prev_text = summarize_baseline(
+            baseline, mode, with_weight=with_weight, kind=kind
+        )
     prev_text = prev_text or t("NOT_FIXED")
     plan_text = format_plan_value(baseline, group, with_weight=with_weight)
     summary = build_strength_summary_from_sets(sets)
