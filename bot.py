@@ -2070,7 +2070,11 @@ async def build_day_sheet_message(
             "Добавь упражнения к дню через меню — после этого они появятся здесь для быстрого учёта.",
         )
     kb_rows: list[list[InlineKeyboardButton]] = []
+    first_entry = True
     for item in visible:
+        if not first_entry:
+            lines.append("")
+        first_entry = False
         name = str(item["name"])
         group_key = str(item["group_key"])
         with_weight = bool(item.get("with_weight", True))
@@ -2086,17 +2090,22 @@ async def build_day_sheet_message(
             summary = item.get("amrap_summary") or {"rounds": 0, "extra": 0}
             rounds = int(summary.get("rounds") or 0)
             extra = int(summary.get("extra") or 0)
-            lines.append(
-                f"{prefix}{t('METCON_TITLE')} — {t('AMRAP_TITLE')} — {t('AMRAP_LINE', rounds=rounds, extra=extra)}"
-            )
+            prev_text = item.get("prev_summary") or t("NOT_FIXED")
+            current_text = t("AMRAP_LINE", rounds=rounds, extra=extra)
+            lines.append(f"{prefix}{t('METCON_TITLE')} — {t('AMRAP_TITLE')}")
+            lines.append(f"• Прошлый раз: {prev_text}")
+            lines.append(f"• План: {t('NOT_SET')}")
+            lines.append(f"• Сегодня: {current_text}")
             kb_rows.append(
                 [
                     InlineKeyboardButton(t("ADD_SET"), callback_data=f"ex:addset:{day_index}:{ue_id}"),
+                    InlineKeyboardButton("− сет", callback_data=f"ex:delset:{day_index}:{ue_id}"),
                     InlineKeyboardButton(t("ADD_REP"), callback_data=f"ex:inc:{day_index}:{ue_id}:reps:1"),
                     InlineKeyboardButton("−1", callback_data=f"ex:inc:{day_index}:{ue_id}:reps:-1"),
                     InlineKeyboardButton(t("DONE"), callback_data=f"ex:done:{day_index}:{ue_id}"),
                 ]
             )
+            continue
         elif group_key == "metcon" and name == FOR_TIME_EXERCISE_NAME:
             fortime = item.get("fortime_summary") or {}
             seconds = fortime.get("last_time_sec")
@@ -2104,9 +2113,11 @@ async def build_day_sheet_message(
                 result = format_duration_value(int(seconds))
             else:
                 result = t("NOT_FIXED")
-            lines.append(
-                f"{prefix}{t('METCON_TITLE')} — {t('FOR_TIME_TITLE')} — {t('FTIME_LINE', time=result)}"
-            )
+            result_line = t("FTIME_LINE", time=result)
+            lines.append(f"{prefix}{t('METCON_TITLE')} — {t('FOR_TIME_TITLE')}")
+            lines.append(f"• Прошлый раз: {result_line}")
+            lines.append(f"• План: {t('NOT_SET')}")
+            lines.append(f"• Сегодня: {result_line}")
             kb_rows.append(
                 [
                     InlineKeyboardButton(t("DONE"), callback_data=f"ex:done:{day_index}:{ue_id}"),
@@ -2120,15 +2131,18 @@ async def build_day_sheet_message(
             done_text = format_strength_done_value(
                 item.get("today_summary"), with_weight=with_weight
             )
-            lines.append(
-                f"{prefix}{name} — {t('LAST_TIME')}: {prev_label} | {t('PLAN')}: {plan_text} | {t('MADE')}: {done_text}"
-            )
+            last_text = prev_label or t("NOT_FIXED")
+            lines.append(f"{prefix}{name}")
+            lines.append(f"• Прошлый раз: {last_text}")
+            lines.append(f"• План: {plan_text}")
+            lines.append(f"• Сегодня: {done_text}")
             step_cb = f"{step_value:g}"
             base_cb = f"ex:inc:{day_index}:{ue_id}"
             add_label = t("ADD_REP") if kind != "duration" else f"{t('ADD_REP')} сек"
             sub_label = "−1" if kind != "duration" else "−1 сек"
             row: list[InlineKeyboardButton] = [
                 InlineKeyboardButton(t("ADD_SET"), callback_data=f"ex:addset:{day_index}:{ue_id}"),
+                InlineKeyboardButton("− сет", callback_data=f"ex:delset:{day_index}:{ue_id}"),
                 InlineKeyboardButton(
                     add_label,
                     callback_data=f"{base_cb}:reps:1",
@@ -2485,9 +2499,11 @@ async def render_library_group_text(
         ),
     )
     lines.append("")
+    first_entry = True
     for ue_id, name in items:
         ex_id, _, ex_group = await get_exercise_info(ue_id)
         resolved_group = resolve_group(name, ex_group)
+        plan_text = t("NOT_SET")
         if resolved_group == "metcon" and name == FOR_TIME_EXERCISE_NAME:
             rows = await fetch_measurement_history(user_id, FOR_TIME_METRIC, limit=1)
             seconds = None
@@ -2504,13 +2520,27 @@ async def render_library_group_text(
             summary = summarize_previous_sets(
                 last_sets, mode, with_weight=with_weight, kind=kind
             )
+            base = await get_baseline(user_id, 0, ex_id)
+            plan_text = format_plan_value(
+                base, resolved_group, with_weight=with_weight
+            )
             if not summary:
-                base = await get_baseline(user_id, 0, ex_id)
                 summary = summarize_baseline(
                     base, mode, with_weight=with_weight, kind=kind
                 )
         last = last_done_map.get(ex_id)
-        lines.append(compose_exercise_line(e("generic"), name, summary, last))
+        if not first_entry:
+            lines.append("")
+        first_entry = False
+        mark = e("generic")
+        prefix = f"{mark} " if mark else ""
+        result_text = summary or t("NOT_FIXED")
+        lines.append(f"{prefix}{name}")
+        lines.append(f"• Последний результат: {result_text}")
+        lines.append(f"• План: {plan_text}")
+        if last:
+            lines.append(f"• Тренировка: {last}")
+    lines.append("")
     lines.append("────────")
     maybe_hint(
         lines,
