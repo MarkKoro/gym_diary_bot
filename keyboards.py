@@ -448,6 +448,14 @@ def day_group_kb(day_index: int, group: str, items: list[tuple[int, str, int]]):
     for ue_id, name, done in items:
         mark = "✅" if done else "⬜"
         rows.append([InlineKeyboardButton(f"{mark} {name} ▸", callback_data=f"ex:view:{day_index}:{ue_id}")])
+    if group.startswith("u"):
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    "🗑 Удалить группу", callback_data=f"day:groupdel:{day_index}:{group}"
+                )
+            ]
+        )
     rows.append([InlineKeyboardButton(t("BACK"), callback_data=f"day:open:{day_index}")])
     return InlineKeyboardMarkup(rows)
 
@@ -731,22 +739,6 @@ def flex_exercise_view_kb(
     kind: str = "reps",
 ):
     rows: list[list[InlineKeyboardButton]] = []
-    if sets:
-        current_row: list[InlineKeyboardButton] = []
-        for set_no, *_ in sets:
-            mark = "✅" if selected == set_no else "⬜"
-            current_row.append(
-                InlineKeyboardButton(
-                    f"{mark} Сет {set_no}",
-                    callback_data=f"ex:select:{day_index}:{ue_id}:{set_no}",
-                )
-            )
-            if len(current_row) == 2:
-                rows.append(current_row)
-                current_row = []
-        if current_row:
-            rows.append(current_row)
-    rows.append([InlineKeyboardButton("Все сеты", callback_data=f"ex:fill:{day_index}:{ue_id}")])
     rows.append([
         InlineKeyboardButton(t("ADD_SET"), callback_data=f"ex:addset:{day_index}:{ue_id}"),
         InlineKeyboardButton("− сет", callback_data=f"ex:delset:{day_index}:{ue_id}"),
@@ -818,6 +810,14 @@ def library_group_kb(group: str, items: list[tuple[int, str]]):
         rows.append([
             InlineKeyboardButton("🗑 Удалить упражнение", callback_data=f"lib:delmenu:{group}")
         ])
+    if group.startswith("u"):
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    "🗑 Удалить группу", callback_data=f"lib:groupdel:{group}"
+                )
+            ]
+        )
     rows.append([InlineKeyboardButton(t("BACK"), callback_data="lib:root")])
     return InlineKeyboardMarkup(rows)
 
@@ -1007,22 +1007,6 @@ def flex_library_exercise_kb(
     kind: str = "reps",
 ):
     rows: list[list[InlineKeyboardButton]] = []
-    if sets:
-        current_row: list[InlineKeyboardButton] = []
-        for set_no, *_ in sets:
-            mark = "✅" if selected == set_no else "⬜"
-            current_row.append(
-                InlineKeyboardButton(
-                    f"{mark} Сет {set_no}",
-                    callback_data=f"ex:select:0:{ue_id}:{set_no}",
-                )
-            )
-            if len(current_row) == 2:
-                rows.append(current_row)
-                current_row = []
-        if current_row:
-            rows.append(current_row)
-    rows.append([InlineKeyboardButton("Все сеты", callback_data=f"ex:fill:0:{ue_id}")])
     rows.append([
         InlineKeyboardButton(t("ADD_SET"), callback_data=f"ex:addset:0:{ue_id}"),
         InlineKeyboardButton("− сет", callback_data=f"ex:delset:0:{ue_id}"),
@@ -1068,6 +1052,34 @@ def flex_library_exercise_kb(
     rows.append([InlineKeyboardButton(t("DONE"), callback_data=f"ex:done:0:{ue_id}")])
     rows.append([InlineKeyboardButton(t("BACK"), callback_data=f"lib:group:{group}")])
     return InlineKeyboardMarkup(rows)
+
+
+def confirm_day_group_delete_kb(day_index: int, group: str):
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton(
+                    "✅ Да, удалить",
+                    callback_data=f"day:groupdel:{day_index}:{group}:ok",
+                )
+            ],
+            [InlineKeyboardButton("↩️ Отмена", callback_data=f"day:group:{day_index}:{group}")],
+        ]
+    )
+
+
+def confirm_library_group_delete_kb(group: str):
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton(
+                    "✅ Да, удалить",
+                    callback_data=f"lib:groupdel:{group}:ok",
+                )
+            ],
+            [InlineKeyboardButton("↩️ Отмена", callback_data=f"lib:group:{group}")],
+        ]
+    )
 def measurements_main_kb(show_all: bool):
     toggle = "Скрыть редкие" if show_all else "Показать ещё"
     return InlineKeyboardMarkup([
