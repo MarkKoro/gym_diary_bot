@@ -643,12 +643,9 @@ def exercise_view_kb(
     add_label, sub_label = _rep_button_labels(kind)
     base_cb = f"ex:inc:{day_index}:{ue_id}"
     rows: list[list[InlineKeyboardButton]] = [
-        [InlineKeyboardButton("Все сеты", callback_data=f"ex:fill:{day_index}:{ue_id}")],
         [
             InlineKeyboardButton(t("ADD_SET"), callback_data=f"ex:addset:{day_index}:{ue_id}"),
             InlineKeyboardButton("− сет", callback_data=f"ex:delset:{day_index}:{ue_id}"),
-        ],
-        [
             InlineKeyboardButton(add_label, callback_data=f"{base_cb}:reps:1"),
             InlineKeyboardButton(sub_label, callback_data=f"{base_cb}:reps:-1"),
         ],
@@ -946,7 +943,6 @@ def library_exercise_kb(
     add_label, sub_label = _rep_button_labels(kind)
     base_cb = f"ex:inc:0:{ue_id}"
     rows = [
-        [InlineKeyboardButton("Все сеты", callback_data=f"ex:fill:0:{ue_id}")],
         [
             InlineKeyboardButton(t("ADD_SET"), callback_data=f"ex:addset:0:{ue_id}"),
             InlineKeyboardButton("− сет", callback_data=f"ex:delset:0:{ue_id}"),
