@@ -674,6 +674,35 @@ async def list_user_muscle_groups(user_id: int):
         rows = await cur.fetchall()
         return [(f"u{r[0]}", r[1]) for r in rows]
 
+
+async def remove_user_muscle_group(user_id: int, code: str) -> bool:
+    if not code.startswith("u"):
+        return False
+    try:
+        group_id = int(code[1:])
+    except ValueError:
+        return False
+    async with connect_db() as db:
+        cur = await db.execute(
+            "DELETE FROM user_muscle_groups WHERE id=? AND user_id=?",
+            (group_id, user_id),
+        )
+        removed = cur.rowcount > 0
+        if removed:
+            await db.execute(
+                """
+                UPDATE user_exercises
+                SET is_archived=1
+                WHERE user_id=?
+                  AND exercise_id IN (
+                      SELECT id FROM exercises WHERE muscle_group=?
+                  )
+                """,
+                (user_id, code),
+            )
+        await db.commit()
+        return removed
+
 async def add_user_exercise(user_id: int, day_index: int, exercise_id: int):
     async with connect_db() as db:
         await db.execute(

@@ -56,6 +56,7 @@ from keyboards import (
     recording_mode_kb,
     ui_preferences_kb,
     flex_exercise_view_kb,
+    confirm_day_group_delete_kb,
     TIMEZONES,
     library_menu_kb,
     library_group_kb,
@@ -64,6 +65,7 @@ from keyboards import (
     library_delete_kb,
     library_exercise_kb,
     flex_library_exercise_kb,
+    confirm_library_group_delete_kb,
     measurements_main_kb,
     measurements_category_kb,
     measurements_metric_kb,
@@ -118,6 +120,7 @@ from db import (
     inc_specific_set,
     add_user_muscle_group,
     list_user_muscle_groups,
+    remove_user_muscle_group,
     list_users_with_reminders,
     copy_day_plan_to_other_days,
     ensure_library_history,
@@ -326,13 +329,13 @@ def format_sets_value(sets: int, reps: int, weight: float, with_weight: bool) ->
 def format_flex_value(
     reps: int, weight: float, with_weight: bool, kind: str = "reps"
 ) -> str:
+    reps = max(int(reps), 0)
     if kind == "duration":
         return f"{reps} сек"
-    reps = max(int(reps), 0)
     if with_weight:
         formatted = format_weight_value(max(weight, 0.0))
-        return f"{reps}x{formatted} кг"
-    return f"{reps}x"
+        return f"{reps}×{formatted} кг"
+    return f"{reps} повт."
 
 
 def filter_work_sets(sets: list[tuple[int, int, float, int]]) -> list[tuple[int, int, float]]:
@@ -2305,6 +2308,42 @@ def format_current_training(
     ]
 
 
+def build_flex_session_lines(
+    sets: list[tuple[int, int, float, int]],
+    selected: int | None,
+    *,
+    with_weight: bool = True,
+    kind: str = "reps",
+) -> list[str]:
+    work_sets = [(no, reps, weight) for no, reps, weight, warm in sets if not warm]
+    lines: list[str] = []
+    if not work_sets:
+        lines.append("Сегодня пока нет рабочих сетов.")
+        lines.append("Нажми «+ сет», чтобы добавить первый.")
+        lines.append(
+            "Добавь столько, сколько делал в прошлый раз или примерно столько, сколько планируешь."
+        )
+        lines.append("Когда закончишь, нажми «Готово».")
+        return lines
+    lines.append("Сегодняшние подходы:")
+    for no, reps, weight in work_sets:
+        marker = ""
+        if selected is not None:
+            if no < selected:
+                marker = "✅ "
+            elif no == selected:
+                marker = "▶︎ "
+        value = format_flex_value(reps, weight, with_weight, kind)
+        lines.append(f"{marker}{no}) {value}")
+    if selected is not None:
+        lines.append("")
+        lines.append(
+            f"Напиши, сколько ты сделал в сете {selected}. Используй кнопки ниже, чтобы скорректировать значения."
+        )
+    lines.append("Когда закончишь с подходами, нажми «Готово».")
+    return lines
+
+
 async def build_summary_map(
     user_id: int,
     day: int,
@@ -2561,24 +2600,13 @@ async def render_exercise_view(
     last_sets = await fetch_last_session_sets(user_id, day, ue_id, today)
     prefs = prefs or await load_ui_preferences(user_id)
     with_weight, kind = get_display_flags(group, name)
-    auto_fill_allowed = (
-        mode == "flex"
-        and not sets
-        and group != "kb"
-        and not (group == "metcon" and name == AMRAP_EXERCISE_NAME)
-        and not (group == "metcon" and name == FOR_TIME_EXERCISE_NAME)
-    )
-    if auto_fill_allowed:
-        if last_sets:
-            for _, reps, weight in last_sets:
-                await add_set(session_id, ue_id, reps, weight)
-        elif baseline:
-            for _ in range(baseline[0]):
-                await add_set(session_id, ue_id, baseline[1], baseline[2])
-        sets = await fetch_exercise_sets(session_id, ue_id)
-    if mode == "flex" and sets:
-        if selected_set is None or all(set_no != selected_set for set_no, *_ in sets):
-            selected_set = sets[0][0]
+    work_sets = [(no, reps, weight) for no, reps, weight, warm in sets if not warm]
+    if mode == "flex":
+        if work_sets:
+            if selected_set is None or all(no != selected_set for no, *_ in work_sets):
+                selected_set = work_sets[-1][0]
+        else:
+            selected_set = None
     icon_key = "strength"
     if group == "kb":
         icon_key = "kb"
@@ -2655,6 +2683,16 @@ async def render_exercise_view(
         f"{t('PLAN')}: {plan_text}",
         f"{t('MADE')}: {done_text}",
     ]
+    if mode == "flex":
+        lines.append("")
+        lines.extend(
+            build_flex_session_lines(
+                sets,
+                selected_set,
+                with_weight=with_weight,
+                kind=kind,
+            )
+        )
     return "\n".join(lines), session_id, ex_id, name, group, sets, mode, selected_set
 
 
@@ -3324,18 +3362,38 @@ async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAUL
             tz = parts[3]
             context.user_data["tz"] = tz
             await set_user_timezone(user_id, tz)
-            if context.user_data.pop("edit_reminders", None):
+            tz_only_change = context.user_data.pop("tz_only_change", None)
+            editing_times = context.user_data.pop("edit_reminders", None)
+            if editing_times:
                 await clear_user_reminders(user_id)
                 for job in context.job_queue.jobs():
                     if job.name and job.name.startswith(f"rem_{user_id}_"):
                         job.schedule_removal()
             day_no = context.user_data.get("reminder_day", 1)
-            context.user_data["reminder_day"] = day_no
-            await safe_edit_message(
-                q,
-                f"{t('DAY')} {day_no}. В какой день недели тренировка?",
-                reply_markup=reminder_day_kb(),
-            )
+            if editing_times:
+                context.user_data["reminder_day"] = day_no
+                await safe_edit_message(
+                    q,
+                    f"{t('DAY')} {day_no}. В какой день недели тренировка?",
+                    reply_markup=reminder_day_kb(),
+                )
+            elif tz_only_change:
+                tz_label = next((label for code, label in TIMEZONES if code == tz), tz)
+                rems = await list_user_reminders(user_id)
+                if rems:
+                    parts = [f"{dict(WEEKDAYS)[d]} {h:02d}:{m:02d}" for d, h, m in rems]
+                    rem_text = ", ".join(parts)
+                    text = f"Часовой пояс обновлён: {tz_label}. Напоминания: {rem_text}."
+                else:
+                    text = f"Часовой пояс обновлён: {tz_label}. Напоминания пока не настроены."
+                await safe_edit_message(q, text, reply_markup=reminders_edit_kb())
+            else:
+                context.user_data["reminder_day"] = day_no
+                await safe_edit_message(
+                    q,
+                    f"{t('DAY')} {day_no}. В какой день недели тренировка?",
+                    reply_markup=reminder_day_kb(),
+                )
         elif action == "back":
             if context.user_data.get("from_settings"):
                 context.user_data.pop("from_settings", None)
@@ -4050,6 +4108,40 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             text, kb = prepare_ui_output(text, kb, prefs)
             await safe_edit_message(q, text, reply_markup=kb)
             return
+        if action == "groupdel":
+            group = parts[2]
+            if not group.startswith("u"):
+                await q.answer("Эту группу нельзя удалить.", show_alert=True)
+                return
+            custom = await get_custom_groups(user_id, context)
+            gname = MG_NAMES.get(group, custom.get(group, group))
+            if len(parts) == 3:
+                text = (
+                    f"Удалить группу «{gname}»?\n"
+                    "Все упражнения из неё исчезнут из библиотеки и расписания."
+                )
+                text, kb = prepare_ui_output(text, confirm_library_group_delete_kb(group), prefs)
+                await safe_edit_message(q, text, reply_markup=kb)
+                return
+            if len(parts) >= 4 and parts[3] == "ok":
+                removed = await remove_user_muscle_group(user_id, group)
+                if not removed:
+                    await q.answer("Не удалось удалить группу.", show_alert=True)
+                    items = await list_library_exercises(user_id, group)
+                    text = await render_library_group_text(user_id, group, items, context, prefs=prefs)
+                    kb = library_group_kb(group, items)
+                    text, kb = prepare_ui_output(text, kb, prefs)
+                    await safe_edit_message(q, text, reply_markup=kb)
+                    return
+                custom.pop(group, None)
+                groups = await list_library_groups(user_id)
+                menu = library_menu_kb(groups, custom)
+                text = "Мои упражнения:"
+                text, menu = prepare_ui_output(text, menu, prefs)
+                await q.answer("Группа удалена.")
+                await safe_edit_message(q, text, reply_markup=menu)
+                return
+            return
         if action == "ex":
             group = parts[2]
             ue_id = int(parts[3])
@@ -4351,6 +4443,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         if action == "reminders":
             if len(parts) == 2:
+                context.user_data.pop("tz_only_change", None)
                 tz = await get_user_timezone(user_id)
                 rems = await list_user_reminders(user_id)
                 if tz and rems:
@@ -4368,12 +4461,14 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if sub == "tz":
                 context.user_data["from_settings"] = True
                 context.user_data["tz_page"] = 0
+                context.user_data["tz_only_change"] = True
                 await safe_edit_message(q, "Выбери свой часовой пояс:", reply_markup=tz_select_kb(0))
                 return
             if sub == "time":
                 context.user_data["from_settings"] = True
                 context.user_data["tz_page"] = 0
                 context.user_data["edit_reminders"] = True
+                context.user_data.pop("tz_only_change", None)
                 if "workouts_per_week" not in context.user_data:
                     settings = await fetch_user_settings(user_id)
                     context.user_data["workouts_per_week"] = settings[1] if settings else 0
@@ -4420,6 +4515,41 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             group = parts[3]
             clear_sheet_context(context, q.message.chat_id, q.message.message_id)
             await show_day_group_view(q, user_id, day, group, context)
+            return
+        if action == "groupdel":
+            day = int(parts[2])
+            group = parts[3]
+            if not group.startswith("u"):
+                await q.answer("Эту группу нельзя удалить.", show_alert=True)
+                return
+            custom = await get_custom_groups(user_id, context)
+            gname = MG_NAMES.get(group, custom.get(group, group))
+            if len(parts) == 4:
+                text = (
+                    f"Удалить группу «{gname}»?\n"
+                    "Все упражнения из неё будут убраны из твоих тренировочных дней."
+                )
+                prefs = await load_ui_preferences(user_id)
+                text, kb = prepare_ui_output(text, confirm_day_group_delete_kb(day, group), prefs)
+                await safe_edit_message(q, text, reply_markup=kb)
+                return
+            if len(parts) >= 5 and parts[4] == "ok":
+                removed = await remove_user_muscle_group(user_id, group)
+                if not removed:
+                    await q.answer("Не удалось удалить группу.", show_alert=True)
+                    await show_day_group_view(q, user_id, day, group, context)
+                    return
+                custom.pop(group, None)
+                day_groups = context.user_data.get("day_groups")
+                if isinstance(day_groups, dict):
+                    for selected in day_groups.values():
+                        if isinstance(selected, set) and group in selected:
+                            selected.discard(group)
+                context.user_data.pop("add_group", None)
+                await q.answer("Группа удалена.")
+                prefs = await load_ui_preferences(user_id)
+                await send_day_cards_view(q, user_id, day, context, prefs)
+                return
             return
         if action == "add_ex":
             day = int(parts[2])
@@ -4721,22 +4851,36 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             set_flex_selected(context, day, ue_id, sets[-1][0])
                 else:
                     if sets:
-                        reps = sets[-1][1]
-                        weight = sets[-1][2]
+                        reps = max(int(sets[-1][1] or 0), 0)
+                        weight = float(max(sets[-1][2] or 0.0, 0.0))
                     else:
-                        stored = await get_session_last_values(session_id, ue_id)
-                        if stored and resolved_group != "kb":
-                            reps, weight = stored
+                        with_weight, _ = get_display_flags(resolved_group, ex_name)
+                        reps = 0
+                        weight = 0.0
+                        last_session_sets = await fetch_last_session_sets(user_id, day, ue_id, today_str)
+                        if last_session_sets:
+                            rep_values = [max(int(r or 0), 0) for _, r, _ in last_session_sets]
+                            if rep_values:
+                                reps = int(round(sum(rep_values) / len(rep_values)))
+                            if with_weight:
+                                weight_values = [float(w or 0.0) for _, _, w in last_session_sets]
+                                if weight_values:
+                                    weight = max(sum(weight_values) / len(weight_values), 0.0)
+                        base = await get_baseline(user_id, day, ex_id)
+                        if reps == 0 and base:
+                            reps = max(int(base[1] or 0), 0)
+                        if with_weight:
+                            if weight <= 0.0 and base:
+                                weight = float(max(base[2] or 0.0, 0.0))
+                            step = await get_weight_step(user_id)
+                            if step and weight > 0.0:
+                                weight = round(weight / step) * step
                         else:
-                            base = await get_baseline(user_id, day, ex_id)
-                            reps = base[1] if base else 0
-                            weight = base[2] if base else 0.0
-                        await add_set(session_id, ue_id, reps, weight)
-                        sets = await fetch_exercise_sets(session_id, ue_id)
-                    if mode == "flex":
-                        sets = await fetch_exercise_sets(session_id, ue_id)
-                        if sets:
-                            set_flex_selected(context, day, ue_id, sets[-1][0])
+                            weight = 0.0
+                    await add_set(session_id, ue_id, reps, weight)
+                    sets = await fetch_exercise_sets(session_id, ue_id)
+                    if mode == "flex" and sets:
+                        set_flex_selected(context, day, ue_id, sets[-1][0])
                 if sheet_context and not is_library:
                     target_day = sheet_day if sheet_day is not None else day
                     await render_day_sheet_from_callback(
