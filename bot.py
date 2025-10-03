@@ -2316,7 +2316,7 @@ async def build_summary_map(
     session_id = await get_session_for_day(user_id, today, day)
     for ue_id, name, group, _, ex_id in ex_rows:
         resolved = resolve_group(name, group)
-        with_weight, _ = get_display_flags(resolved, name)
+        with_weight, kind = get_display_flags(resolved, name)
         text = ""
         current_sets_full: list[tuple[int, int, float, int]] = []
         if session_id:

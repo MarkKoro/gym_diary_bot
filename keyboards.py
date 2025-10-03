@@ -403,8 +403,10 @@ def tz_select_kb(page: int = 0, per_page: int = 6):
 def reminder_time_kb():
     rows = []
     for h in range(6, 23):
-        t = f"{h:02d}:00"
-        rows.append([InlineKeyboardButton(t, callback_data=f"wiz:remind:{t}")])
+        time_label = f"{h:02d}:00"
+        rows.append(
+            [InlineKeyboardButton(time_label, callback_data=f"wiz:remind:{time_label}")]
+        )
     rows.append([InlineKeyboardButton(t("BACK"), callback_data="wiz:remind:back")])
     return InlineKeyboardMarkup(rows)
 
