@@ -8,6 +8,29 @@ from kb_catalog import get_kb_catalog_page, KB_MISC_CATEGORY
 if TYPE_CHECKING:
     from bot import UiPreferences
 
+
+def ui_header_row(back_cb: str, menu_cb: str | None) -> list[list[InlineKeyboardButton]]:
+    buttons = [InlineKeyboardButton("‹ Назад", callback_data=back_cb)]
+    if menu_cb and menu_cb != back_cb:
+        buttons.append(InlineKeyboardButton("⋯ Меню", callback_data=menu_cb))
+    return [buttons]
+
+
+def ui_footer_rows(
+    primary: list[tuple[str, str]],
+    secondary: list[tuple[str, str]] | None,
+) -> list[list[InlineKeyboardButton]]:
+    rows: list[list[InlineKeyboardButton]] = []
+    if primary:
+        rows.append(
+            [InlineKeyboardButton(label, callback_data=cb) for label, cb in primary]
+        )
+    if secondary:
+        rows.append(
+            [InlineKeyboardButton(label, callback_data=cb) for label, cb in secondary]
+        )
+    return rows
+
 def main_menu_kb(days: list[tuple[int, str]], support_url: str):
     rows = []
     for idx, label in days:
@@ -553,10 +576,10 @@ def _format_step_label(step: float) -> str:
     return text.replace(".0", "") if text.endswith(".0") else text
 
 
-def _rep_control_labels(kind: str) -> tuple[str, str, str, str]:
+def _rep_control_labels(kind: str) -> tuple[str, str]:
     if kind == "duration":
-        return "＋ сек", "− сек", "＋5 сек", "−5 сек"
-    return "＋ повтор", "− повтор", "＋5 повторов", "−5 повторов"
+        return "＋ сек", "− сек"
+    return "＋ повтор", "− повтор"
 
 
 def _format_weight_delta(value: float) -> str:
@@ -564,6 +587,35 @@ def _format_weight_delta(value: float) -> str:
     if formatted.endswith(".0"):
         return formatted[:-2]
     return formatted
+
+
+def _format_signed_delta(value: float) -> str:
+    formatted = f"{value:+g}"
+    if formatted.endswith(".0"):
+        return formatted[:-2]
+    return formatted
+
+
+def _pluralize_reps(count: int) -> str:
+    rem10 = count % 10
+    rem100 = count % 100
+    if rem10 == 1 and rem100 != 11:
+        return "повтор"
+    if 2 <= rem10 <= 4 and not (12 <= rem100 <= 14):
+        return "повтора"
+    return "повторов"
+
+
+def _format_major_rep_label(kind: str, value: int, positive: bool) -> str:
+    sign = "＋" if positive else "−"
+    if kind == "duration":
+        return f"{sign}{value} сек"
+    return f"{sign}{value} {_pluralize_reps(value)}"
+
+
+def _format_major_weight_label(value: float, positive: bool) -> str:
+    sign = "＋" if positive else "−"
+    return f"{sign}{_format_step_label(value)} кг"
 
 
 def exercise_actions_kb(
@@ -635,7 +687,8 @@ def exercise_actions_kb(
         rows.append(final_row)
         return InlineKeyboardMarkup(rows)
 
-    plus_one, minus_one, plus_five, minus_five = _rep_control_labels(kind)
+    rep_field = "sec" if kind == "duration" else "reps"
+    plus_one, minus_one = _rep_control_labels(kind)
     rows.append(
         [
             InlineKeyboardButton("＋ сет", callback_data=addset_cb),
@@ -644,17 +697,59 @@ def exercise_actions_kb(
     )
     rows.append(
         [
-            InlineKeyboardButton(plus_one, callback_data=f"{inc_base}:reps:1"),
-            InlineKeyboardButton(minus_one, callback_data=f"{inc_base}:reps:-1"),
+            InlineKeyboardButton(plus_one, callback_data=f"{inc_base}:{rep_field}:1"),
+            InlineKeyboardButton(minus_one, callback_data=f"{inc_base}:{rep_field}:-1"),
         ]
     )
     if prefs.mode == "detailed":
-        rows.append(
-            [
-                InlineKeyboardButton(plus_five, callback_data=f"{inc_base}:reps:5"),
-                InlineKeyboardButton(minus_five, callback_data=f"{inc_base}:reps:-5"),
-            ]
-        )
+        if kind == "duration":
+            major_row: list[InlineKeyboardButton] = []
+            for step in (5, 10):
+                major_row.append(
+                    InlineKeyboardButton(
+                        _format_major_rep_label(kind, step, True),
+                        callback_data=f"{inc_base}:{rep_field}:{_format_signed_delta(step)}",
+                    )
+                )
+                major_row.append(
+                    InlineKeyboardButton(
+                        _format_major_rep_label(kind, step, False),
+                        callback_data=f"{inc_base}:{rep_field}:{_format_signed_delta(-step)}",
+                    )
+                )
+            rows.append(major_row)
+        else:
+            rep_major_row: list[InlineKeyboardButton] = []
+            for step in (2, 5, 10):
+                rep_major_row.append(
+                    InlineKeyboardButton(
+                        _format_major_rep_label(kind, step, True),
+                        callback_data=f"{inc_base}:{rep_field}:{_format_signed_delta(step)}",
+                    )
+                )
+                rep_major_row.append(
+                    InlineKeyboardButton(
+                        _format_major_rep_label(kind, step, False),
+                        callback_data=f"{inc_base}:{rep_field}:{_format_signed_delta(-step)}",
+                    )
+                )
+            rows.append(rep_major_row)
+            if with_weight:
+                weight_row: list[InlineKeyboardButton] = []
+                for step in (5.0, 10.0):
+                    weight_row.append(
+                        InlineKeyboardButton(
+                            _format_major_weight_label(step, True),
+                            callback_data=f"{inc_base}:kg:{_format_signed_delta(step)}",
+                        )
+                    )
+                    weight_row.append(
+                        InlineKeyboardButton(
+                            _format_major_weight_label(step, False),
+                            callback_data=f"{inc_base}:kg:{_format_signed_delta(-step)}",
+                        )
+                    )
+                rows.append(weight_row)
     if with_weight:
         step_value = weight_step if weight_step is not None else 1.0
         step_label = _format_step_label(step_value)

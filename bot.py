@@ -67,6 +67,8 @@ from keyboards import (
     measurements_category_kb,
     measurements_metric_kb,
     measurements_existing_kb,
+    ui_header_row,
+    ui_footer_rows,
 )
 from settings import TG_TOKEN, SUPPORT_DEEPLINK, TG_POOL_SIZE, SUBSCRIPTION_CHAT, JOIN_URL
 from db import (
@@ -2413,7 +2415,31 @@ async def send_day_cards_view(
         last_done_map,
         prefs,
     )
-    kb = day_kb(day, ex_rows)
+    base_markup = day_kb(day, ex_rows)
+    back_cb = "menu:root"
+    menu_cb = "menu:root"
+    content_rows: list[list[InlineKeyboardButton]] = []
+    primary_actions: list[tuple[str, str]] = []
+    for row in base_markup.inline_keyboard:
+        if not row:
+            continue
+        button = row[0]
+        callback = button.callback_data or ""
+        if callback == "menu:root":
+            back_cb = callback
+            menu_cb = callback
+            continue
+        if callback.startswith(f"day:add_ex:{day}") or callback.startswith(
+            f"day:del_ex:{day}"
+        ):
+            primary_actions.append((button.text, callback))
+            continue
+        content_rows.append(row)
+    rows: list[list[InlineKeyboardButton]] = []
+    rows += ui_header_row(back_cb, menu_cb)
+    rows += content_rows
+    rows += ui_footer_rows(primary_actions, None)
+    kb = InlineKeyboardMarkup(rows)
     text, kb = prepare_ui_output(text, kb, prefs)
     await safe_edit_message(q, text, reply_markup=kb)
 
@@ -2858,7 +2884,7 @@ def build_exercise_actions_markup(
             f"lib:group:{group}" if is_library else f"day:group:{day}:{group}"
         )
     context_mode = "library" if is_library else "flex"
-    return exercise_actions_kb(
+    markup = exercise_actions_kb(
         context_mode,
         view.with_weight,
         view.kind,
@@ -2872,6 +2898,28 @@ def build_exercise_actions_markup(
         is_for_time=view.is_for_time,
         back_callback=callback_back,
     )
+    content_rows: list[list[InlineKeyboardButton]] = []
+    primary_actions: list[tuple[str, str]] = []
+    secondary_actions: list[tuple[str, str]] | None = None
+    for row in markup.inline_keyboard:
+        if not row:
+            continue
+        callbacks = [btn.callback_data or "" for btn in row]
+        if callback_back in callbacks:
+            for btn in row:
+                if (btn.callback_data or "") == callback_back:
+                    continue
+                primary_actions.append((btn.text, btn.callback_data or ""))
+            continue
+        if callbacks and all(cb.startswith("ex:progress:") for cb in callbacks):
+            secondary_actions = [(btn.text, btn.callback_data or "") for btn in row]
+            continue
+        content_rows.append(row)
+    rows: list[list[InlineKeyboardButton]] = []
+    rows += ui_header_row(callback_back, "menu:root")
+    rows += content_rows
+    rows += ui_footer_rows(primary_actions, secondary_actions)
+    return InlineKeyboardMarkup(rows)
 
 
 async def build_for_time_history_view(
@@ -2980,6 +3028,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     u = update.effective_user
     user_id = await get_or_create_user(u.id, u.username)
     settings = await fetch_user_settings(user_id)
+    prefs = await load_ui_preferences(user_id)
     if not settings or not settings[0] or not settings[1]:
         text = (
             "В этом боте ты ведёшь дневник тренировок: сохраняешь упражнения, "
@@ -2988,11 +3037,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "Нажми кнопку ниже, чтобы продолжить."
         )
         kb = InlineKeyboardMarkup([[InlineKeyboardButton("Ясно, спасибо", callback_data="wiz:intro:ok")]])
+        text, kb = prepare_ui_output(text, kb, prefs)
         msg = await update.message.reply_text(text, reply_markup=kb)
         remember_message(msg.chat_id, msg.message_id)
         return
     days = await list_active_days(user_id)
-    prefs = await load_ui_preferences(user_id)
     text = build_main_menu_text(prefs)
     kb = main_menu_kb(days, SUPPORT_DEEPLINK)
     text, kb = prepare_ui_output(text, kb, prefs)
@@ -5115,41 +5164,62 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         )
                         return
                 elif action == "inc":
-                    field = parts[4]
-                    delta = float(parts[5])
-                    sets = await fetch_exercise_sets(session_id, ue_id)
-                    ex_id, ex_name, ex_group = await get_exercise_info(ue_id)
-                    resolved_group = resolve_group(ex_name, ex_group)
-                    with_weight, _ = get_display_flags(resolved_group, ex_name)
-                    if not sets:
-                        stored = await get_session_last_values(session_id, ue_id)
-                        if stored and resolved_group != "kb":
-                            reps, weight = stored
-                        else:
-                            base = await get_baseline(user_id, day, ex_id)
-                            reps = base[1] if base else 0
-                            weight = base[2] if base else 0.0
-                        await add_set(session_id, ue_id, reps, weight)
-                        sets = await fetch_exercise_sets(session_id, ue_id)
-                    target = "reps" if field == "reps" else "weight_kg"
-                    if target == "weight_kg" and not with_weight:
-                        await q.answer()
-                        return
-                    if mode == "flex":
-                        selected = get_flex_selected(context, day, ue_id)
-                        if selected is None and sets:
-                            selected = sets[-1][0]
-                            set_flex_selected(context, day, ue_id, selected)
-                        if selected is not None:
-                            await inc_specific_set(ue_id, session_id, selected, target, delta)
+                    field = parts[4] if len(parts) > 4 else ""
+                    delta_value: float | None = None
+                    explicit_delta = len(parts) > 5
+                    if explicit_delta and parts[5]:
+                        try:
+                            delta_value = float(parts[5])
+                        except ValueError:
+                            delta_value = None
+                        if delta_value is None:
+                            explicit_delta = True
                     else:
-                        await inc_last_set(ue_id, session_id, target, delta)
-                    if sheet_context and not is_library:
-                        target_day = sheet_day if sheet_day is not None else day
-                        await render_day_sheet_from_callback(
-                            q, context, user_id, target_day, sheet_page
-                        )
-                        return
+                        explicit_delta = False
+                    if field == "kg" and delta_value is None and not explicit_delta:
+                        step = await get_weight_step(user_id)
+                        if step is not None:
+                            delta_value = step
+                    target = None
+                    if field in ("reps", "sec"):
+                        target = "reps"
+                    elif field == "kg":
+                        target = "weight_kg"
+                    if target and delta_value is not None:
+                        sets = await fetch_exercise_sets(session_id, ue_id)
+                        ex_id, ex_name, ex_group = await get_exercise_info(ue_id)
+                        resolved_group = resolve_group(ex_name, ex_group)
+                        with_weight, _ = get_display_flags(resolved_group, ex_name)
+                        if not sets:
+                            stored = await get_session_last_values(session_id, ue_id)
+                            if stored and resolved_group != "kb":
+                                reps, weight = stored
+                            else:
+                                base = await get_baseline(user_id, day, ex_id)
+                                reps = base[1] if base else 0
+                                weight = base[2] if base else 0.0
+                            await add_set(session_id, ue_id, reps, weight)
+                            sets = await fetch_exercise_sets(session_id, ue_id)
+                        if target == "weight_kg" and not with_weight:
+                            await q.answer()
+                            return
+                        if mode == "flex":
+                            selected = get_flex_selected(context, day, ue_id)
+                            if selected is None and sets:
+                                selected = sets[-1][0]
+                                set_flex_selected(context, day, ue_id, selected)
+                            if selected is not None:
+                                await inc_specific_set(
+                                    ue_id, session_id, selected, target, delta_value
+                                )
+                        else:
+                            await inc_last_set(ue_id, session_id, target, delta_value)
+                        if sheet_context and not is_library:
+                            target_day = sheet_day if sheet_day is not None else day
+                            await render_day_sheet_from_callback(
+                                q, context, user_id, target_day, sheet_page
+                            )
+                            return
                 elif action == "done":
                     ex_id, ex_name, ex_group = await get_exercise_info(ue_id)
                     resolved = resolve_group(ex_name, ex_group)
