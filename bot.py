@@ -270,19 +270,48 @@ def apply_text_preferences(text: str, prefs: UiPreferences) -> str:
     return "\n".join(processed)
 
 
-def apply_markup_preferences(markup: InlineKeyboardMarkup | None, prefs: UiPreferences):
-    if markup is None or prefs.emoji_enabled:
-        return markup
+def apply_markup_preferences(
+    markup: InlineKeyboardMarkup | None, prefs: UiPreferences
+) -> InlineKeyboardMarkup | None:
+    if markup is None:
+        return None
+
+    def split_variants(text: str) -> tuple[str, str]:
+        if not text:
+            return "", ""
+        if "||" in text:
+            compact, detailed = text.split("||", 1)
+            return compact.strip(), detailed.strip()
+        if "\n" in text:
+            first_line, _rest = text.split("\n", 1)
+            return first_line.strip(), text
+        return text, text
 
     new_rows: list[list[InlineKeyboardButton]] = []
     for row in markup.inline_keyboard:
         new_row: list[InlineKeyboardButton] = []
         for button in row:
-            cleaned = strip_emoji(button.text)
-            cleaned = re.sub(r"\s{2,}", " ", cleaned).strip()
-            button_data = button.to_dict()
-            button_data["text"] = cleaned or button.text.strip()
-            new_row.append(InlineKeyboardButton(**button_data))
+            compact_text, detailed_text = split_variants(button.text)
+            selected_text = detailed_text if prefs.verbose_level else compact_text
+            if not selected_text:
+                selected_text = detailed_text or compact_text or button.text
+            if not prefs.emoji_enabled:
+                cleaned = strip_emoji(selected_text)
+                cleaned = re.sub(r"\s{2,}", " ", cleaned)
+                selected_text = cleaned.strip() or selected_text.strip() or selected_text
+            new_row.append(
+                InlineKeyboardButton(
+                    text=selected_text,
+                    callback_data=button.callback_data,
+                    url=button.url,
+                    switch_inline_query=button.switch_inline_query,
+                    switch_inline_query_current_chat=button.switch_inline_query_current_chat,
+                    login_url=button.login_url,
+                    callback_game=button.callback_game,
+                    pay=button.pay,
+                    web_app=button.web_app,
+                )
+            )
         new_rows.append(new_row)
 
     return InlineKeyboardMarkup(new_rows)
