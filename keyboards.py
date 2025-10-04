@@ -1,7 +1,12 @@
+from typing import TYPE_CHECKING
+
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
 from ui_texts import t
 from kb_catalog import get_kb_catalog_page, KB_MISC_CATEGORY
+
+if TYPE_CHECKING:
+    from bot import UiPreferences
 
 def main_menu_kb(days: list[tuple[int, str]], support_url: str):
     rows = []
@@ -59,22 +64,22 @@ def edit_day_mode_kb(day_index: int):
         [
             [
                 InlineKeyboardButton(
-                    "💪 Силовая", callback_data=f"set:edit_day:{day_index}:strength"
+                    "🏋️ Силовая", callback_data=f"set:edit_day:{day_index}:strength"
                 )
             ],
             [
                 InlineKeyboardButton(
-                    "🥇 Гири", callback_data=f"set:edit_day:{day_index}:kb"
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    "⚡️ Кроссфит", callback_data=f"set:edit_day:{day_index}:metcon"
+                    "🕋 Гири", callback_data=f"set:edit_day:{day_index}:kb"
                 )
             ],
             [
                 InlineKeyboardButton(
                     "🤸 Воркаут", callback_data=f"set:edit_day:{day_index}:workout"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    "⏱️ Меткон", callback_data=f"set:edit_day:{day_index}:metcon"
                 )
             ],
             [InlineKeyboardButton(t("BACK"), callback_data="set:edit_day")],
@@ -548,170 +553,132 @@ def _format_step_label(step: float) -> str:
     return text.replace(".0", "") if text.endswith(".0") else text
 
 
-def _rep_button_labels(kind: str) -> tuple[str, str]:
+def _rep_control_labels(kind: str) -> tuple[str, str, str, str]:
     if kind == "duration":
-        return f"{t('ADD_REP')} сек", "−1 сек"
-    return t("ADD_REP"), "−1 реп"
+        return "＋ сек", "− сек", "＋5 сек", "−5 сек"
+    return "＋ повтор", "− повтор", "＋5 повторов", "−5 повторов"
 
 
-def _duration_quick_rows(base_cb: str) -> list[list[InlineKeyboardButton]]:
-    return [
-        [
-            InlineKeyboardButton("＋5 сек", callback_data=f"{base_cb}:reps:5"),
-            InlineKeyboardButton("＋10 сек", callback_data=f"{base_cb}:reps:10"),
-        ],
-        [
-            InlineKeyboardButton("−5 сек", callback_data=f"{base_cb}:reps:-5"),
-            InlineKeyboardButton("−10 сек", callback_data=f"{base_cb}:reps:-10"),
-        ],
-    ]
+def _format_weight_delta(value: float) -> str:
+    formatted = f"{value:g}"
+    if formatted.endswith(".0"):
+        return formatted[:-2]
+    return formatted
 
 
-def exercise_view_kb(
-    day_index: int,
+def exercise_actions_kb(
+    mode: str,
+    with_weight: bool,
+    kind: str,
+    has_history: bool,
+    prefs: "UiPreferences",
+    *,
+    day: int,
     ue_id: int,
     group: str,
     weight_step: float | None = None,
     is_amrap: bool = False,
     is_for_time: bool = False,
-    *,
-    with_weight: bool = True,
-    kind: str = "reps",
-):
+    back_callback: str,
+) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    addset_cb = f"ex:addset:{day}:{ue_id}"
+    delset_cb = f"ex:delset:{day}:{ue_id}"
+    inc_base = f"ex:inc:{day}:{ue_id}"
+    progress_cb = f"ex:progress:{day}:{ue_id}"
+    done_cb = f"ex:done:{day}:{ue_id}"
+
     if is_for_time:
-        return InlineKeyboardMarkup(
-            [
-                [InlineKeyboardButton(t("DONE"), callback_data=f"ex:done:{day_index}:{ue_id}")],
-                [InlineKeyboardButton(t("HISTORY"), callback_data=f"ex:progress:{day_index}:{ue_id}")],
-                [InlineKeyboardButton(t("BACK"), callback_data=f"day:group:{day_index}:{group}")],
-            ]
-        )
+        row: list[InlineKeyboardButton] = [
+            InlineKeyboardButton("⏱️ Ввести время", callback_data=done_cb)
+        ]
+        if has_history:
+            row.append(InlineKeyboardButton("📈 История", callback_data=progress_cb))
+        row.append(InlineKeyboardButton("◀️ Назад", callback_data=back_callback))
+        return InlineKeyboardMarkup([row])
+
     if is_amrap:
-        return InlineKeyboardMarkup(
+        rows.append(
             [
-                [
-                    InlineKeyboardButton(
-                        "✏️ Изменить схему",
-                        callback_data=f"ex:amrapscheme:{day_index}:{ue_id}",
-                    )
-                ],
-                [
-                    InlineKeyboardButton("＋ раунд", callback_data=f"ex:addset:{day_index}:{ue_id}"),
-                    InlineKeyboardButton("− раунд", callback_data=f"ex:delset:{day_index}:{ue_id}"),
-                ],
-                [
-                    InlineKeyboardButton(
-                        f"{t('ADD_REP')} повтор", callback_data=f"ex:amrapextra:{day_index}:{ue_id}:1"
-                    ),
-                    InlineKeyboardButton(
-                        "−1 повтор", callback_data=f"ex:amrapextra:{day_index}:{ue_id}:-1"
-                    ),
-                ],
-                [InlineKeyboardButton("📈 Прогресс", callback_data=f"ex:progress:{day_index}:{ue_id}")],
-                [InlineKeyboardButton(t("DONE"), callback_data=f"ex:done:{day_index}:{ue_id}")],
-                [InlineKeyboardButton(t("BACK"), callback_data=f"day:group:{day_index}:{group}")],
+                InlineKeyboardButton("＋ круг", callback_data=addset_cb),
+                InlineKeyboardButton("− круг", callback_data=delset_cb),
             ]
         )
-    if group == "kb":
-        step = weight_step if weight_step is not None else 1.0
-        label = _format_step_label(step)
-        return InlineKeyboardMarkup(
+        rows.append(
             [
-                [
-                    InlineKeyboardButton(t("ADD_SET"), callback_data=f"ex:addset:{day_index}:{ue_id}"),
-                    InlineKeyboardButton("− сет", callback_data=f"ex:delset:{day_index}:{ue_id}"),
-                ],
-                [
-                    InlineKeyboardButton(f"{t('ADD_REP')} повтор", callback_data=f"ex:inc:{day_index}:{ue_id}:reps:1"),
-                    InlineKeyboardButton("−1 повтор", callback_data=f"ex:inc:{day_index}:{ue_id}:reps:-1"),
-                ],
-                [
-                    InlineKeyboardButton(
-                        t("ADD_W", step=f"{label} "),
-                        callback_data=f"ex:inc:{day_index}:{ue_id}:kg:{step}",
-                    ),
-                    InlineKeyboardButton(
-                        t("SUB_W", step=f"{label} "),
-                        callback_data=f"ex:inc:{day_index}:{ue_id}:kg:{-step}",
-                    ),
-                ],
-                [InlineKeyboardButton("📈 Прогресс", callback_data=f"ex:progress:{day_index}:{ue_id}")],
-                [InlineKeyboardButton(t("DONE"), callback_data=f"ex:done:{day_index}:{ue_id}")],
-                [InlineKeyboardButton(t("BACK"), callback_data=f"day:group:{day_index}:{group}")],
+                InlineKeyboardButton(
+                    "＋ повтор", callback_data=f"ex:amrapextra:{day}:{ue_id}:1"
+                ),
+                InlineKeyboardButton(
+                    "− повтор", callback_data=f"ex:amrapextra:{day}:{ue_id}:-1"
+                ),
             ]
         )
-    add_label, sub_label = _rep_button_labels(kind)
-    base_cb = f"ex:inc:{day_index}:{ue_id}"
-    rows: list[list[InlineKeyboardButton]] = [
+        if prefs.mode == "detailed":
+            rows.append(
+                [
+                    InlineKeyboardButton(
+                        "＋5 повторов", callback_data=f"ex:amrapextra:{day}:{ue_id}:5"
+                    ),
+                    InlineKeyboardButton(
+                        "−5 повторов",
+                        callback_data=f"ex:amrapextra:{day}:{ue_id}:-5",
+                    ),
+                ]
+            )
+        final_row: list[InlineKeyboardButton] = [
+            InlineKeyboardButton("✅ Готово", callback_data=done_cb)
+        ]
+        if has_history:
+            final_row.append(InlineKeyboardButton("📈 История", callback_data=progress_cb))
+        final_row.append(InlineKeyboardButton("◀️ Назад", callback_data=back_callback))
+        rows.append(final_row)
+        return InlineKeyboardMarkup(rows)
+
+    plus_one, minus_one, plus_five, minus_five = _rep_control_labels(kind)
+    rows.append(
         [
-            InlineKeyboardButton(t("ADD_SET"), callback_data=f"ex:addset:{day_index}:{ue_id}"),
-            InlineKeyboardButton("− сет", callback_data=f"ex:delset:{day_index}:{ue_id}"),
-            InlineKeyboardButton(add_label, callback_data=f"{base_cb}:reps:1"),
-            InlineKeyboardButton(sub_label, callback_data=f"{base_cb}:reps:-1"),
-        ],
-    ]
-    if kind == "duration":
-        rows.extend(_duration_quick_rows(base_cb))
-    if with_weight:
-        rows.extend(
+            InlineKeyboardButton("＋ сет", callback_data=addset_cb),
+            InlineKeyboardButton("− сет", callback_data=delset_cb),
+        ]
+    )
+    rows.append(
+        [
+            InlineKeyboardButton(plus_one, callback_data=f"{inc_base}:reps:1"),
+            InlineKeyboardButton(minus_one, callback_data=f"{inc_base}:reps:-1"),
+        ]
+    )
+    if prefs.mode == "detailed":
+        rows.append(
             [
-                [
-                    InlineKeyboardButton(
-                        t("ADD_W", step=f"{_format_step_label(0.5)} "),
-                        callback_data=f"{base_cb}:kg:0.5",
-                    ),
-                    InlineKeyboardButton(
-                        t("ADD_W", step=f"{_format_step_label(1)} "),
-                        callback_data=f"{base_cb}:kg:1",
-                    ),
-                    InlineKeyboardButton(
-                        t("ADD_W", step=f"{_format_step_label(2.5)} "),
-                        callback_data=f"{base_cb}:kg:2.5",
-                    ),
-                    InlineKeyboardButton(
-                        t("ADD_W", step=f"{_format_step_label(10)} "),
-                        callback_data=f"{base_cb}:kg:10",
-                    ),
-                    InlineKeyboardButton(
-                        t("ADD_W", step=f"{_format_step_label(25)} "),
-                        callback_data=f"{base_cb}:kg:25",
-                    ),
-                    InlineKeyboardButton(
-                        t("ADD_W", step=f"{_format_step_label(50)} "),
-                        callback_data=f"{base_cb}:kg:50",
-                    ),
-                ],
-                [
-                    InlineKeyboardButton(
-                        t("SUB_W", step=f"{_format_step_label(0.5)} "),
-                        callback_data=f"{base_cb}:kg:-0.5",
-                    ),
-                    InlineKeyboardButton(
-                        t("SUB_W", step=f"{_format_step_label(1)} "),
-                        callback_data=f"{base_cb}:kg:-1",
-                    ),
-                    InlineKeyboardButton(
-                        t("SUB_W", step=f"{_format_step_label(2.5)} "),
-                        callback_data=f"{base_cb}:kg:-2.5",
-                    ),
-                    InlineKeyboardButton(
-                        t("SUB_W", step=f"{_format_step_label(10)} "),
-                        callback_data=f"{base_cb}:kg:-10",
-                    ),
-                    InlineKeyboardButton(
-                        t("SUB_W", step=f"{_format_step_label(25)} "),
-                        callback_data=f"{base_cb}:kg:-25",
-                    ),
-                    InlineKeyboardButton(
-                        t("SUB_W", step=f"{_format_step_label(50)} "),
-                        callback_data=f"{base_cb}:kg:-50",
-                    ),
-                ],
+                InlineKeyboardButton(plus_five, callback_data=f"{inc_base}:reps:5"),
+                InlineKeyboardButton(minus_five, callback_data=f"{inc_base}:reps:-5"),
             ]
         )
-    rows.append([InlineKeyboardButton("📈 Прогресс", callback_data=f"ex:progress:{day_index}:{ue_id}")])
-    rows.append([InlineKeyboardButton(t("DONE"), callback_data=f"ex:done:{day_index}:{ue_id}")])
-    rows.append([InlineKeyboardButton(t("BACK"), callback_data=f"day:group:{day_index}:{group}")])
+    if with_weight:
+        step_value = weight_step if weight_step is not None else 1.0
+        step_label = _format_step_label(step_value)
+        delta = _format_weight_delta(step_value)
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    f"＋ шаг кг||＋ {step_label} кг",
+                    callback_data=f"{inc_base}:kg:{delta}",
+                ),
+                InlineKeyboardButton(
+                    f"− шаг кг||− {step_label} кг",
+                    callback_data=f"{inc_base}:kg:{_format_weight_delta(-step_value)}",
+                ),
+            ]
+        )
+    if has_history:
+        rows.append([InlineKeyboardButton("📈 История", callback_data=progress_cb)])
+    rows.append(
+        [
+            InlineKeyboardButton("✅ Готово", callback_data=done_cb),
+            InlineKeyboardButton("◀️ Назад", callback_data=back_callback),
+        ]
+    )
     return InlineKeyboardMarkup(rows)
 
 
@@ -723,64 +690,6 @@ def recording_mode_kb(current: str):
         [InlineKeyboardButton(f"{mark_flex}Гибкая запись", callback_data="set:recording:flex")],
         [InlineKeyboardButton(t("BACK"), callback_data="menu:settings")],
     ])
-
-
-def flex_exercise_view_kb(
-    day_index: int,
-    ue_id: int,
-    group: str,
-    sets: list[tuple[int, int, float, int]],
-    selected: int | None,
-    *,
-    with_weight: bool = True,
-    kind: str = "reps",
-):
-    rows: list[list[InlineKeyboardButton]] = []
-    rows.append([
-        InlineKeyboardButton(t("ADD_SET"), callback_data=f"ex:addset:{day_index}:{ue_id}"),
-        InlineKeyboardButton("− сет", callback_data=f"ex:delset:{day_index}:{ue_id}"),
-    ])
-    add_label, sub_label = _rep_button_labels(kind)
-    base_cb = f"ex:inc:{day_index}:{ue_id}"
-    rows.append([
-        InlineKeyboardButton(add_label, callback_data=f"{base_cb}:reps:1"),
-        InlineKeyboardButton(sub_label, callback_data=f"{base_cb}:reps:-1"),
-    ])
-    if kind == "duration":
-        rows.extend(_duration_quick_rows(base_cb))
-    if with_weight:
-        rows.append([
-            InlineKeyboardButton(
-                t("ADD_W", step=f"{_format_step_label(0.5)} "),
-                callback_data=f"{base_cb}:kg:0.5",
-            ),
-            InlineKeyboardButton(
-                t("ADD_W", step=f"{_format_step_label(1)} "),
-                callback_data=f"{base_cb}:kg:1",
-            ),
-            InlineKeyboardButton(
-                t("ADD_W", step=f"{_format_step_label(2.5)} "),
-                callback_data=f"{base_cb}:kg:2.5",
-            ),
-        ])
-        rows.append([
-            InlineKeyboardButton(
-                t("SUB_W", step=f"{_format_step_label(0.5)} "),
-                callback_data=f"{base_cb}:kg:-0.5",
-            ),
-            InlineKeyboardButton(
-                t("SUB_W", step=f"{_format_step_label(1)} "),
-                callback_data=f"{base_cb}:kg:-1",
-            ),
-            InlineKeyboardButton(
-                t("SUB_W", step=f"{_format_step_label(2.5)} "),
-                callback_data=f"{base_cb}:kg:-2.5",
-            ),
-        ])
-    rows.append([InlineKeyboardButton("📈 Прогресс", callback_data=f"ex:progress:{day_index}:{ue_id}")])
-    rows.append([InlineKeyboardButton(t("DONE"), callback_data=f"ex:done:{day_index}:{ue_id}")])
-    rows.append([InlineKeyboardButton(t("BACK"), callback_data=f"day:group:{day_index}:{group}")])
-    return InlineKeyboardMarkup(rows)
 
 
 def library_menu_kb(groups: list[tuple[str, int]], custom: dict[str, str] | None = None):
@@ -897,157 +806,6 @@ def library_add_exercises_kb(
         ]
     )
     return InlineKeyboardMarkup(rows), page, total_pages
-
-
-def library_exercise_kb(
-    ue_id: int,
-    group: str,
-    name: str,
-    weight_step: float | None = None,
-    is_amrap: bool = False,
-    is_for_time: bool = False,
-    *,
-    with_weight: bool = True,
-    kind: str = "reps",
-):
-    if is_for_time:
-        rows = [
-            [InlineKeyboardButton(t("DONE"), callback_data=f"ex:done:0:{ue_id}")],
-            [InlineKeyboardButton(t("HISTORY"), callback_data=f"ex:progress:0:{ue_id}")],
-        ]
-        rows.append([InlineKeyboardButton(t("BACK"), callback_data=f"lib:group:{group}")])
-        return InlineKeyboardMarkup(rows)
-    if is_amrap:
-        rows = [
-            [
-                InlineKeyboardButton(
-                    "✏️ Изменить схему",
-                    callback_data=f"ex:amrapscheme:0:{ue_id}",
-                )
-            ],
-            [
-                InlineKeyboardButton("＋ раунд", callback_data=f"ex:addset:0:{ue_id}"),
-                InlineKeyboardButton("− раунд", callback_data=f"ex:delset:0:{ue_id}"),
-            ],
-            [
-                InlineKeyboardButton(
-                    f"{t('ADD_REP')} повтор", callback_data=f"ex:amrapextra:0:{ue_id}:1"
-                ),
-                InlineKeyboardButton("−1 повтор", callback_data=f"ex:amrapextra:0:{ue_id}:-1"),
-            ],
-            [InlineKeyboardButton(t("HISTORY"), callback_data=f"ex:progress:0:{ue_id}")],
-            [InlineKeyboardButton(t("DONE"), callback_data=f"ex:done:0:{ue_id}")],
-        ]
-        rows.append([InlineKeyboardButton(t("BACK"), callback_data=f"lib:group:{group}")])
-        return InlineKeyboardMarkup(rows)
-    add_label, sub_label = _rep_button_labels(kind)
-    base_cb = f"ex:inc:0:{ue_id}"
-    rows = [
-        [
-            InlineKeyboardButton(t("ADD_SET"), callback_data=f"ex:addset:0:{ue_id}"),
-            InlineKeyboardButton("− сет", callback_data=f"ex:delset:0:{ue_id}"),
-        ],
-        [
-            InlineKeyboardButton(add_label, callback_data=f"{base_cb}:reps:1"),
-            InlineKeyboardButton(sub_label, callback_data=f"{base_cb}:reps:-1"),
-        ],
-    ]
-    if kind == "duration":
-        rows.extend(_duration_quick_rows(base_cb))
-    if with_weight:
-        rows.extend(
-            [
-                [
-                    InlineKeyboardButton(
-                        t("ADD_W", step=f"{_format_step_label(0.5)} "),
-                        callback_data=f"{base_cb}:kg:0.5",
-                    ),
-                    InlineKeyboardButton(
-                        t("ADD_W", step=f"{_format_step_label(1)} "),
-                        callback_data=f"{base_cb}:kg:1",
-                    ),
-                    InlineKeyboardButton(
-                        t("ADD_W", step=f"{_format_step_label(2.5)} "),
-                        callback_data=f"{base_cb}:kg:2.5",
-                    ),
-                ],
-                [
-                    InlineKeyboardButton(
-                        t("SUB_W", step=f"{_format_step_label(0.5)} "),
-                        callback_data=f"{base_cb}:kg:-0.5",
-                    ),
-                    InlineKeyboardButton(
-                        t("SUB_W", step=f"{_format_step_label(1)} "),
-                        callback_data=f"{base_cb}:kg:-1",
-                    ),
-                    InlineKeyboardButton(
-                        t("SUB_W", step=f"{_format_step_label(2.5)} "),
-                        callback_data=f"{base_cb}:kg:-2.5",
-                    ),
-                ],
-            ]
-        )
-    rows.append([InlineKeyboardButton("📈 Прогресс", callback_data=f"ex:progress:0:{ue_id}")])
-    rows.append([InlineKeyboardButton(t("DONE"), callback_data=f"ex:done:0:{ue_id}")])
-    rows.append([InlineKeyboardButton(t("BACK"), callback_data=f"lib:group:{group}")])
-    return InlineKeyboardMarkup(rows)
-
-
-def flex_library_exercise_kb(
-    ue_id: int,
-    group: str,
-    sets: list[tuple[int, int, float, int]],
-    selected: int | None,
-    *,
-    with_weight: bool = True,
-    kind: str = "reps",
-):
-    rows: list[list[InlineKeyboardButton]] = []
-    rows.append([
-        InlineKeyboardButton(t("ADD_SET"), callback_data=f"ex:addset:0:{ue_id}"),
-        InlineKeyboardButton("− сет", callback_data=f"ex:delset:0:{ue_id}"),
-    ])
-    add_label, sub_label = _rep_button_labels(kind)
-    base_cb = f"ex:inc:0:{ue_id}"
-    rows.append([
-        InlineKeyboardButton(add_label, callback_data=f"{base_cb}:reps:1"),
-        InlineKeyboardButton(sub_label, callback_data=f"{base_cb}:reps:-1"),
-    ])
-    if kind == "duration":
-        rows.extend(_duration_quick_rows(base_cb))
-    if with_weight:
-        rows.append([
-            InlineKeyboardButton(
-                t("ADD_W", step=f"{_format_step_label(0.5)} "),
-                callback_data=f"{base_cb}:kg:0.5",
-            ),
-            InlineKeyboardButton(
-                t("ADD_W", step=f"{_format_step_label(1)} "),
-                callback_data=f"{base_cb}:kg:1",
-            ),
-            InlineKeyboardButton(
-                t("ADD_W", step=f"{_format_step_label(2.5)} "),
-                callback_data=f"{base_cb}:kg:2.5",
-            ),
-        ])
-        rows.append([
-            InlineKeyboardButton(
-                t("SUB_W", step=f"{_format_step_label(0.5)} "),
-                callback_data=f"{base_cb}:kg:-0.5",
-            ),
-            InlineKeyboardButton(
-                t("SUB_W", step=f"{_format_step_label(1)} "),
-                callback_data=f"{base_cb}:kg:-1",
-            ),
-            InlineKeyboardButton(
-                t("SUB_W", step=f"{_format_step_label(2.5)} "),
-                callback_data=f"{base_cb}:kg:-2.5",
-            ),
-        ])
-    rows.append([InlineKeyboardButton("📈 Прогресс", callback_data=f"ex:progress:0:{ue_id}")])
-    rows.append([InlineKeyboardButton(t("DONE"), callback_data=f"ex:done:0:{ue_id}")])
-    rows.append([InlineKeyboardButton(t("BACK"), callback_data=f"lib:group:{group}")])
-    return InlineKeyboardMarkup(rows)
 
 
 def confirm_day_group_delete_kb(day_index: int, group: str):
