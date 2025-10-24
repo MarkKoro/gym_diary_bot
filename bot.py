@@ -334,7 +334,6 @@ def apply_markup_preferences(
     return InlineKeyboardMarkup(new_rows)
 
 
-def prepare_ui_output(
     text: str,
     markup: InlineKeyboardMarkup | None,
     prefs: UiPreferences,
@@ -542,33 +541,6 @@ def remember_message(chat_id: int | None, message_id: int | None):
         return
     last_messages[chat_id] = message_id
 
-async def safe_edit_message(q, text, reply_markup=None):
-    chat_id = getattr(q.message, "chat_id", None)
-    message_id = getattr(q.message, "message_id", None)
-    try:
-        await q.edit_message_text(text, reply_markup=reply_markup)
-    except BadRequest as e:
-        message = (e.message or "").lower()
-        if "not modified" in message:
-            remember_message(chat_id, message_id)
-            return
-        if (
-            "message to edit not found" in message
-            or "message identifier is not valid" in message
-            or "chat not found" in message
-        ):
-            if chat_id is None:
-                raise
-            bot = getattr(q, "bot", None) or getattr(q.message, "bot", None)
-            if bot is None:
-                raise
-            new_msg = await bot.send_message(chat_id, text, reply_markup=reply_markup)
-            remember_message(chat_id, new_msg.message_id)
-            q.message = new_msg
-            return
-        raise
-    remember_message(chat_id, message_id)
-
 async def safe_update_screen(q, context, text, reply_markup=None):
     message = getattr(q, "message", None)
     chat = getattr(message, "chat", None) if message else None
@@ -594,6 +566,18 @@ async def safe_update_screen(q, context, text, reply_markup=None):
             return
         raise
     remember_message(chat_id, message_id)
+
+
+async def show_screen(
+    q,
+    context: ContextTypes.DEFAULT_TYPE,
+    text: str,
+    reply_markup: InlineKeyboardMarkup | None,
+    user_id: int,
+) -> None:
+    prefs = await load_ui_preferences(user_id)
+    prepared_text, prepared_markup = prepare_ui_output(text, reply_markup, prefs)
+    await safe_update_screen(q, context, prepared_text, prepared_markup)
 
 
 def wizard_day_mode_text(day: int, prefs: UiPreferences) -> str:
@@ -698,10 +682,12 @@ async def require_subscription(update: Update, context: ContextTypes.DEFAULT_TYP
         return True
     kb = subscription_kb(JOIN_URL)
     if update.callback_query:
-        await safe_edit_message(
+        await show_screen(
             update.callback_query,
+            context,
             "Прежде чем получить помощника, подпишись на наш канал, чтобы поддержать нас и быть в курсе новостей.",
-            reply_markup=kb,
+            kb,
+            u.id,
         )
     else:
         msg = await update.message.reply_text(
@@ -764,7 +750,7 @@ def render_day_text(
     if not groups:
         return (
             f"{t('DAY')} {i} — {label}\n"
-            "Пока нет упражнений. Добавь их, чтобы запланировать тренировку."
+            "Пока нет упражнений||Добавь упражнения, чтобы запланировать тренировку."
         )
     lines = [
         f"{t('DAY')} {i} — {label}",
@@ -1282,8 +1268,7 @@ async def finish_fill_editor(
         group=view.group,
         prefs=prefs,
     )
-    text, kb = prepare_ui_output(view.text, kb, prefs)
-    await safe_edit_message(q, text, kb)
+    await show_screen(q, context, view.text, kb, user_id)
 
 
 async def apply_fill_changes(
@@ -1432,8 +1417,7 @@ async def open_fill_editor(
     set_fill_state(context, q.message.chat_id, q.message.message_id, state)
     text = render_fill_editor(state, prefs)
     kb = build_fill_keyboard(state)
-    text, kb = prepare_ui_output(text, kb, prefs)
-    await safe_edit_message(q, text, kb)
+    await show_screen(q, context, text, kb, user_id)
 
 async def handle_fill_callback(
     q,
@@ -1470,8 +1454,7 @@ async def handle_fill_callback(
             return
         text = render_fill_editor(state, prefs)
         kb = build_fill_keyboard(state)
-        text, kb = prepare_ui_output(text, kb, prefs)
-        await safe_edit_message(q, text, kb)
+        await show_screen(q, context, text, kb, user_id)
         await q.answer()
         return
 
@@ -1520,8 +1503,7 @@ async def handle_fill_callback(
         return
     text = render_fill_editor(state, prefs)
     kb = build_fill_keyboard(state)
-    text, kb = prepare_ui_output(text, kb, prefs)
-    await safe_edit_message(q, text, kb)
+    await show_screen(q, context, text, kb, user_id)
     await q.answer()
 
 MEASUREMENTS_SHOW_ALL_KEY = "measurements_show_all"
@@ -1917,7 +1899,7 @@ async def build_measurements_view(
             lines.append(title)
             lines.extend(category_lines)
     if not lines:
-        lines.append("Пока нет замеров. Добавь показатели, чтобы отслеживать прогресс.")
+        lines.append("Пока нет замеров||Добавь показатели, чтобы отслеживать прогресс.")
     text = header + "\n\n" + "\n".join(lines)
     return text, measurements_main_kb(show_all)
 
@@ -2347,10 +2329,9 @@ async def render_day_sheet_from_callback(
 ) -> int:
     prefs = prefs or await load_ui_preferences(user_id)
     text, kb, page, _ = await build_day_sheet_message(user_id, day_index, page, prefs)
-    text, kb = prepare_ui_output(text, kb, prefs)
     old_chat_id = q.message.chat_id
     old_message_id = q.message.message_id
-    await safe_edit_message(q, text, reply_markup=kb)
+    await show_screen(q, context, text, kb, user_id)
     new_chat_id = q.message.chat_id
     new_message_id = q.message.message_id
     if (new_chat_id, new_message_id) != (old_chat_id, old_message_id):
@@ -2440,8 +2421,7 @@ async def send_day_cards_view(
     rows += content_rows
     rows += ui_footer_rows(primary_actions, None)
     kb = InlineKeyboardMarkup(rows)
-    text, kb = prepare_ui_output(text, kb, prefs)
-    await safe_edit_message(q, text, reply_markup=kb)
+    await show_screen(q, context, text, kb, user_id)
 
 
 def format_current_training(
@@ -2611,11 +2591,10 @@ async def show_day_group_view(
     if items:
         lines.append("────────")
     else:
-        lines.append("Пока нет упражнений. Добавь их, чтобы заполнить этот раздел.")
+        lines.append("Пока нет упражнений||Добавь упражнения, чтобы заполнить этот раздел.")
     text = "\n".join(lines)
     kb = day_group_kb(day, group, items)
-    text, kb = prepare_ui_output(text, kb, prefs)
-    await safe_edit_message(q, text, reply_markup=kb)
+    await show_screen(q, context, text, kb, user_id)
 
 async def render_library_group_text(
     user_id: int,
@@ -2630,7 +2609,7 @@ async def render_library_group_text(
     if not items:
         return (
             f"{gname}\n"
-            "Пока нет упражнений. Нажми «Добавить упражнение», чтобы сохранить их и вести учёт."
+            "Пока нет упражнений||Нажми «Добавить упражнение», чтобы сохранить их и вести учёт."
         )
     mode = await get_recording_mode(user_id)
     today = datetime.now(UTC).strftime("%Y-%m-%d")
@@ -2723,8 +2702,7 @@ async def show_library_exercise_view(
         )
     else:
         attach_lines = [
-            "Пока не прикреплено ни к одному дню.",
-            "Добавь упражнение через нужный день тренировок, чтобы видеть его в расписании.",
+            "Пока не прикреплено ни к одному дню||Добавь упражнение через нужный день тренировок, чтобы видеть его в расписании.",
         ]
     full_text = view.text + "\n\n" + "\n".join(attach_lines)
     if view.recording_mode == "flex":
@@ -2739,8 +2717,7 @@ async def show_library_exercise_view(
         prefs=prefs,
         is_library=True,
     )
-    full_text, kb = prepare_ui_output(full_text, kb, prefs)
-    await safe_edit_message(q, full_text, reply_markup=kb)
+    await show_screen(q, context, full_text, kb, user_id)
     return ex_id, resolved_group
 
 
@@ -3146,12 +3123,7 @@ async def show_exercises(
         text = day_exercises_text(day, group, custom)
     if group == "metcon":
         kb = enrich_metcon_keyboard(day, kb, selected_ids, ex_rows)
-    text, kb = prepare_ui_output(text, kb, prefs)
-    await safe_edit_message(
-        q,
-        text,
-        kb,
-    )
+    await show_screen(q, context, text, kb, user_id)
 
 
 async def show_day_add_exercises_view(
@@ -3170,11 +3142,7 @@ async def show_day_add_exercises_view(
         day, group, ex_rows, selected_ids, page=requested_page
     )
     set_kb_page(context, "day", group, actual_page, day)
-    await safe_edit_message(
-        q,
-        day_exercises_text(day, group, custom),
-        reply_markup=kb,
-    )
+    await show_screen(q, context, day_exercises_text(day, group, custom), kb, user_id)
 
 async def finish_day(q, context, user_id: int, day: int, summary: str | None = None):
     n = context.user_data.get("workouts_per_week", 0)
@@ -3184,29 +3152,20 @@ async def finish_day(q, context, user_id: int, day: int, summary: str | None = N
         if summary:
             text = summary + "\n────────\n" + text
         kb = wizard_apply_kb(n)
-        text, kb = prepare_ui_output(text, kb, prefs)
-        await safe_edit_message(q, text, reply_markup=kb)
+        await show_screen(q, context, text, kb, user_id)
         return
     if day >= n:
         days = await list_active_days(user_id)
         text = "Отлично, супер! Мы сохранили все ваши данные. Теперь можете с удовольствием пользоваться."
         if summary:
             text = summary + "\n────────\n" + text
-        await safe_edit_message(
-            q,
-            text,
-            reply_markup=main_menu_kb(days, SUPPORT_DEEPLINK),
-        )
+        await show_screen(q, context, text, main_menu_kb(days, SUPPORT_DEEPLINK), user_id)
     else:
         context.user_data["current_day"] = day
         text = f"{t('DAY')} {day} сохранён. Перейти к {t('DAY')} {day + 1}?"
         if summary:
             text = summary + "\n────────\n" + text
-        await safe_edit_message(
-            q,
-            text,
-            reply_markup=day_done_kb(day),
-        )
+        await show_screen(q, context, text, day_done_kb(day), user_id)
 
 async def advance_day(q, context, user_id: int, next_day: int):
     n = context.user_data.get("workouts_per_week", 0)
@@ -3217,19 +3176,14 @@ async def advance_day(q, context, user_id: int, next_day: int):
         context.user_data.pop("group_idx", None)
         await prompt_day_mode(q, context, user_id, next_day)
     else:
-        await safe_edit_message(
-            q,
-            "Присылать напоминания перед тренировками?",
-            reply_markup=reminders_kb(),
-        )
+        await show_screen(q, context, "Присылать напоминания перед тренировками?", reminders_kb(), user_id)
 
 
 async def prompt_day_mode(q, context, user_id: int, day: int):
     prefs = await load_ui_preferences(user_id)
     text = wizard_day_mode_text(day, prefs)
     kb = wizard_day_mode_kb(day)
-    text, kb = prepare_ui_output(text, kb, prefs)
-    await safe_edit_message(q, text, reply_markup=kb)
+    await show_screen(q, context, text, kb, user_id)
 
 async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAULT_TYPE):
     try:
@@ -3245,12 +3199,14 @@ async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAUL
                 kb = InlineKeyboardMarkup(
                     [[InlineKeyboardButton("Ясно, спасибо", callback_data="wiz:intro:ok")]]
                 )
-                await safe_edit_message(q, text, reply_markup=kb)
+                await show_screen(q, context, text, kb, user_id)
             else:
-                await safe_edit_message(
+                await show_screen(
                     q,
+                    context,
                     "Прежде чем получить помощника, подпишись на наш канал, чтобы поддержать нас и быть в курсе новостей.",
-                    reply_markup=subscription_kb(JOIN_URL),
+                    subscription_kb(JOIN_URL),
+                    user_id,
                 )
             return
         if data == "wiz:intro:ok":
@@ -3260,7 +3216,7 @@ async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAUL
                 "Если выбираешь Split, сможешь настроить упражнения для каждого дня отдельно. "
                 "В любом случае ты всегда сможешь добавить или убрать упражнения в любой день."
             )
-            await safe_edit_message(q, text, reply_markup=system_kb())
+            await show_screen(q, context, text, system_kb(), user_id)
             return
         if data == "wiz:sys:back":
             text = (
@@ -3269,7 +3225,7 @@ async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAUL
                 "Если выбираешь Split, сможешь настроить упражнения для каждого дня отдельно. "
                 "В любом случае ты всегда сможешь добавить или убрать упражнения в любой день."
             )
-            await safe_edit_message(q, text, reply_markup=system_kb())
+            await show_screen(q, context, text, system_kb(), user_id)
             return
         if data.startswith("wiz:sys:"):
             code = data.split(":")[2]
@@ -3282,18 +3238,14 @@ async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAUL
                 kb = InlineKeyboardMarkup(
                     [[InlineKeyboardButton(t("BACK"), callback_data="wiz:sys:back")]]
                 )
-                await safe_edit_message(q, hint, reply_markup=kb)
+                await show_screen(q, context, hint, kb, user_id)
                 return
             context.user_data["system"] = code
             await update_user_system(user_id, code)
-            await safe_edit_message(
-                q,
-                "Сколько тренировок планируешь в неделю?",
-                reply_markup=days_kb(),
-            )
+            await show_screen(q, context, "Сколько тренировок планируешь в неделю?", days_kb(), user_id)
             return
         if data == "wiz:days:back":
-            await safe_edit_message(q, "Как ты тренируешься?", reply_markup=system_kb())
+            await show_screen(q, context, "Как ты тренируешься?", system_kb(), user_id)
             return
         if data.startswith("wiz:days:"):
             n = int(data.split(":")[2])
@@ -3321,10 +3273,12 @@ async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAUL
             if mode == "strength":
                 selected = groups_store.setdefault(day, set())
                 custom = await get_custom_groups(user_id, context)
-                await safe_edit_message(
+                await show_screen(
                     q,
+                    context,
                     day_groups_text(day),
-                    reply_markup=muscle_groups_kb(day, selected or set(), custom),
+                    muscle_groups_kb(day, selected or set(), custom),
+                    user_id,
                 )
             elif mode in {"kb", "metcon", "workout"}:
                 selected = groups_store.setdefault(day, set())
@@ -3362,12 +3316,14 @@ async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAUL
                     values[1] = max(0, values[1] + int(delta))
                 elif field == "kg" and with_weight:
                     values[2] = max(0.0, values[2] + delta)
-                await safe_edit_message(
+                await show_screen(
                     q,
+                    context,
                     render_baseline_progress(
                         done, name, *values, with_weight=with_weight
                     ),
                     baseline_kb(day, *values, with_weight=with_weight),
+                    user_id,
                 )
                 return
             if action == "ready":
@@ -3391,12 +3347,14 @@ async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAUL
                     next_with_weight, _ = get_display_flags(ex_group, name)
                     if not next_with_weight:
                         values[2] = 0.0
-                    await safe_edit_message(
+                    await show_screen(
                         q,
+                        context,
                         render_baseline_progress(
                             done, name, *values, with_weight=next_with_weight
                         ),
                         baseline_kb(day, *values, with_weight=next_with_weight),
+                        user_id,
                     )
                 else:
                     summary = "\n".join(done)
@@ -3419,12 +3377,14 @@ async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAUL
                     next_with_weight, _ = get_display_flags(ex_group, name)
                     if not next_with_weight:
                         values[2] = 0.0
-                    await safe_edit_message(
+                    await show_screen(
                         q,
+                        context,
                         render_baseline_progress(
                             done, name, *values, with_weight=next_with_weight
                         ),
                         baseline_kb(day, *values, with_weight=next_with_weight),
+                        user_id,
                     )
                 else:
                     summary = "\n".join(done)
@@ -3446,12 +3406,14 @@ async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAUL
                     prev_with_weight, _ = get_display_flags(ex_group, name)
                     if not prev_with_weight:
                         values[2] = 0.0
-                    await safe_edit_message(
+                    await show_screen(
                         q,
+                        context,
                         render_baseline_progress(
                             done, name, *values, with_weight=prev_with_weight
                         ),
                         baseline_kb(day, *values, with_weight=prev_with_weight),
+                        user_id,
                     )
                 else:
                     context.user_data.pop("baseline_day", None)
@@ -3461,11 +3423,7 @@ async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAUL
                     context.user_data.pop("baseline_done", None)
                     selected = context.user_data.setdefault("day_groups", {}).get(day, set())
                     custom = await get_custom_groups(user_id, context)
-                    await safe_edit_message(
-                        q,
-                        day_groups_text(day),
-                        reply_markup=muscle_groups_kb(day, selected, custom),
-                    )
+                    await show_screen(q, context, day_groups_text(day), muscle_groups_kb(day, selected, custom), user_id)
                 return
         if data.startswith("wiz:day:"):
             parts = data.split(":")
@@ -3478,20 +3436,13 @@ async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAUL
             if parts[3] == "redo":
                 selected = context.user_data.setdefault("day_groups", {}).get(day, set())
                 custom = await get_custom_groups(user_id, context)
-                await safe_edit_message(
-                    q,
-                    day_groups_text(day),
-                    reply_markup=muscle_groups_kb(day, selected, custom),
-                )
+                await show_screen(q, context, day_groups_text(day), muscle_groups_kb(day, selected, custom), user_id)
                 return
             if parts[3] == "mg":
                 group = parts[4]
                 if group == "other":
                     context.user_data["awaiting_group_name"] = (day, q.message.chat_id, q.message.message_id, "wizard")
-                    await safe_edit_message(
-                        q,
-                        f"Укажи группу мышц для дня {day}, которой нет в списке.",
-                    )
+                    await show_screen(q, context, f'Укажи группу мышц для дня {day}, которой нет в списке.', None, user_id)
                     return
                 selected = context.user_data.setdefault("day_groups", {}).setdefault(day, set())
                 if group in selected:
@@ -3499,11 +3450,7 @@ async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAUL
                 else:
                     selected.add(group)
                 custom = await get_custom_groups(user_id, context)
-                await safe_edit_message(
-                    q,
-                    day_groups_text(day),
-                    reply_markup=muscle_groups_kb(day, selected, custom),
-                )
+                await show_screen(q, context, day_groups_text(day), muscle_groups_kb(day, selected, custom), user_id)
                 return
             if parts[3] == "groups" and parts[4] == "next":
                 groups = list(context.user_data.setdefault("day_groups", {}).get(day, set()))
@@ -3530,7 +3477,7 @@ async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAUL
                     group = context.user_data["group_list"][context.user_data["group_idx"]]
                     if added:
                         async def edit_instant(text, kb):
-                            await safe_edit_message(q, text, kb)
+                            await show_screen(q, context, text, kb, user_id)
 
                         started = await start_instant_baseline(
                             context,
@@ -3563,7 +3510,7 @@ async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAUL
                             ]
                         ]
                     )
-                    await safe_edit_message(q, "Напиши название упражнения:", reply_markup=kb)
+                    await show_screen(q, context, 'Напиши название упражнения:', kb, user_id)
                     return
                 if action == "custom_back":
                     group = parts[5]
@@ -3572,11 +3519,7 @@ async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAUL
                 if action == "back":
                     selected = context.user_data.setdefault("day_groups", {}).get(day, set())
                     custom = await get_custom_groups(user_id, context)
-                    await safe_edit_message(
-                        q,
-                        day_groups_text(day),
-                        reply_markup=muscle_groups_kb(day, selected, custom),
-                    )
+                    await show_screen(q, context, day_groups_text(day), muscle_groups_kb(day, selected, custom), user_id)
                     return
                 if action == "done":
                     groups = context.user_data.get("group_list", [])
@@ -3604,15 +3547,7 @@ async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAUL
                             first_with_weight, _ = get_display_flags(ex_group, name)
                             if not first_with_weight:
                                 vals[2] = 0.0
-                            await safe_edit_message(
-                                q,
-                                render_baseline_progress(
-                                    [], name, *vals, with_weight=first_with_weight
-                                ),
-                                reply_markup=baseline_kb(
-                                    day, *vals, with_weight=first_with_weight
-                                ),
-                            )
+                            await show_screen(q, context, render_baseline_progress([], name, *vals, with_weight=first_with_weight), baseline_kb(day, *vals, with_weight=first_with_weight), user_id)
                         else:
                             await finish_day(q, context, user_id, day)
                     return
@@ -3639,8 +3574,7 @@ async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAUL
                 prefs = await load_ui_preferences(user_id)
                 text = build_main_menu_text(prefs)
                 kb = main_menu_kb(days, SUPPORT_DEEPLINK)
-                text, kb = prepare_ui_output(text, kb, prefs)
-                await safe_edit_message(q, text, reply_markup=kb)
+                await show_screen(q, context, text, kb, user_id)
                 return
             if action == "next" and len(parts) > 3:
                 next_day = int(parts[3])
@@ -3651,8 +3585,7 @@ async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAUL
                 prefs = await load_ui_preferences(user_id)
                 text = build_main_menu_text(prefs)
                 kb = main_menu_kb(days, SUPPORT_DEEPLINK)
-                text, kb = prepare_ui_output(text, kb, prefs)
-                await safe_edit_message(q, text, reply_markup=kb)
+                await show_screen(q, context, text, kb, user_id)
                 return
         if data == "wiz:finish_early":
             day = context.user_data.get("current_day", 0)
@@ -3662,65 +3595,41 @@ async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAUL
                 kb = InlineKeyboardMarkup(
                     [[InlineKeyboardButton("Да", callback_data="wiz:finish_yes"), InlineKeyboardButton("Нет", callback_data="wiz:finish_no")]]
                 )
-                await safe_edit_message(
-                    q,
-                    f"У тебя было заявлено {n} тренировок. Завершить на {day}?",
-                    reply_markup=kb,
-                )
+                await show_screen(q, context, f'У тебя было заявлено {n} тренировок. Завершить на {day}?', kb, user_id)
             else:
                 days = await list_active_days(user_id)
-                await safe_edit_message(
-                    q,
-                    "Настройка завершена.",
-                    reply_markup=main_menu_kb(days, SUPPORT_DEEPLINK),
-                )
+                await show_screen(q, context, 'Настройка завершена.', main_menu_kb(days, SUPPORT_DEEPLINK), user_id)
             return
         if data == "wiz:finish_yes":
             days = await list_active_days(user_id)
-            await safe_edit_message(
-                q,
-                "Настройка завершена.",
-                reply_markup=main_menu_kb(days, SUPPORT_DEEPLINK),
-            )
+            await show_screen(q, context, 'Настройка завершена.', main_menu_kb(days, SUPPORT_DEEPLINK), user_id)
             return
         if data == "wiz:finish_no":
             day = context.user_data.get("confirm_finish_day", 1)
-            await safe_edit_message(
-                q,
-                f"{t('DAY')} {day} сохранён. Перейти к {t('DAY')} {day + 1}?",
-                reply_markup=day_done_kb(day),
-            )
+            await show_screen(q, context, f"{t('DAY')} {day} сохранён. Перейти к {t('DAY')} {day + 1}?", day_done_kb(day), user_id)
             return
         if data == "wiz:reminders:yes":
             context.user_data["tz_page"] = 0
             if "workouts_per_week" not in context.user_data:
                 settings = await fetch_user_settings(user_id)
                 context.user_data["workouts_per_week"] = settings[1] if settings else 0
-            await safe_edit_message(q, "Выбери свой часовой пояс:", reply_markup=tz_select_kb(0))
+            await show_screen(q, context, 'Выбери свой часовой пояс:', tz_select_kb(0), user_id)
             return
         if data == "wiz:reminders:no":
             if context.user_data.get("from_settings"):
                 context.user_data.pop("from_settings", None)
-                await safe_edit_message(q, "Настройки:", reply_markup=settings_kb())
+                await show_screen(q, context, 'Настройки:', settings_kb(), user_id)
             else:
                 days = await list_active_days(user_id)
-                await safe_edit_message(
-                    q,
-                    "Настройка завершена.",
-                    reply_markup=main_menu_kb(days, SUPPORT_DEEPLINK),
-                )
+                await show_screen(q, context, 'Настройка завершена.', main_menu_kb(days, SUPPORT_DEEPLINK), user_id)
             return
         if data == "wiz:reminders:back":
             if context.user_data.get("from_settings"):
                 context.user_data.pop("from_settings", None)
-                await safe_edit_message(q, "Настройки:", reply_markup=settings_kb())
+                await show_screen(q, context, 'Настройки:', settings_kb(), user_id)
             else:
                 day = context.user_data.get("current_day", 1)
-                await safe_edit_message(
-                    q,
-                    f"{t('DAY')} {day} сохранён. Перейти к {t('DAY')} {day + 1}?",
-                    reply_markup=day_done_kb(day),
-                )
+                await show_screen(q, context, f"{t('DAY')} {day} сохранён. Перейти к {t('DAY')} {day + 1}?", day_done_kb(day), user_id)
             return
         if data.startswith("wiz:tzsel:"):
             parts = data.split(":")
@@ -3728,7 +3637,7 @@ async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAUL
             if action == "page":
                 page = int(parts[3])
                 context.user_data["tz_page"] = page
-                await safe_edit_message(q, "Выбери свой часовой пояс:", reply_markup=tz_select_kb(page))
+                await show_screen(q, context, 'Выбери свой часовой пояс:', tz_select_kb(page), user_id)
             elif action == "set":
                 tz = parts[3]
                 context.user_data["tz"] = tz
@@ -3743,11 +3652,7 @@ async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAUL
                 day_no = context.user_data.get("reminder_day", 1)
                 if editing_times:
                     context.user_data["reminder_day"] = day_no
-                    await safe_edit_message(
-                        q,
-                        f"{t('DAY')} {day_no}. В какой день недели тренировка?",
-                        reply_markup=reminder_day_kb(),
-                    )
+                    await show_screen(q, context, f"{t('DAY')} {day_no}. В какой день недели тренировка?", reminder_day_kb(), user_id)
                 elif tz_only_change:
                     tz_label = next((label for code, label in TIMEZONES if code == tz), tz)
                     rems = await list_user_reminders(user_id)
@@ -3757,45 +3662,29 @@ async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAUL
                         text = f"Часовой пояс обновлён: {tz_label}. Напоминания: {rem_text}."
                     else:
                         text = f"Часовой пояс обновлён: {tz_label}. Напоминания пока не настроены."
-                    await safe_edit_message(q, text, reply_markup=reminders_edit_kb())
+                    await show_screen(q, context, text, reminders_edit_kb(), user_id)
                 else:
                     context.user_data["reminder_day"] = day_no
-                    await safe_edit_message(
-                        q,
-                        f"{t('DAY')} {day_no}. В какой день недели тренировка?",
-                        reply_markup=reminder_day_kb(),
-                    )
+                    await show_screen(q, context, f"{t('DAY')} {day_no}. В какой день недели тренировка?", reminder_day_kb(), user_id)
             elif action == "back":
                 if context.user_data.get("from_settings"):
                     context.user_data.pop("from_settings", None)
-                    await safe_edit_message(q, "Настройки:", reply_markup=settings_kb())
+                    await show_screen(q, context, 'Настройки:', settings_kb(), user_id)
                 else:
-                    await safe_edit_message(
-                        q,
-                        "Присылать напоминания перед тренировками?",
-                        reply_markup=reminders_kb(),
-                    )
+                    await show_screen(q, context, 'Присылать напоминания перед тренировками?', reminders_kb(), user_id)
             return
         if data.startswith("wiz:rday:"):
             action = data.split(":")[2]
             if action == "back":
                 page = context.user_data.get("tz_page", 0)
-                await safe_edit_message(q, "Выбери свой часовой пояс:", reply_markup=tz_select_kb(page))
+                await show_screen(q, context, 'Выбери свой часовой пояс:', tz_select_kb(page), user_id)
             else:
                 context.user_data["selected_dow"] = int(action)
-                await safe_edit_message(
-                    q,
-                    "Во сколько напоминать в этот день? Выбери время (по твоему часовому поясу)",
-                    reply_markup=reminder_time_kb(),
-                )
+                await show_screen(q, context, 'Во сколько напоминать в этот день? Выбери время (по твоему часовому поясу)', reminder_time_kb(), user_id)
             return
         if data == "wiz:remind:back":
             day_no = context.user_data.get("reminder_day", 1)
-            await safe_edit_message(
-                q,
-                f"{t('DAY')} {day_no}. В какой день недели тренировка?",
-                reply_markup=reminder_day_kb(),
-            )
+            await show_screen(q, context, f"{t('DAY')} {day_no}. В какой день недели тренировка?", reminder_day_kb(), user_id)
             return
         if data.startswith("wiz:remind:"):
             _, _, hh, mm = data.split(":")
@@ -3820,22 +3709,14 @@ async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAUL
             total = context.user_data.get("workouts_per_week", 0)
             if day_no < total:
                 context.user_data["reminder_day"] = day_no + 1
-                await safe_edit_message(
-                    q,
-                    f"{t('DAY')} {day_no + 1}. В какой день недели тренировка?",
-                    reply_markup=reminder_day_kb(),
-                )
+                await show_screen(q, context, f"{t('DAY')} {day_no + 1}. В какой день недели тренировка?", reminder_day_kb(), user_id)
                 return
             if context.user_data.get("from_settings"):
                 context.user_data.pop("from_settings", None)
-                await safe_edit_message(q, "Настройки:", reply_markup=settings_kb())
+                await show_screen(q, context, 'Настройки:', settings_kb(), user_id)
             else:
                 days = await list_active_days(user_id)
-                await safe_edit_message(
-                    q,
-                    "Настройка завершена.",
-                    reply_markup=main_menu_kb(days, SUPPORT_DEEPLINK),
-                )
+                await show_screen(q, context, 'Настройка завершена.', main_menu_kb(days, SUPPORT_DEEPLINK), user_id)
             return
     finally:
         message = getattr(q, "message", None)
@@ -4169,7 +4050,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 elif field == "kg" and with_weight:
                     values[2] = max(0.0, values[2] + delta)
                 text, kb = instant_baseline_view(info)
-                await safe_edit_message(q, text, kb)
+                await show_screen(q, context, text, kb, user_id)
                 return
             if action == "ready":
                 await set_baseline(
@@ -4196,8 +4077,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             prefs = await load_ui_preferences(user_id)
             text = build_main_menu_text(prefs)
             kb = main_menu_kb(days, SUPPORT_DEEPLINK)
-            text, kb = prepare_ui_output(text, kb, prefs)
-            await safe_edit_message(q, text, reply_markup=kb)
+            await show_screen(q, context, text, kb, user_id)
             return
 
         if data in ("menu:library", "lib:root"):
@@ -4208,16 +4088,14 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             prefs = await load_ui_preferences(user_id)
             text = "Мои упражнения:"
             kb = library_menu_kb(groups, custom)
-            text, kb = prepare_ui_output(text, kb, prefs)
-            await safe_edit_message(q, text, reply_markup=kb)
+            await show_screen(q, context, text, kb, user_id)
             return
 
         if data == "menu:metrics":
             context.user_data.pop(MEASUREMENT_INPUT_KEY, None)
             prefs = await load_ui_preferences(user_id)
             text, kb = await build_measurements_view(user_id, context)
-            text, kb = prepare_ui_output(text, kb, prefs)
-            await safe_edit_message(q, text, kb)
+            await show_screen(q, context, text, kb, user_id)
             return
 
         if data == "menu:settings":
@@ -4251,14 +4129,13 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "⭐ Подписка — информация о подписке."
             )
             kb = settings_kb()
-            text, kb = prepare_ui_output(text, kb, prefs)
-            await safe_edit_message(q, text, reply_markup=kb)
+            await show_screen(q, context, text, kb, user_id)
             return
 
         if data == "measure:back":
             context.user_data.pop(MEASUREMENT_INPUT_KEY, None)
             text, kb = await build_measurements_view(user_id, context)
-            await safe_edit_message(q, text, kb)
+            await show_screen(q, context, text, kb, user_id)
             return
 
         if data == "measure:toggle":
@@ -4266,7 +4143,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             current = context.user_data.get(MEASUREMENTS_SHOW_ALL_KEY, False)
             context.user_data[MEASUREMENTS_SHOW_ALL_KEY] = not current
             text, kb = await build_measurements_view(user_id, context)
-            await safe_edit_message(q, text, kb)
+            await show_screen(q, context, text, kb, user_id)
             return
 
         if data == "measure:graph":
@@ -4276,11 +4153,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if data == "measure:add":
             context.user_data.pop(MEASUREMENT_INPUT_KEY, None)
             categories = measurement_categories_list()
-            await safe_edit_message(
-                q,
-                "Выбери категорию:",
-                reply_markup=measurements_category_kb("add", categories),
-            )
+            await show_screen(q, context, 'Выбери категорию:', measurements_category_kb('add', categories), user_id)
             return
 
         if data.startswith("measure:add:cat:"):
@@ -4295,11 +4168,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if not metrics:
                 await q.answer("Нет показателей для ввода.", show_alert=True)
                 return
-            await safe_edit_message(
-                q,
-                "Выбери показатель:",
-                reply_markup=measurements_metric_kb("add", category, metrics),
-            )
+            await show_screen(q, context, 'Выбери показатель:', measurements_metric_kb('add', category, metrics), user_id)
             return
 
         if data.startswith("measure:add:item:"):
@@ -4320,7 +4189,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             kb = InlineKeyboardMarkup(
                 [[InlineKeyboardButton(t("BACK"), callback_data=f"measure:add:cat:{category}")]]
             )
-            await safe_edit_message(q, item["prompt"], reply_markup=kb)
+            await show_screen(q, context, item['prompt'], kb, user_id)
             return
 
         if data == "measure:edit":
@@ -4334,11 +4203,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if not metrics:
                 await q.answer("Пока нечего изменять.", show_alert=True)
                 return
-            await safe_edit_message(
-                q,
-                "Что изменить?",
-                reply_markup=measurements_existing_kb("edit", metrics),
-            )
+            await show_screen(q, context, 'Что изменить?', measurements_existing_kb('edit', metrics), user_id)
             return
 
         if data.startswith("measure:edit:metric:"):
@@ -4361,7 +4226,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             kb = InlineKeyboardMarkup(
                 [[InlineKeyboardButton(t("BACK"), callback_data="measure:edit")]]
             )
-            await safe_edit_message(q, prefix + item["prompt"], reply_markup=kb)
+            await show_screen(q, context, prefix + item['prompt'], kb, user_id)
             return
 
         if data == "measure:delete":
@@ -4375,11 +4240,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if not metrics:
                 await q.answer("Пока нечего удалять.", show_alert=True)
                 return
-            await safe_edit_message(
-                q,
-                "Что удалить? Удалим только последнее значение.",
-                reply_markup=measurements_existing_kb("delete", metrics),
-            )
+            await show_screen(q, context, 'Что удалить? Удалим только последнее значение.', measurements_existing_kb('delete', metrics), user_id)
             return
 
         if data.startswith("measure:delete:metric:"):
@@ -4390,7 +4251,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await q.answer("Нет данных для удаления.", show_alert=True)
                 return
             text, kb = await build_measurements_view(user_id, context)
-            await safe_edit_message(q, text, kb)
+            await show_screen(q, context, text, kb, user_id)
             return
 
         parts = data.split(":")
@@ -4406,8 +4267,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 items = await list_library_exercises(user_id, group)
                 text = await render_library_group_text(user_id, group, items, context, prefs=prefs)
                 kb = library_group_kb(group, items)
-                text, kb = prepare_ui_output(text, kb, prefs)
-                await safe_edit_message(q, text, reply_markup=kb)
+                await show_screen(q, context, text, kb, user_id)
                 return
             if action == "groupdel":
                 group = parts[2]
@@ -4421,8 +4281,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         f"Удалить группу «{gname}»?\n"
                         "Все упражнения из неё исчезнут из библиотеки и расписания."
                     )
-                    text, kb = prepare_ui_output(text, confirm_library_group_delete_kb(group), prefs)
-                    await safe_edit_message(q, text, reply_markup=kb)
+                    await show_screen(q, context, text, kb, user_id)
                     return
                 if len(parts) >= 4 and parts[3] == "ok":
                     removed = await remove_user_muscle_group(user_id, group)
@@ -4431,16 +4290,14 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         items = await list_library_exercises(user_id, group)
                         text = await render_library_group_text(user_id, group, items, context, prefs=prefs)
                         kb = library_group_kb(group, items)
-                        text, kb = prepare_ui_output(text, kb, prefs)
-                        await safe_edit_message(q, text, reply_markup=kb)
+                        await show_screen(q, context, text, kb, user_id)
                         return
                     custom.pop(group, None)
                     groups = await list_library_groups(user_id)
                     menu = library_menu_kb(groups, custom)
                     text = "Мои упражнения:"
-                    text, menu = prepare_ui_output(text, menu, prefs)
                     await q.answer("Группа удалена.")
-                    await safe_edit_message(q, text, reply_markup=menu)
+                    await show_screen(q, context, text, menu, user_id)
                     return
                 return
             if action == "ex":
@@ -4451,22 +4308,14 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if action == "delmenu":
                 group = parts[2]
                 items = await list_library_exercises(user_id, group)
-                await safe_edit_message(
-                    q,
-                    "Удалить упражнение:",
-                    reply_markup=library_delete_kb(group, items),
-                )
+                await show_screen(q, context, 'Удалить упражнение:', library_delete_kb(group, items), user_id)
                 return
             if action == "del":
                 group = parts[2]
                 ue_id = int(parts[3])
                 await remove_user_exercise(user_id, 0, ue_id)
                 items = await list_library_exercises(user_id, group)
-                await safe_edit_message(
-                    q,
-                    "Удалить упражнение:",
-                    reply_markup=library_delete_kb(group, items),
-                )
+                await show_screen(q, context, 'Удалить упражнение:', library_delete_kb(group, items), user_id)
                 return
             if action == "add":
                 sub = parts[2]
@@ -4477,8 +4326,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     context.user_data["lib_return"] = target
                     custom = await get_custom_groups(user_id, context)
                     kb = library_add_group_kb(custom)
-                    text, kb = prepare_ui_output("Выбери группу:", kb, prefs)
-                    await safe_edit_message(q, text, reply_markup=kb)
+                    await show_screen(q, context, text, kb, user_id)
                     return
                 if sub == "mg":
                     group = parts[3]
@@ -4490,8 +4338,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         group, ex_rows, selected, page=requested_page
                     )
                     set_kb_page(context, "lib", group, page_value)
-                    text, kb = prepare_ui_output("Выбери упражнения:", kb, prefs)
-                    await safe_edit_message(q, text, reply_markup=kb)
+                    await show_screen(q, context, text, kb, user_id)
                     return
                 if sub == "page":
                     group = parts[3]
@@ -4502,8 +4349,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         group, ex_rows, selected, page=requested_page
                     )
                     set_kb_page(context, "lib", group, page_value)
-                    text, kb = prepare_ui_output("Выбери упражнения:", kb, prefs)
-                    await safe_edit_message(q, text, reply_markup=kb)
+                    await show_screen(q, context, text, kb, user_id)
                     return
                 if sub == "ex":
                     group = parts[3]
@@ -4517,8 +4363,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         group, ex_rows, selected, page=requested_page
                     )
                     set_kb_page(context, "lib", group, page_value)
-                    text, kb = prepare_ui_output("Выбери упражнения:", kb, prefs)
-                    await safe_edit_message(q, text, reply_markup=kb)
+                    await show_screen(q, context, text, kb, user_id)
                     return
                 if sub == "custom":
                     group = parts[3]
@@ -4530,7 +4375,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     kb = InlineKeyboardMarkup(
                         [[InlineKeyboardButton(t("BACK"), callback_data=f"lib:add:mg:{group}")]]
                     )
-                    await safe_edit_message(q, "Как назвать упражнение?", reply_markup=kb)
+                    await show_screen(q, context, 'Как назвать упражнение?', kb, user_id)
                     remember_message(q.message.chat.id, q.message.message_id)
                     return
                 if sub == "back":
@@ -4542,12 +4387,10 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         items = await list_library_exercises(user_id, group)
                         text = await render_library_group_text(user_id, group, items, context, prefs=prefs)
                         kb = library_group_kb(group, items)
-                        text, kb = prepare_ui_output(text, kb, prefs)
-                        await safe_edit_message(q, text, reply_markup=kb)
+                        await show_screen(q, context, text, kb, user_id)
                     else:
                         kb = library_add_group_kb(custom)
-                        text, kb = prepare_ui_output("Выбери группу:", kb, prefs)
-                        await safe_edit_message(q, text, reply_markup=kb)
+                        await show_screen(q, context, text, kb, user_id)
                     return
                 if sub == "done":
                     context.user_data.pop(LIBRARY_CUSTOM_KEY, None)
@@ -4557,14 +4400,12 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         items = await list_library_exercises(user_id, group)
                         text = await render_library_group_text(user_id, group, items, context, prefs=prefs)
                         kb = library_group_kb(group, items)
-                        text, kb = prepare_ui_output(text, kb, prefs)
-                        await safe_edit_message(q, text, reply_markup=kb)
+                        await show_screen(q, context, text, kb, user_id)
                     else:
                         groups = await list_library_groups(user_id)
                         custom = await get_custom_groups(user_id, context)
                         kb = library_menu_kb(groups, custom)
-                        text, kb = prepare_ui_output("Мои упражнения:", kb, prefs)
-                        await safe_edit_message(q, text, reply_markup=kb)
+                        await show_screen(q, context, text, kb, user_id)
                     return
 
         if parts[0] == "set":
@@ -4572,11 +4413,11 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if action == "rename_day":
                 if len(parts) == 2:
                     days = await list_active_days(user_id)
-                    await safe_edit_message(q, "Выбери день:", reply_markup=rename_day_kb(days))
+                    await show_screen(q, context, 'Выбери день:', rename_day_kb(days), user_id)
                 else:
                     day = int(parts[2])
                     context.user_data["awaiting_rename"] = (day, q.message.chat.id, q.message.message_id)
-                    await safe_edit_message(q, f"Новое название для Дня {day}:")
+                    await show_screen(q, context, f'Новое название для Дня {day}:', None, user_id)
                 return
             if action == "edit_day":
                 prefs = await load_ui_preferences(user_id)
@@ -4584,8 +4425,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     days = await list_active_days(user_id)
                     text = "Какой день изменить?"
                     kb = edit_day_select_kb(days)
-                    text, kb = prepare_ui_output(text, kb, prefs)
-                    await safe_edit_message(q, text, reply_markup=kb)
+                    await show_screen(q, context, text, kb, user_id)
                 else:
                     day = int(parts[2])
                     label = await get_day_label(user_id, day) or f"{t('DAY')} {day}"
@@ -4621,12 +4461,11 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             kb = edit_day_special_kb(day, mode, labels[mode])
                         else:
                             return
-                    text, kb = prepare_ui_output(text, kb, prefs)
-                    await safe_edit_message(q, text, reply_markup=kb)
+                    await show_screen(q, context, text, kb, user_id)
                 return
             if action == "days_count":
                 if len(parts) == 2:
-                    await safe_edit_message(q, "Сколько тренировок планируешь в неделю?", reply_markup=days_count_kb())
+                    await show_screen(q, context, 'Сколько тренировок планируешь в неделю?', days_count_kb(), user_id)
                 else:
                     n = int(parts[2])
                     await set_workouts_per_week(user_id, n)
@@ -4636,9 +4475,9 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         context.user_data["tz_page"] = 0
                         context.user_data["workouts_per_week"] = n
                         context.user_data["reminder_day"] = len(rems) + 1
-                        await safe_edit_message(q, "Хотите настроить уведомления для новых дней?", reply_markup=reminders_kb())
+                        await show_screen(q, context, 'Хотите настроить уведомления для новых дней?', reminders_kb(), user_id)
                     else:
-                        await safe_edit_message(q, "Количество тренировок обновлено.", reply_markup=settings_kb())
+                        await show_screen(q, context, 'Количество тренировок обновлено.', settings_kb(), user_id)
                 return
             if action == "step":
                 if len(parts) == 2:
@@ -4648,30 +4487,17 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         "Кнопки «＋/−шаг кг» в карточках и компактном листе будут прибавлять или убавлять именно это значение.\n"
                         "Можно добавлять и убирать вес маленькими шагами: 0.5, 1, 2 или 5 кг — выбери, что удобнее."
                     )
-                    await safe_edit_message(q, text, reply_markup=weight_step_kb(step))
+                    await show_screen(q, context, text, weight_step_kb(step), user_id)
                 else:
                     step = float(parts[2])
                     await set_weight_step(user_id, step)
                     formatted = format_weight_value(step)
-                    await safe_edit_message(
-                        q,
-                        f"Шаг веса обновлён: {formatted} кг. Кнопки веса теперь работают с этим шагом.",
-                        reply_markup=settings_kb(),
-                    )
+                    await show_screen(q, context, f'Шаг веса обновлён: {formatted} кг. Кнопки веса теперь работают с этим шагом.', settings_kb(), user_id)
                 return
             if action == "recording":
                 if len(parts) == 2:
                     mode = await get_recording_mode(user_id)
-                    await safe_edit_message(
-                        q,
-                        (
-                            "Как фиксировать подходы?\n"
-                            "Фиксация подходов помогает сохранять каждую пару рабочих сетов — бот запомнит и левую, и правую сторону, если добавишь их отдельными сетами.\n"
-                            "Одинаковый вес — один шаблон для всех сетов. Удобно для классических тренировок.\n"
-                            "Гибкая запись — индивидуальные вес и повторы для каждого подхода, подходит для пирамид, суперсетов и парных подходов с разными весами."
-                        ),
-                        reply_markup=recording_mode_kb(mode),
-                    )
+                    await show_screen(q, context, 'Как фиксировать подходы?\nФиксация подходов помогает сохранять каждую пару рабочих сетов — бот запомнит и левую, и правую сторону, если добавишь их отдельными сетами.\nОдинаковый вес — один шаблон для всех сетов. Удобно для классических тренировок.\nГибкая запись — индивидуальные вес и повторы для каждого подхода, подходит для пирамид, суперсетов и парных подходов с разными весами.', recording_mode_kb(mode), user_id)
                 else:
                     mode = parts[2]
                     if mode not in ("single", "flex"):
@@ -4683,11 +4509,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         if mode == "flex"
                         else "Каждый новый сет наследует повторы и вес из предыдущего — удобно для одинаковых пар подходов."
                     )
-                    await safe_edit_message(
-                        q,
-                        f"Режим записи обновлён: {label}. {hint}",
-                        reply_markup=recording_mode_kb(mode),
-                    )
+                    await show_screen(q, context, f'Режим записи обновлён: {label}. {hint}', recording_mode_kb(mode), user_id)
                 return
             if action == "ui":
                 prefs = await load_ui_preferences(user_id)
@@ -4706,8 +4528,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         f"Пояснения: {verbose_state}."
                     )
                     kb = ui_preferences_kb(prefs.mode, prefs.emoji_enabled, prefs.verbose_level)
-                    text, kb = prepare_ui_output(text, kb, prefs)
-                    await safe_edit_message(q, text, reply_markup=kb)
+                    await show_screen(q, context, text, kb, user_id)
                     return
                 if len(parts) >= 4:
                     sub = parts[2]
@@ -4739,8 +4560,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     else:
                         return
                     kb = ui_preferences_kb(prefs.mode, prefs.emoji_enabled, prefs.verbose_level)
-                    msg, kb = prepare_ui_output(msg, kb, prefs)
-                    await safe_edit_message(q, msg, reply_markup=kb)
+                    await show_screen(q, context, msg, kb, user_id)
                 return
             if action == "reminders":
                 if len(parts) == 2:
@@ -4752,18 +4572,18 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         parts = [f"{dict(WEEKDAYS)[d]} {h:02d}:{m:02d}" for d, h, m in rems]
                         rem_text = ", ".join(parts)
                         text = f"Сейчас выбран {tz_label}, напоминания: {rem_text}."
-                        await safe_edit_message(q, text, reply_markup=reminders_edit_kb())
+                        await show_screen(q, context, text, reminders_edit_kb(), user_id)
                         return
                     context.user_data["from_settings"] = True
                     context.user_data["tz_page"] = 0
-                    await safe_edit_message(q, "Выбери свой часовой пояс:", reply_markup=tz_select_kb(0))
+                    await show_screen(q, context, 'Выбери свой часовой пояс:', tz_select_kb(0), user_id)
                     return
                 sub = parts[2]
                 if sub == "tz":
                     context.user_data["from_settings"] = True
                     context.user_data["tz_page"] = 0
                     context.user_data["tz_only_change"] = True
-                    await safe_edit_message(q, "Выбери свой часовой пояс:", reply_markup=tz_select_kb(0))
+                    await show_screen(q, context, 'Выбери свой часовой пояс:', tz_select_kb(0), user_id)
                     return
                 if sub == "time":
                     context.user_data["from_settings"] = True
@@ -4773,10 +4593,10 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     if "workouts_per_week" not in context.user_data:
                         settings = await fetch_user_settings(user_id)
                         context.user_data["workouts_per_week"] = settings[1] if settings else 0
-                    await safe_edit_message(q, "Выбери свой часовой пояс:", reply_markup=tz_select_kb(0))
+                    await show_screen(q, context, 'Выбери свой часовой пояс:', tz_select_kb(0), user_id)
                     return
             if action == "subscription":
-                await safe_edit_message(q, "Подписка пока в разработке.", reply_markup=settings_kb())
+                await show_screen(q, context, 'Подписка пока в разработке.', settings_kb(), user_id)
                 return
 
         if parts[0] == "day":
@@ -4831,8 +4651,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         "Все упражнения из неё будут убраны из твоих тренировочных дней."
                     )
                     prefs = await load_ui_preferences(user_id)
-                    text, kb = prepare_ui_output(text, confirm_day_group_delete_kb(day, group), prefs)
-                    await safe_edit_message(q, text, reply_markup=kb)
+                    await show_screen(q, context, text, kb, user_id)
                     return
                 if len(parts) >= 5 and parts[4] == "ok":
                     removed = await remove_user_muscle_group(user_id, group)
@@ -4859,14 +4678,14 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 ex_rows = await fetch_day_exercises(user_id, day, today_str)
                 existing_groups = {g for _, _, g, _, _ in ex_rows}
                 custom = await get_custom_groups(user_id, context)
-                await safe_edit_message(q, "Выбери группу:", reply_markup=day_add_group_kb(day, custom, existing_groups))
+                await show_screen(q, context, 'Выбери группу:', day_add_group_kb(day, custom, existing_groups), user_id)
                 return
             if action == "del_ex":
                 day = int(parts[2])
                 clear_sheet_context(context, q.message.chat_id, q.message.message_id)
                 today_str = await get_user_local_date(user_id)
                 ex_rows = await fetch_day_exercises(user_id, day, today_str)
-                await safe_edit_message(q, "Удалить упражнение:", reply_markup=del_exercises_kb(day, ex_rows))
+                await show_screen(q, context, 'Удалить упражнение:', del_exercises_kb(day, ex_rows), user_id)
                 return
             if action == "add":
                 day = int(parts[2])
@@ -4876,7 +4695,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     group = parts[4]
                     if group == "other":
                         context.user_data["awaiting_group_name"] = (day, q.message.chat_id, q.message.message_id, "settings")
-                        await safe_edit_message(q, "Укажи группу мышц, которой хочешь заниматься.")
+                        await show_screen(q, context, 'Укажи группу мышц, которой хочешь заниматься.', None, user_id)
                         return
                     context.user_data["add_group"] = (day, group)
                     await show_day_add_exercises_view(q, user_id, day, group, context)
@@ -4908,7 +4727,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                 context.user_data["add_group"] = (day, group)
 
                         async def edit_instant(text, kb):
-                            await safe_edit_message(q, text, kb)
+                            await show_screen(q, context, text, kb, user_id)
 
                         started = await start_instant_baseline(
                             context,
@@ -4942,7 +4761,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             ]
                         ]
                     )
-                    await safe_edit_message(q, "Напиши название упражнения:", reply_markup=kb)
+                    await show_screen(q, context, 'Напиши название упражнения:', kb, user_id)
                     return
                 if sub == "custom_back":
                     group = parts[4]
@@ -4963,9 +4782,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     await remove_user_exercise(user_id, day, ue_id)
                     today_str = await get_user_local_date(user_id)
                     ex_rows = await fetch_day_exercises(user_id, day, today_str)
-                    await safe_edit_message(
-                        q, "Удалить упражнение:", reply_markup=del_exercises_kb(day, ex_rows)
-                    )
+                    await show_screen(q, context, 'Удалить упражнение:', del_exercises_kb(day, ex_rows), user_id)
                 return
 
         if parts[0] == "ex":
@@ -4994,11 +4811,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 kb = InlineKeyboardMarkup(
                     [[InlineKeyboardButton(t("BACK"), callback_data=f"ex:view:{day}:{ue_id}")]]
                 )
-                await safe_edit_message(
-                    q,
-                    "Напиши схему WOD. Оставь пусто, чтобы очистить.",
-                    kb,
-                )
+                await show_screen(q, context, 'Напиши схему WOD. Оставь пусто, чтобы очистить.', kb, user_id)
                 return
             if action == "select":
                 set_no = int(parts[4])
@@ -5017,8 +4830,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     prefs=prefs,
                     is_library=is_library,
                 )
-                text, kb = prepare_ui_output(view.text, kb, prefs)
-                await safe_edit_message(q, text, kb)
+                await show_screen(q, context, view.text, kb, user_id)
                 return
             if action == "view":
                 view = await render_exercise_view(
@@ -5036,8 +4848,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     prefs=prefs,
                     is_library=is_library,
                 )
-                text, kb = prepare_ui_output(view.text, kb, prefs)
-                await safe_edit_message(q, text, kb)
+                await show_screen(q, context, view.text, kb, user_id)
                 return
             today_str = await get_user_local_date(user_id)
             mode = await get_recording_mode(user_id)
@@ -5242,11 +5053,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         kb = InlineKeyboardMarkup(
                             [[InlineKeyboardButton(t("BACK"), callback_data=f"ex:view:{day}:{ue_id}")]]
                         )
-                        await safe_edit_message(
-                            q,
-                            "Укажи время в формате ММ:СС или ЧЧ:ММ:СС.",
-                            kb,
-                        )
+                        await show_screen(q, context, 'Укажи время в формате ММ:СС или ЧЧ:ММ:СС.', kb, user_id)
                         return
                     await mark_exercise_done(session_id, ue_id)
                     group = resolve_group(ex_name, ex_group)
@@ -5260,8 +5067,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         items = await list_library_exercises(user_id, group)
                         text = await render_library_group_text(user_id, group, items, context, prefs=prefs)
                         kb = library_group_kb(group, items)
-                        text, kb = prepare_ui_output(text, kb, prefs)
-                        await safe_edit_message(q, text, reply_markup=kb)
+                        await show_screen(q, context, text, kb, user_id)
                     else:
                         await show_day_group_view(q, user_id, day, group, context)
                     return
@@ -5280,8 +5086,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                 sheet_day if sheet_day is not None else day,
                                 sheet_page,
                             )
-                        text, kb = prepare_ui_output(text, kb, prefs)
-                        await safe_edit_message(q, text, kb)
+                        await show_screen(q, context, text, kb, user_id)
                         return
                     page = 0
                     if len(parts) > 4:
@@ -5362,8 +5167,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         kb = InlineKeyboardMarkup(nav_rows + base_rows)
                     else:
                         kb = InlineKeyboardMarkup(base_rows)
-                    text, kb = prepare_ui_output(text, kb, prefs)
-                    await safe_edit_message(q, text, kb)
+                    await show_screen(q, context, text, kb, user_id)
                     return
                 elif action == "timeedit":
                     ex_id, ex_name, ex_group = await get_exercise_info(ue_id)
@@ -5394,11 +5198,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     kb = InlineKeyboardMarkup(
                         [[InlineKeyboardButton(t("BACK"), callback_data=back_target)]]
                     )
-                    await safe_edit_message(
-                        q,
-                        "Укажи новое время в формате ММ:СС или ЧЧ:ММ:СС.",
-                        kb,
-                    )
+                    await show_screen(q, context, 'Укажи новое время в формате ММ:СС или ЧЧ:ММ:СС.', kb, user_id)
                     return
                 elif action == "timedel":
                     ex_id, ex_name, ex_group = await get_exercise_info(ue_id)
@@ -5421,8 +5221,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             sheet_day if sheet_day is not None else day,
                             sheet_page,
                         )
-                    text, kb = prepare_ui_output(text, kb, prefs)
-                    await safe_edit_message(q, text, kb)
+                    await show_screen(q, context, text, kb, user_id)
                     return
         view = await render_exercise_view(
             user_id, day, ue_id, get_flex_selected(context, day, ue_id), prefs=prefs
@@ -5439,8 +5238,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             prefs=prefs,
             is_library=is_library,
         )
-        text, kb = prepare_ui_output(view.text, kb, prefs)
-        await safe_edit_message(q, text, kb)
+        await show_screen(q, context, text, kb, user_id)
         return
     finally:
         message = getattr(q, "message", None)
