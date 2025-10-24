@@ -334,12 +334,43 @@ def apply_markup_preferences(
     return InlineKeyboardMarkup(new_rows)
 
 
+def _select_text_variant(line: str, prefs: UiPreferences) -> str:
+    if "||" not in line:
+        return line
+    compact, detailed = line.split("||", 1)
+    compact = compact.strip()
+    detailed = detailed.strip()
+    selected = detailed if prefs.verbose_level else compact
+    if not selected:
+        selected = detailed or compact
+    if line.startswith(" ") and not selected.startswith(" "):
+        leading = len(line) - len(line.lstrip(" "))
+        selected = (" " * leading) + selected
+    return selected
+
+
+def prepare_ui_output(
+    text: str,
+    markup: InlineKeyboardMarkup | None,
+    prefs: UiPreferences,
+) -> tuple[str, InlineKeyboardMarkup | None]:
+    processed_text = text or ""
+    if processed_text:
+        processed_lines = [
+            _select_text_variant(line, prefs) for line in processed_text.splitlines()
+        ]
+        processed_text = "\n".join(processed_lines)
+    processed_text = apply_text_preferences(processed_text, prefs)
+    processed_markup = apply_markup_preferences(markup, prefs)
+    return processed_text, processed_markup
+
+
 def apply_ui_preferences(
     text: str,
     markup: InlineKeyboardMarkup | None,
     prefs: UiPreferences,
 ) -> tuple[str, InlineKeyboardMarkup | None]:
-    return apply_text_preferences(text, prefs), apply_markup_preferences(markup, prefs)
+    return prepare_ui_output(text, markup, prefs)
 
 
 def resolve_group(name: str, group: str) -> str:
