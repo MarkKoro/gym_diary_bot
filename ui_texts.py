@@ -22,8 +22,6 @@ STRINGS_RU = MappingProxyType(
         "FOR_TIME_TITLE": "For Time",
         "ADD_SET": "＋ сет",
         "ADD_REP": "＋1",
-        "ADD_W": "＋{step}кг",
-        "SUB_W": "−{step}кг",
         "AMRAP_LINE": "Сделано: {rounds} раундов + {extra} повт.",
         "AMRAP_RESULT": "{rounds} раундов + {extra} повт.",
         "FTIME_LINE": "Результат: {time}",

@@ -39,6 +39,7 @@ from keyboards import (
     reminder_day_kb,
     WEEKDAYS,
     MG_NAMES,
+    BACK_BTN,
     day_kb,
     day_group_kb,
     day_add_group_kb,
@@ -46,16 +47,17 @@ from keyboards import (
     del_exercises_kb,
     exercise_actions_kb,
     settings_kb,
+    settings_groups_kb,
     edit_day_select_kb,
     edit_day_mode_kb,
     edit_day_strength_kb,
     edit_day_special_kb,
     rename_day_kb,
     days_count_kb,
-    weight_step_kb,
     recording_mode_kb,
     ui_preferences_kb,
     confirm_day_group_delete_kb,
+    confirm_settings_group_delete_kb,
     TIMEZONES,
     library_menu_kb,
     library_group_kb,
@@ -67,7 +69,6 @@ from keyboards import (
     measurements_category_kb,
     measurements_metric_kb,
     measurements_existing_kb,
-    ui_header_row,
     ui_footer_rows,
 )
 from settings import TG_TOKEN, SUPPORT_DEEPLINK, TG_POOL_SIZE, SUBSCRIPTION_CHAT, JOIN_URL
@@ -107,8 +108,6 @@ from db import (
     count_exercise_progress_entries,
     list_last_done_dates,
     rename_day,
-    get_weight_step,
-    set_weight_step,
     get_recording_mode,
     set_recording_mode,
     get_ui_preferences,
@@ -147,6 +146,7 @@ last_messages: dict[int, int] = {}
 PROGRESS_PAGE_SIZE = 5
 DAY_SHEET_PAGE_SIZE = 6
 SHEET_VIEWS_KEY = "day_sheet_views"
+WEIGHT_ROUND_STEP = 0.5
 
 AMRAP_EXERCISE_NAME = "Меткон — AMRAP (кастом)"
 FOR_TIME_EXERCISE_NAME = "Меткон — For Time (кастом)"
@@ -195,7 +195,6 @@ class ExerciseView:
     is_amrap: bool
     is_for_time: bool
     has_history: bool
-    weight_step: float | None
 
 
 async def load_ui_preferences(user_id: int) -> UiPreferences:
@@ -702,7 +701,6 @@ def wizard_apply_kb(total_days: int) -> InlineKeyboardMarkup:
         rows.append(
             [InlineKeyboardButton("Настроить День 2", callback_data="wiz:apply:next:2")]
         )
-    rows.append([InlineKeyboardButton("В меню", callback_data="wiz:apply:menu")])
     return InlineKeyboardMarkup(rows)
 
 async def try_delete(msg):
@@ -1197,10 +1195,10 @@ def _build_single_fill_keyboard(state: FillEditorState) -> InlineKeyboardMarkup:
                         "＋0.5 кг", callback_data="fill:single:inc:kg:0.5"
                     ),
                     InlineKeyboardButton(
-                        "＋1 кг", callback_data="fill:single:inc:kg:1"
+                        "＋3 кг", callback_data="fill:single:inc:kg:3"
                     ),
                     InlineKeyboardButton(
-                        "＋5 кг", callback_data="fill:single:inc:kg:5"
+                        "＋10 кг", callback_data="fill:single:inc:kg:10"
                     ),
                 ],
                 [
@@ -1208,10 +1206,10 @@ def _build_single_fill_keyboard(state: FillEditorState) -> InlineKeyboardMarkup:
                         "−0.5 кг", callback_data="fill:single:inc:kg:-0.5"
                     ),
                     InlineKeyboardButton(
-                        "−1 кг", callback_data="fill:single:inc:kg:-1"
+                        "−3 кг", callback_data="fill:single:inc:kg:-3"
                     ),
                     InlineKeyboardButton(
-                        "−5 кг", callback_data="fill:single:inc:kg:-5"
+                        "−10 кг", callback_data="fill:single:inc:kg:-10"
                     ),
                 ],
             ]
@@ -1273,10 +1271,10 @@ def _build_flex_fill_keyboard(state: FillEditorState) -> InlineKeyboardMarkup:
                     "＋0.5 кг", callback_data="fill:flex:inc:kg:0.5"
                 ),
                 InlineKeyboardButton(
-                    "＋1 кг", callback_data="fill:flex:inc:kg:1"
+                    "＋3 кг", callback_data="fill:flex:inc:kg:3"
                 ),
                 InlineKeyboardButton(
-                    "＋5 кг", callback_data="fill:flex:inc:kg:5"
+                    "＋10 кг", callback_data="fill:flex:inc:kg:10"
                 ),
             ]
         )
@@ -1286,10 +1284,10 @@ def _build_flex_fill_keyboard(state: FillEditorState) -> InlineKeyboardMarkup:
                     "−0.5 кг", callback_data="fill:flex:inc:kg:-0.5"
                 ),
                 InlineKeyboardButton(
-                    "−1 кг", callback_data="fill:flex:inc:kg:-1"
+                    "−3 кг", callback_data="fill:flex:inc:kg:-3"
                 ),
                 InlineKeyboardButton(
-                    "−5 кг", callback_data="fill:flex:inc:kg:-5"
+                    "−10 кг", callback_data="fill:flex:inc:kg:-10"
                 ),
             ]
         )
@@ -2213,8 +2211,6 @@ async def build_day_sheet_message(
     date_str = await get_user_local_date(user_id)
     items = await fetch_day_sheet_data(user_id, day_index, date_str)
     label = await get_day_label(user_id, day_index)
-    step_value = await get_weight_step(user_id)
-    step_label = format_weight_value(step_value)
     total = len(items)
     total_pages = max(1, math.ceil(total / DAY_SHEET_PAGE_SIZE)) if total else 1
     page = max(0, min(page, total_pages - 1))
@@ -2227,8 +2223,12 @@ async def build_day_sheet_message(
         header += f" — {label}"
     lines = [header]
     weight_hint = (
-        f"Фиксируй подходы кнопками «{t('ADD_SET')}» и «{t('ADD_REP')}».",
-        f"Фиксируй подходы кнопками «{t('ADD_SET')}» и «{t('ADD_REP')}». Кнопки «{t('ADD_W', step=step_label)}» меняют рабочий вес во всех карточках, так что учёт ведётся без переходов по меню.",
+        "Фиксируй подходы кнопками «{add_set}» и «{add_rep}». Кнопки «＋0.5 кг», «＋3 кг» и «＋10 кг» меняют рабочий вес во всех карточках.".format(
+            add_set=t('ADD_SET'), add_rep=t('ADD_REP')
+        ),
+        "Фиксируй подходы кнопками «{add_set}» и «{add_rep}». Кнопки «＋0.5 кг», «＋3 кг» и «＋10 кг» меняют рабочий вес во всех карточках, «−0.5 кг», «−3 кг» и «−10 кг» убирают вес — учёт ведётся без переходов по меню.".format(
+            add_set=t('ADD_SET'), add_rep=t('ADD_REP')
+        ),
     )
     simple_hint = (
         f"Фиксируй подходы кнопками «{t('ADD_SET')}» и «{t('ADD_REP')}».",
@@ -2309,26 +2309,23 @@ async def build_day_sheet_message(
             lines.append(f"• Прошлый раз: {last_text}")
             lines.append(f"• План: {plan_text}")
             lines.append(f"• Сегодня: {done_text}")
-            step_cb = f"{step_value:g}"
             base_cb = f"ex:inc:{day_index}:{ue_id}"
             add_label = t("ADD_REP") if kind != "duration" else f"{t('ADD_REP')} сек"
             sub_label = "−1" if kind != "duration" else "−1 сек"
-            row: list[InlineKeyboardButton] = [
+            controls_row: list[InlineKeyboardButton] = [
                 InlineKeyboardButton(t("ADD_SET"), callback_data=f"ex:addset:{day_index}:{ue_id}"),
                 InlineKeyboardButton("− сет", callback_data=f"ex:delset:{day_index}:{ue_id}"),
                 InlineKeyboardButton(
                     add_label,
                     callback_data=f"{base_cb}:reps:1",
                 ),
+                InlineKeyboardButton(
+                    sub_label,
+                    callback_data=f"{base_cb}:reps:-1",
+                ),
             ]
-            row.append(
-                InlineKeyboardButton(sub_label, callback_data=f"{base_cb}:reps:-1")
-            )
+            kb_rows.append(controls_row)
             if kind == "duration":
-                row.append(
-                    InlineKeyboardButton(t("DONE"), callback_data=f"ex:done:{day_index}:{ue_id}")
-                )
-                kb_rows.append(row)
                 kb_rows.append(
                     [
                         InlineKeyboardButton("＋5 сек", callback_data=f"{base_cb}:reps:5"),
@@ -2341,26 +2338,33 @@ async def build_day_sheet_message(
                         InlineKeyboardButton("−10 сек", callback_data=f"{base_cb}:reps:-10"),
                     ]
                 )
-                continue
-            else:
-                if with_weight:
-                    row.extend(
-                        [
-                            InlineKeyboardButton(
-                                t("ADD_W", step=step_label),
-                                callback_data=f"{base_cb}:kg:{step_cb}",
-                            ),
-                            InlineKeyboardButton(
-                                t("SUB_W", step=step_label),
-                                callback_data=f"{base_cb}:kg:{-step_value}",
-                            ),
-                        ]
-                    )
-                row.append(
-                    InlineKeyboardButton(t("DONE"), callback_data=f"ex:done:{day_index}:{ue_id}")
+                kb_rows.append(
+                    [InlineKeyboardButton(t("DONE"), callback_data=f"ex:done:{day_index}:{ue_id}")]
                 )
-                kb_rows.append(row)
                 continue
+            if with_weight:
+                plus_row: list[InlineKeyboardButton] = []
+                minus_row: list[InlineKeyboardButton] = []
+                for step in (0.5, 3.0, 10.0):
+                    label = format_weight_value(step)
+                    plus_row.append(
+                        InlineKeyboardButton(
+                            f"＋{label} кг",
+                            callback_data=f"{base_cb}:kg:{step:g}",
+                        )
+                    )
+                    minus_row.append(
+                        InlineKeyboardButton(
+                            f"−{label} кг",
+                            callback_data=f"{base_cb}:kg:{-step:g}",
+                        )
+                    )
+                kb_rows.append(plus_row)
+                kb_rows.append(minus_row)
+            kb_rows.append(
+                [InlineKeyboardButton(t("DONE"), callback_data=f"ex:done:{day_index}:{ue_id}")]
+            )
+            continue
     if total_pages > 1:
         nav_row: list[InlineKeyboardButton] = []
         if page > 0:
@@ -2470,7 +2474,6 @@ async def send_day_cards_view(
     )
     base_markup = day_kb(day, ex_rows)
     back_cb = "menu:root"
-    menu_cb = "menu:root"
     content_rows: list[list[InlineKeyboardButton]] = []
     primary_actions: list[tuple[str, str]] = []
     for row in base_markup.inline_keyboard:
@@ -2480,7 +2483,6 @@ async def send_day_cards_view(
         callback = button.callback_data or ""
         if callback == "menu:root":
             back_cb = callback
-            menu_cb = callback
             continue
         if callback.startswith(f"day:add_ex:{day}") or callback.startswith(
             f"day:del_ex:{day}"
@@ -2489,9 +2491,9 @@ async def send_day_cards_view(
             continue
         content_rows.append(row)
     rows: list[list[InlineKeyboardButton]] = []
-    rows += ui_header_row(back_cb, menu_cb)
     rows += content_rows
     rows += ui_footer_rows(primary_actions, None)
+    rows.append([InlineKeyboardButton(BACK_BTN, callback_data=back_cb)])
     kb = InlineKeyboardMarkup(rows)
     await show_screen(q, context, text, kb, user_id)
 
@@ -2810,7 +2812,6 @@ async def render_exercise_view(
     last_sets = await fetch_last_session_sets(user_id, day, ue_id, today)
     prefs = prefs or await load_ui_preferences(user_id)
     with_weight, kind = get_display_flags(group, name)
-    weight_step = await get_weight_step(user_id) if with_weight else None
     is_amrap = group == "metcon" and name == AMRAP_EXERCISE_NAME
     is_for_time = group == "metcon" and name == FOR_TIME_EXERCISE_NAME
 
@@ -2912,7 +2913,6 @@ async def render_exercise_view(
         is_amrap=is_amrap,
         is_for_time=is_for_time,
         has_history=True,
-        weight_step=weight_step,
     )
 
 
@@ -2942,7 +2942,6 @@ def build_exercise_actions_markup(
         day=target_day,
         ue_id=ue_id,
         group=group,
-        weight_step=view.weight_step,
         is_amrap=view.is_amrap,
         is_for_time=view.is_for_time,
         back_callback=callback_back,
@@ -2965,9 +2964,9 @@ def build_exercise_actions_markup(
             continue
         content_rows.append(row)
     rows: list[list[InlineKeyboardButton]] = []
-    rows += ui_header_row(callback_back, "menu:root")
     rows += content_rows
     rows += ui_footer_rows(primary_actions, secondary_actions)
+    rows.append([InlineKeyboardButton(BACK_BTN, callback_data=callback_back)])
     return InlineKeyboardMarkup(rows)
 
 
@@ -4199,7 +4198,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "🔁 Изменить день — переключи тип тренировки (силовая, гири, кроссфит, воркаут) и открой подходящие упражнения. После переключения можно добавлять упражнения из любых групп.\n"
                 f"📅 Количество тренировок — сейчас {n}. Укажи, сколько раз планируешь тренироваться.\n"
                 f"🎨 Оформление интерфейса — режим {mode_label.lower()}, эмодзи {emoji_label}, пояснения: {verbose_label}.\n"
-                f"🏋️ Шаг веса — задай шаг изменения (0.5/1/2/5 кг). Кнопки «{t('ADD_W', step='шаг ')}» и «{t('SUB_W', step='шаг ')}» используют это значение во всех упражнениях для прибавки и убавки веса.\n"
+                "🗑 Мои группы — удаляй созданные группы мышц. Все упражнения из удалённых групп исчезнут из расписания и библиотеки.\n"
                 "📝 Выбор записи — расскажи боту, как фиксировать подходы. Бот хранит каждый рабочий сет, в том числе парные (левая/правая, две гири подряд).\n"
                 "   • Одинаковый вес — каждый сет с одной схемой повторов и веса.\n"
                 "   • Гибкая запись — настраивай вес и повторы отдельно для каждого подхода.\n"
@@ -4557,20 +4556,63 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     else:
                         await show_screen(q, context, 'Количество тренировок обновлено.', settings_kb(), user_id)
                 return
-            if action == "step":
+            if action == "groups":
                 if len(parts) == 2:
-                    step = await get_weight_step(user_id)
-                    text = (
-                        "Какой шаг изменения веса использовать?\n"
-                        "Кнопки «＋/−шаг кг» в карточках и компактном листе будут прибавлять или убавлять именно это значение.\n"
-                        "Можно добавлять и убирать вес маленькими шагами: 0.5, 1, 2 или 5 кг — выбери, что удобнее."
-                    )
-                    await show_screen(q, context, text, weight_step_kb(step), user_id)
-                else:
-                    step = float(parts[2])
-                    await set_weight_step(user_id, step)
-                    formatted = format_weight_value(step)
-                    await show_screen(q, context, f'Шаг веса обновлён: {formatted} кг. Кнопки веса теперь работают с этим шагом.', settings_kb(), user_id)
+                    rows = await list_user_muscle_groups(user_id)
+                    context.user_data["custom_groups"] = {code: name for code, name in rows}
+                    if not rows:
+                        text = (
+                            "Собственных групп пока нет. Добавь их через настройку дней — здесь появится список для удаления."
+                        )
+                    else:
+                        text = (
+                            "Выбери группу, которую хочешь удалить.\n"
+                            "Все упражнения из неё исчезнут из расписания и библиотеки."
+                        )
+                    await show_screen(q, context, text, settings_groups_kb(rows), user_id)
+                    return
+                if len(parts) >= 4 and parts[2] == "del":
+                    code = parts[3]
+                    if not code.startswith("u"):
+                        await q.answer("Эту группу нельзя удалить.", show_alert=True)
+                        return
+                    custom = await get_custom_groups(user_id, context)
+                    name = custom.get(code, MG_NAMES.get(code, code))
+                    if len(parts) == 4:
+                        text = (
+                            f"Удалить группу «{name}»?\n"
+                            "Все упражнения из неё исчезнут из расписания и библиотеки."
+                        )
+                        kb = confirm_settings_group_delete_kb(code)
+                        await show_screen(q, context, text, kb, user_id)
+                        return
+                    if len(parts) >= 5 and parts[4] == "ok":
+                        removed = await remove_user_muscle_group(user_id, code)
+                        if not removed:
+                            await q.answer("Не удалось удалить группу.", show_alert=True)
+                            rows = await list_user_muscle_groups(user_id)
+                            message = (
+                                "Собственных групп пока нет. Добавь их через настройку дней — здесь появится список для удаления."
+                                if not rows
+                                else "Выбери группу, которую хочешь удалить.\nВсе упражнения из неё исчезнут из расписания и библиотеки."
+                            )
+                            await show_screen(q, context, message, settings_groups_kb(rows), user_id)
+                            return
+                        custom.pop(code, None)
+                        rows = await list_user_muscle_groups(user_id)
+                        context.user_data["custom_groups"] = {c: n for c, n in rows}
+                        if rows:
+                            text = (
+                                "Группа удалена. Все связанные упражнения убраны из расписания и библиотеки."
+                            )
+                        else:
+                            text = (
+                                "Группа удалена. Все связанные упражнения убраны из расписания и библиотеки."
+                                "\nСобственных групп больше нет."
+                            )
+                        await q.answer("Группа удалена.")
+                        await show_screen(q, context, text, settings_groups_kb(rows), user_id)
+                        return
                 return
             if action == "recording":
                 if len(parts) == 2:
@@ -4984,9 +5026,8 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             if with_weight:
                                 if weight <= 0.0 and base:
                                     weight = float(max(base[2] or 0.0, 0.0))
-                                step = await get_weight_step(user_id)
-                                if step and weight > 0.0:
-                                    weight = round(weight / step) * step
+                                if weight > 0.0:
+                                    weight = round(weight / WEIGHT_ROUND_STEP) * WEIGHT_ROUND_STEP
                             else:
                                 weight = 0.0
                         await add_set(session_id, ue_id, reps, weight)
@@ -5066,9 +5107,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     else:
                         explicit_delta = False
                     if field == "kg" and delta_value is None and not explicit_delta:
-                        step = await get_weight_step(user_id)
-                        if step is not None:
-                            delta_value = step
+                        delta_value = WEIGHT_ROUND_STEP
                     target = None
                     if field in ("reps", "sec"):
                         target = "reps"

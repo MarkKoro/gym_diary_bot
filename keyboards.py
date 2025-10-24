@@ -11,7 +11,6 @@ def dual(compact: str, detailed: str) -> str:
 
 
 BACK_BTN = dual("‹ Назад", "Назад")
-MENU_BTN = dual("⋯ Меню", "Открыть меню")
 DONE_BTN = dual("✅ Готово", "Готово")
 CANCEL_BTN = dual("↩︎ Отмена", "Отмена")
 HISTORY_BTN = dual("📈 История", "Посмотреть историю")
@@ -19,13 +18,6 @@ CUSTOM_OPTION_BTN = dual("📝 Свой вариант", "Добавить св�
 
 if TYPE_CHECKING:
     from bot import UiPreferences
-
-
-def ui_header_row(back_cb: str, menu_cb: str | None) -> list[list[InlineKeyboardButton]]:
-    buttons = [InlineKeyboardButton(BACK_BTN, callback_data=back_cb)]
-    if menu_cb and menu_cb != back_cb:
-        buttons.append(InlineKeyboardButton(MENU_BTN, callback_data=menu_cb))
-    return [buttons]
 
 
 def ui_footer_rows(
@@ -134,8 +126,8 @@ def settings_kb():
         ],
         [
             InlineKeyboardButton(
-                dual("🏋️ Шаг веса", "Изменить шаг добавления веса"),
-                callback_data="set:step",
+                dual("🗑 Мои группы", "Удалить созданные группы мышц"),
+                callback_data="set:groups",
             )
         ],
         [
@@ -170,6 +162,21 @@ def rename_day_kb(days: list[tuple[int, str]]):
                         f"Переименовать {t('DAY')} {idx} — {label}",
                     ),
                     callback_data=f"set:rename_day:{idx}",
+                )
+            ]
+        )
+    rows.append([InlineKeyboardButton(BACK_BTN, callback_data="menu:settings")])
+    return InlineKeyboardMarkup(rows)
+
+
+def settings_groups_kb(groups: list[tuple[str, str]]):
+    rows: list[list[InlineKeyboardButton]] = []
+    for code, name in groups:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    dual(f"− {name}", f"Удалить группу «{name}»"),
+                    callback_data=f"set:groups:del:{code}",
                 )
             ]
         )
@@ -274,28 +281,6 @@ def days_count_kb():
         )
     rows.append([InlineKeyboardButton(BACK_BTN, callback_data="menu:settings")])
     return InlineKeyboardMarkup(rows)
-
-def weight_step_kb(current: float):
-    rows = []
-    for val in (0.5, 1.0, 2.0, 5.0):
-        mark = "✅ " if abs(current - val) < 1e-6 else ""
-        label = f"{val:.1f}" if val % 1 else f"{int(val)}"
-        detailed = (
-            f"Выбран шаг {label} кг"
-            if mark
-            else f"Выбрать шаг {label} кг"
-        )
-        rows.append(
-            [
-                InlineKeyboardButton(
-                    dual(f"{mark}{label}", detailed),
-                    callback_data=f"set:step:{val}",
-                )
-            ]
-        )
-    rows.append([InlineKeyboardButton(BACK_BTN, callback_data="menu:settings")])
-    return InlineKeyboardMarkup(rows)
-
 
 def _option_marker(active: bool) -> str:
     return "◉" if active else "○"
@@ -1014,7 +999,6 @@ def exercise_actions_kb(
     day: int,
     ue_id: int,
     group: str,
-    weight_step: float | None = None,
     is_amrap: bool = False,
     is_for_time: bool = False,
     back_callback: str,
@@ -1159,21 +1143,25 @@ def exercise_actions_kb(
                     )
                 rows.append(weight_row)
     if with_weight:
-        step_value = weight_step if weight_step is not None else 1.0
-        step_label = _format_step_label(step_value)
-        delta = _format_weight_delta(step_value)
-        rows.append(
-            [
+        positive_row: list[InlineKeyboardButton] = []
+        negative_row: list[InlineKeyboardButton] = []
+        for step in (0.5, 3.0, 10.0):
+            compact, detailed = _format_major_weight_label(step, True)
+            positive_row.append(
                 InlineKeyboardButton(
-                    dual("＋ Шаг кг", f"Добавить {step_label} кг"),
-                    callback_data=f"{inc_base}:kg:{delta}",
-                ),
+                    dual(compact, detailed),
+                    callback_data=f"{inc_base}:kg:{_format_weight_delta(step)}",
+                )
+            )
+            compact, detailed = _format_major_weight_label(step, False)
+            negative_row.append(
                 InlineKeyboardButton(
-                    dual("− Шаг кг", f"Убрать {step_label} кг"),
-                    callback_data=f"{inc_base}:kg:{_format_weight_delta(-step_value)}",
-                ),
-            ]
-        )
+                    dual(compact, detailed),
+                    callback_data=f"{inc_base}:kg:{_format_weight_delta(-step)}",
+                )
+            )
+        rows.append(positive_row)
+        rows.append(negative_row)
     if has_history:
         rows.append([InlineKeyboardButton(HISTORY_BTN, callback_data=progress_cb)])
     rows.append(
@@ -1402,6 +1390,20 @@ def confirm_day_group_delete_kb(day_index: int, group: str):
                 )
             ],
             [InlineKeyboardButton(CANCEL_BTN, callback_data=f"day:group:{day_index}:{group}")],
+        ]
+    )
+
+
+def confirm_settings_group_delete_kb(group: str):
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton(
+                    dual("✅ Готово", "Удалить группу"),
+                    callback_data=f"set:groups:del:{group}:ok",
+                )
+            ],
+            [InlineKeyboardButton(CANCEL_BTN, callback_data="set:groups")],
         ]
     )
 
