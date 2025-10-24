@@ -199,7 +199,13 @@ class ExerciseView:
 
 async def load_ui_preferences(user_id: int) -> UiPreferences:
     mode, emoji, verbose = await get_ui_preferences(user_id)
-    return UiPreferences(mode=mode, emoji_enabled=bool(emoji), verbose_level=1 if verbose else 0)
+    if mode != "detailed":
+        await set_ui_mode(user_id, "detailed")
+        mode = "detailed"
+    if not emoji:
+        await set_ui_emoji_enabled(user_id, True)
+        emoji = 1
+    return UiPreferences(mode=mode, emoji_enabled=True, verbose_level=1 if verbose else 0)
 
 
 def emoji_for(prefs: UiPreferences, key: str) -> str:
@@ -232,22 +238,24 @@ def build_main_menu_text(prefs: UiPreferences) -> str:
     lines = [f"{t('MAIN_TITLE')}:", ""]
     lines.append("Выбирай тренировочный день или другой раздел, чтобы вести дневник.")
     if prefs.verbose_level:
-        lines.append("Ниже — подробное описание разделов, чтобы быстро сориентироваться.")
+        lines.append(
+            "Ниже — подробное описание разделов с подсказками, как работать с упражнениями."
+        )
     else:
         lines.append("Ниже — краткое напоминание о назначении каждого раздела.")
     lines.append("────────")
     if prefs.verbose_level:
         lines.append(
-            "Дни тренировок — открой нужный, чтобы отмечать подходы и просматривать прошлые результаты. Здесь же можно добавлять упражнения из любых групп мышц."
+            "Дни тренировок — открой нужный день, чтобы отмечать подходы, настраивать упражнения и тут же видеть актуальный результат. Добавлять и убирать упражнения можно прямо из карточек."
         )
         lines.append(
-            "Мои упражнения — личная библиотека с описаниями и историей. Добавляй упражнения через день тренировки, чтобы они появлялись здесь для быстрого доступа."
+            "Мои упражнения — личная библиотека с описаниями и историей. Здесь удобно уточнять технику, обновлять план и возвращаться к сохранённым схемам."
         )
         lines.append(
             "Мои замеры — сохраняй динамику тела и контрольных показателей. Последние записи отображаются списком, чтобы видеть прогресс без лишних переходов."
         )
         lines.append(
-            "Настройки — настрой расписание, напоминания и внешний вид интерфейса. Здесь же выбираются краткие или обычные пояснения и отключаются эмодзи."
+            "Настройки — измени расписание, управление напоминаниями и выбери уровень пояснений. Все подсказки в интерфейсе синхронизируются с выбранным режимом."
         )
         lines.append(
             "Техподдержка — напиши, если что-то не работает или есть вопросы. Мы ответим прямо в чате и поможем настроить дневник."
@@ -412,6 +420,59 @@ def format_flex_value(
         formatted = format_weight_value(max(weight, 0.0))
         return f"{reps}×{formatted} кг"
     return f"{reps} повт."
+
+
+def _compress_flex_entries(
+    entries: list[tuple[int, int, float, int]],
+    *,
+    with_weight: bool,
+    kind: str,
+) -> list[dict[str, int | float]]:
+    runs: list[dict[str, int | float]] = []
+    for no, reps, weight, warm in entries:
+        reps_value = int(reps)
+        weight_value = float(weight or 0.0)
+        warm_flag = int(warm or 0)
+        if runs:
+            prev = runs[-1]
+            same_reps = int(prev["reps"]) == reps_value
+            same_warm = int(prev["warm"]) == warm_flag
+            same_weight = (
+                kind == "duration"
+                or not with_weight
+                or math.isclose(float(prev["weight"]), weight_value, abs_tol=1e-6)
+            )
+            if same_reps and same_warm and same_weight:
+                prev["end"] = no
+                prev["count"] = int(prev["count"]) + 1
+                continue
+        runs.append(
+            {
+                "start": no,
+                "end": no,
+                "count": 1,
+                "reps": reps_value,
+                "weight": weight_value,
+                "warm": warm_flag,
+            }
+        )
+    return runs
+
+
+def _compress_flex_triplets(
+    entries: list[tuple[int, int, float]],
+    *,
+    with_weight: bool,
+    kind: str,
+) -> list[dict[str, int | float]]:
+    extended = [(no, reps, weight, 0) for no, reps, weight in entries]
+    return _compress_flex_entries(extended, with_weight=with_weight, kind=kind)
+
+
+def _format_flex_span(start: int, end: int) -> str:
+    if start == end:
+        return str(start)
+    return f"{start}–{end}"
 
 
 def filter_work_sets(sets: list[tuple[int, int, float, int]]) -> list[tuple[int, int, float]]:
@@ -639,12 +700,12 @@ async def show_screen(
 
 
 def wizard_day_mode_text(day: int, prefs: UiPreferences) -> str:
-    if prefs.mode == "compact":
-        base = f"Тип дня {day}:"
-    else:
-        base = f"День {day}. Выбери тип тренировки."
+    base = f"День {day}. Выбери тип тренировки."
     if prefs.verbose_level:
-        return f"{base}\nВыбери направление, чтобы подобрать упражнения."
+        return (
+            f"{base}\nОриентируйся на цели дня: выбери направление, затем подберёшь упражнения"
+            " с подходящими подсказками."
+        )
     return base
 
 
@@ -685,11 +746,14 @@ def wizard_day_mode_kb(day: int) -> InlineKeyboardMarkup:
 
 
 def wizard_apply_text(prefs: UiPreferences) -> str:
-    if prefs.mode == "compact":
-        return "Применить ко всем дням?"
-    text = "Применить настройки Дня 1 ко всем остальным дням? Это можно менять позже в настройках."
+    text = (
+        "Применить настройки Дня 1 ко всем остальным дням? Это можно менять позже в настройках."
+    )
     if prefs.verbose_level:
-        return text
+        return (
+            f"{text}\nЕсли хочешь настроить дни по-разному, выбери вариант с отдельной"
+            " настройкой и добавь упражнения вручную."
+        )
     return text
 
 
@@ -826,7 +890,7 @@ def render_day_text(
         prefs,
         (
             "Открой нужную группу, чтобы отметить подходы.",
-            "Открой нужную группу, чтобы отметить подходы. После отметки показатели обновятся прямо в списке и покажут актуальный результат.",
+            "Открой нужную группу, чтобы отметить подходы и настроить упражнение. В карточке можно добавить или удалить подходы, скорректировать вес и сразу сохранить результат в расписании.",
         ),
     )
     total = len(groups)
@@ -1980,10 +2044,18 @@ def summarize_previous_sets(
     if not sets:
         return ""
     if mode == "flex":
-        return " · ".join(
-            f"{no}. {format_flex_value(reps, weight, with_weight, kind)}"
-            for no, reps, weight in sets
-        )
+        grouped = _compress_flex_triplets(sets, with_weight=with_weight, kind=kind)
+        parts: list[str] = []
+        for entry in grouped:
+            value = format_flex_value(
+                int(entry["reps"]), float(entry["weight"]), with_weight, kind
+            )
+            count = int(entry["count"])
+            if count > 1:
+                parts.append(f"{count}× {value}")
+            else:
+                parts.append(value)
+        return " · ".join(parts)
     reps = sets[-1][1]
     weight = sets[-1][2]
     return format_sets_value(len(sets), reps, weight, with_weight)
@@ -2000,10 +2072,8 @@ def summarize_baseline(
         return ""
     sets, reps, weight = values
     if mode == "flex":
-        return " · ".join(
-            f"{i}. {format_flex_value(reps, weight, with_weight, kind)}"
-            for i in range(1, sets + 1)
-        )
+        formatted = format_flex_value(reps, weight, with_weight, kind)
+        return f"{sets}× {formatted}"
     return format_sets_value(sets, reps, weight, with_weight)
 
 
@@ -2511,10 +2581,25 @@ def format_current_training(
             empty = format_sets_value(0, 0, 0.0, with_weight)
             return [f"Текущая тренировка: {empty}"]
         lines = ["Текущая тренировка:"]
-        for set_no, reps, weight, _ in sets:
-            prefix = "▶︎ " if selected == set_no else ""
-            value = format_flex_value(reps, weight, with_weight, kind)
-            lines.append(f"{prefix}{set_no}. {value}")
+        grouped = _compress_flex_entries(sets, with_weight=with_weight, kind=kind)
+        for entry in grouped:
+            start = int(entry["start"])
+            end = int(entry["end"])
+            count = int(entry["count"])
+            marker = ""
+            if selected is not None:
+                if end < selected:
+                    marker = "✅ "
+                elif start <= selected <= end:
+                    marker = "▶︎ "
+            value = format_flex_value(
+                int(entry["reps"]), float(entry["weight"]), with_weight, kind
+            )
+            if count > 1:
+                label = _format_flex_span(start, end)
+                lines.append(f"{marker}{label}. {count}× {value}")
+            else:
+                lines.append(f"{marker}{start}. {value}")
         return lines
     reps = sets[-1][1] if sets else 0
     weight = sets[-1][2] if sets else 0.0
@@ -2541,15 +2626,25 @@ def build_flex_session_lines(
         lines.append("Когда закончишь, нажми «Готово».")
         return lines
     lines.append("Сегодняшние подходы:")
-    for no, reps, weight in work_sets:
+    grouped = _compress_flex_triplets(work_sets, with_weight=with_weight, kind=kind)
+    for entry in grouped:
+        start = int(entry["start"])
+        end = int(entry["end"])
+        count = int(entry["count"])
         marker = ""
         if selected is not None:
-            if no < selected:
+            if end < selected:
                 marker = "✅ "
-            elif no == selected:
+            elif start <= selected <= end:
                 marker = "▶︎ "
-        value = format_flex_value(reps, weight, with_weight, kind)
-        lines.append(f"{marker}{no}) {value}")
+        value = format_flex_value(
+            int(entry["reps"]), float(entry["weight"]), with_weight, kind
+        )
+        if count > 1:
+            label = _format_flex_span(start, end)
+            lines.append(f"{marker}{label}) {count}× {value}")
+        else:
+            lines.append(f"{marker}{start}) {value}")
     if selected is not None:
         lines.append("")
         lines.append(
@@ -2648,7 +2743,7 @@ async def show_day_group_view(
         prefs,
         (
             "Отмечай подходы прямо в списке упражнений.",
-            "Отмечай подходы прямо в списке упражнений. После сохранения строка обновится и покажет актуальный объём и последний рабочий сет.",
+            "Отмечай подходы прямо в списке упражнений. Используй кнопки «＋ сет», «＋1» и настройки веса, чтобы собрать фактический комплект, — после сохранения строка обновится и покажет актуальный объём и последний рабочий сет.",
         ),
     )
     lines.append("")
@@ -2695,7 +2790,7 @@ async def render_library_group_text(
         prefs,
         (
             "Открой упражнение, чтобы посмотреть детали.",
-            "Открой упражнение, чтобы посмотреть детали. Там доступна история и быстрые кнопки для записи новых подходов.",
+            "Открой упражнение, чтобы посмотреть детали. Там можно уточнить план, изучить историю и через кнопки сразу записать новые подходы или скорректировать их.",
         ),
     )
     lines.append("")
@@ -2747,7 +2842,7 @@ async def render_library_group_text(
         prefs,
         (
             "Добавь новые упражнения через «Добавить упражнение».",
-            "Добавь новые упражнения через «Добавить упражнение». После сохранения их можно прикрепить к тренировочным дням прямо из расписания.",
+            "Добавь новые упражнения через «Добавить упражнение». После сохранения их можно прикрепить к тренировочным дням и сразу настроить базовый план или фактические подходы.",
         ),
     )
     return "\n".join(lines)
@@ -2829,10 +2924,7 @@ async def render_exercise_view(
         "workout": "Воркаут",
     }
     type_label = type_labels.get(group, "Силовая")
-    if prefs.mode == "detailed":
-        title = f"{name} · {type_label}"
-    else:
-        title = name
+    title = f"{name} · {type_label}"
 
     if group == "kb":
         prev_text = format_kb_previous(last_sets) or t("NOT_FIXED")
@@ -3121,10 +3213,10 @@ def wizard_catalog_text(day: int, group: str, prefs: UiPreferences) -> str:
             "AMRAP — на раунды, For Time — на время.",
         ),
     }
-    detailed, compact, hint = templates.get(group, ("", "", ""))
-    base = detailed.format(day=day) if prefs.mode == "detailed" else compact.format(day=day)
+    detailed, _compact, hint = templates.get(group, ("", "", ""))
+    base = detailed.format(day=day) if detailed else ""
     if prefs.verbose_level and hint:
-        return f"{base}\n{hint}"
+        return f"{base or day_exercises_text(day, group, None)}\n{hint}"
     return base or day_exercises_text(day, group, None)
 
 
@@ -4187,8 +4279,6 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             else:
                 rem_text = t("NOT_SET")
             prefs = await load_ui_preferences(user_id)
-            mode_label = "Компактный" if prefs.mode == "compact" else "Подробный"
-            emoji_label = "включены" if prefs.emoji_enabled else "выключены"
             verbose_label = "обычные пояснения" if prefs.verbose_level else "краткие пояснения"
             text = (
                 "Настройки:\n"
@@ -4197,7 +4287,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "✏️ Переименовать дни — поменять названия тренировочных дней.\n"
                 "🔁 Изменить день — переключи тип тренировки (силовая, гири, кроссфит, воркаут) и открой подходящие упражнения. После переключения можно добавлять упражнения из любых групп.\n"
                 f"📅 Количество тренировок — сейчас {n}. Укажи, сколько раз планируешь тренироваться.\n"
-                f"🎨 Оформление интерфейса — режим {mode_label.lower()}, эмодзи {emoji_label}, пояснения: {verbose_label}.\n"
+                f"🎨 Оформление интерфейса — выбирай краткие или обычные пояснения. Сейчас: {verbose_label}.\n"
                 "🗑 Мои группы — удаляй созданные группы мышц. Все упражнения из удалённых групп исчезнут из расписания и библиотеки.\n"
                 "📝 Выбор записи — расскажи боту, как фиксировать подходы. Бот хранит каждый рабочий сет, в том числе парные (левая/правая, две гири подряд).\n"
                 "   • Одинаковый вес — каждый сет с одной схемой повторов и веса.\n"
@@ -4634,41 +4724,23 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if action == "ui":
                 prefs = await load_ui_preferences(user_id)
                 if len(parts) == 2:
-                    current_mode = "Компактный" if prefs.mode == "compact" else "Подробный"
-                    emoji_state = "Эмодзи включены" if prefs.emoji_enabled else "Эмодзи выключены"
                     verbose_state = (
                         "Обычные пояснения" if prefs.verbose_level else "Краткие пояснения"
                     )
                     text = (
                         "Оформление интерфейса:\n"
-                        "Выбери варианты ниже, чтобы настроить внешний вид сообщений.\n"
+                        "Выбери уровень подсказок, чтобы сообщения были либо лаконичными,"
+                        " либо с подробными инструкциями по настройке упражнений.\n"
                         "────────\n"
-                        f"Режим показа: {current_mode}.\n"
-                        f"Эмодзи: {emoji_state}.\n"
                         f"Пояснения: {verbose_state}."
                     )
-                    kb = ui_preferences_kb(prefs.mode, prefs.emoji_enabled, prefs.verbose_level)
+                    kb = ui_preferences_kb(prefs.verbose_level)
                     await show_screen(q, context, text, kb, user_id)
                     return
                 if len(parts) >= 4:
                     sub = parts[2]
                     value = parts[3]
-                    if sub == "mode" and value in {"compact", "detailed"}:
-                        await set_ui_mode(user_id, value)
-                        prefs = await load_ui_preferences(user_id)
-                        label = "Компактный лист" if value == "compact" else "Подробный режим"
-                        hint = (
-                            "Дни будут открываться в виде списка с быстрыми действиями."
-                            if value == "compact"
-                            else "Возвращаются подробные карточки упражнений."
-                        )
-                        msg = f"Режим интерфейса обновлён: {label}. {hint}"
-                    elif sub == "emoji" and value in {"0", "1"}:
-                        await set_ui_emoji_enabled(user_id, value == "1")
-                        prefs = await load_ui_preferences(user_id)
-                        state = "Эмодзи включены" if prefs.emoji_enabled else "Эмодзи отключены"
-                        msg = f"Настройка эмодзи обновлена: {state}."
-                    elif sub == "verbose" and value in {"0", "1"}:
+                    if sub == "verbose" and value in {"0", "1"}:
                         await set_ui_verbose_level(user_id, int(value))
                         prefs = await load_ui_preferences(user_id)
                         state = (
@@ -4677,9 +4749,18 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             else "Выбраны краткие пояснения."
                         )
                         msg = f"Настройка пояснений обновлена. {state}"
+                    elif sub in {"mode", "emoji"}:
+                        await q.answer(
+                            "Режим показа и эмодзи теперь фиксированы и не требуют настройки.",
+                            show_alert=True,
+                        )
+                        prefs = await load_ui_preferences(user_id)
+                        msg = (
+                            "Оформление уже настроено: включены эмодзи и подробные карточки упражнений."
+                        )
                     else:
                         return
-                    kb = ui_preferences_kb(prefs.mode, prefs.emoji_enabled, prefs.verbose_level)
+                    kb = ui_preferences_kb(prefs.verbose_level)
                     await show_screen(q, context, msg, kb, user_id)
                 return
             if action == "reminders":
@@ -4724,24 +4805,16 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if action == "open":
                 day = int(parts[2])
                 prefs = await load_ui_preferences(user_id)
-                if prefs.mode == "compact":
-                    await render_day_sheet_from_callback(q, context, user_id, day, 0, prefs=prefs)
-                    return
                 await send_day_cards_view(q, user_id, day, context, prefs)
                 return
             if action == "sheet":
                 day = int(parts[2])
-                page = 0
-                if len(parts) > 4 and parts[3] == "p":
-                    try:
-                        page = max(int(parts[4]), 0)
-                    except ValueError:
-                        page = 0
-                await render_day_sheet_from_callback(q, context, user_id, day, page)
+                await q.answer("Компактный режим больше недоступен. Открываю карточки дня.")
+                prefs = await load_ui_preferences(user_id)
+                await send_day_cards_view(q, user_id, day, context, prefs)
                 return
             if action == "sheetdone":
                 day = int(parts[2])
-                page = int(parts[3]) if len(parts) > 3 else 0
                 today_local = await get_user_local_date(user_id)
                 ex_rows = await fetch_day_exercises(user_id, day, today_local)
                 if ex_rows:
@@ -4749,7 +4822,8 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     for ue_id, *_ in ex_rows:
                         await mark_exercise_done(session_id, ue_id)
                 await q.answer(f"{t('DAY')} отмечен выполненным.")
-                await render_day_sheet_from_callback(q, context, user_id, day, page)
+                prefs = await load_ui_preferences(user_id)
+                await send_day_cards_view(q, user_id, day, context, prefs)
                 return
             if action == "group":
                 day = int(parts[2])
@@ -4890,10 +4964,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 if sub == "done":
                     context.user_data.pop("add_group", None)
                     prefs = await load_ui_preferences(user_id)
-                    if prefs.mode == "compact":
-                        await render_day_sheet_from_callback(q, context, user_id, day, 0, prefs=prefs)
-                    else:
-                        await send_day_cards_view(q, user_id, day, context, prefs)
+                    await send_day_cards_view(q, user_id, day, context, prefs)
                     return
             if action == "del":
                 day = int(parts[2])
@@ -5176,9 +5247,8 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     group = resolve_group(ex_name, ex_group)
                     if sheet_context and not is_library:
                         target_day = sheet_day if sheet_day is not None else day
-                        await render_day_sheet_from_callback(
-                            q, context, user_id, target_day, sheet_page
-                        )
+                        prefs = await load_ui_preferences(user_id)
+                        await send_day_cards_view(q, user_id, target_day, context, prefs)
                         return
                     if is_library:
                         items = await list_library_exercises(user_id, group)
@@ -5193,7 +5263,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     if resolve_group(ex_name, ex_group) == "metcon" and ex_name == FOR_TIME_EXERCISE_NAME:
                         back_cb = None
                         if sheet_context and not is_library:
-                            back_cb = f"day:sheet:{sheet_day if sheet_day is not None else day}:p:{sheet_page}"
+                            back_cb = f"day:open:{sheet_day if sheet_day is not None else day}"
                         text, kb = await build_for_time_history_view(user_id, day, ue_id, back_cb, prefs=prefs)
                         if sheet_context and not is_library and back_cb:
                             set_sheet_context(
@@ -5309,7 +5379,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             "day": sheet_day if sheet_day is not None else day,
                             "page": sheet_page,
                         }
-                        back_target = f"day:sheet:{sheet_day if sheet_day is not None else day}:p:{sheet_page}"
+                        back_target = f"day:open:{sheet_day if sheet_day is not None else day}"
                         clear_sheet_context(context, q.message.chat_id, q.message.message_id)
                     context.user_data[FOR_TIME_INPUT_KEY] = state
                     kb = InlineKeyboardMarkup(
@@ -5328,7 +5398,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         return
                     back_cb = None
                     if sheet_context and not is_library:
-                        back_cb = f"day:sheet:{sheet_day if sheet_day is not None else day}:p:{sheet_page}"
+                        back_cb = f"day:open:{sheet_day if sheet_day is not None else day}"
                     text, kb = await build_for_time_history_view(user_id, day, ue_id, back_cb, prefs=prefs)
                     if sheet_context and not is_library and back_cb:
                         set_sheet_context(
