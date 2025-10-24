@@ -1368,26 +1368,6 @@ async def list_last_done_dates(user_id: int):
         )
         return await cur.fetchall()
 
-async def get_weight_step(user_id: int) -> float:
-    async with connect_db() as db:
-        cur = await db.execute(
-            "SELECT weight_step FROM user_prefs WHERE user_id=?",
-            (user_id,),
-        )
-        row = await cur.fetchone()
-        return row[0] if row and row[0] is not None else 0.5
-
-async def set_weight_step(user_id: int, step: float):
-    async with connect_db() as db:
-        await db.execute(
-            """
-            INSERT INTO user_prefs(user_id, weight_step) VALUES(?,?)
-            ON CONFLICT(user_id) DO UPDATE SET weight_step=excluded.weight_step
-            """,
-            (user_id, step),
-        )
-        await db.commit()
-
 async def get_recording_mode(user_id: int) -> str:
     async with connect_db() as db:
         cur = await db.execute(
