@@ -4404,7 +4404,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     context.user_data["lib_return"] = target
                     custom = await get_custom_groups(user_id, context)
                     kb = library_add_group_kb(custom)
-                    await show_screen(q, context, text, kb, user_id)
+                    await show_screen(q, context, "Выбери группу:", kb, user_id)
                     return
                 if sub == "mg":
                     group = parts[3]
@@ -4416,7 +4416,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         group, ex_rows, selected, page=requested_page
                     )
                     set_kb_page(context, "lib", group, page_value)
-                    await show_screen(q, context, text, kb, user_id)
+                    await show_screen(q, context, "Выбери упражнения:", kb, user_id)
                     return
                 if sub == "page":
                     group = parts[3]
@@ -4427,7 +4427,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         group, ex_rows, selected, page=requested_page
                     )
                     set_kb_page(context, "lib", group, page_value)
-                    await show_screen(q, context, text, kb, user_id)
+                    await show_screen(q, context, "Выбери упражнения:", kb, user_id)
                     return
                 if sub == "ex":
                     group = parts[3]
@@ -4441,7 +4441,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         group, ex_rows, selected, page=requested_page
                     )
                     set_kb_page(context, "lib", group, page_value)
-                    await show_screen(q, context, text, kb, user_id)
+                    await show_screen(q, context, "Выбери упражнения:", kb, user_id)
                     return
                 if sub == "custom":
                     group = parts[3]
@@ -4468,7 +4468,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         await show_screen(q, context, text, kb, user_id)
                     else:
                         kb = library_add_group_kb(custom)
-                        await show_screen(q, context, text, kb, user_id)
+                        await show_screen(q, context, "Выбери группу:", kb, user_id)
                     return
                 if sub == "done":
                     context.user_data.pop(LIBRARY_CUSTOM_KEY, None)
@@ -4483,7 +4483,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         groups = await list_library_groups(user_id)
                         custom = await get_custom_groups(user_id, context)
                         kb = library_menu_kb(groups, custom)
-                        await show_screen(q, context, text, kb, user_id)
+                        await show_screen(q, context, "Мои упражнения:", kb, user_id)
                     return
 
         if parts[0] == "set":
@@ -5316,7 +5316,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             prefs=prefs,
             is_library=is_library,
         )
-        await show_screen(q, context, text, kb, user_id)
+        await show_screen(q, context, view.text, kb, user_id)
         return
     finally:
         message = getattr(q, "message", None)
