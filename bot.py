@@ -6,7 +6,7 @@ from datetime import datetime, time, timedelta, UTC
 from zoneinfo import ZoneInfo
 from collections import defaultdict
 import re
-from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
+from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton, Message
 from telegram.error import (
     BadRequest,
     Forbidden,
@@ -542,6 +542,33 @@ def remember_message(chat_id: int | None, message_id: int | None):
         return
     last_messages[chat_id] = message_id
 
+
+async def send_main_message(
+    bot,
+    chat_id: int | None,
+    text: str,
+    reply_markup: InlineKeyboardMarkup | None = None,
+    **kwargs,
+) -> Message:
+    if chat_id is None:
+        raise ValueError("chat_id is required to send a message")
+    previous_id = last_messages.pop(chat_id, None)
+    if previous_id:
+        try:
+            await bot.delete_message(chat_id, previous_id)
+        except (BadRequest, Forbidden):
+            pass
+        except Exception:
+            logger.warning("Failed to delete previous message", exc_info=True)
+    msg = await bot.send_message(
+        chat_id=chat_id,
+        text=text,
+        reply_markup=reply_markup,
+        **kwargs,
+    )
+    remember_message(msg.chat_id, msg.message_id)
+    return msg
+
 async def safe_update_screen(q, context, text, reply_markup=None):
     message = getattr(q, "message", None)
     chat = getattr(message, "chat", None) if message else None
@@ -557,12 +584,12 @@ async def safe_update_screen(q, context, text, reply_markup=None):
         if "message to edit not found" in error_text:
             if chat_id is None:
                 raise
-            new_message = await context.bot.send_message(
-                chat_id=chat_id,
-                text=text,
+            new_message = await send_main_message(
+                context.bot,
+                chat_id,
+                text,
                 reply_markup=reply_markup,
             )
-            remember_message(new_message.chat_id, new_message.message_id)
             q.message = new_message
             return
         raise
@@ -691,11 +718,20 @@ async def require_subscription(update: Update, context: ContextTypes.DEFAULT_TYP
             u.id,
         )
     else:
-        msg = await update.message.reply_text(
-            "Прежде чем получить помощника, подпишись на наш канал, чтобы поддержать нас и быть в курсе новостей.",
-            reply_markup=kb,
-        )
-        remember_message(msg.chat_id, msg.message_id)
+        chat = update.effective_chat
+        if chat is not None:
+            await send_main_message(
+                context.bot,
+                chat.id,
+                "Прежде чем получить помощника, подпишись на наш канал, чтобы поддержать нас и быть в курсе новостей.",
+                reply_markup=kb,
+            )
+        elif update.message:
+            msg = await update.message.reply_text(
+                "Прежде чем получить помощника, подпишись на наш канал, чтобы поддержать нас и быть в курсе новостей.",
+                reply_markup=kb,
+            )
+            remember_message(msg.chat_id, msg.message_id)
     return False
 
 async def get_custom_groups(user_id: int, context) -> dict[str, str]:
@@ -2367,8 +2403,12 @@ async def render_day_sheet_by_id(
             set_sheet_context(context, chat_id, message_id, day_index, page)
             return
         clear_sheet_context(context, chat_id, message_id)
-        new_msg = await context.bot.send_message(chat_id, text, reply_markup=kb)
-        remember_message(chat_id, new_msg.message_id)
+        new_msg = await send_main_message(
+            context.bot,
+            chat_id,
+            text,
+            reply_markup=kb,
+        )
         set_sheet_context(context, new_msg.chat_id, new_msg.message_id, day_index, page)
 
 
@@ -2957,12 +2997,6 @@ async def reminder_job(context: ContextTypes.DEFAULT_TYPE):
     if context.job.data and isinstance(context.job.data, dict):
         user_id = context.job.data.get("user_id")
     try:
-        last_id = last_messages.pop(chat_id, None)
-        if last_id:
-            try:
-                await context.bot.delete_message(chat_id, last_id)
-            except BadRequest:
-                pass
         reply_markup = None
         if user_id:
             days = await list_active_days(user_id)
@@ -2971,8 +3005,12 @@ async def reminder_job(context: ContextTypes.DEFAULT_TYPE):
             "Напоминание о тренировке!\n"
             "Открой нужный день и отметь новые подходы, чтобы сохранить прогресс."
         )
-        msg = await context.bot.send_message(chat_id, text, reply_markup=reply_markup)
-        remember_message(msg.chat_id, msg.message_id)
+        await send_main_message(
+            context.bot,
+            chat_id,
+            text,
+            reply_markup=reply_markup,
+        )
     except Forbidden:
         try:
             context.job.schedule_removal()
@@ -3016,15 +3054,23 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         kb = InlineKeyboardMarkup([[InlineKeyboardButton("Ясно, спасибо", callback_data="wiz:intro:ok")]])
         text, kb = prepare_ui_output(text, kb, prefs)
-        msg = await update.message.reply_text(text, reply_markup=kb)
-        remember_message(msg.chat_id, msg.message_id)
+        chat = update.effective_chat
+        if chat is not None:
+            await send_main_message(context.bot, chat.id, text, reply_markup=kb)
+        elif update.message:
+            msg = await update.message.reply_text(text, reply_markup=kb)
+            remember_message(msg.chat_id, msg.message_id)
         return
     days = await list_active_days(user_id)
     text = build_main_menu_text(prefs)
     kb = main_menu_kb(days, SUPPORT_DEEPLINK)
     text, kb = prepare_ui_output(text, kb, prefs)
-    msg = await update.message.reply_text(text, reply_markup=kb)
-    remember_message(msg.chat_id, msg.message_id)
+    chat = update.effective_chat
+    if chat is not None:
+        await send_main_message(context.bot, chat.id, text, reply_markup=kb)
+    elif update.message:
+        msg = await update.message.reply_text(text, reply_markup=kb)
+        remember_message(msg.chat_id, msg.message_id)
 
 
 def wizard_catalog_text(day: int, group: str, prefs: UiPreferences) -> str:
