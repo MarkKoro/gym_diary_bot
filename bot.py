@@ -334,6 +334,7 @@ def apply_markup_preferences(
     return InlineKeyboardMarkup(new_rows)
 
 
+def apply_ui_preferences(
     text: str,
     markup: InlineKeyboardMarkup | None,
     prefs: UiPreferences,
