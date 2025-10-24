@@ -286,29 +286,9 @@ def _option_marker(active: bool) -> str:
     return "◉" if active else "○"
 
 
-def ui_preferences_kb(mode: str, emoji_enabled: bool, verbose_level: int):
+def ui_preferences_kb(verbose_level: int):
     return InlineKeyboardMarkup(
         [
-            [
-                InlineKeyboardButton(
-                    f"{_option_marker(mode == 'compact')} Компактный",
-                    callback_data="set:ui:mode:compact",
-                ),
-                InlineKeyboardButton(
-                    f"{_option_marker(mode == 'detailed')} Подробный",
-                    callback_data="set:ui:mode:detailed",
-                ),
-            ],
-            [
-                InlineKeyboardButton(
-                    f"{_option_marker(bool(emoji_enabled))} Включить",
-                    callback_data="set:ui:emoji:1",
-                ),
-                InlineKeyboardButton(
-                    f"{_option_marker(not bool(emoji_enabled))} Выключить",
-                    callback_data="set:ui:emoji:0",
-                ),
-            ],
             [
                 InlineKeyboardButton(
                     f"{_option_marker(verbose_level == 0)} Краткие",
