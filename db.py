@@ -198,6 +198,13 @@ async def init_db():
             is_warmup INTEGER DEFAULT 0
         );
 
+        CREATE TABLE IF NOT EXISTS day_completions(
+            user_id INTEGER,
+            day_index INTEGER,
+            completed_at TEXT,
+            PRIMARY KEY(user_id, day_index)
+        );
+
         CREATE TABLE IF NOT EXISTS session_exercises(
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             session_id INTEGER,
@@ -1044,6 +1051,14 @@ async def list_users_with_reminders():
         )
         return await cur.fetchall()
 
+
+async def list_all_user_tg_ids():
+    async with connect_db() as db:
+        cur = await db.execute("SELECT tg_id FROM users WHERE tg_id IS NOT NULL")
+        rows = await cur.fetchall()
+        return [row[0] for row in rows]
+
+
 async def list_active_days(user_id: int):
     async with connect_db() as db:
         cur = await db.execute(
@@ -1051,6 +1066,31 @@ async def list_active_days(user_id: int):
             (user_id,),
         )
         return await cur.fetchall()
+
+
+async def list_day_completions(user_id: int):
+    async with connect_db() as db:
+        cur = await db.execute(
+            "SELECT day_index, completed_at FROM day_completions WHERE user_id=?",
+            (user_id,),
+        )
+        return await cur.fetchall()
+
+
+async def mark_day_completed(user_id: int, day_index: int, completed_at: str):
+    async with connect_db() as db:
+        await db.execute(
+            "REPLACE INTO day_completions(user_id, day_index, completed_at) VALUES(?,?,?)",
+            (user_id, day_index, completed_at),
+        )
+        await db.commit()
+
+
+async def clear_day_completions(user_id: int):
+    async with connect_db() as db:
+        await db.execute("DELETE FROM day_completions WHERE user_id=?", (user_id,))
+        await db.commit()
+
 
 async def get_day_label(user_id: int, day_index: int):
     async with connect_db() as db:

@@ -13,6 +13,7 @@ from telegram.error import (
     RetryAfter,
     TimedOut,
     NetworkError,
+    TelegramError,
 )
 from telegram.ext import (
     Application,
@@ -74,7 +75,14 @@ from keyboards import (
     measurements_existing_kb,
     ui_footer_rows,
 )
-from settings import TG_TOKEN, SUPPORT_DEEPLINK, TG_POOL_SIZE, SUBSCRIPTION_CHAT, JOIN_URL
+from settings import (
+    TG_TOKEN,
+    SUPPORT_DEEPLINK,
+    TG_POOL_SIZE,
+    SUBSCRIPTION_CHAT,
+    JOIN_URL,
+    ADMIN_IDS,
+)
 from db import (
     init_db,
     get_or_create_user,
@@ -99,6 +107,7 @@ from db import (
     list_user_reminders,
     clear_user_reminders,
     list_active_days,
+    list_day_completions,
     get_day_label,
     remove_user_exercise,
     clear_day_plan,
@@ -139,6 +148,9 @@ from db import (
     apply_sets_template,
     set_exercise_scheme,
     user_has_library_exercise,
+    mark_day_completed,
+    clear_day_completions,
+    list_all_user_tg_ids,
     METCON_EXERCISE_NAMES,
 )
 from text_utils import normalize_whitespace
@@ -150,6 +162,20 @@ last_messages: dict[int, int] = {}
 PROGRESS_PAGE_SIZE = 5
 DAY_SHEET_PAGE_SIZE = 6
 SHEET_VIEWS_KEY = "day_sheet_views"
+
+DAY_COMPLETION_TTL = timedelta(hours=12)
+ORDINAL_WORDS = {
+    1: "первая",
+    2: "вторая",
+    3: "третья",
+    4: "четвёртая",
+    5: "пятая",
+    6: "шестая",
+    7: "седьмая",
+    8: "восьмая",
+    9: "девятая",
+    10: "десятая",
+}
 WEIGHT_ROUND_STEP = 0.5
 
 AMRAP_EXERCISE_NAME = "Меткон — AMRAP (кастом)"
@@ -212,6 +238,58 @@ async def load_ui_preferences(user_id: int) -> UiPreferences:
     return UiPreferences(mode=mode, emoji_enabled=True, verbose_level=1 if verbose else 0)
 
 
+def _parse_completion_rows(
+    rows: list[tuple[int, str | None]]
+) -> tuple[list[tuple[int, datetime]], datetime | None]:
+    parsed: list[tuple[int, datetime]] = []
+    latest: datetime | None = None
+    for day, value in rows:
+        if not value:
+            continue
+        try:
+            dt = datetime.fromisoformat(value)
+        except ValueError:
+            continue
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=UTC)
+        parsed.append((day, dt))
+        if latest is None or dt > latest:
+            latest = dt
+    return parsed, latest
+
+
+async def get_active_day_completions(user_id: int) -> set[int]:
+    rows = await list_day_completions(user_id)
+    parsed, latest = _parse_completion_rows(rows)
+    if latest is not None and datetime.now(UTC) - latest >= DAY_COMPLETION_TTL:
+        await clear_day_completions(user_id)
+        return set()
+    return {day for day, _ in parsed}
+
+
+async def record_day_completion(user_id: int, day_index: int) -> set[int]:
+    rows = await list_day_completions(user_id)
+    parsed, latest = _parse_completion_rows(rows)
+    now = datetime.now(UTC)
+    if latest is not None and now - latest >= DAY_COMPLETION_TTL:
+        await clear_day_completions(user_id)
+        parsed = []
+    await mark_day_completed(user_id, day_index, now.isoformat())
+    current = {day for day, _ in parsed}
+    current.add(day_index)
+    return current
+
+
+def format_reminder_cheer(done_count: int) -> str:
+    if done_count <= 0:
+        return "Самое время открыть первую тренировку недели!"
+    next_no = done_count + 1
+    if next_no == 2:
+        return "Молодец, одна уже позади!"
+    word = ORDINAL_WORDS.get(next_no, f"{next_no}-я")
+    return f"Молодец, уже {word} тренировка на неделе!"
+
+
 def emoji_for(prefs: UiPreferences, key: str) -> str:
     if not prefs.emoji_enabled:
         return ""
@@ -271,6 +349,17 @@ def build_main_menu_text(prefs: UiPreferences) -> str:
         lines.append("Настройки — меняй расписание, напоминания и оформление.")
         lines.append("Техподдержка — быстро связаться с нами, если нужна помощь.")
     return "\n".join(lines)
+
+
+async def compose_main_menu(
+    user_id: int, prefs: UiPreferences | None = None
+) -> tuple[str, InlineKeyboardMarkup, UiPreferences]:
+    prefs = prefs or await load_ui_preferences(user_id)
+    days = await list_active_days(user_id)
+    completions = await get_active_day_completions(user_id)
+    text = build_main_menu_text(prefs)
+    kb = main_menu_kb(days, SUPPORT_DEEPLINK, completions)
+    return text, kb, prefs
 
 
 def strip_emoji(text: str) -> str:
@@ -2585,13 +2674,21 @@ async def send_day_cards_view(
         if callback == "menu:root":
             back_cb = callback
             continue
-        if callback.startswith(f"day:add_ex:{day}") or callback.startswith(
-            f"day:del_ex:{day}"
-        ) or callback in {
-            f"day:manage:{day}:all:add",
-            f"day:manage:{day}:all:del",
-        }:
-            primary_actions.append((button.text, callback))
+        callbacks = [btn.callback_data or "" for btn in row]
+        if any(
+            cb.startswith(f"day:add_ex:{day}")
+            or cb.startswith(f"day:del_ex:{day}")
+            or cb in {
+                f"day:manage:{day}:all:add",
+                f"day:manage:{day}:all:del",
+            }
+            or cb == f"day:complete:{day}"
+            for cb in callbacks
+        ):
+            for btn in row:
+                cb = btn.callback_data
+                if cb:
+                    primary_actions.append((btn.text, cb))
             continue
         content_rows.append(row)
     rows: list[list[InlineKeyboardButton]] = []
@@ -3155,13 +3252,18 @@ async def reminder_job(context: ContextTypes.DEFAULT_TYPE):
         user_id = context.job.data.get("user_id")
     try:
         reply_markup = None
+        cheer = ""
         if user_id:
             days = await list_active_days(user_id)
-            reply_markup = main_menu_kb(days, SUPPORT_DEEPLINK)
+            completions = await get_active_day_completions(user_id)
+            reply_markup = main_menu_kb(days, SUPPORT_DEEPLINK, completions)
+            cheer = format_reminder_cheer(len(completions))
         text = (
             "Напоминание о тренировке!\n"
             "Открой нужный день и отметь новые подходы, чтобы сохранить прогресс."
         )
+        if cheer:
+            text = f"{text}\n{cheer}"
         await send_main_message(
             context.bot,
             chat_id,
@@ -3218,9 +3320,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             msg = await update.message.reply_text(text, reply_markup=kb)
             remember_message(msg.chat_id, msg.message_id)
         return
-    days = await list_active_days(user_id)
-    text = build_main_menu_text(prefs)
-    kb = main_menu_kb(days, SUPPORT_DEEPLINK)
+    text, kb, prefs = await compose_main_menu(user_id, prefs)
     text, kb = prepare_ui_output(text, kb, prefs)
     chat = update.effective_chat
     if chat is not None:
@@ -3228,6 +3328,47 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif update.message:
         msg = await update.message.reply_text(text, reply_markup=kb)
         remember_message(msg.chat_id, msg.message_id)
+
+
+async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    if not user or user.id not in ADMIN_IDS:
+        if update.message:
+            await update.message.reply_text("Команда доступна только администратору.")
+        return
+    if not update.message or not update.message.text:
+        return
+    parts = update.message.text.split(None, 1)
+    if len(parts) < 2 or not parts[1].strip():
+        await update.message.reply_text("Использование: /broadcast <текст сообщения>.")
+        return
+    payload = parts[1].strip()
+    delivered = 0
+    skipped = 0
+    tg_ids = await list_all_user_tg_ids()
+    for tg_id in tg_ids:
+        try:
+            await context.bot.send_message(tg_id, payload)
+            delivered += 1
+            await asyncio.sleep(0.05)
+        except Forbidden:
+            skipped += 1
+        except RetryAfter as exc:
+            await asyncio.sleep(exc.retry_after)
+            try:
+                await context.bot.send_message(tg_id, payload)
+                delivered += 1
+            except Forbidden:
+                skipped += 1
+            except TelegramError as err:
+                skipped += 1
+                logger.warning("Broadcast failed after retry for %s: %s", tg_id, err)
+        except TelegramError as err:
+            skipped += 1
+            logger.warning("Broadcast failed for %s: %s", tg_id, err)
+    await update.message.reply_text(
+        f"Рассылка завершена. Доставлено: {delivered}. Недоступно: {skipped}."
+    )
 
 
 def wizard_catalog_text(day: int, group: str, prefs: UiPreferences) -> str:
@@ -3360,15 +3501,22 @@ def library_manage_text(
     *,
     has_items: bool,
     can_delete_group: bool,
+    mode: str = "manage",
 ) -> str:
     name = MG_NAMES.get(group, custom.get(group, group))
     lines = [name]
     if has_items:
         lines.append("Нажми на упражнение, чтобы удалить его из библиотеки.")
-        lines.append("«Добавить» откроет каталог этой группы.")
+        if mode == "manage":
+            lines.append("«Добавить» откроет каталог этой группы.")
+        else:
+            lines.append("Когда закончишь, вернись назад.")
     else:
         lines.append("Пока нет упражнений.")
-        lines.append("Нажми «Добавить», чтобы пополнить эту группу.")
+        if mode == "manage":
+            lines.append("Нажми «Добавить», чтобы пополнить эту группу.")
+        else:
+            lines.append("Удалять пока нечего — вернись назад, чтобы добавить упражнения.")
     if can_delete_group:
         lines.append("Можно удалить всю группу через «− Группа».")
     return "\n".join(lines)
@@ -3410,11 +3558,11 @@ async def finish_day(q, context, user_id: int, day: int, summary: str | None = N
         await show_screen(q, context, text, kb, user_id)
         return
     if day >= n:
-        days = await list_active_days(user_id)
         text = "Отлично, супер! Мы сохранили все ваши данные. Теперь можете с удовольствием пользоваться."
         if summary:
             text = summary + "\n────────\n" + text
-        await show_screen(q, context, text, main_menu_kb(days, SUPPORT_DEEPLINK), user_id)
+        _, menu_kb, _ = await compose_main_menu(user_id)
+        await show_screen(q, context, text, menu_kb, user_id)
     else:
         context.user_data["current_day"] = day
         text = f"{t('DAY')} {day} сохранён. Перейти к {t('DAY')} {day + 1}?"
@@ -3825,10 +3973,8 @@ async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAUL
                 if total_days > 1 and not context.user_data.get("wizard_copied_all_days"):
                     await copy_day_plan_to_other_days(user_id, 1, total_days)
                     context.user_data["wizard_copied_all_days"] = True
-                days = await list_active_days(user_id)
                 prefs = await load_ui_preferences(user_id)
-                text = build_main_menu_text(prefs)
-                kb = main_menu_kb(days, SUPPORT_DEEPLINK)
+                text, kb, prefs = await compose_main_menu(user_id, prefs)
                 await show_screen(q, context, text, kb, user_id)
                 return
             if action == "next" and len(parts) > 3:
@@ -3836,10 +3982,8 @@ async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAUL
                 await advance_day(q, context, user_id, next_day)
                 return
             if action == "menu":
-                days = await list_active_days(user_id)
                 prefs = await load_ui_preferences(user_id)
-                text = build_main_menu_text(prefs)
-                kb = main_menu_kb(days, SUPPORT_DEEPLINK)
+                text, kb, prefs = await compose_main_menu(user_id, prefs)
                 await show_screen(q, context, text, kb, user_id)
                 return
         if data == "wiz:finish_early":
@@ -3852,12 +3996,12 @@ async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAUL
                 )
                 await show_screen(q, context, f'У тебя было заявлено {n} тренировок. Завершить на {day}?', kb, user_id)
             else:
-                days = await list_active_days(user_id)
-                await show_screen(q, context, 'Настройка завершена.', main_menu_kb(days, SUPPORT_DEEPLINK), user_id)
+                _, menu_kb, _ = await compose_main_menu(user_id)
+                await show_screen(q, context, 'Настройка завершена.', menu_kb, user_id)
             return
         if data == "wiz:finish_yes":
-            days = await list_active_days(user_id)
-            await show_screen(q, context, 'Настройка завершена.', main_menu_kb(days, SUPPORT_DEEPLINK), user_id)
+            _, menu_kb, _ = await compose_main_menu(user_id)
+            await show_screen(q, context, 'Настройка завершена.', menu_kb, user_id)
             return
         if data == "wiz:finish_no":
             day = context.user_data.get("confirm_finish_day", 1)
@@ -3875,8 +4019,8 @@ async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAUL
                 context.user_data.pop("from_settings", None)
                 await show_screen(q, context, 'Настройки:', settings_kb(), user_id)
             else:
-                days = await list_active_days(user_id)
-                await show_screen(q, context, 'Настройка завершена.', main_menu_kb(days, SUPPORT_DEEPLINK), user_id)
+                _, menu_kb, _ = await compose_main_menu(user_id)
+                await show_screen(q, context, 'Настройка завершена.', menu_kb, user_id)
             return
         if data == "wiz:reminders:back":
             if context.user_data.get("from_settings"):
@@ -3970,8 +4114,8 @@ async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAUL
                 context.user_data.pop("from_settings", None)
                 await show_screen(q, context, 'Настройки:', settings_kb(), user_id)
             else:
-                days = await list_active_days(user_id)
-                await show_screen(q, context, 'Настройка завершена.', main_menu_kb(days, SUPPORT_DEEPLINK), user_id)
+                _, menu_kb, _ = await compose_main_menu(user_id)
+                await show_screen(q, context, 'Настройка завершена.', menu_kb, user_id)
             return
     finally:
         message = getattr(q, "message", None)
@@ -4345,10 +4489,8 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         if data == "menu:root":
-            days = await list_active_days(user_id)
             prefs = await load_ui_preferences(user_id)
-            text = build_main_menu_text(prefs)
-            kb = main_menu_kb(days, SUPPORT_DEEPLINK)
+            text, kb, prefs = await compose_main_menu(user_id, prefs)
             await show_screen(q, context, text, kb, user_id)
             return
 
@@ -4643,20 +4785,37 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 items = await list_library_exercises(user_id, group)
                 custom = await get_custom_groups(user_id, context)
                 can_delete_group = group.startswith("u")
-                text = library_manage_text(
-                    group,
-                    custom,
-                    has_items=bool(items),
-                    can_delete_group=can_delete_group,
-                )
                 sub = parts[3] if len(parts) > 3 else None
-                if sub is None or sub == "del":
+                if sub is None:
+                    text = library_manage_text(
+                        group,
+                        custom,
+                        has_items=bool(items),
+                        can_delete_group=can_delete_group,
+                        mode="manage",
+                    )
                     kb = library_manage_kb(
                         group,
                         items,
                         can_delete_group=can_delete_group,
                         back_callback=f"lib:group:{group}",
                         add_callback=f"lib:manage:{group}:add",
+                    )
+                    await show_screen(q, context, text, kb, user_id)
+                    return
+                if sub == "del":
+                    text = library_manage_text(
+                        group,
+                        custom,
+                        has_items=bool(items),
+                        can_delete_group=can_delete_group,
+                        mode="delete",
+                    )
+                    kb = library_delete_kb(
+                        group,
+                        items,
+                        back_callback=f"lib:group:{group}",
+                        can_delete_group=can_delete_group,
                     )
                     await show_screen(q, context, text, kb, user_id)
                     return
@@ -4679,12 +4838,12 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     custom,
                     has_items=bool(items),
                     can_delete_group=group.startswith("u"),
+                    mode="delete",
                 )
                 kb = library_delete_kb(
                     group,
                     items,
                     back_callback=f"lib:group:{group}",
-                    add_callback=f"lib:manage:{group}:add",
                     can_delete_group=group.startswith("u"),
                 )
                 await show_screen(q, context, text, kb, user_id)
@@ -4700,12 +4859,12 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     custom,
                     has_items=bool(items),
                     can_delete_group=group.startswith("u"),
+                    mode="delete",
                 )
                 kb = library_delete_kb(
                     group,
                     items,
                     back_callback=f"lib:group:{group}",
-                    add_callback=f"lib:manage:{group}:add",
                     can_delete_group=group.startswith("u"),
                 )
                 await show_screen(q, context, text, kb, user_id)
@@ -5063,6 +5222,16 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 day = int(parts[2])
                 prefs = await load_ui_preferences(user_id)
                 await send_day_cards_view(q, user_id, day, context, prefs)
+                return
+            if action == "complete":
+                day = int(parts[2])
+                await record_day_completion(user_id, day)
+                prefs = await load_ui_preferences(user_id)
+                text, kb, prefs = await compose_main_menu(user_id, prefs)
+                label = await get_day_label(user_id, day)
+                title = label or f"{t('DAY')} {day}"
+                await q.answer(f"{title} завершён. Отличная работа!")
+                await show_screen(q, context, text, kb, user_id)
                 return
             if action == "sheet":
                 day = int(parts[2])
@@ -5935,6 +6104,7 @@ def main():
         .build()
     )
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("broadcast", broadcast_command))
     app.add_handler(CallbackQueryHandler(menu_router))
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), text_router))
     app.add_error_handler(on_error)

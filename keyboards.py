@@ -35,14 +35,18 @@ def ui_footer_rows(
         )
     return rows
 
-def main_menu_kb(days: list[tuple[int, str]], support_url: str):
+def main_menu_kb(
+    days: list[tuple[int, str]], support_url: str, completed_days: set[int] | None = None
+):
+    completed_days = completed_days or set()
     rows = []
     for idx, label in days:
+        mark = "✅ " if idx in completed_days else ""
         rows.append(
             [
                 InlineKeyboardButton(
                     dual(
-                        f"{t('DAY')} {idx} — {label}",
+                        f"{mark}{t('DAY')} {idx} — {label}",
                         f"Открыть {t('DAY')} {idx} — {label}",
                     ),
                     callback_data=f"day:open:{idx}",
@@ -740,6 +744,10 @@ def day_kb(day_index: int, ex_rows: list[tuple[int, str, str, int, int]]):
                 callback_data=f"day:manage:{day_index}:all:add",
             ),
             InlineKeyboardButton(
+                dual(t("CLOSE_DAY"), "Отметить тренировку завершённой"),
+                callback_data=f"day:complete:{day_index}",
+            ),
+            InlineKeyboardButton(
                 dual("🗑 Удалить", "Удалить группу мышц"),
                 callback_data=f"day:manage:{day_index}:all:del",
             ),
@@ -769,6 +777,10 @@ def day_group_kb(day_index: int, group: str, items: list[tuple[int, str, int]]):
             InlineKeyboardButton(
                 dual("➕ Добавить", "Добавить упражнения"),
                 callback_data=f"day:manage:{day_index}:{group}:add",
+            ),
+            InlineKeyboardButton(
+                dual(t("CLOSE_DAY"), "Отметить тренировку завершённой"),
+                callback_data=f"day:complete:{day_index}",
             ),
             InlineKeyboardButton(
                 dual("🗑 Удалить", "Удалить упражнения"),
