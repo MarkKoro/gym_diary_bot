@@ -933,6 +933,8 @@ def del_exercises_kb(
     *,
     group: str | None = None,
     back_callback: str | None = None,
+    add_callback: str | None = None,
+    group_delete_callback: str | None = None,
 ):
     rows = []
     for ue_id, name, raw_group, *_ in ex_rows:
@@ -943,6 +945,24 @@ def del_exercises_kb(
                 InlineKeyboardButton(
                     dual("− Упражнение", f"Удалить упражнение «{name}»"),
                     callback_data=f"day:del:{day_index}:{ue_id}",
+                )
+            ]
+        )
+    if add_callback:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    dual("➕ Добавить", "Вернуться к добавлению упражнений"),
+                    callback_data=add_callback,
+                )
+            ]
+        )
+    if group_delete_callback:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    dual("− Группа", "Удалить группу упражнений"),
+                    callback_data=group_delete_callback,
                 )
             ]
         )
@@ -1210,7 +1230,7 @@ def library_menu_kb(groups: list[tuple[str, int]], custom: dict[str, str] | None
     rows.append(
         [
             InlineKeyboardButton(
-                dual("＋ Упражнение", "Добавить упражнение в библиотеку"),
+                dual("➕ Добавить", "Добавить упражнения в библиотеку"),
                 callback_data="lib:add:start",
             )
         ]
@@ -1233,9 +1253,13 @@ def library_group_kb(group: str, items: list[tuple[int, str]]):
     rows.append(
         [
             InlineKeyboardButton(
-                dual("Добавить / удалить", "Добавить или удалить упражнения"),
-                callback_data=f"lib:manage:{group}",
-            )
+                dual("➕ Добавить", "Добавить упражнения"),
+                callback_data=f"lib:manage:{group}:add",
+            ),
+            InlineKeyboardButton(
+                dual("🗑 Удалить", "Удалить упражнения"),
+                callback_data=f"lib:manage:{group}:del",
+            ),
         ]
     )
     if group.startswith("u"):
@@ -1251,33 +1275,15 @@ def library_group_kb(group: str, items: list[tuple[int, str]]):
     return InlineKeyboardMarkup(rows)
 
 
-def library_manage_kb(group: str, *, can_delete: bool) -> InlineKeyboardMarkup:
-    rows: list[list[InlineKeyboardButton]] = [
-        [
-            InlineKeyboardButton(
-                dual("Добавить", "Добавить упражнения"),
-                callback_data=f"lib:manage:{group}:add",
-            ),
-        ]
-    ]
-    if can_delete:
-        rows[0].append(
-            InlineKeyboardButton(
-                dual("Удалить", "Удалить упражнения"),
-                callback_data=f"lib:manage:{group}:del",
-            )
-        )
-    rows.append([InlineKeyboardButton(BACK_BTN, callback_data=f"lib:group:{group}")])
-    return InlineKeyboardMarkup(rows)
-
-
-def library_delete_kb(
+def library_manage_kb(
     group: str,
     items: list[tuple[int, str]],
     *,
+    can_delete_group: bool,
     back_callback: str | None = None,
-):
-    rows = []
+    add_callback: str | None = None,
+) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
     for ue_id, name in items:
         rows.append(
             [
@@ -1287,9 +1293,53 @@ def library_delete_kb(
                 )
             ]
         )
-    back_cb = back_callback if back_callback is not None else f"lib:group:{group}"
+    if not items:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    dual("Пока нет упражнений", "Добавь упражнения через «Добавить»"),
+                    callback_data="noop",
+                )
+            ]
+        )
+    add_cb = add_callback or f"lib:manage:{group}:add"
+    rows.append(
+        [
+            InlineKeyboardButton(
+                dual("➕ Добавить", "Добавить упражнения"),
+                callback_data=add_cb,
+            )
+        ]
+    )
+    if can_delete_group:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    dual("− Группа", "Удалить группу упражнений"),
+                    callback_data=f"lib:groupdel:{group}",
+                )
+            ]
+        )
+    back_cb = back_callback or f"lib:group:{group}"
     rows.append([InlineKeyboardButton(BACK_BTN, callback_data=back_cb)])
     return InlineKeyboardMarkup(rows)
+
+
+def library_delete_kb(
+    group: str,
+    items: list[tuple[int, str]],
+    *,
+    back_callback: str | None = None,
+    add_callback: str | None = None,
+    can_delete_group: bool = False,
+):
+    return library_manage_kb(
+        group,
+        items,
+        can_delete_group=can_delete_group,
+        back_callback=back_callback,
+        add_callback=add_callback,
+    )
 
 
 def library_add_group_kb(custom: dict[str, str] | None = None):
@@ -1315,6 +1365,14 @@ def library_add_group_kb(custom: dict[str, str] | None = None):
                     )
                 ]
             )
+    rows.append(
+        [
+            InlineKeyboardButton(
+                dual("➕ Добавить группу", "Создать свою группу мышц"),
+                callback_data="lib:add:custom_group",
+            )
+        ]
+    )
     rows.append([InlineKeyboardButton(BACK_BTN, callback_data="lib:root")])
     return InlineKeyboardMarkup(rows)
 

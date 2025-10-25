@@ -2796,7 +2796,7 @@ async def render_library_group_text(
     if not items:
         return (
             f"{gname}\n"
-            "Пока нет упражнений||Нажми «Добавить / удалить», чтобы сохранить их и вести учёт."
+            "Пока нет упражнений||Нажми «Добавить», чтобы сохранить упражнения и вести учёт."
         )
     mode = await get_recording_mode(user_id)
     today = datetime.now(UTC).strftime("%Y-%m-%d")
@@ -2859,8 +2859,8 @@ async def render_library_group_text(
         lines,
         prefs,
         (
-            "Добавь новые упражнения через «Добавить / удалить».",
-            "Добавь новые упражнения через «Добавить / удалить». После сохранения их можно прикрепить к тренировочным дням и сразу настроить базовый план или фактические подходы.",
+            "Добавь новые упражнения через «Добавить».",
+            "Добавь новые упражнения через «Добавить». После сохранения их можно прикрепить к тренировочным дням и сразу настроить базовый план или фактические подходы.",
         ),
     )
     return "\n".join(lines)
@@ -3330,6 +3330,57 @@ async def show_day_add_exercises_view(
     )
     set_kb_page(context, "day", group, actual_page, day)
     await show_screen(q, context, day_exercises_text(day, group, custom), kb, user_id)
+
+
+def library_exercises_text(group: str, custom: dict[str, str]) -> str:
+    name = MG_NAMES.get(group, custom.get(group, group))
+    return f"{name}. Отметь упражнения или добавь своё. Потом жми «{t('DONE')}»."
+
+
+def library_manage_text(
+    group: str,
+    custom: dict[str, str],
+    *,
+    has_items: bool,
+    can_delete_group: bool,
+) -> str:
+    name = MG_NAMES.get(group, custom.get(group, group))
+    lines = [name]
+    if has_items:
+        lines.append("Нажми на упражнение, чтобы удалить его из библиотеки.")
+        lines.append("«Добавить» откроет каталог этой группы.")
+    else:
+        lines.append("Пока нет упражнений.")
+        lines.append("Нажми «Добавить», чтобы пополнить эту группу.")
+    if can_delete_group:
+        lines.append("Можно удалить всю группу через «− Группа».")
+    return "\n".join(lines)
+
+
+async def show_library_add_exercises_view(
+    q,
+    user_id: int,
+    group: str,
+    context,
+    *,
+    page: int | None = None,
+):
+    context.user_data.pop(LIBRARY_CUSTOM_KEY, None)
+    ex_rows = await list_exercises_by_group(group)
+    selected = set(await list_user_exercise_ids(user_id, 0, group))
+    requested_page = page if page is not None else get_kb_page(context, "lib", group)
+    kb, actual_page, _ = library_add_exercises_kb(
+        group, ex_rows, selected, page=requested_page
+    )
+    set_kb_page(context, "lib", group, actual_page)
+    custom = await get_custom_groups(user_id, context)
+    await show_screen(
+        q,
+        context,
+        library_exercises_text(group, custom),
+        kb,
+        user_id,
+    )
 
 async def finish_day(q, context, user_id: int, day: int, summary: str | None = None):
     n = context.user_data.get("workouts_per_week", 0)
@@ -4089,8 +4140,9 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             group, ex_rows, selected, page=requested_page
         )
         set_kb_page(context, "lib", group, page_value)
+        custom = await get_custom_groups(user_id, context)
         await context.bot.edit_message_text(
-            "Выбери упражнения:",
+            library_exercises_text(group, custom),
             chat_id=chat_id,
             message_id=msg_id,
             reply_markup=kb,
@@ -4118,6 +4170,22 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 chat_id=chat_id,
                 message_id=msg_id,
                 reply_markup=muscle_groups_kb(day, selected, custom),
+            )
+            remember_message(chat_id, msg_id)
+        elif mode == "library":
+            context.user_data["lib_return"] = ("group", code)
+            ex_rows = await list_exercises_by_group(code)
+            selected_ids = set(await list_user_exercise_ids(user_id, 0, code))
+            requested_page = get_kb_page(context, "lib", code)
+            kb, page_value, _ = library_add_exercises_kb(
+                code, ex_rows, selected_ids, page=requested_page
+            )
+            set_kb_page(context, "lib", code, page_value)
+            await context.bot.edit_message_text(
+                library_exercises_text(code, custom),
+                chat_id=chat_id,
+                message_id=msg_id,
+                reply_markup=kb,
             )
             remember_message(chat_id, msg_id)
         else:
@@ -4488,32 +4556,28 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if action == "manage":
                 group = parts[2]
                 items = await list_library_exercises(user_id, group)
-                if len(parts) == 3:
-                    can_delete = bool(items)
-                    text = "Что сделать с упражнениями этой группы?"
-                    kb = library_manage_kb(group, can_delete=can_delete)
+                custom = await get_custom_groups(user_id, context)
+                can_delete_group = group.startswith("u")
+                text = library_manage_text(
+                    group,
+                    custom,
+                    has_items=bool(items),
+                    can_delete_group=can_delete_group,
+                )
+                sub = parts[3] if len(parts) > 3 else None
+                if sub is None or sub == "del":
+                    kb = library_manage_kb(
+                        group,
+                        items,
+                        can_delete_group=can_delete_group,
+                        back_callback=f"lib:group:{group}",
+                        add_callback=f"lib:manage:{group}:add",
+                    )
                     await show_screen(q, context, text, kb, user_id)
                     return
-                sub = parts[3]
                 if sub == "add":
                     context.user_data["lib_return"] = ("group", group)
-                    custom = await get_custom_groups(user_id, context)
-                    kb = library_add_group_kb(custom)
-                    await show_screen(q, context, "Выбери группу:", kb, user_id)
-                    return
-                if sub == "del":
-                    if not items:
-                        await q.answer("Пока нечего удалять.", show_alert=True)
-                        text = await render_library_group_text(
-                            user_id, group, items, context, prefs=prefs
-                        )
-                        kb = library_group_kb(group, items)
-                        await show_screen(q, context, text, kb, user_id)
-                        return
-                    kb = library_delete_kb(
-                        group, items, back_callback=f"lib:manage:{group}"
-                    )
-                    await show_screen(q, context, "Удалить упражнение:", kb, user_id)
+                    await show_library_add_exercises_view(q, user_id, group, context)
                     return
                 return
             if action == "ex":
@@ -4524,14 +4588,42 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if action == "delmenu":
                 group = parts[2]
                 items = await list_library_exercises(user_id, group)
-                await show_screen(q, context, 'Удалить упражнение:', library_delete_kb(group, items), user_id)
+                custom = await get_custom_groups(user_id, context)
+                text = library_manage_text(
+                    group,
+                    custom,
+                    has_items=bool(items),
+                    can_delete_group=group.startswith("u"),
+                )
+                kb = library_delete_kb(
+                    group,
+                    items,
+                    back_callback=f"lib:group:{group}",
+                    add_callback=f"lib:manage:{group}:add",
+                    can_delete_group=group.startswith("u"),
+                )
+                await show_screen(q, context, text, kb, user_id)
                 return
             if action == "del":
                 group = parts[2]
                 ue_id = int(parts[3])
                 await remove_user_exercise(user_id, 0, ue_id)
                 items = await list_library_exercises(user_id, group)
-                await show_screen(q, context, 'Удалить упражнение:', library_delete_kb(group, items), user_id)
+                custom = await get_custom_groups(user_id, context)
+                text = library_manage_text(
+                    group,
+                    custom,
+                    has_items=bool(items),
+                    can_delete_group=group.startswith("u"),
+                )
+                kb = library_delete_kb(
+                    group,
+                    items,
+                    back_callback=f"lib:group:{group}",
+                    add_callback=f"lib:manage:{group}:add",
+                    can_delete_group=group.startswith("u"),
+                )
+                await show_screen(q, context, text, kb, user_id)
                 return
             if action == "add":
                 sub = parts[2]
@@ -4546,40 +4638,50 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     return
                 if sub == "mg":
                     group = parts[3]
-                    context.user_data.pop(LIBRARY_CUSTOM_KEY, None)
-                    ex_rows = await list_exercises_by_group(group)
-                    selected = set(await list_user_exercise_ids(user_id, 0, group))
-                    requested_page = get_kb_page(context, "lib", group)
-                    kb, page_value, _ = library_add_exercises_kb(
-                        group, ex_rows, selected, page=requested_page
+                    await show_library_add_exercises_view(q, user_id, group, context)
+                    return
+                if sub == "mg_back":
+                    pending = context.user_data.get("awaiting_group_name")
+                    if pending and pending[3] == "library":
+                        context.user_data.pop("awaiting_group_name", None)
+                    custom = await get_custom_groups(user_id, context)
+                    kb = library_add_group_kb(custom)
+                    await show_screen(q, context, "Выбери группу:", kb, user_id)
+                    return
+                if sub == "custom_group":
+                    context.user_data["awaiting_group_name"] = (
+                        0,
+                        q.message.chat.id,
+                        q.message.message_id,
+                        "library",
                     )
-                    set_kb_page(context, "lib", group, page_value)
-                    await show_screen(q, context, "Выбери упражнения:", kb, user_id)
+                    kb = InlineKeyboardMarkup(
+                        [[InlineKeyboardButton(BACK_BTN, callback_data="lib:add:mg_back")]]
+                    )
+                    await show_screen(
+                        q,
+                        context,
+                        "Как назвать новую группу мышц? Напиши название сообщением.",
+                        kb,
+                        user_id,
+                    )
+                    remember_message(q.message.chat.id, q.message.message_id)
                     return
                 if sub == "page":
                     group = parts[3]
                     requested_page = int(parts[4]) if len(parts) > 4 else 0
-                    ex_rows = await list_exercises_by_group(group)
-                    selected = set(await list_user_exercise_ids(user_id, 0, group))
-                    kb, page_value, _ = library_add_exercises_kb(
-                        group, ex_rows, selected, page=requested_page
+                    await show_library_add_exercises_view(
+                        q, user_id, group, context, page=requested_page
                     )
-                    set_kb_page(context, "lib", group, page_value)
-                    await show_screen(q, context, "Выбери упражнения:", kb, user_id)
                     return
                 if sub == "ex":
                     group = parts[3]
-                    context.user_data.pop(LIBRARY_CUSTOM_KEY, None)
                     ex_id = int(parts[4])
                     await toggle_user_exercise(user_id, 0, ex_id)
-                    ex_rows = await list_exercises_by_group(group)
-                    selected = set(await list_user_exercise_ids(user_id, 0, group))
                     requested_page = get_kb_page(context, "lib", group)
-                    kb, page_value, _ = library_add_exercises_kb(
-                        group, ex_rows, selected, page=requested_page
+                    await show_library_add_exercises_view(
+                        q, user_id, group, context, page=requested_page
                     )
-                    set_kb_page(context, "lib", group, page_value)
-                    await show_screen(q, context, "Выбери упражнения:", kb, user_id)
                     return
                 if sub == "custom":
                     group = parts[3]
@@ -4656,7 +4758,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         if mode == "strength":
                             text = (
                                 f"{t('DAY')} {day} — {label}.\n"
-                                "Открой список групп мышц, выбери нужные и добавь упражнения. В любой момент можешь расширить тренировку другими направлениями через «Добавить / удалить»."
+                                "Открой список групп мышц, выбери нужные и добавь упражнения. В любой момент можешь расширить тренировку другими направлениями через кнопки «Добавить» и «Удалить»."
                             )
                             kb = edit_day_strength_kb(day)
                         elif mode in {"kb", "metcon", "workout"}:
@@ -4668,7 +4770,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             descriptions = {
                                 "kb": "Подбери упражнения с гирями. После добавления можно дополнять день силовыми или другими упражнениями.",
                                 "metcon": "Открой подборку кроссфит-упражнений и собери тренировку. Другие группы всегда доступны через меню дня.",
-                                "workout": "Выбери упражнения для воркаута. При желании добавляй силовые или гиревые упражнения через «Добавить / удалить».",
+                                "workout": "Выбери упражнения для воркаута. При желании добавляй силовые или гиревые упражнения через кнопки «Добавить» и «Удалить».",
                             }
                             text = (
                                 f"{t('DAY')} {day} — {label}.\n"
@@ -4993,13 +5095,29 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         await q.answer("Пока нечего удалять.", show_alert=True)
                         await show_day_group_view(q, user_id, day, target_group, context)
                         return
+                    gname = MG_NAMES.get(
+                        target_group, custom.get(target_group, target_group)
+                    )
+                    text = (
+                        f"{t('DAY')} {day} — {gname}\n"
+                        "Нажми на упражнение, чтобы удалить его из дня."
+                        " «Добавить» откроет список этой группы."
+                    )
+                    if target_group.startswith("u"):
+                        text += "\nМожно удалить всю группу через «− Группа»."
                     kb = del_exercises_kb(
                         day,
                         ex_rows,
                         group=target_group,
                         back_callback=f"day:group:{day}:{target_group}",
+                        add_callback=f"day:manage:{day}:{target_group}:add",
+                        group_delete_callback=(
+                            f"day:groupdel:{day}:{target_group}"
+                            if target_group.startswith("u")
+                            else None
+                        ),
                     )
-                    await show_screen(q, context, "Удалить упражнение:", kb, user_id)
+                    await show_screen(q, context, text, kb, user_id)
                     return
                 return
             if action == "remove_group":
