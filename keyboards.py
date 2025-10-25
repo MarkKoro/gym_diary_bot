@@ -757,7 +757,13 @@ def day_kb(day_index: int, ex_rows: list[tuple[int, str, str, int, int]]):
     return InlineKeyboardMarkup(rows)
 
 
-def day_group_kb(day_index: int, group: str, items: list[tuple[int, str, int]]):
+def day_group_kb(
+    day_index: int,
+    group: str,
+    items: list[tuple[int, str, int]],
+    *,
+    group_name: str | None = None,
+):
     rows = []
     for ue_id, name, done in items:
         mark = "✅" if done else "⬜"
@@ -789,10 +795,18 @@ def day_group_kb(day_index: int, group: str, items: list[tuple[int, str, int]]):
         ]
     )
     if group.startswith("u"):
+        label = group_name or "Группа"
         rows.append(
             [
                 InlineKeyboardButton(
-                    dual("− Группа", "Удалить группу упражнений"),
+                    dual(
+                        f"− {label}",
+                        (
+                            f"Удалить группу «{label}»"
+                            if group_name
+                            else "Удалить группу упражнений"
+                        ),
+                    ),
                     callback_data=f"day:groupdel:{day_index}:{group}",
                 )
             ]
@@ -853,7 +867,7 @@ def day_remove_group_kb(
         rows.append(
             [
                 InlineKeyboardButton(
-                    dual("− Группа", f"Удалить группу «{name}»"),
+                    dual(f"− {name}", f"Удалить группу «{name}»"),
                     callback_data=f"day:remove_group:{day_index}:{code}",
                 )
             ]
@@ -947,6 +961,7 @@ def del_exercises_kb(
     back_callback: str | None = None,
     add_callback: str | None = None,
     group_delete_callback: str | None = None,
+    group_delete_label: str | None = None,
 ):
     rows = []
     for ue_id, name, raw_group, *_ in ex_rows:
@@ -970,10 +985,18 @@ def del_exercises_kb(
             ]
         )
     if group_delete_callback:
+        label = group_delete_label or "Группа"
         rows.append(
             [
                 InlineKeyboardButton(
-                    dual("− Группа", "Удалить группу упражнений"),
+                    dual(
+                        f"− {label}",
+                        (
+                            f"Удалить группу «{label}»"
+                            if group_delete_label
+                            else "Удалить группу упражнений"
+                        ),
+                    ),
                     callback_data=group_delete_callback,
                 )
             ]
@@ -1251,7 +1274,12 @@ def library_menu_kb(groups: list[tuple[str, int]], custom: dict[str, str] | None
     return InlineKeyboardMarkup(rows)
 
 
-def library_group_kb(group: str, items: list[tuple[int, str]]):
+def library_group_kb(
+    group: str,
+    items: list[tuple[int, str]],
+    *,
+    group_name: str | None = None,
+):
     rows: list[list[InlineKeyboardButton]] = []
     for ue_id, name in items:
         rows.append(
@@ -1275,10 +1303,18 @@ def library_group_kb(group: str, items: list[tuple[int, str]]):
         ]
     )
     if group.startswith("u"):
+        label = group_name or "Группа"
         rows.append(
             [
                 InlineKeyboardButton(
-                    dual("− Группа", "Удалить группу упражнений"),
+                    dual(
+                        f"− {label}",
+                        (
+                            f"Удалить группу «{label}»"
+                            if group_name
+                            else "Удалить группу упражнений"
+                        ),
+                    ),
                     callback_data=f"lib:groupdel:{group}",
                 )
             ]
@@ -1326,10 +1362,18 @@ def library_manage_kb(
             ]
         )
     if can_delete_group:
+        label = group_name or "Группа"
         rows.append(
             [
                 InlineKeyboardButton(
-                    dual("− Группа", "Удалить группу упражнений"),
+                    dual(
+                        f"− {label}",
+                        (
+                            f"Удалить группу «{label}»"
+                            if group_name
+                            else "Удалить группу упражнений"
+                        ),
+                    ),
                     callback_data=f"lib:groupdel:{group}",
                 )
             ]
@@ -1346,6 +1390,7 @@ def library_delete_kb(
     back_callback: str | None = None,
     add_callback: str | None = None,
     can_delete_group: bool = False,
+    group_name: str | None = None,
 ):
     return library_manage_kb(
         group,

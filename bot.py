@@ -2894,7 +2894,7 @@ async def show_day_group_view(
     else:
         lines.append("Пока нет упражнений||Добавь упражнения, чтобы заполнить этот раздел.")
     text = "\n".join(lines)
-    kb = day_group_kb(day, group, items)
+    kb = day_group_kb(day, group, items, group_name=gname)
     await show_screen(q, context, text, kb, user_id)
 
 async def render_library_group_text(
@@ -3518,7 +3518,7 @@ def library_manage_text(
         else:
             lines.append("Удалять пока нечего — вернись назад, чтобы добавить упражнения.")
     if can_delete_group:
-        lines.append("Можно удалить всю группу через «− Группа».")
+        lines.append(f"Можно удалить всю группу через «− {name}».")
     return "\n".join(lines)
 
 
@@ -4745,8 +4745,12 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if action == "group":
                 group = parts[2]
                 items = await list_library_exercises(user_id, group)
-                text = await render_library_group_text(user_id, group, items, context, prefs=prefs)
-                kb = library_group_kb(group, items)
+                custom = await get_custom_groups(user_id, context)
+                gname = MG_NAMES.get(group, custom.get(group, group))
+                text = await render_library_group_text(
+                    user_id, group, items, context, prefs=prefs
+                )
+                kb = library_group_kb(group, items, group_name=gname)
                 await show_screen(q, context, text, kb, user_id)
                 return
             if action == "groupdel":
@@ -4761,6 +4765,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         f"Удалить группу «{gname}»?\n"
                         "Все упражнения из неё исчезнут из библиотеки и расписания."
                     )
+                    kb = confirm_library_group_delete_kb(group)
                     await show_screen(q, context, text, kb, user_id)
                     return
                 if len(parts) >= 4 and parts[3] == "ok":
@@ -4768,8 +4773,10 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     if not removed:
                         await q.answer("Не удалось удалить группу.", show_alert=True)
                         items = await list_library_exercises(user_id, group)
-                        text = await render_library_group_text(user_id, group, items, context, prefs=prefs)
-                        kb = library_group_kb(group, items)
+                        text = await render_library_group_text(
+                            user_id, group, items, context, prefs=prefs
+                        )
+                        kb = library_group_kb(group, items, group_name=gname)
                         await show_screen(q, context, text, kb, user_id)
                         return
                     custom.pop(group, None)
@@ -4784,6 +4791,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 group = parts[2]
                 items = await list_library_exercises(user_id, group)
                 custom = await get_custom_groups(user_id, context)
+                gname = MG_NAMES.get(group, custom.get(group, group))
                 can_delete_group = group.startswith("u")
                 sub = parts[3] if len(parts) > 3 else None
                 if sub is None:
@@ -4800,6 +4808,24 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         can_delete_group=can_delete_group,
                         back_callback=f"lib:group:{group}",
                         add_callback=f"lib:manage:{group}:add",
+                        group_name=gname if can_delete_group else None,
+                    )
+                    await show_screen(q, context, text, kb, user_id)
+                    return
+                if sub == "del":
+                    text = library_manage_text(
+                        group,
+                        custom,
+                        has_items=bool(items),
+                        can_delete_group=can_delete_group,
+                        mode="delete",
+                    )
+                    kb = library_delete_kb(
+                        group,
+                        items,
+                        back_callback=f"lib:group:{group}",
+                        can_delete_group=can_delete_group,
+                        group_name=gname if can_delete_group else None,
                     )
                     await show_screen(q, context, text, kb, user_id)
                     return
@@ -4833,6 +4859,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 group = parts[2]
                 items = await list_library_exercises(user_id, group)
                 custom = await get_custom_groups(user_id, context)
+                gname = MG_NAMES.get(group, custom.get(group, group))
                 text = library_manage_text(
                     group,
                     custom,
@@ -4845,6 +4872,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     items,
                     back_callback=f"lib:group:{group}",
                     can_delete_group=group.startswith("u"),
+                    group_name=gname if group.startswith("u") else None,
                 )
                 await show_screen(q, context, text, kb, user_id)
                 return
@@ -4854,6 +4882,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await remove_user_exercise(user_id, 0, ue_id)
                 items = await list_library_exercises(user_id, group)
                 custom = await get_custom_groups(user_id, context)
+                gname = MG_NAMES.get(group, custom.get(group, group))
                 text = library_manage_text(
                     group,
                     custom,
@@ -4866,6 +4895,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     items,
                     back_callback=f"lib:group:{group}",
                     can_delete_group=group.startswith("u"),
+                    group_name=gname if group.startswith("u") else None,
                 )
                 await show_screen(q, context, text, kb, user_id)
                 return
@@ -4947,8 +4977,11 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     if target and target[0] == "group":
                         group = target[1]
                         items = await list_library_exercises(user_id, group)
-                        text = await render_library_group_text(user_id, group, items, context, prefs=prefs)
-                        kb = library_group_kb(group, items)
+                        text = await render_library_group_text(
+                            user_id, group, items, context, prefs=prefs
+                        )
+                        gname = MG_NAMES.get(group, custom.get(group, group))
+                        kb = library_group_kb(group, items, group_name=gname)
                         await show_screen(q, context, text, kb, user_id)
                     else:
                         kb = library_add_group_kb(custom)
@@ -4960,8 +4993,12 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     if target and target[0] == "group":
                         group = target[1]
                         items = await list_library_exercises(user_id, group)
-                        text = await render_library_group_text(user_id, group, items, context, prefs=prefs)
-                        kb = library_group_kb(group, items)
+                        text = await render_library_group_text(
+                            user_id, group, items, context, prefs=prefs
+                        )
+                        custom = await get_custom_groups(user_id, context)
+                        gname = MG_NAMES.get(group, custom.get(group, group))
+                        kb = library_group_kb(group, items, group_name=gname)
                         await show_screen(q, context, text, kb, user_id)
                     else:
                         groups = await list_library_groups(user_id)
@@ -5395,6 +5432,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             if target_group.startswith("u")
                             else None
                         ),
+                        group_delete_label=gname if target_group.startswith("u") else None,
                     )
                     await show_screen(q, context, text, kb, user_id)
                     return
@@ -5906,8 +5944,12 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         return
                     if is_library:
                         items = await list_library_exercises(user_id, group)
-                        text = await render_library_group_text(user_id, group, items, context, prefs=prefs)
-                        kb = library_group_kb(group, items)
+                        text = await render_library_group_text(
+                            user_id, group, items, context, prefs=prefs
+                        )
+                        custom = await get_custom_groups(user_id, context)
+                        gname = MG_NAMES.get(group, custom.get(group, group))
+                        kb = library_group_kb(group, items, group_name=gname)
                         await show_screen(q, context, text, kb, user_id)
                     else:
                         await show_day_group_view(q, user_id, day, group, context)
