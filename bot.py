@@ -42,8 +42,8 @@ from keyboards import (
     BACK_BTN,
     day_kb,
     day_group_kb,
-    day_manage_kb,
     day_add_group_kb,
+    day_remove_group_kb,
     day_add_exercises_kb,
     del_exercises_kb,
     exercise_actions_kb,
@@ -2571,9 +2571,10 @@ async def send_day_cards_view(
             continue
         if callback.startswith(f"day:add_ex:{day}") or callback.startswith(
             f"day:del_ex:{day}"
-        ) or callback.startswith(f"day:manage:{day}:all") or callback.startswith(
-            f"day:add_group:{day}"
-        ):
+        ) or callback in {
+            f"day:manage:{day}:all:add",
+            f"day:manage:{day}:all:del",
+        }:
             primary_actions.append((button.text, callback))
             continue
         content_rows.append(row)
@@ -4920,39 +4921,42 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     day,
                     q.message.chat_id,
                     q.message.message_id,
-                    "settings",
+                    "day",
+                )
+                kb = InlineKeyboardMarkup(
+                    [
+                        [
+                            InlineKeyboardButton(
+                                BACK_BTN,
+                                callback_data=f"day:manage:{day}:all:add",
+                            )
+                        ]
+                    ]
                 )
                 await show_screen(
                     q,
                     context,
                     "Как назвать новую группу мышц? Напиши название сообщением.",
-                    None,
+                    kb,
                     user_id,
                 )
                 return
             if action == "manage":
                 day = int(parts[2])
                 scope = parts[3] if len(parts) > 3 else "all"
+                sub = parts[4] if len(parts) > 4 else None
                 clear_sheet_context(context, q.message.chat_id, q.message.message_id)
                 today_str = await get_user_local_date(user_id)
                 ex_rows = await fetch_day_exercises(user_id, day, today_str)
                 custom = await get_custom_groups(user_id, context)
                 target_group = None if scope == "all" else scope
-                if len(parts) == 4:
+                if sub is None:
                     if target_group is None:
-                        can_delete = bool(ex_rows)
-                        text = "Что сделать с упражнениями этого дня?"
+                        prefs = await load_ui_preferences(user_id)
+                        await send_day_cards_view(q, user_id, day, context, prefs)
                     else:
-                        filtered = [row for row in ex_rows if row[2] == target_group]
-                        can_delete = bool(filtered)
-                        gname = MG_NAMES.get(
-                            target_group, custom.get(target_group, target_group)
-                        )
-                        text = f"Группа «{gname}». Что сделать?"
-                    kb = day_manage_kb(day, target_group, can_delete=can_delete)
-                    await show_screen(q, context, text, kb, user_id)
+                        await show_day_group_view(q, user_id, day, target_group, context)
                     return
-                sub = parts[4]
                 if sub == "add":
                     if target_group is None:
                         existing_groups = {g for _, _, g, _, _ in ex_rows}
@@ -4965,22 +4969,23 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     )
                     return
                 if sub == "del":
-                    back_cb = (
-                        f"day:manage:{day}:all"
-                        if target_group is None
-                        else f"day:manage:{day}:{target_group}"
-                    )
                     if target_group is None:
-                        if not ex_rows:
+                        order: list[str] = []
+                        for _, _, raw_group, *_ in ex_rows:
+                            if raw_group not in order:
+                                order.append(raw_group)
+                        if not order:
                             await q.answer("Пока нечего удалять.", show_alert=True)
                             prefs = await load_ui_preferences(user_id)
                             await send_day_cards_view(q, user_id, day, context, prefs)
                             return
-                        kb = del_exercises_kb(
-                            day, ex_rows, back_callback=back_cb
-                        )
+                        groups_for_kb = []
+                        for code in order:
+                            name = MG_NAMES.get(code, custom.get(code, code))
+                            groups_for_kb.append((code, name))
+                        kb = day_remove_group_kb(day, groups_for_kb)
                         await show_screen(
-                            q, context, "Удалить упражнение:", kb, user_id
+                            q, context, "Удалить группу мышц:", kb, user_id
                         )
                         return
                     filtered = [row for row in ex_rows if row[2] == target_group]
@@ -4992,10 +4997,42 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         day,
                         ex_rows,
                         group=target_group,
-                        back_callback=back_cb,
+                        back_callback=f"day:group:{day}:{target_group}",
                     )
                     await show_screen(q, context, "Удалить упражнение:", kb, user_id)
                     return
+                return
+            if action == "remove_group":
+                day = int(parts[2])
+                group = parts[3]
+                clear_sheet_context(context, q.message.chat_id, q.message.message_id)
+                today_str = await get_user_local_date(user_id)
+                ex_rows = await fetch_day_exercises(user_id, day, today_str)
+                filtered = [row for row in ex_rows if row[2] == group]
+                if not filtered:
+                    await q.answer("Эта группа уже отсутствует в дне.", show_alert=True)
+                else:
+                    for ue_id, *_ in filtered:
+                        await remove_user_exercise(user_id, day, ue_id)
+                    if context.user_data.get("add_group") == (day, group):
+                        context.user_data.pop("add_group", None)
+                    await q.answer("Группа удалена из дня.")
+                ex_rows = await fetch_day_exercises(user_id, day, today_str)
+                order: list[str] = []
+                for _, _, raw_group, *_ in ex_rows:
+                    if raw_group not in order:
+                        order.append(raw_group)
+                if order:
+                    custom = await get_custom_groups(user_id, context)
+                    groups_for_kb = []
+                    for code in order:
+                        name = MG_NAMES.get(code, custom.get(code, code))
+                        groups_for_kb.append((code, name))
+                    kb = day_remove_group_kb(day, groups_for_kb)
+                    await show_screen(q, context, "Удалить группу мышц:", kb, user_id)
+                else:
+                    prefs = await load_ui_preferences(user_id)
+                    await send_day_cards_view(q, user_id, day, context, prefs)
                 return
             if action == "add_ex":
                 day = int(parts[2])
@@ -5019,12 +5056,37 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 clear_sheet_context(context, q.message.chat_id, q.message.message_id)
                 if sub == "mg":
                     group = parts[4]
-                    if group == "other":
-                        context.user_data["awaiting_group_name"] = (day, q.message.chat_id, q.message.message_id, "settings")
-                        await show_screen(q, context, 'Укажи группу мышц, которой хочешь заниматься.', None, user_id)
-                        return
                     context.user_data["add_group"] = (day, group)
                     await show_day_add_exercises_view(q, user_id, day, group, context)
+                    return
+                if sub == "custom_group":
+                    context.user_data["awaiting_group_name"] = (
+                        day,
+                        q.message.chat_id,
+                        q.message.message_id,
+                        "day",
+                    )
+                    kb = InlineKeyboardMarkup(
+                        [[InlineKeyboardButton(BACK_BTN, callback_data=f"day:add:{day}:mg_back")]]
+                    )
+                    await show_screen(
+                        q,
+                        context,
+                        "Как назвать новую группу мышц? Напиши название сообщением.",
+                        kb,
+                        user_id,
+                    )
+                    return
+                if sub == "mg_back":
+                    pending = context.user_data.get("awaiting_group_name")
+                    if pending and pending[0] == day:
+                        context.user_data.pop("awaiting_group_name", None)
+                    today_str = await get_user_local_date(user_id)
+                    ex_rows = await fetch_day_exercises(user_id, day, today_str)
+                    existing_groups = {g for _, _, g, _, _ in ex_rows}
+                    custom = await get_custom_groups(user_id, context)
+                    kb = day_add_group_kb(day, custom, existing_groups)
+                    await show_screen(q, context, "Выбери группу:", kb, user_id)
                     return
                 if sub == "page":
                     group = parts[4]

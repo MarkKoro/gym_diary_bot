@@ -736,17 +736,13 @@ def day_kb(day_index: int, ex_rows: list[tuple[int, str, str, int, int]]):
     rows.append(
         [
             InlineKeyboardButton(
-                dual("Добавить / удалить", "Добавить или удалить упражнения"),
-                callback_data=f"day:manage:{day_index}:all",
-            )
-        ]
-    )
-    rows.append(
-        [
+                dual("➕ Добавить", "Добавить группу мышц"),
+                callback_data=f"day:manage:{day_index}:all:add",
+            ),
             InlineKeyboardButton(
-                dual("Добавить своё", "Добавить свою группу мышц"),
-                callback_data=f"day:add_group:{day_index}",
-            )
+                dual("🗑 Удалить", "Удалить группу мышц"),
+                callback_data=f"day:manage:{day_index}:all:del",
+            ),
         ]
     )
     rows.append([InlineKeyboardButton(BACK_BTN, callback_data="menu:root")])
@@ -771,9 +767,13 @@ def day_group_kb(day_index: int, group: str, items: list[tuple[int, str, int]]):
     rows.append(
         [
             InlineKeyboardButton(
-                dual("Добавить / удалить", "Добавить или удалить упражнения"),
-                callback_data=f"day:manage:{day_index}:{group}",
-            )
+                dual("➕ Добавить", "Добавить упражнения"),
+                callback_data=f"day:manage:{day_index}:{group}:add",
+            ),
+            InlineKeyboardButton(
+                dual("🗑 Удалить", "Удалить упражнения"),
+                callback_data=f"day:manage:{day_index}:{group}:del",
+            ),
         ]
     )
     if group.startswith("u"):
@@ -788,34 +788,6 @@ def day_group_kb(day_index: int, group: str, items: list[tuple[int, str, int]]):
     rows.append([InlineKeyboardButton(BACK_BTN, callback_data=f"day:open:{day_index}")])
     return InlineKeyboardMarkup(rows)
 
-
-def day_manage_kb(
-    day_index: int,
-    group: str | None,
-    *,
-    can_delete: bool,
-) -> InlineKeyboardMarkup:
-    scope = group if group is not None else "all"
-    rows: list[list[InlineKeyboardButton]] = [
-        [
-            InlineKeyboardButton(
-                dual("Добавить", "Добавить упражнения"),
-                callback_data=f"day:manage:{day_index}:{scope}:add",
-            ),
-        ]
-    ]
-    if can_delete:
-        rows[0].append(
-            InlineKeyboardButton(
-                dual("Удалить", "Удалить упражнения"),
-                callback_data=f"day:manage:{day_index}:{scope}:del",
-            )
-        )
-    back_cb = (
-        f"day:group:{day_index}:{group}" if group is not None else f"day:open:{day_index}"
-    )
-    rows.append([InlineKeyboardButton(BACK_BTN, callback_data=back_cb)])
-    return InlineKeyboardMarkup(rows)
 
 def day_add_group_kb(day_index: int, custom: dict[str, str] | None = None, selected: set[str] | None = None):
     rows = []
@@ -852,14 +824,28 @@ def day_add_group_kb(day_index: int, custom: dict[str, str] | None = None, selec
     rows.append(
         [
             InlineKeyboardButton(
-                dual(
-                    f"⬜ {MG_NAMES['other']}",
-                    f"Добавить свою группу ({MG_NAMES['other']})",
-                ),
-                callback_data=f"day:add:{day_index}:mg:other",
+                dual("➕ Добавить группу", "Создать свою группу мышц"),
+                callback_data=f"day:add:{day_index}:custom_group",
             )
         ]
     )
+    rows.append([InlineKeyboardButton(BACK_BTN, callback_data=f"day:open:{day_index}")])
+    return InlineKeyboardMarkup(rows)
+
+
+def day_remove_group_kb(
+    day_index: int, groups: list[tuple[str, str]]
+) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    for code, name in groups:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    dual("− Группа", f"Удалить группу «{name}»"),
+                    callback_data=f"day:remove_group:{day_index}:{code}",
+                )
+            ]
+        )
     rows.append([InlineKeyboardButton(BACK_BTN, callback_data=f"day:open:{day_index}")])
     return InlineKeyboardMarkup(rows)
 
