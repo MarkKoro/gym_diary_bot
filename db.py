@@ -1077,6 +1077,20 @@ async def remove_user_exercise(user_id: int, day_index: int, ue_id: int):
         )
         await db.commit()
 
+
+async def clear_day_plan(user_id: int, day_index: int):
+    async with connect_db() as db:
+        await db.execute(
+            "UPDATE user_exercises SET is_archived=1 WHERE user_id=? AND day_index=? AND is_archived=0",
+            (user_id, day_index),
+        )
+        await db.execute(
+            "DELETE FROM exercise_baseline WHERE user_id=? AND day_index=?",
+            (user_id, day_index),
+        )
+        await db.commit()
+
+
 async def get_exercise_info(ue_id: int):
     async with connect_db() as db:
         cur = await db.execute(
