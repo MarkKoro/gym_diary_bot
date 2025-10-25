@@ -1331,7 +1331,6 @@ def library_manage_kb(
     back_callback: str | None = None,
     add_callback: str | None = None,
     show_add_button: bool = True,
-    group_name: str | None = None,
 ) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
     for ue_id, name in items:
@@ -1400,7 +1399,6 @@ def library_delete_kb(
         back_callback=back_callback,
         add_callback=add_callback,
         show_add_button=False,
-        group_name=group_name,
     )
 
 

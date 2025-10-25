@@ -4829,6 +4829,22 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     )
                     await show_screen(q, context, text, kb, user_id)
                     return
+                if sub == "del":
+                    text = library_manage_text(
+                        group,
+                        custom,
+                        has_items=bool(items),
+                        can_delete_group=can_delete_group,
+                        mode="delete",
+                    )
+                    kb = library_delete_kb(
+                        group,
+                        items,
+                        back_callback=f"lib:group:{group}",
+                        can_delete_group=can_delete_group,
+                    )
+                    await show_screen(q, context, text, kb, user_id)
+                    return
                 if sub == "add":
                     context.user_data["lib_return"] = ("group", group)
                     await show_library_add_exercises_view(q, user_id, group, context)
@@ -5401,7 +5417,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         "Если захочешь добавить другие упражнения, вернись назад."
                     )
                     if target_group.startswith("u"):
-                        text += f"\nМожно удалить всю группу через «− {gname}»."
+                        text += "\nМожно удалить всю группу через «− Группа»."
                     context.user_data[DAY_DELETE_SCOPE_KEY] = {
                         "day": day,
                         "group": target_group,
@@ -5611,7 +5627,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                 "Если захочешь добавить другие упражнения, вернись назад."
                             )
                             if target_group.startswith("u"):
-                                text += f"\nМожно удалить всю группу через «− {gname}»."
+                                text += "\nМожно удалить всю группу через «− Группа»."
                             context.user_data[DAY_DELETE_SCOPE_KEY] = {
                                 "day": day,
                                 "group": target_group,
@@ -5626,7 +5642,6 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                     if target_group.startswith("u")
                                     else None
                                 ),
-                                group_delete_label=gname if target_group.startswith("u") else None,
                             )
                             await show_screen(q, context, text, kb, user_id)
                         else:
