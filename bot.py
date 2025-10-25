@@ -42,6 +42,7 @@ from keyboards import (
     BACK_BTN,
     day_kb,
     day_group_kb,
+    day_manage_kb,
     day_add_group_kb,
     day_add_exercises_kb,
     del_exercises_kb,
@@ -61,6 +62,7 @@ from keyboards import (
     TIMEZONES,
     library_menu_kb,
     library_group_kb,
+    library_manage_kb,
     library_add_group_kb,
     library_add_exercises_kb,
     library_delete_kb,
@@ -410,6 +412,19 @@ def format_sets_value(sets: int, reps: int, weight: float, with_weight: bool) ->
     return f"{base} при {format_weight_value(weight)} кг"
 
 
+def format_compact_sets_value(
+    sets: int, reps: int, weight: float, with_weight: bool
+) -> str:
+    safe_sets = max(int(sets or 0), 0)
+    safe_reps = max(int(reps or 0), 0)
+    base = f"{safe_sets}×{safe_reps}"
+    if with_weight:
+        safe_weight = max(float(weight or 0.0), 0.0)
+        if safe_weight > 0:
+            return f"{base}×{format_weight_value(safe_weight)} кг"
+    return base
+
+
 def format_flex_value(
     reps: int, weight: float, with_weight: bool, kind: str = "reps"
 ) -> str:
@@ -517,7 +532,7 @@ def format_kb_plan(baseline: tuple[int, int, float] | None) -> str:
     if not baseline:
         return "—"
     sets, reps, weight = baseline
-    return f"{sets}×{reps} повт. при {format_weight_value(weight)} кг"
+    return format_compact_sets_value(sets, reps, weight, True)
 
 
 def format_kb_done(sets: list[tuple[int, int, float]]) -> str:
@@ -2135,7 +2150,7 @@ def format_plan_value(
         value = format_kb_plan(baseline)
         return value if value != "—" else t("NOT_SET")
     sets, reps, weight = baseline
-    return format_sets_value(sets, reps, weight, with_weight)
+    return format_compact_sets_value(sets, reps, weight, with_weight)
 
 
 def format_strength_done_value(
@@ -2556,6 +2571,8 @@ async def send_day_cards_view(
             continue
         if callback.startswith(f"day:add_ex:{day}") or callback.startswith(
             f"day:del_ex:{day}"
+        ) or callback.startswith(f"day:manage:{day}:all") or callback.startswith(
+            f"day:add_group:{day}"
         ):
             primary_actions.append((button.text, callback))
             continue
@@ -2778,7 +2795,7 @@ async def render_library_group_text(
     if not items:
         return (
             f"{gname}\n"
-            "Пока нет упражнений||Нажми «Добавить упражнение», чтобы сохранить их и вести учёт."
+            "Пока нет упражнений||Нажми «Добавить / удалить», чтобы сохранить их и вести учёт."
         )
     mode = await get_recording_mode(user_id)
     today = datetime.now(UTC).strftime("%Y-%m-%d")
@@ -2841,8 +2858,8 @@ async def render_library_group_text(
         lines,
         prefs,
         (
-            "Добавь новые упражнения через «Добавить упражнение».",
-            "Добавь новые упражнения через «Добавить упражнение». После сохранения их можно прикрепить к тренировочным дням и сразу настроить базовый план или фактические подходы.",
+            "Добавь новые упражнения через «Добавить / удалить».",
+            "Добавь новые упражнения через «Добавить / удалить». После сохранения их можно прикрепить к тренировочным дням и сразу настроить базовый план или фактические подходы.",
         ),
     )
     return "\n".join(lines)
@@ -4467,6 +4484,37 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     await show_screen(q, context, text, menu, user_id)
                     return
                 return
+            if action == "manage":
+                group = parts[2]
+                items = await list_library_exercises(user_id, group)
+                if len(parts) == 3:
+                    can_delete = bool(items)
+                    text = "Что сделать с упражнениями этой группы?"
+                    kb = library_manage_kb(group, can_delete=can_delete)
+                    await show_screen(q, context, text, kb, user_id)
+                    return
+                sub = parts[3]
+                if sub == "add":
+                    context.user_data["lib_return"] = ("group", group)
+                    custom = await get_custom_groups(user_id, context)
+                    kb = library_add_group_kb(custom)
+                    await show_screen(q, context, "Выбери группу:", kb, user_id)
+                    return
+                if sub == "del":
+                    if not items:
+                        await q.answer("Пока нечего удалять.", show_alert=True)
+                        text = await render_library_group_text(
+                            user_id, group, items, context, prefs=prefs
+                        )
+                        kb = library_group_kb(group, items)
+                        await show_screen(q, context, text, kb, user_id)
+                        return
+                    kb = library_delete_kb(
+                        group, items, back_callback=f"lib:manage:{group}"
+                    )
+                    await show_screen(q, context, "Удалить упражнение:", kb, user_id)
+                    return
+                return
             if action == "ex":
                 group = parts[2]
                 ue_id = int(parts[3])
@@ -4607,7 +4655,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         if mode == "strength":
                             text = (
                                 f"{t('DAY')} {day} — {label}.\n"
-                                "Открой список групп мышц, выбери нужные и добавь упражнения. В любой момент можешь расширить тренировку другими направлениями через «Добавить упражнение»."
+                                "Открой список групп мышц, выбери нужные и добавь упражнения. В любой момент можешь расширить тренировку другими направлениями через «Добавить / удалить»."
                             )
                             kb = edit_day_strength_kb(day)
                         elif mode in {"kb", "metcon", "workout"}:
@@ -4619,7 +4667,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             descriptions = {
                                 "kb": "Подбери упражнения с гирями. После добавления можно дополнять день силовыми или другими упражнениями.",
                                 "metcon": "Открой подборку кроссфит-упражнений и собери тренировку. Другие группы всегда доступны через меню дня.",
-                                "workout": "Выбери упражнения для воркаута. При желании добавляй силовые или гиревые упражнения через «Добавить упражнение».",
+                                "workout": "Выбери упражнения для воркаута. При желании добавляй силовые или гиревые упражнения через «Добавить / удалить».",
                             }
                             text = (
                                 f"{t('DAY')} {day} — {label}.\n"
@@ -4863,6 +4911,90 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     await q.answer("Группа удалена.")
                     prefs = await load_ui_preferences(user_id)
                     await send_day_cards_view(q, user_id, day, context, prefs)
+                    return
+                return
+            if action == "add_group":
+                day = int(parts[2])
+                clear_sheet_context(context, q.message.chat_id, q.message.message_id)
+                context.user_data["awaiting_group_name"] = (
+                    day,
+                    q.message.chat_id,
+                    q.message.message_id,
+                    "settings",
+                )
+                await show_screen(
+                    q,
+                    context,
+                    "Как назвать новую группу мышц? Напиши название сообщением.",
+                    None,
+                    user_id,
+                )
+                return
+            if action == "manage":
+                day = int(parts[2])
+                scope = parts[3] if len(parts) > 3 else "all"
+                clear_sheet_context(context, q.message.chat_id, q.message.message_id)
+                today_str = await get_user_local_date(user_id)
+                ex_rows = await fetch_day_exercises(user_id, day, today_str)
+                custom = await get_custom_groups(user_id, context)
+                target_group = None if scope == "all" else scope
+                if len(parts) == 4:
+                    if target_group is None:
+                        can_delete = bool(ex_rows)
+                        text = "Что сделать с упражнениями этого дня?"
+                    else:
+                        filtered = [row for row in ex_rows if row[2] == target_group]
+                        can_delete = bool(filtered)
+                        gname = MG_NAMES.get(
+                            target_group, custom.get(target_group, target_group)
+                        )
+                        text = f"Группа «{gname}». Что сделать?"
+                    kb = day_manage_kb(day, target_group, can_delete=can_delete)
+                    await show_screen(q, context, text, kb, user_id)
+                    return
+                sub = parts[4]
+                if sub == "add":
+                    if target_group is None:
+                        existing_groups = {g for _, _, g, _, _ in ex_rows}
+                        kb = day_add_group_kb(day, custom, existing_groups)
+                        await show_screen(q, context, "Выбери группу:", kb, user_id)
+                        return
+                    context.user_data["add_group"] = (day, target_group)
+                    await show_day_add_exercises_view(
+                        q, user_id, day, target_group, context
+                    )
+                    return
+                if sub == "del":
+                    back_cb = (
+                        f"day:manage:{day}:all"
+                        if target_group is None
+                        else f"day:manage:{day}:{target_group}"
+                    )
+                    if target_group is None:
+                        if not ex_rows:
+                            await q.answer("Пока нечего удалять.", show_alert=True)
+                            prefs = await load_ui_preferences(user_id)
+                            await send_day_cards_view(q, user_id, day, context, prefs)
+                            return
+                        kb = del_exercises_kb(
+                            day, ex_rows, back_callback=back_cb
+                        )
+                        await show_screen(
+                            q, context, "Удалить упражнение:", kb, user_id
+                        )
+                        return
+                    filtered = [row for row in ex_rows if row[2] == target_group]
+                    if not filtered:
+                        await q.answer("Пока нечего удалять.", show_alert=True)
+                        await show_day_group_view(q, user_id, day, target_group, context)
+                        return
+                    kb = del_exercises_kb(
+                        day,
+                        ex_rows,
+                        group=target_group,
+                        back_callback=back_cb,
+                    )
+                    await show_screen(q, context, "Удалить упражнение:", kb, user_id)
                     return
                 return
             if action == "add_ex":
