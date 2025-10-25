@@ -943,7 +943,7 @@ def del_exercises_kb(
         rows.append(
             [
                 InlineKeyboardButton(
-                    dual("− Упражнение", f"Удалить упражнение «{name}»"),
+                    dual(f"− {name}", f"Удалить упражнение «{name}»"),
                     callback_data=f"day:del:{day_index}:{ue_id}",
                 )
             ]
@@ -1282,13 +1282,14 @@ def library_manage_kb(
     can_delete_group: bool,
     back_callback: str | None = None,
     add_callback: str | None = None,
+    show_add_button: bool = True,
 ) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
     for ue_id, name in items:
         rows.append(
             [
                 InlineKeyboardButton(
-                    dual("− Упражнение", f"Удалить «{name}»"),
+                    dual(f"− {name}", f"Удалить «{name}»"),
                     callback_data=f"lib:del:{group}:{ue_id}",
                 )
             ]
@@ -1302,15 +1303,16 @@ def library_manage_kb(
                 )
             ]
         )
-    add_cb = add_callback or f"lib:manage:{group}:add"
-    rows.append(
-        [
-            InlineKeyboardButton(
-                dual("➕ Добавить", "Добавить упражнения"),
-                callback_data=add_cb,
-            )
-        ]
-    )
+    if show_add_button:
+        add_cb = add_callback or f"lib:manage:{group}:add"
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    dual("➕ Добавить", "Добавить упражнения"),
+                    callback_data=add_cb,
+                )
+            ]
+        )
     if can_delete_group:
         rows.append(
             [
@@ -1339,6 +1341,7 @@ def library_delete_kb(
         can_delete_group=can_delete_group,
         back_callback=back_callback,
         add_callback=add_callback,
+        show_add_button=False,
     )
 
 

@@ -643,6 +643,17 @@ def format_measurement_timestamp(value: str, tz: ZoneInfo) -> str:
         return value.split("T")[0]
 
 
+def format_progress_date(value: str) -> str:
+    try:
+        return datetime.strptime(value, "%Y-%m-%d").strftime("%d.%m.%Y")
+    except ValueError:
+        try:
+            dt = datetime.fromisoformat(value)
+            return dt.strftime("%d.%m.%Y")
+        except Exception:
+            return value
+
+
 def remember_message(chat_id: int | None, message_id: int | None):
     if chat_id is None or message_id is None:
         return
@@ -2905,7 +2916,7 @@ async def show_library_exercise_view(
         is_library=True,
     )
     await show_screen(q, context, full_text, kb, user_id)
-    return ex_id, resolved_group
+    return view.exercise_id, view.group
 
 
 async def render_exercise_view(
@@ -5620,12 +5631,13 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         prog_lines.append(
                             f"Базовое: {format_sets_value(base[0], base[1], base[2], view.with_weight)}"
                         )
-                    for d, s, r, w in rows:
+                    for date_text, s, r, w in rows:
                         sets_cnt = s or 0
                         reps_cnt = r or 0
                         weight_val = w or 0.0
+                        label = format_progress_date(date_text)
                         prog_lines.append(
-                            f"{d}: {format_sets_value(sets_cnt, reps_cnt, weight_val, view.with_weight)}"
+                            f"{label}: {format_sets_value(sets_cnt, reps_cnt, weight_val, view.with_weight)}"
                         )
                     if prog_lines:
                         header = "Прогресс"
