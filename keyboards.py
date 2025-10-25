@@ -126,7 +126,7 @@ def settings_kb():
         ],
         [
             InlineKeyboardButton(
-                dual("🗑 Мои группы", "Удалить созданные группы мышц"),
+                dual("🗑 Удаление моих групп мышц", "Удалить созданные группы мышц"),
                 callback_data="set:groups",
             )
         ],
@@ -212,7 +212,7 @@ def edit_day_mode_kb(day_index: int):
             ],
             [
                 InlineKeyboardButton(
-                    "🕋 Гири", callback_data=f"set:edit_day:{day_index}:kb"
+                    "🏋️‍♀️ Гири", callback_data=f"set:edit_day:{day_index}:kb"
                 )
             ],
             [
@@ -943,7 +943,7 @@ def del_exercises_kb(
         rows.append(
             [
                 InlineKeyboardButton(
-                    dual("− Упражнение", f"Удалить упражнение «{name}»"),
+                    dual(f"− {name}", f"Удалить упражнение «{name}»"),
                     callback_data=f"day:del:{day_index}:{ue_id}",
                 )
             ]
@@ -1282,13 +1282,14 @@ def library_manage_kb(
     can_delete_group: bool,
     back_callback: str | None = None,
     add_callback: str | None = None,
+    show_add_button: bool = True,
 ) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
     for ue_id, name in items:
         rows.append(
             [
                 InlineKeyboardButton(
-                    dual("− Упражнение", f"Удалить «{name}»"),
+                    dual(f"− {name}", f"Удалить «{name}»"),
                     callback_data=f"lib:del:{group}:{ue_id}",
                 )
             ]
@@ -1302,15 +1303,16 @@ def library_manage_kb(
                 )
             ]
         )
-    add_cb = add_callback or f"lib:manage:{group}:add"
-    rows.append(
-        [
-            InlineKeyboardButton(
-                dual("➕ Добавить", "Добавить упражнения"),
-                callback_data=add_cb,
-            )
-        ]
-    )
+    if show_add_button:
+        add_cb = add_callback or f"lib:manage:{group}:add"
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    dual("➕ Добавить", "Добавить упражнения"),
+                    callback_data=add_cb,
+                )
+            ]
+        )
     if can_delete_group:
         rows.append(
             [
@@ -1339,6 +1341,7 @@ def library_delete_kb(
         can_delete_group=can_delete_group,
         back_callback=back_callback,
         add_callback=add_callback,
+        show_add_button=False,
     )
 
 
@@ -1538,6 +1541,32 @@ def measurements_category_kb(action: str, categories: list[tuple[str, str]]):
     return InlineKeyboardMarkup(rows)
 
 
+def confirm_day_reset_kb(day_index: int, mode: str):
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton(
+                    dual(
+                        "✅ Начать сначала",
+                        "Очистить упражнения и начать настройку заново",
+                    ),
+                    callback_data=f"set:edit_day:{day_index}:{mode}:reset",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    dual(
+                        "↩️ Оставить упражнения",
+                        "Сохранить текущий план и продолжить настройку",
+                    ),
+                    callback_data=f"set:edit_day:{day_index}:{mode}:keep",
+                )
+            ],
+            [InlineKeyboardButton(BACK_BTN, callback_data=f"set:edit_day:{day_index}")],
+        ]
+    )
+
+
 def measurements_metric_kb(action: str, category: str, metrics: list[tuple[str, str]]):
     rows = []
     for code, title in metrics:
@@ -1553,7 +1582,9 @@ def measurements_metric_kb(action: str, category: str, metrics: list[tuple[str, 
     return InlineKeyboardMarkup(rows)
 
 
-def measurements_existing_kb(action: str, metrics: list[tuple[str, str]]):
+def measurements_existing_kb(
+    action: str, metrics: list[tuple[str, str]], back_callback: str = "measure:back"
+):
     rows = []
     for code, title in metrics:
         rows.append(
@@ -1564,5 +1595,5 @@ def measurements_existing_kb(action: str, metrics: list[tuple[str, str]]):
                 )
             ]
         )
-    rows.append([InlineKeyboardButton(BACK_BTN, callback_data="measure:back")])
+    rows.append([InlineKeyboardButton(BACK_BTN, callback_data=back_callback)])
     return InlineKeyboardMarkup(rows)

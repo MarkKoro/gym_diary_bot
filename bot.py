@@ -59,6 +59,7 @@ from keyboards import (
     ui_preferences_kb,
     confirm_day_group_delete_kb,
     confirm_settings_group_delete_kb,
+    confirm_day_reset_kb,
     TIMEZONES,
     library_menu_kb,
     library_group_kb,
@@ -100,6 +101,7 @@ from db import (
     list_active_days,
     get_day_label,
     remove_user_exercise,
+    clear_day_plan,
     get_exercise_info,
     get_baseline,
     fetch_exercise_sets,
@@ -641,6 +643,17 @@ def format_measurement_timestamp(value: str, tz: ZoneInfo) -> str:
         return dt.strftime("%d.%m.%Y %H:%M")
     except Exception:
         return value.split("T")[0]
+
+
+def format_progress_date(value: str) -> str:
+    try:
+        return datetime.strptime(value, "%Y-%m-%d").strftime("%d.%m.%Y")
+    except ValueError:
+        try:
+            dt = datetime.fromisoformat(value)
+            return dt.strftime("%d.%m.%Y")
+        except Exception:
+            return value
 
 
 def remember_message(chat_id: int | None, message_id: int | None):
@@ -1653,7 +1666,9 @@ async def handle_fill_callback(
 
 MEASUREMENTS_SHOW_ALL_KEY = "measurements_show_all"
 MEASUREMENT_INPUT_KEY = "measurement_input"
+MEASUREMENT_EXISTING_KEY = "measurement_existing"
 LIBRARY_CUSTOM_KEY = "library_custom_input"
+DAY_DELETE_SCOPE_KEY = "day_delete_scope"
 
 MEASUREMENT_CATEGORIES = [
     ("body", "A) Масса/состав тела"),
@@ -2538,8 +2553,9 @@ async def send_day_cards_view(
     day: int,
     context: ContextTypes.DEFAULT_TYPE,
     prefs: UiPreferences,
-):
+): 
     clear_sheet_context(context, q.message.chat_id, q.message.message_id)
+    context.user_data.pop(DAY_DELETE_SCOPE_KEY, None)
     label = await get_day_label(user_id, day)
     today_str = await get_user_local_date(user_id)
     ex_rows = await fetch_day_exercises(user_id, day, today_str)
@@ -2748,6 +2764,7 @@ async def show_day_group_view(
 ):
     today_str = await get_user_local_date(user_id)
     ex_rows = await fetch_day_exercises(user_id, day, today_str)
+    context.user_data.pop(DAY_DELETE_SCOPE_KEY, None)
     mode = await get_recording_mode(user_id)
     summaries = await build_summary_map(user_id, day, ex_rows, today_str, mode)
     last_done_rows = await list_last_done_dates(user_id)
@@ -2905,7 +2922,7 @@ async def show_library_exercise_view(
         is_library=True,
     )
     await show_screen(q, context, full_text, kb, user_id)
-    return ex_id, resolved_group
+    return view.exercise_id, view.group
 
 
 async def render_exercise_view(
@@ -4374,7 +4391,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "🔁 Изменить день — переключи тип тренировки (силовая, гири, кроссфит, воркаут) и открой подходящие упражнения. После переключения можно добавлять упражнения из любых групп.\n"
                 f"📅 Количество тренировок — сейчас {n}. Укажи, сколько раз планируешь тренироваться.\n"
                 f"🎨 Оформление интерфейса — выбирай краткие или обычные пояснения. Сейчас: {verbose_label}.\n"
-                "🗑 Мои группы — удаляй созданные группы мышц. Все упражнения из удалённых групп исчезнут из расписания и библиотеки.\n"
+                "🗑 Удаление моих групп мышц — удаляй созданные группы мышц. Все упражнения из удалённых групп исчезнут из расписания и библиотеки.\n"
                 "📝 Выбор записи — расскажи боту, как фиксировать подходы. Бот хранит каждый рабочий сет, в том числе парные (левая/правая, две гири подряд).\n"
                 "   • Одинаковый вес — каждый сет с одной схемой повторов и веса.\n"
                 "   • Гибкая запись — настраивай вес и повторы отдельно для каждого подхода.\n"
@@ -4387,12 +4404,14 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         if data == "measure:back":
             context.user_data.pop(MEASUREMENT_INPUT_KEY, None)
+            context.user_data.pop(MEASUREMENT_EXISTING_KEY, None)
             text, kb = await build_measurements_view(user_id, context)
             await show_screen(q, context, text, kb, user_id)
             return
 
         if data == "measure:toggle":
             context.user_data.pop(MEASUREMENT_INPUT_KEY, None)
+            context.user_data.pop(MEASUREMENT_EXISTING_KEY, None)
             current = context.user_data.get(MEASUREMENTS_SHOW_ALL_KEY, False)
             context.user_data[MEASUREMENTS_SHOW_ALL_KEY] = not current
             text, kb = await build_measurements_view(user_id, context)
@@ -4405,12 +4424,14 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         if data == "measure:add":
             context.user_data.pop(MEASUREMENT_INPUT_KEY, None)
+            context.user_data.pop(MEASUREMENT_EXISTING_KEY, None)
             categories = measurement_categories_list()
             await show_screen(q, context, 'Выбери категорию:', measurements_category_kb('add', categories), user_id)
             return
 
         if data.startswith("measure:add:cat:"):
             context.user_data.pop(MEASUREMENT_INPUT_KEY, None)
+            context.user_data.pop(MEASUREMENT_EXISTING_KEY, None)
             parts = data.split(":")
             category = parts[3]
             metrics = [
@@ -4448,15 +4469,68 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if data == "measure:edit":
             context.user_data.pop(MEASUREMENT_INPUT_KEY, None)
             rows = await list_measurement_metrics(user_id)
-            metrics = []
+            metrics_by_category: dict[str, list[tuple[str, str]]] = {}
             for code, _ in rows:
                 item = get_measurement_item(code)
                 if item and not item.get("derived"):
-                    metrics.append((code, item["name"]))
-            if not metrics:
+                    metrics_by_category.setdefault(item["category"], []).append(
+                        (code, item["name"])
+                    )
+            if not metrics_by_category:
                 await q.answer("Пока нечего изменять.", show_alert=True)
                 return
-            await show_screen(q, context, 'Что изменить?', measurements_existing_kb('edit', metrics), user_id)
+            context.user_data[MEASUREMENT_EXISTING_KEY] = metrics_by_category
+            available = [
+                (code, title)
+                for code, title in measurement_categories_list()
+                if code in metrics_by_category
+            ]
+            await show_screen(
+                q,
+                context,
+                'Какую группу изменить?',
+                measurements_category_kb('edit', available),
+                user_id,
+            )
+            return
+
+        if data.startswith("measure:edit:cat:"):
+            context.user_data.pop(MEASUREMENT_INPUT_KEY, None)
+            parts = data.split(":")
+            category = parts[3]
+            stored = context.user_data.get(MEASUREMENT_EXISTING_KEY)
+            metrics = None
+            if isinstance(stored, dict):
+                metrics = stored.get(category)
+            if metrics is None:
+                rows = await list_measurement_metrics(user_id)
+                metrics = []
+                for code, _ in rows:
+                    item = get_measurement_item(code)
+                    if (
+                        item
+                        and not item.get("derived")
+                        and item.get("category") == category
+                    ):
+                        metrics.append((code, item["name"]))
+                if metrics:
+                    updated = dict(stored or {})
+                    updated[category] = metrics
+                    context.user_data[MEASUREMENT_EXISTING_KEY] = updated
+            if not metrics:
+                await q.answer("Нет данных для этой группы.", show_alert=True)
+                return
+            title = next(
+                (label for code, label in measurement_categories_list() if code == category),
+                "Эта группа",
+            )
+            await show_screen(
+                q,
+                context,
+                f"{title} — что изменить?",
+                measurements_existing_kb('edit', metrics, back_callback="measure:edit"),
+                user_id,
+            )
             return
 
         if data.startswith("measure:edit:metric:"):
@@ -4477,7 +4551,18 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "message_id": q.message.message_id,
             }
             kb = InlineKeyboardMarkup(
-                [[InlineKeyboardButton(t("BACK"), callback_data="measure:edit")]]
+                [
+                    [
+                        InlineKeyboardButton(
+                            t("BACK"),
+                            callback_data=(
+                                f"measure:edit:cat:{item.get('category')}"
+                                if item.get("category")
+                                else "measure:edit"
+                            ),
+                        )
+                    ]
+                ]
             )
             await show_screen(q, context, prefix + item['prompt'], kb, user_id)
             return
@@ -4755,6 +4840,27 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         kb = edit_day_mode_kb(day)
                     else:
                         mode = parts[3]
+                        followup = parts[4] if len(parts) > 4 else None
+                        if mode in {"strength", "kb", "metcon", "workout"}:
+                            today_str = await get_user_local_date(user_id)
+                            ex_rows = await fetch_day_exercises(user_id, day, today_str)
+                            has_exercises = bool(ex_rows)
+                            if followup is None and has_exercises:
+                                confirm_text = (
+                                    f"{t('DAY')} {day} — {label}.\n"
+                                    "Начать настройку с нуля? Удалим все упражнения и планы этого дня, чтобы собрать его заново."
+                                )
+                                kb = confirm_day_reset_kb(day, mode)
+                                await show_screen(q, context, confirm_text, kb, user_id)
+                                return
+                            if followup == "reset" and has_exercises:
+                                await clear_day_plan(user_id, day)
+                                pending_add = context.user_data.get("add_group")
+                                if pending_add and pending_add[0] == day:
+                                    context.user_data.pop("add_group", None)
+                                context.user_data.pop(DAY_DELETE_SCOPE_KEY, None)
+                                await q.answer("День очищен. Начнём заново.")
+                                has_exercises = False
                         if mode == "strength":
                             text = (
                                 f"{t('DAY')} {day} — {label}.\n"
@@ -5086,6 +5192,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             name = MG_NAMES.get(code, custom.get(code, code))
                             groups_for_kb.append((code, name))
                         kb = day_remove_group_kb(day, groups_for_kb)
+                        context.user_data.pop(DAY_DELETE_SCOPE_KEY, None)
                         await show_screen(
                             q, context, "Удалить группу мышц:", kb, user_id
                         )
@@ -5100,17 +5207,20 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     )
                     text = (
                         f"{t('DAY')} {day} — {gname}\n"
-                        "Нажми на упражнение, чтобы удалить его из дня."
-                        " «Добавить» откроет список этой группы."
+                        "Нажми на упражнение, чтобы удалить его из дня.\n"
+                        "Если захочешь добавить другие упражнения, вернись назад."
                     )
                     if target_group.startswith("u"):
                         text += "\nМожно удалить всю группу через «− Группа»."
+                    context.user_data[DAY_DELETE_SCOPE_KEY] = {
+                        "day": day,
+                        "group": target_group,
+                    }
                     kb = del_exercises_kb(
                         day,
                         ex_rows,
                         group=target_group,
                         back_callback=f"day:group:{day}:{target_group}",
-                        add_callback=f"day:manage:{day}:{target_group}:add",
                         group_delete_callback=(
                             f"day:groupdel:{day}:{target_group}"
                             if target_group.startswith("u")
@@ -5166,7 +5276,14 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 clear_sheet_context(context, q.message.chat_id, q.message.message_id)
                 today_str = await get_user_local_date(user_id)
                 ex_rows = await fetch_day_exercises(user_id, day, today_str)
-                await show_screen(q, context, 'Удалить упражнение:', del_exercises_kb(day, ex_rows), user_id)
+                context.user_data[DAY_DELETE_SCOPE_KEY] = {"day": day, "group": None}
+                await show_screen(
+                    q,
+                    context,
+                    'Удалить упражнение:',
+                    del_exercises_kb(day, ex_rows),
+                    user_id,
+                )
                 return
             if action == "add":
                 day = int(parts[2])
@@ -5285,7 +5402,63 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     await remove_user_exercise(user_id, day, ue_id)
                     today_str = await get_user_local_date(user_id)
                     ex_rows = await fetch_day_exercises(user_id, day, today_str)
-                    await show_screen(q, context, 'Удалить упражнение:', del_exercises_kb(day, ex_rows), user_id)
+                    await q.answer("Упражнение удалено.")
+                    scope = context.user_data.get(DAY_DELETE_SCOPE_KEY)
+                    target_group = None
+                    if isinstance(scope, dict) and scope.get("day") == day:
+                        target_group = scope.get("group")
+                    if target_group:
+                        filtered = [row for row in ex_rows if row[2] == target_group]
+                        if filtered:
+                            custom = await get_custom_groups(user_id, context)
+                            gname = MG_NAMES.get(
+                                target_group, custom.get(target_group, target_group)
+                            )
+                            text = (
+                                f"{t('DAY')} {day} — {gname}\n"
+                                "Нажми на упражнение, чтобы удалить его из дня.\n"
+                                "Если захочешь добавить другие упражнения, вернись назад."
+                            )
+                            if target_group.startswith("u"):
+                                text += "\nМожно удалить всю группу через «− Группа»."
+                            context.user_data[DAY_DELETE_SCOPE_KEY] = {
+                                "day": day,
+                                "group": target_group,
+                            }
+                            kb = del_exercises_kb(
+                                day,
+                                ex_rows,
+                                group=target_group,
+                                back_callback=f"day:group:{day}:{target_group}",
+                                group_delete_callback=(
+                                    f"day:groupdel:{day}:{target_group}"
+                                    if target_group.startswith("u")
+                                    else None
+                                ),
+                            )
+                            await show_screen(q, context, text, kb, user_id)
+                        else:
+                            context.user_data.pop(DAY_DELETE_SCOPE_KEY, None)
+                            await show_day_group_view(
+                                q, user_id, day, target_group, context
+                            )
+                    else:
+                        if ex_rows:
+                            context.user_data[DAY_DELETE_SCOPE_KEY] = {
+                                "day": day,
+                                "group": None,
+                            }
+                            await show_screen(
+                                q,
+                                context,
+                                'Удалить упражнение:',
+                                del_exercises_kb(day, ex_rows),
+                                user_id,
+                            )
+                        else:
+                            context.user_data.pop(DAY_DELETE_SCOPE_KEY, None)
+                            prefs = await load_ui_preferences(user_id)
+                            await send_day_cards_view(q, user_id, day, context, prefs)
                 return
 
         if parts[0] == "ex":
@@ -5620,12 +5793,13 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         prog_lines.append(
                             f"Базовое: {format_sets_value(base[0], base[1], base[2], view.with_weight)}"
                         )
-                    for d, s, r, w in rows:
+                    for date_text, s, r, w in rows:
                         sets_cnt = s or 0
                         reps_cnt = r or 0
                         weight_val = w or 0.0
+                        label = format_progress_date(date_text)
                         prog_lines.append(
-                            f"{d}: {format_sets_value(sets_cnt, reps_cnt, weight_val, view.with_weight)}"
+                            f"{label}: {format_sets_value(sets_cnt, reps_cnt, weight_val, view.with_weight)}"
                         )
                     if prog_lines:
                         header = "Прогресс"
