@@ -62,6 +62,7 @@ DEFAULT_EXERCISES: Sequence[tuple[str, str]] = [
     ("Русский твист", "core"),
     ("Касания пяток", "core"),
     ("Скручивания на скамье", "core"),
+    ("Бег", "run"),
 ]
 
 KB_EXERCISES: Sequence[tuple[str, str]] = tuple((name, "kb") for name in KB_EXERCISE_NAMES)
@@ -252,11 +253,38 @@ async def init_db():
             metric TEXT,
             value REAL,
             extra TEXT,
-            created_at TEXT
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS running_entries(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            user_exercise_id INTEGER,
+            session_id INTEGER,
+            day_index INTEGER,
+            distance_km REAL DEFAULT 0,
+            duration_sec INTEGER DEFAULT 0,
+            calories INTEGER DEFAULT 0,
+            is_draft INTEGER DEFAULT 1,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS user_measurement_custom(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            code TEXT UNIQUE,
+            name TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
         );
 
         CREATE INDEX IF NOT EXISTS idx_measurements_user_metric
             ON user_measurements(user_id, metric, created_at);
+        CREATE INDEX IF NOT EXISTS idx_running_entries_session
+            ON running_entries(session_id, user_exercise_id);
+        CREATE INDEX IF NOT EXISTS idx_running_entries_user
+            ON running_entries(user_id, user_exercise_id, created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_user_measurement_custom_user
+            ON user_measurement_custom(user_id, created_at DESC);
 
         CREATE TABLE IF NOT EXISTS user_muscle_groups(
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1660,3 +1688,202 @@ async def get_measurements_last_update(user_id: int) -> str | None:
         )
         row = await cur.fetchone()
         return row[0] if row and row[0] else None
+
+
+def _now_iso() -> str:
+    return datetime.now(UTC).isoformat()
+
+
+async def get_running_entry(
+    user_id: int,
+    user_exercise_id: int,
+    *,
+    session_id: int | None,
+    day_index: int,
+    create: bool = True,
+) -> tuple | None:
+    async with connect_db() as db:
+        if session_id is not None:
+            cur = await db.execute(
+                """
+                SELECT id, distance_km, duration_sec, calories, is_draft, created_at
+                FROM running_entries
+                WHERE session_id=? AND user_exercise_id=?
+                ORDER BY created_at DESC
+                LIMIT 1
+                """,
+                (session_id, user_exercise_id),
+            )
+        else:
+            cur = await db.execute(
+                """
+                SELECT id, distance_km, duration_sec, calories, is_draft, created_at
+                FROM running_entries
+                WHERE user_id=? AND user_exercise_id=? AND session_id IS NULL AND is_draft=1
+                ORDER BY created_at DESC
+                LIMIT 1
+                """,
+                (user_id, user_exercise_id),
+            )
+        row = await cur.fetchone()
+        if row or not create:
+            return row
+        created_at = _now_iso()
+        await db.execute(
+            """
+            INSERT INTO running_entries(
+                user_id, user_exercise_id, session_id, day_index,
+                distance_km, duration_sec, calories, is_draft, created_at
+            ) VALUES(?,?,?,?,0,0,0,1,?)
+            """,
+            (user_id, user_exercise_id, session_id, day_index, created_at),
+        )
+        await db.commit()
+        cur = await db.execute("SELECT last_insert_rowid()")
+        new_id = (await cur.fetchone())[0]
+        return (new_id, 0.0, 0, 0, 1, created_at)
+
+
+async def update_running_entry(
+    entry_id: int,
+    *,
+    distance_km: float | None = None,
+    duration_sec: int | None = None,
+    calories: int | None = None,
+    is_draft: int | None = None,
+):
+    fields: list[str] = []
+    values: list = []
+    if distance_km is not None:
+        fields.append("distance_km=?")
+        values.append(float(distance_km))
+    if duration_sec is not None:
+        fields.append("duration_sec=?")
+        values.append(int(duration_sec))
+    if calories is not None:
+        fields.append("calories=?")
+        values.append(int(calories))
+    if is_draft is not None:
+        fields.append("is_draft=?")
+        values.append(int(is_draft))
+    if not fields:
+        return
+    values.append(entry_id)
+    async with connect_db() as db:
+        await db.execute(
+            f"UPDATE running_entries SET {', '.join(fields)} WHERE id=?",
+            tuple(values),
+        )
+        await db.commit()
+
+
+async def mark_running_entry_done(entry_id: int):
+    async with connect_db() as db:
+        await db.execute(
+            """
+            UPDATE running_entries
+            SET is_draft=0, created_at=?
+            WHERE id=?
+            """,
+            (_now_iso(), entry_id),
+        )
+        await db.commit()
+
+
+async def list_running_history(
+    user_id: int,
+    user_exercise_id: int,
+    limit: int = 10,
+    offset: int = 0,
+) -> list[tuple]:
+    async with connect_db() as db:
+        cur = await db.execute(
+            "SELECT exercise_id FROM user_exercises WHERE id=?",
+            (user_exercise_id,),
+        )
+        ex_row = await cur.fetchone()
+        if not ex_row:
+            return []
+        exercise_id = ex_row[0]
+        cur = await db.execute(
+            """
+            SELECT re.id,
+                   re.distance_km,
+                   re.duration_sec,
+                   re.calories,
+                   re.created_at,
+                   re.day_index
+            FROM running_entries re
+            JOIN user_exercises ue ON ue.id=re.user_exercise_id
+            WHERE re.user_id=? AND ue.exercise_id=? AND re.is_draft=0
+            ORDER BY re.created_at DESC
+            LIMIT ? OFFSET ?
+            """,
+            (user_id, exercise_id, limit, offset),
+        )
+        return await cur.fetchall()
+
+
+async def get_running_entry_by_id(entry_id: int) -> tuple | None:
+    async with connect_db() as db:
+        cur = await db.execute(
+            """
+            SELECT id, user_id, user_exercise_id, session_id, day_index,
+                   distance_km, duration_sec, calories, is_draft, created_at
+            FROM running_entries
+            WHERE id=?
+            """,
+            (entry_id,),
+        )
+        return await cur.fetchone()
+
+
+async def add_custom_measurement(user_id: int, name: str) -> str:
+    async with connect_db() as db:
+        created_at = _now_iso()
+        await db.execute(
+            "INSERT INTO user_measurement_custom(user_id, code, name, created_at) VALUES(?,?,?,?)",
+            (user_id, "", name, created_at),
+        )
+        cur = await db.execute("SELECT last_insert_rowid()")
+        row = await cur.fetchone()
+        raw_id = row[0]
+        code = f"uc{user_id}_{raw_id}"
+        await db.execute(
+            "UPDATE user_measurement_custom SET code=? WHERE id=?",
+            (code, raw_id),
+        )
+        await db.commit()
+        return code
+
+
+async def list_custom_measurements(user_id: int) -> list[tuple[str, str]]:
+    async with connect_db() as db:
+        cur = await db.execute(
+            """
+            SELECT code, name
+            FROM user_measurement_custom
+            WHERE user_id=?
+            ORDER BY created_at DESC
+            """,
+            (user_id,),
+        )
+        rows = await cur.fetchall()
+        return [(row[0], row[1]) for row in rows if row[0]]
+
+
+async def get_custom_measurement(user_id: int, code: str) -> tuple[str, str] | None:
+    async with connect_db() as db:
+        cur = await db.execute(
+            """
+            SELECT code, name
+            FROM user_measurement_custom
+            WHERE user_id=? AND code=?
+            LIMIT 1
+            """,
+            (user_id, code),
+        )
+        row = await cur.fetchone()
+        if not row:
+            return None
+        return row[0], row[1]

@@ -73,6 +73,7 @@ from keyboards import (
     measurements_metric_kb,
     measurements_existing_kb,
     ui_footer_rows,
+    HISTORY_BTN,
 )
 from settings import (
     TG_TOKEN,
@@ -149,6 +150,14 @@ from db import (
     clear_day_completions,
     list_all_user_tg_ids,
     METCON_EXERCISE_NAMES,
+    get_running_entry,
+    update_running_entry,
+    list_running_history,
+    mark_running_entry_done,
+    get_running_entry_by_id,
+    add_custom_measurement,
+    list_custom_measurements,
+    get_custom_measurement,
 )
 from text_utils import normalize_whitespace
 from ui_texts import t, e
@@ -189,6 +198,9 @@ FOR_TIME_EXERCISE_NAME = "Меткон — For Time (кастом)"
 FOR_TIME_METRIC = "wod_time_sec"
 AMRAP_SCHEME_KEY = "awaiting_amrap_scheme"
 FOR_TIME_INPUT_KEY = "awaiting_for_time_result"
+RUNNING_GROUP = "run"
+RUNNING_INPUT_KEY = "running_input"
+RUNNING_HISTORY_PAGE_SIZE = 1
 
 REMINDER_EDIT_POSITION_KEY = "reminder_edit_position"
 REMINDER_EDIT_LABEL_KEY = "reminder_edit_label"
@@ -236,6 +248,7 @@ class ExerciseView:
     is_amrap: bool
     is_for_time: bool
     has_history: bool
+    running: dict | None = None
 
 
 async def load_ui_preferences(user_id: int) -> UiPreferences:
@@ -326,7 +339,9 @@ def emoji_for(prefs: UiPreferences, key: str) -> str:
 
 
 def status_icon(prefs: UiPreferences, done: bool) -> str:
-    return emoji_for(prefs, "done" if done else "generic")
+    if done:
+        return emoji_for(prefs, "done")
+    return ""
 
 
 def maybe_hint(lines: list[str], prefs: UiPreferences, text: str | tuple[str, str]):
@@ -604,6 +619,8 @@ def apply_ui_preferences(
 def resolve_group(name: str, group: str) -> str:
     if name in METCON_EXERCISE_NAMES:
         return "metcon"
+    if group == RUNNING_GROUP:
+        return RUNNING_GROUP
     return group
 
 
@@ -613,6 +630,8 @@ def _is_duration_name(name: str) -> bool:
 
 
 def get_display_flags(group: str, name: str) -> tuple[bool, str]:
+    if group == RUNNING_GROUP:
+        return False, "running"
     with_weight = group != "workout"
     kind = "duration" if not with_weight and _is_duration_name(name) else "reps"
     return with_weight, kind
@@ -849,6 +868,71 @@ def format_duration_delta(delta_seconds: int) -> str:
     sign = "+" if delta_seconds >= 0 else "-"
     formatted = format_duration_value(abs(delta_seconds))
     return f"{sign}{formatted}"
+
+
+def format_pace_value(seconds: float) -> str:
+    total = max(int(round(seconds)), 0)
+    minutes, sec = divmod(total, 60)
+    return f"{minutes}:{sec:02d}"
+
+
+def format_running_pace(duration_sec: int, distance_km: float) -> str:
+    if distance_km <= 0 or duration_sec <= 0:
+        return "—"
+    pace = duration_sec / distance_km
+    return format_pace_value(pace)
+
+
+def format_running_entry(distance_km: float, duration_sec: int, calories: int) -> tuple[str, str]:
+    distance_text = f"{max(distance_km, 0.0):.2f} км"
+    time_text = format_duration_value(duration_sec)
+    pace_text = format_running_pace(duration_sec, distance_km)
+    if pace_text == "—":
+        pace_display = "— мин/км"
+    else:
+        pace_display = f"{pace_text} мин/км"
+    summary = f"{distance_text} · {time_text} · {pace_display}"
+    calories_text = f"{max(int(calories), 0)} ккал" if calories > 0 else ""
+    return summary, calories_text
+
+
+def format_running_line(distance_km: float, duration_sec: int, calories: int) -> str:
+    summary, calories_text = format_running_entry(distance_km, duration_sec, calories)
+    if calories_text:
+        return f"{summary} · {calories_text}"
+    return summary
+
+
+def clamp_running_distance(value: float) -> float:
+    return max(round(float(value), 2), 0.0)
+
+
+def clamp_running_duration(value: int) -> int:
+    return max(int(value), 0)
+
+
+def clamp_running_calories(value: int) -> int:
+    return max(int(value), 0)
+
+
+def parse_distance_input(text: str) -> float:
+    raw = text.strip().replace(",", ".")
+    value = float(raw)
+    return clamp_running_distance(value)
+
+
+def parse_calories_input(text: str) -> int:
+    raw = text.strip()
+    value = int(float(raw.replace(",", ".")))
+    return clamp_running_calories(value)
+
+
+def apply_pace_to_entry(distance_km: float, pace_seconds: int) -> tuple[float, int]:
+    safe_distance = clamp_running_distance(distance_km)
+    if safe_distance <= 0:
+        safe_distance = 1.0
+    duration = clamp_running_duration(int(round(pace_seconds * safe_distance)))
+    return safe_distance, duration
 
 
 def format_measurement_timestamp(value: str, tz: ZoneInfo) -> str:
@@ -1717,8 +1801,13 @@ async def handle_fill_callback(
 MEASUREMENTS_SHOW_ALL_KEY = "measurements_show_all"
 MEASUREMENT_INPUT_KEY = "measurement_input"
 MEASUREMENT_EXISTING_KEY = "measurement_existing"
+MEASUREMENT_CUSTOM_KEY = "measurement_custom_input"
+MEASUREMENT_CUSTOM_CACHE_KEY = "measurement_custom_items"
 LIBRARY_CUSTOM_KEY = "library_custom_input"
 DAY_DELETE_SCOPE_KEY = "day_delete_scope"
+
+MEASUREMENT_CUSTOM_CATEGORY = ("custom", "E) Свои замеры")
+CUSTOM_MEASUREMENT_REGISTRY: dict[str, dict] = {}
 
 MEASUREMENT_CATEGORIES = [
     ("body", "A) Масса/состав тела"),
@@ -1841,17 +1930,18 @@ MEASUREMENT_ITEMS = [
         "см",
         optional=True,
     ),
+    _measurement_item("hamstring", "Бицепс бедра", "circumference", "см"),
     _measurement_item("calf", "Икроножная", "circumference", "см"),
     _measurement_item("ankle", "Лодыжка", "circumference", "см", optional=True),
     _measurement_item(
         "bicep_relaxed",
-        "Плечо (расслабл.)",
+        "Бицепс (расслабл.)",
         "circumference",
         "см",
     ),
     _measurement_item(
         "bicep_flexed",
-        "Плечо (напряж.)",
+        "Бицепс (напряж.)",
         "circumference",
         "см",
     ),
@@ -1933,8 +2023,46 @@ MEASUREMENT_ITEMS = [
 MEASUREMENT_MAP = {item["code"]: item for item in MEASUREMENT_ITEMS}
 
 
-def measurement_categories_list() -> list[tuple[str, str]]:
-    return MEASUREMENT_CATEGORIES
+def clear_custom_measurement_registry(user_id: int):
+    prefix = f"uc{user_id}_"
+    to_remove = [code for code in CUSTOM_MEASUREMENT_REGISTRY.keys() if code.startswith(prefix)]
+    for code in to_remove:
+        CUSTOM_MEASUREMENT_REGISTRY.pop(code, None)
+        MEASUREMENT_MAP.pop(code, None)
+
+
+async def load_custom_measurements(
+    user_id: int, context: ContextTypes.DEFAULT_TYPE
+) -> list[dict]:
+    rows = await list_custom_measurements(user_id)
+    clear_custom_measurement_registry(user_id)
+    items: list[dict] = []
+    for code, name in rows:
+        item = {
+            "code": code,
+            "name": name,
+            "category": MEASUREMENT_CUSTOM_CATEGORY[0],
+            "unit": "",
+            "precision": 1,
+            "optional": False,
+            "prompt": f"Введи значение для «{name}» (например: 10).",
+        }
+        items.append(item)
+        CUSTOM_MEASUREMENT_REGISTRY[code] = item
+        MEASUREMENT_MAP[code] = item
+    context.user_data[MEASUREMENT_CUSTOM_CACHE_KEY] = items
+    return items
+
+
+def get_cached_custom_measurements(context: ContextTypes.DEFAULT_TYPE) -> list[dict]:
+    return context.user_data.get(MEASUREMENT_CUSTOM_CACHE_KEY, [])
+
+
+def measurement_categories_list(include_custom: bool = False) -> list[tuple[str, str]]:
+    categories = list(MEASUREMENT_CATEGORIES)
+    if include_custom:
+        categories.append(MEASUREMENT_CUSTOM_CATEGORY)
+    return categories
 
 
 def get_measurement_items(category: str) -> list[dict]:
@@ -1942,7 +2070,10 @@ def get_measurement_items(category: str) -> list[dict]:
 
 
 def get_measurement_item(code: str) -> dict | None:
-    return MEASUREMENT_MAP.get(code)
+    item = MEASUREMENT_MAP.get(code)
+    if item:
+        return item
+    return CUSTOM_MEASUREMENT_REGISTRY.get(code)
 
 
 def format_measurements_header(last_update: str | None) -> str:
@@ -2092,12 +2223,17 @@ async def build_measurements_view(
     user_id: int, context: ContextTypes.DEFAULT_TYPE
 ) -> tuple[str, InlineKeyboardMarkup]:
     show_all = context.user_data.get(MEASUREMENTS_SHOW_ALL_KEY, False)
+    custom_items = await load_custom_measurements(user_id, context)
     last_update = await get_measurements_last_update(user_id)
     header = format_measurements_header(last_update)
     cache: dict[str, list[tuple[float, str | None, str]]] = {}
     lines: list[str] = []
-    for code, title in measurement_categories_list():
-        items = get_measurement_items(code)
+    categories = measurement_categories_list(include_custom=bool(custom_items))
+    for code, title in categories:
+        if code == MEASUREMENT_CUSTOM_CATEGORY[0]:
+            items = custom_items
+        else:
+            items = get_measurement_items(code)
         category_lines: list[str] = []
         for item in items:
             history = await get_measurement_history(user_id, item["code"], cache)
@@ -2141,8 +2277,13 @@ async def build_measurements_history_view(
     zone = resolve_user_zone(tz_name)
     cache: dict[str, list[tuple[float, str | None, str]]] = {}
     lines: list[str] = []
-    for code, title in measurement_categories_list():
-        items = get_measurement_items(code)
+    custom_items = await load_custom_measurements(user_id, context)
+    categories = measurement_categories_list(include_custom=bool(custom_items))
+    for code, title in categories:
+        if code == MEASUREMENT_CUSTOM_CATEGORY[0]:
+            items = custom_items
+        else:
+            items = get_measurement_items(code)
         category_lines: list[str] = []
         for item in items:
             history = await get_measurement_history(
@@ -2348,6 +2489,47 @@ async def fetch_day_sheet_data(
                     last_for_time = None
                 for_time_loaded = True
             entry["fortime_summary"] = {"last_time_sec": last_for_time}
+        elif resolved_group == RUNNING_GROUP:
+            running_entry = None
+            if session_id is not None:
+                running_entry = await get_running_entry(
+                    user_id,
+                    ue_id,
+                    session_id=session_id,
+                    day_index=day_index,
+                    create=False,
+                )
+            if running_entry:
+                _, dist, duration, calories, is_draft, created_at = running_entry
+                distance_value = float(dist or 0.0)
+                duration_value = int(duration or 0)
+                calories_value = int(calories or 0)
+            else:
+                distance_value = 0.0
+                duration_value = 0
+                calories_value = 0
+            entry["running_summary"] = {
+                "distance": distance_value,
+                "duration": duration_value,
+                "calories": calories_value,
+            }
+            history_rows = await list_running_history(user_id, ue_id, limit=2)
+            prev_entry = None
+            if history_rows:
+                if running_entry and history_rows[0][0] == running_entry[0]:
+                    if len(history_rows) > 1:
+                        prev_entry = history_rows[1]
+                else:
+                    prev_entry = history_rows[0]
+            if prev_entry:
+                _, prev_distance, prev_duration, prev_calories, prev_created, _ = prev_entry
+                entry["prev_summary"] = format_running_line(
+                    float(prev_distance or 0.0),
+                    int(prev_duration or 0),
+                    int(prev_calories or 0),
+                )
+                entry["prev_date"] = prev_created
+            entry["has_history"] = bool(history_rows)
         else:
             work_sets = filter_work_sets(today_sets_full)
             sets_count = len(work_sets)
@@ -2494,6 +2676,26 @@ async def build_day_sheet_message(
                     InlineKeyboardButton(t("HISTORY"), callback_data=f"ex:progress:{day_index}:{ue_id}"),
                 ]
             )
+        elif group_key == RUNNING_GROUP:
+            summary = item.get("running_summary") or {}
+            distance_value = float(summary.get("distance") or 0.0)
+            duration_value = int(summary.get("duration") or 0)
+            calories_value = int(summary.get("calories") or 0)
+            current_text = format_running_line(distance_value, duration_value, calories_value)
+            prev_text = item.get("prev_summary") or t("NOT_FIXED")
+            lines.append(f"{prefix}{name}")
+            lines.append(f"• Сегодня: {current_text}")
+            lines.append(f"• Прошлый раз: {prev_text}")
+            action_row: list[InlineKeyboardButton] = [
+                InlineKeyboardButton("Открыть", callback_data=f"ex:view:{day_index}:{ue_id}"),
+                InlineKeyboardButton(t("DONE"), callback_data=f"run:done:{day_index}:{ue_id}"),
+            ]
+            action_row.append(
+                InlineKeyboardButton(
+                    HISTORY_BTN, callback_data=f"run:history:{day_index}:{ue_id}:0"
+                )
+            )
+            kb_rows.append(action_row)
         else:
             plan_text = format_plan_value(
                 item.get("baseline"), group_key, with_weight=with_weight
@@ -2686,6 +2888,7 @@ async def send_day_cards_view(
     back_cb = "menu:root"
     content_rows: list[list[InlineKeyboardButton]] = []
     primary_actions: list[tuple[str, str]] = []
+    completion_action: tuple[str, str] | None = None
     for row in base_markup.inline_keyboard:
         if not row:
             continue
@@ -2695,6 +2898,16 @@ async def send_day_cards_view(
             back_cb = callback
             continue
         callbacks = [btn.callback_data or "" for btn in row]
+        if f"day:complete:{day}" in callbacks:
+            for btn in row:
+                cb = btn.callback_data or ""
+                if cb == back_cb:
+                    continue
+                if cb == f"day:complete:{day}":
+                    completion_action = (btn.text, cb)
+                elif cb:
+                    primary_actions.append((btn.text, cb))
+            continue
         if any(
             cb.startswith(f"day:add_ex:{day}")
             or cb.startswith(f"day:del_ex:{day}")
@@ -2714,6 +2927,10 @@ async def send_day_cards_view(
     rows: list[list[InlineKeyboardButton]] = []
     rows += content_rows
     rows += ui_footer_rows(primary_actions, None)
+    if completion_action:
+        rows.append(
+            [InlineKeyboardButton(completion_action[0], callback_data=completion_action[1])]
+        )
     rows.append([InlineKeyboardButton(BACK_BTN, callback_data=back_cb)])
     kb = InlineKeyboardMarkup(rows)
     await show_screen(q, context, text, kb, user_id)
@@ -2969,8 +3186,7 @@ async def render_library_group_text(
         if not first_entry:
             lines.append("")
         first_entry = False
-        mark = e("generic")
-        prefix = f"{mark} " if mark else ""
+        prefix = ""
         result_text = summary or t("NOT_FIXED")
         lines.append(f"{prefix}{name}")
         lines.append(f"• Последний результат: {result_text}")
@@ -3059,6 +3275,7 @@ async def render_exercise_view(
         "kb": "Гири",
         "metcon": "Меткон",
         "workout": "Воркаут",
+        RUNNING_GROUP: "Бег",
     }
     type_label = type_labels.get(group, "Силовая")
     title = f"{name} · {type_label}"
@@ -3070,6 +3287,76 @@ async def render_exercise_view(
         plan_text = format_plan_value(baseline, "kb")
         summary = build_strength_summary_from_sets(sets)
         done_text = format_strength_done_value(summary)
+    elif group == RUNNING_GROUP:
+        running_entry = await get_running_entry(
+            user_id,
+            ue_id,
+            session_id=session_id,
+            day_index=day,
+            create=True,
+        )
+        entry_id, dist, duration, calories, draft_flag, created_at = running_entry
+        distance_value = float(dist or 0.0)
+        duration_value = int(duration or 0)
+        calories_value = int(calories or 0)
+        current_line = format_running_line(distance_value, duration_value, calories_value)
+        history_rows = await list_running_history(user_id, ue_id, limit=2)
+        prev_text = t("NOT_FIXED")
+        prev_created_at = None
+        if history_rows:
+            candidate = history_rows[0]
+            if candidate[0] == entry_id and len(history_rows) > 1:
+                candidate = history_rows[1]
+            if candidate[0] != entry_id:
+                _, prev_distance, prev_duration, prev_calories, prev_created, _ = candidate
+                prev_text = format_running_line(
+                    float(prev_distance or 0.0),
+                    int(prev_duration or 0),
+                    int(prev_calories or 0),
+                )
+                prev_created_at = prev_created
+        plan_text = t("NOT_SET")
+        done_text = current_line
+        lines = [title, ""]
+        lines.append("Сегодня:")
+        lines.append(f"• {current_line}")
+        if prev_created_at:
+            lines.append("")
+            lines.append("Прошлый раз:")
+            lines.append(f"• {prev_text}")
+        lines.append("")
+        maybe_hint(
+            lines,
+            prefs,
+            (
+                "Используй кнопки, чтобы добавить километры и время.",
+                "Используй кнопки ниже, чтобы добавить километры, время, темп и калории. Все изменения сохраняются сразу, а «Готово» завершает забег.",
+            ),
+        )
+        running_data = {
+            "entry_id": entry_id,
+            "distance": distance_value,
+            "duration": duration_value,
+            "calories": calories_value,
+            "is_draft": bool(draft_flag),
+            "created_at": created_at,
+            "last_created_at": prev_created_at,
+        }
+        return ExerciseView(
+            text="\n".join(lines),
+            session_id=session_id,
+            exercise_id=ex_id,
+            name=name,
+            group=group,
+            sets=[],
+            selected_set=None,
+            with_weight=False,
+            kind="running",
+            is_amrap=False,
+            is_for_time=False,
+            has_history=bool(history_rows),
+            running=running_data,
+        )
     elif is_amrap:
         rounds, extra = parse_amrap_sets(sets)
         last_rounds, last_extra = parse_amrap_history(last_sets)
@@ -3158,6 +3445,12 @@ def build_exercise_actions_markup(
         callback_back = (
             f"lib:group:{group}" if is_library else f"day:group:{day}:{group}"
         )
+    if view.group == RUNNING_GROUP:
+        return build_running_actions_markup(
+            day=target_day,
+            ue_id=ue_id,
+            back_callback=callback_back,
+        )
     context_mode = "library" if is_library else "flex"
     markup = exercise_actions_kb(
         context_mode,
@@ -3193,6 +3486,148 @@ def build_exercise_actions_markup(
     rows += content_rows
     rows += ui_footer_rows(primary_actions, secondary_actions)
     rows.append([InlineKeyboardButton(BACK_BTN, callback_data=callback_back)])
+    return InlineKeyboardMarkup(rows)
+
+
+async def build_running_history_view(
+    user_id: int,
+    day: int,
+    ue_id: int,
+    index: int = 0,
+    *,
+    back_callback: str | None = None,
+    prefs: UiPreferences | None = None,
+) -> tuple[str, InlineKeyboardMarkup]:
+    _, name, _ = await get_exercise_info(ue_id)
+    entries = await list_running_history(user_id, ue_id, limit=20)
+    prefs_local = prefs or await load_ui_preferences(user_id)
+    tz_name = await get_user_timezone(user_id)
+    zone = resolve_user_zone(tz_name)
+    lines = [name, ""]
+    if not entries:
+        lines.append("История забегов пока пуста. Добавь результат через «Готово».")
+        back_cb = back_callback or f"ex:view:{day}:{ue_id}"
+        kb = InlineKeyboardMarkup(
+            [[InlineKeyboardButton(t("BACK"), callback_data=back_cb)]]
+        )
+        return "\n".join(lines), kb
+    total = len(entries)
+    safe_index = max(0, min(index, total - 1))
+    _, distance, duration, calories, created_at, entry_day = entries[safe_index]
+    timestamp = format_measurement_timestamp(created_at, zone)
+    summary = format_running_line(
+        float(distance or 0.0), int(duration or 0), int(calories or 0)
+    )
+    lines.append(f"Запись {safe_index + 1} из {total}")
+    lines.append(timestamp)
+    lines.append(f"• {summary}")
+    if entry_day:
+        lines.append(f"• {t('DAY')} {entry_day}")
+    lines.append("")
+    maybe_hint(
+        lines,
+        prefs_local,
+        (
+            "Листай стрелками, чтобы посмотреть предыдущие забеги.",
+            "Листай стрелками, чтобы посмотреть предыдущие забеги. Возвращайся назад, чтобы продолжить вести текущую тренировку.",
+        ),
+    )
+    nav_row: list[InlineKeyboardButton] = []
+    if safe_index + 1 < total:
+        nav_row.append(
+            InlineKeyboardButton(
+                "◀︎ Раньше",
+                callback_data=f"run:history:{day}:{ue_id}:{safe_index + 1}",
+            )
+        )
+    if safe_index > 0:
+        nav_row.append(
+            InlineKeyboardButton(
+                "Позже ▶︎",
+                callback_data=f"run:history:{day}:{ue_id}:{safe_index - 1}",
+            )
+        )
+    rows: list[list[InlineKeyboardButton]] = []
+    if nav_row:
+        rows.append(nav_row)
+    back_cb = back_callback or f"ex:view:{day}:{ue_id}"
+    rows.append([InlineKeyboardButton(t("BACK"), callback_data=back_cb)])
+    return "\n".join(lines), InlineKeyboardMarkup(rows)
+
+
+def build_running_actions_markup(
+    *, day: int, ue_id: int, back_callback: str
+) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    rows.append(
+        [
+            InlineKeyboardButton(
+                "＋0.5 км", callback_data=f"run:inc:{day}:{ue_id}:dist:0.5"
+            ),
+            InlineKeyboardButton(
+                "＋1 км", callback_data=f"run:inc:{day}:{ue_id}:dist:1"
+            ),
+            InlineKeyboardButton(
+                "−0.5 км", callback_data=f"run:inc:{day}:{ue_id}:dist:-0.5"
+            ),
+            InlineKeyboardButton(
+                "−1 км", callback_data=f"run:inc:{day}:{ue_id}:dist:-1"
+            ),
+        ]
+    )
+    rows.append(
+        [
+            InlineKeyboardButton(
+                "＋1 мин", callback_data=f"run:inc:{day}:{ue_id}:time:60"
+            ),
+            InlineKeyboardButton(
+                "＋5 мин", callback_data=f"run:inc:{day}:{ue_id}:time:300"
+            ),
+            InlineKeyboardButton(
+                "＋30 мин", callback_data=f"run:inc:{day}:{ue_id}:time:1800"
+            ),
+        ]
+    )
+    rows.append(
+        [
+            InlineKeyboardButton(
+                "−1 мин", callback_data=f"run:inc:{day}:{ue_id}:time:-60"
+            ),
+            InlineKeyboardButton(
+                "−5 мин", callback_data=f"run:inc:{day}:{ue_id}:time:-300"
+            ),
+            InlineKeyboardButton(
+                "−30 мин", callback_data=f"run:inc:{day}:{ue_id}:time:-1800"
+            ),
+        ]
+    )
+    rows.append(
+        [
+            InlineKeyboardButton(
+                "✏️ Дистанция", callback_data=f"run:input:{day}:{ue_id}:distance"
+            ),
+            InlineKeyboardButton(
+                "✏️ Время", callback_data=f"run:input:{day}:{ue_id}:time"
+            ),
+        ]
+    )
+    rows.append(
+        [
+            InlineKeyboardButton(
+                "✏️ Темп", callback_data=f"run:input:{day}:{ue_id}:pace"
+            ),
+            InlineKeyboardButton(
+                "✏️ Калории", callback_data=f"run:input:{day}:{ue_id}:calories"
+            ),
+        ]
+    )
+    primary_actions: list[tuple[str, str]] = [
+        (t("DONE"), f"run:done:{day}:{ue_id}"),
+    ]
+    history_callback = f"run:history:{day}:{ue_id}:0"
+    secondary_actions: list[tuple[str, str]] | None = [(HISTORY_BTN, history_callback)]
+    rows += ui_footer_rows(primary_actions, secondary_actions)
+    rows.append([InlineKeyboardButton(BACK_BTN, callback_data=back_callback)])
     return InlineKeyboardMarkup(rows)
 
 
@@ -4255,6 +4690,132 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             remember_message(chat_id, msg_id)
         return
+    running_state = context.user_data.get(RUNNING_INPUT_KEY)
+    if running_state:
+        if not update.message or not update.message.text:
+            return
+        field = running_state.get("field")
+        entry_id = int(running_state.get("entry_id") or 0)
+        if not entry_id:
+            context.user_data.pop(RUNNING_INPUT_KEY, None)
+            return
+        text_value = update.message.text
+        try:
+            if field == "distance":
+                new_distance = parse_distance_input(text_value)
+                update_kwargs = {"distance_km": new_distance, "is_draft": 1}
+            elif field == "time":
+                duration = clamp_running_duration(parse_duration_input(text_value))
+                update_kwargs = {"duration_sec": duration, "is_draft": 1}
+            elif field == "pace":
+                pace_seconds = clamp_running_duration(parse_duration_input(text_value))
+                entry_row = await get_running_entry_by_id(entry_id)
+                if not entry_row:
+                    raise ValueError
+                distance_value = float(entry_row[5] or 0.0)
+                safe_distance, new_duration = apply_pace_to_entry(
+                    distance_value, pace_seconds
+                )
+                update_kwargs = {
+                    "distance_km": safe_distance,
+                    "duration_sec": new_duration,
+                    "is_draft": 1,
+                }
+            elif field == "calories":
+                calories = parse_calories_input(text_value)
+                update_kwargs = {"calories": calories, "is_draft": 1}
+            else:
+                update_kwargs = {}
+        except Exception:
+            await update.message.reply_text(
+                "Не удалось распознать значение. Используй подсказку и попробуй ещё раз."
+            )
+            return
+        await try_delete(update.message)
+        context.user_data.pop(RUNNING_INPUT_KEY, None)
+        u = update.effective_user
+        user_id = await get_or_create_user(u.id, u.username)
+        if update_kwargs:
+            await update_running_entry(entry_id, **update_kwargs)
+        chat_id = running_state.get("chat_id")
+        msg_id = running_state.get("message_id")
+        if not chat_id or not msg_id:
+            return
+        sheet_info = running_state.get("sheet")
+        is_library = bool(running_state.get("is_library"))
+        prefs = await load_ui_preferences(user_id)
+        if sheet_info and not is_library:
+            target_day = int(sheet_info.get("day", running_state.get("day", 0)))
+            target_page = int(sheet_info.get("page", 0))
+            await render_day_sheet_by_id(
+                context,
+                chat_id,
+                msg_id,
+                user_id,
+                target_day,
+                target_page,
+                prefs=prefs,
+            )
+            return
+        day = int(running_state.get("day", 0))
+        ue_id = int(running_state.get("ue_id", 0))
+        selected = get_flex_selected(context, day, ue_id)
+        view = await render_exercise_view(user_id, day, ue_id, selected, prefs=prefs)
+        set_flex_selected(context, day, ue_id, view.selected_set)
+        kb = build_exercise_actions_markup(
+            view,
+            day=day,
+            ue_id=ue_id,
+            group=view.group,
+            prefs=prefs,
+            is_library=is_library,
+        )
+        text, kb = prepare_ui_output(view.text, kb, prefs)
+        await context.bot.edit_message_text(
+            text,
+            chat_id=chat_id,
+            message_id=msg_id,
+            reply_markup=kb,
+        )
+        remember_message(chat_id, msg_id)
+        return
+    custom_state = context.user_data.get(MEASUREMENT_CUSTOM_KEY)
+    if custom_state:
+        name = normalize_whitespace(update.message.text or "")
+        if not name:
+            await update.message.reply_text("Название не должно быть пустым.")
+            return
+        await try_delete(update.message)
+        context.user_data.pop(MEASUREMENT_CUSTOM_KEY, None)
+        u = update.effective_user
+        user_id = await get_or_create_user(u.id, u.username)
+        code = await add_custom_measurement(user_id, name)
+        await load_custom_measurements(user_id, context)
+        chat_id = custom_state.get("chat_id")
+        msg_id = custom_state.get("message_id")
+        if not chat_id or not msg_id:
+            return
+        context.user_data[MEASUREMENT_INPUT_KEY] = {
+            "action": "add",
+            "metric": code,
+            "chat_id": chat_id,
+            "message_id": msg_id,
+            "category": MEASUREMENT_CUSTOM_CATEGORY[0],
+        }
+        prompt = f"Введи значение для «{name}» (например: 10)."
+        kb = InlineKeyboardMarkup(
+            [[InlineKeyboardButton(BACK_BTN, callback_data="measure:add")]]
+        )
+        prefs = await load_ui_preferences(user_id)
+        text, kb = prepare_ui_output(prompt, kb, prefs)
+        await context.bot.edit_message_text(
+            text,
+            chat_id=chat_id,
+            message_id=msg_id,
+            reply_markup=kb,
+        )
+        remember_message(chat_id, msg_id)
+        return
     input_state = context.user_data.get(MEASUREMENT_INPUT_KEY)
     if input_state:
         item = get_measurement_item(input_state.get("metric"))
@@ -4623,7 +5184,8 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if data == "measure:add":
             context.user_data.pop(MEASUREMENT_INPUT_KEY, None)
             context.user_data.pop(MEASUREMENT_EXISTING_KEY, None)
-            categories = measurement_categories_list()
+            await load_custom_measurements(user_id, context)
+            categories = measurement_categories_list(include_custom=True)
             await show_screen(q, context, 'Выбери категорию:', measurements_category_kb('add', categories), user_id)
             return
 
@@ -4632,6 +5194,22 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context.user_data.pop(MEASUREMENT_EXISTING_KEY, None)
             parts = data.split(":")
             category = parts[3]
+            if category == MEASUREMENT_CUSTOM_CATEGORY[0]:
+                context.user_data[MEASUREMENT_CUSTOM_KEY] = {
+                    "chat_id": q.message.chat_id,
+                    "message_id": q.message.message_id,
+                }
+                kb = InlineKeyboardMarkup(
+                    [[InlineKeyboardButton(BACK_BTN, callback_data="measure:add")]]
+                )
+                await show_screen(
+                    q,
+                    context,
+                    "Как назвать замер? Напиши понятное название, например «Гибкость» или «Шагов в день».",
+                    kb,
+                    user_id,
+                )
+                return
             metrics = [
                 (item["code"], item["name"])
                 for item in get_measurement_items(category)
@@ -4680,7 +5258,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context.user_data[MEASUREMENT_EXISTING_KEY] = metrics_by_category
             available = [
                 (code, title)
-                for code, title in measurement_categories_list()
+                for code, title in measurement_categories_list(include_custom=True)
                 if code in metrics_by_category
             ]
             await show_screen(
@@ -4719,7 +5297,11 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await q.answer("Нет данных для этой группы.", show_alert=True)
                 return
             title = next(
-                (label for code, label in measurement_categories_list() if code == category),
+                (
+                    label
+                    for code, label in measurement_categories_list(include_custom=True)
+                    if code == category
+                ),
                 "Эта группа",
             )
             await show_screen(
@@ -5062,6 +5644,175 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         kb = library_menu_kb(groups, custom)
                         await show_screen(q, context, "Мои упражнения:", kb, user_id)
                     return
+
+        if parts[0] == "run":
+            action = parts[1] if len(parts) > 1 else ""
+            day = int(parts[2]) if len(parts) > 2 else 0
+            ue_id = int(parts[3]) if len(parts) > 3 else 0
+            is_library = day == 0
+            sheet_context = get_sheet_context(
+                context, q.message.chat_id, q.message.message_id
+            )
+            sheet_day = (
+                int(sheet_context.get("day")) if sheet_context and "day" in sheet_context else None
+            )
+            sheet_page = (
+                int(sheet_context.get("page")) if sheet_context and "page" in sheet_context else 0
+            )
+            prefs = await load_ui_preferences(user_id)
+            if action == "history":
+                index = int(parts[4]) if len(parts) > 4 else 0
+                back_cb = None
+                if sheet_context and not is_library:
+                    target_day = sheet_day if sheet_day is not None else day
+                    back_cb = f"day:open:{target_day}"
+                text, kb = await build_running_history_view(
+                    user_id,
+                    day,
+                    ue_id,
+                    index,
+                    back_callback=back_cb,
+                    prefs=prefs,
+                )
+                if sheet_context and not is_library and sheet_day is not None:
+                    set_sheet_context(
+                        context,
+                        q.message.chat_id,
+                        q.message.message_id,
+                        sheet_day,
+                        sheet_page,
+                    )
+                await show_screen(q, context, text, kb, user_id)
+                return
+            async with user_locks[user_id]:
+                selected = get_flex_selected(context, day, ue_id)
+                view = await render_exercise_view(
+                    user_id, day, ue_id, selected, prefs=prefs
+                )
+                set_flex_selected(context, day, ue_id, view.selected_set)
+                running = view.running or {}
+                entry_id = int(running.get("entry_id") or 0)
+                distance_value = float(running.get("distance") or 0.0)
+                duration_value = int(running.get("duration") or 0)
+                if not entry_id:
+                    await q.answer("Не удалось загрузить забег.", show_alert=True)
+                    return
+                if action == "inc":
+                    if len(parts) < 5:
+                        return
+                    field = parts[4]
+                    delta_raw = parts[5] if len(parts) > 5 else "0"
+                    try:
+                        delta_value = float(delta_raw)
+                    except ValueError:
+                        await q.answer("Не удалось изменить значение.", show_alert=True)
+                        return
+                    update_kwargs: dict = {"is_draft": 1}
+                    if field == "dist":
+                        new_distance = clamp_running_distance(
+                            distance_value + delta_value
+                        )
+                        update_kwargs["distance_km"] = new_distance
+                    elif field == "time":
+                        new_duration = clamp_running_duration(
+                            duration_value + int(round(delta_value))
+                        )
+                        update_kwargs["duration_sec"] = new_duration
+                    else:
+                        return
+                    await update_running_entry(entry_id, **update_kwargs)
+                elif action == "input":
+                    target = parts[4] if len(parts) > 4 else ""
+                    prompts = {
+                        "distance": "Сколько километров пробежал? Напиши число, например 5.2.",
+                        "time": "Сколько заняло времени? Используй формат ММ:СС или ЧЧ:ММ:СС.",
+                        "pace": "Какой средний темп? Укажи ММ:СС на километр.",
+                        "calories": "Сколько калорий сжёг? Например 320.",
+                    }
+                    prompt = prompts.get(target)
+                    if not prompt:
+                        await q.answer()
+                        return
+                    state = {
+                        "field": target,
+                        "day": day,
+                        "ue_id": ue_id,
+                        "chat_id": q.message.chat_id,
+                        "message_id": q.message.message_id,
+                        "is_library": is_library,
+                        "entry_id": entry_id,
+                    }
+                    if sheet_context and not is_library:
+                        state["sheet"] = {
+                            "day": sheet_day if sheet_day is not None else day,
+                            "page": sheet_page,
+                        }
+                        clear_sheet_context(
+                            context, q.message.chat_id, q.message.message_id
+                        )
+                    context.user_data[RUNNING_INPUT_KEY] = state
+                    kb = InlineKeyboardMarkup(
+                        [
+                            [
+                                InlineKeyboardButton(
+                                    BACK_BTN, callback_data=f"run:cancel:{day}:{ue_id}"
+                                )
+                            ]
+                        ]
+                    )
+                    await show_screen(q, context, prompt, kb, user_id)
+                    return
+                elif action == "cancel":
+                    context.user_data.pop(RUNNING_INPUT_KEY, None)
+                elif action == "done":
+                    if distance_value <= 0 or duration_value <= 0:
+                        await q.answer(
+                            "Добавь дистанцию и время перед сохранением.",
+                            show_alert=True,
+                        )
+                        return
+                    await mark_running_entry_done(entry_id)
+                    if view.session_id:
+                        await mark_exercise_done(view.session_id, ue_id)
+                    if sheet_context and not is_library:
+                        target_day = sheet_day if sheet_day is not None else day
+                        await render_day_sheet_from_callback(
+                            q,
+                            context,
+                            user_id,
+                            target_day,
+                            sheet_page,
+                            prefs=prefs,
+                        )
+                        await q.answer("Забег сохранён!")
+                        return
+                else:
+                    return
+                if sheet_context and action == "cancel" and not is_library:
+                    target_day = sheet_day if sheet_day is not None else day
+                    await render_day_sheet_from_callback(
+                        q,
+                        context,
+                        user_id,
+                        target_day,
+                        sheet_page,
+                        prefs=prefs,
+                    )
+                    return
+                refreshed = await render_exercise_view(
+                    user_id, day, ue_id, get_flex_selected(context, day, ue_id), prefs=prefs
+                )
+                set_flex_selected(context, day, ue_id, refreshed.selected_set)
+                kb = build_exercise_actions_markup(
+                    refreshed,
+                    day=day,
+                    ue_id=ue_id,
+                    group=refreshed.group,
+                    prefs=prefs,
+                    is_library=is_library,
+                )
+                await show_screen(q, context, refreshed.text, kb, user_id)
+                return
 
         if parts[0] == "set":
             action = parts[1]

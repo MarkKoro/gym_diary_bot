@@ -15,6 +15,7 @@ DONE_BTN = dual("✅ Готово", "Готово")
 CANCEL_BTN = dual("↩︎ Отмена", "Отмена")
 HISTORY_BTN = dual("📈 История", "Посмотреть историю")
 CUSTOM_OPTION_BTN = dual("📝 Свой вариант", "Добавить свой вариант")
+RUNNING_GROUP = "run"
 
 if TYPE_CHECKING:
     from bot import UiPreferences
@@ -325,6 +326,7 @@ MG_NAMES = {
     "kb": "Гиря",
     "metcon": "Кроссфит",
     "workout": "Воркаут (турники/брусья)",
+    "run": "Бег",
     "other": "Другое",
 }
 
@@ -760,13 +762,17 @@ def day_kb(day_index: int, ex_rows: list[tuple[int, str, str, int, int]]):
                 callback_data=f"day:manage:{day_index}:all:add",
             ),
             InlineKeyboardButton(
-                dual(t("CLOSE_DAY"), "Отметить тренировку завершённой"),
-                callback_data=f"day:complete:{day_index}",
-            ),
-            InlineKeyboardButton(
                 dual("🗑 Удалить", "Удалить группу мышц"),
                 callback_data=f"day:manage:{day_index}:all:del",
             ),
+        ]
+    )
+    rows.append(
+        [
+            InlineKeyboardButton(
+                dual(t("CLOSE_DAY"), "Отметить тренировку завершённой"),
+                callback_data=f"day:complete:{day_index}",
+            )
         ]
     )
     rows.append([InlineKeyboardButton(BACK_BTN, callback_data="menu:root")])
@@ -955,13 +961,15 @@ def day_add_exercises_kb(
             )
         if nav_row:
             rows.append(nav_row)
-    rows.append(
-        [
-            InlineKeyboardButton(
-                CUSTOM_OPTION_BTN, callback_data=f"day:add:{day_index}:custom:{group}"
-            )
-        ]
-    )
+    if group != RUNNING_GROUP:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    CUSTOM_OPTION_BTN,
+                    callback_data=f"day:add:{day_index}:custom:{group}",
+                )
+            ]
+        )
     rows.append([InlineKeyboardButton(DONE_BTN, callback_data=f"day:add:{day_index}:done")])
     return InlineKeyboardMarkup(rows), page, total_pages
 
@@ -1492,7 +1500,14 @@ def library_add_exercises_kb(
             )
         if nav_row:
             rows.append(nav_row)
-    rows.append([InlineKeyboardButton(CUSTOM_OPTION_BTN, callback_data=f"lib:add:custom:{group}")])
+    if group != RUNNING_GROUP:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    CUSTOM_OPTION_BTN, callback_data=f"lib:add:custom:{group}"
+                )
+            ]
+        )
     rows.append(
         [
             InlineKeyboardButton(DONE_BTN, callback_data="lib:add:done"),
