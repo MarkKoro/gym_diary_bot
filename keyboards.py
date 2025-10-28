@@ -325,6 +325,7 @@ MG_NAMES = {
     "kb": "Гиря",
     "metcon": "Кроссфит",
     "workout": "Воркаут (турники/брусья)",
+    "run": "Бег",
     "other": "Другое",
 }
 
@@ -760,13 +761,17 @@ def day_kb(day_index: int, ex_rows: list[tuple[int, str, str, int, int]]):
                 callback_data=f"day:manage:{day_index}:all:add",
             ),
             InlineKeyboardButton(
-                dual(t("CLOSE_DAY"), "Отметить тренировку завершённой"),
-                callback_data=f"day:complete:{day_index}",
-            ),
-            InlineKeyboardButton(
                 dual("🗑 Удалить", "Удалить группу мышц"),
                 callback_data=f"day:manage:{day_index}:all:del",
             ),
+        ]
+    )
+    rows.append(
+        [
+            InlineKeyboardButton(
+                dual(t("CLOSE_DAY"), "Отметить тренировку завершённой"),
+                callback_data=f"day:complete:{day_index}",
+            )
         ]
     )
     rows.append([InlineKeyboardButton(BACK_BTN, callback_data="menu:root")])
