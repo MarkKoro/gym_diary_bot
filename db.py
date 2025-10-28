@@ -1798,28 +1798,14 @@ async def list_running_history(
 ) -> list[tuple]:
     async with connect_db() as db:
         cur = await db.execute(
-            "SELECT exercise_id FROM user_exercises WHERE id=?",
-            (user_exercise_id,),
-        )
-        ex_row = await cur.fetchone()
-        if not ex_row:
-            return []
-        exercise_id = ex_row[0]
-        cur = await db.execute(
             """
-            SELECT re.id,
-                   re.distance_km,
-                   re.duration_sec,
-                   re.calories,
-                   re.created_at,
-                   re.day_index
-            FROM running_entries re
-            JOIN user_exercises ue ON ue.id=re.user_exercise_id
-            WHERE re.user_id=? AND ue.exercise_id=? AND re.is_draft=0
-            ORDER BY re.created_at DESC
+            SELECT id, distance_km, duration_sec, calories, created_at, day_index
+            FROM running_entries
+            WHERE user_id=? AND user_exercise_id=? AND is_draft=0
+            ORDER BY created_at DESC
             LIMIT ? OFFSET ?
             """,
-            (user_id, exercise_id, limit, offset),
+            (user_id, user_exercise_id, limit, offset),
         )
         return await cur.fetchall()
 
