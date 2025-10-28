@@ -37,6 +37,7 @@ from keyboards import (
     reminder_time_kb,
     tz_select_kb,
     reminders_edit_kb,
+    reminders_schedule_kb,
     reminder_day_kb,
     WEEKDAYS,
     MG_NAMES,
@@ -188,6 +189,11 @@ FOR_TIME_EXERCISE_NAME = "Меткон — For Time (кастом)"
 FOR_TIME_METRIC = "wod_time_sec"
 AMRAP_SCHEME_KEY = "awaiting_amrap_scheme"
 FOR_TIME_INPUT_KEY = "awaiting_for_time_result"
+
+REMINDER_EDIT_POSITION_KEY = "reminder_edit_position"
+REMINDER_EDIT_LABEL_KEY = "reminder_edit_label"
+REMINDER_SELECTED_DOW_KEY = "reminder_selected_dow"
+REMINDER_EDIT_DAY_INDEX_KEY = "reminder_edit_day_index"
 
 EMOJI_RE = re.compile(
     "["
@@ -368,19 +374,35 @@ def _format_day_label(day_index: int, raw_label: str | None, weekday_label: str 
 
 
 def _build_day_weekday_map(
-    days: list[tuple[int, str]], reminders: list[tuple[int, int, int]]
+    days: list[tuple[int, str]], reminders: list[tuple[int, int, int, int]]
 ) -> dict[int, str]:
     mapping: dict[int, str] = {}
-    has_any_reminders = bool(reminders)
-    for idx, (day_index, _label) in enumerate(days):
-        if idx < len(reminders):
-            dow, _hour, _minute = reminders[idx]
+    reminder_map = {day_no: (dow, hour, minute) for day_no, dow, hour, minute in reminders}
+    has_any_reminders = bool(reminder_map)
+    for day_index, _label in days:
+        info = reminder_map.get(day_index)
+        if info:
+            dow, _hour, _minute = info
             mapping[day_index] = WEEKDAY_FULL_NAMES.get(
                 dow, t("NOT_SET").capitalize()
             )
         elif has_any_reminders:
             mapping[day_index] = t("NOT_SET").capitalize()
     return mapping
+
+
+def get_timezone_label(tz_code: str) -> str:
+    return next((label for code, label in TIMEZONES if code == tz_code), tz_code)
+
+
+def format_reminder_status(
+    label: str, info: tuple[int, int, int] | None
+) -> str:
+    if info:
+        dow, hour, minute = info
+        weekday = WEEKDAY_FULL_NAMES.get(dow, t("NOT_SET").capitalize())
+        return f"{label} — {weekday}, {hour:02d}:{minute:02d}"
+    return f"{label} — напоминание не настроено"
 
 
 async def compose_main_menu(
@@ -398,6 +420,58 @@ async def compose_main_menu(
     text = build_main_menu_text(prefs)
     kb = main_menu_kb(days, SUPPORT_DEEPLINK, completions)
     return text, kb, prefs
+
+
+async def start_reminder_day_edit(
+    q,
+    context,
+    user_id: int,
+    position: int,
+    day_index: int,
+    raw_label: str,
+):
+    display_label = (raw_label or "").strip() or f"{t('DAY')} {day_index}"
+    context.user_data[REMINDER_EDIT_POSITION_KEY] = position
+    context.user_data[REMINDER_EDIT_LABEL_KEY] = display_label
+    context.user_data[REMINDER_EDIT_DAY_INDEX_KEY] = day_index
+    reminders = await list_user_reminders(user_id)
+    reminder_map = {day_no: (dow, hour, minute) for day_no, dow, hour, minute in reminders}
+    selected = reminder_map.get(day_index)
+    selected_dow = selected[0] if selected else None
+    context.user_data[REMINDER_SELECTED_DOW_KEY] = selected_dow
+    text = f"{display_label}. В какой день недели тренировка?"
+    kb = reminder_day_kb(prefix=f"remedit:dow:{position}", selected=selected_dow)
+    await show_screen(q, context, text, kb, user_id)
+
+
+async def show_reminders_overview(q, context, user_id: int):
+    days = await list_active_days(user_id)
+    reminders = await list_user_reminders(user_id)
+    tz_code = await get_user_timezone(user_id)
+    tz_label = get_timezone_label(tz_code)
+    reminder_map = {day_no: (dow, hour, minute) for day_no, dow, hour, minute in reminders}
+    lines: list[str] = [f"Напоминания (время по {tz_label}):", ""]
+    entries: list[tuple[int, str]] = []
+    if days:
+        if len(days) == 1:
+            day_index, raw_label = days[0]
+            await start_reminder_day_edit(q, context, user_id, 1, day_index, raw_label)
+            return
+        for position, (day_index, raw_label) in enumerate(days, start=1):
+            display_label = (raw_label or "").strip() or f"{t('DAY')} {day_index}"
+            info = reminder_map.get(day_index)
+            line = format_reminder_status(display_label, info)
+            lines.append(line)
+            entries.append((position, line))
+        lines.append("")
+        lines.append("Выбери день, чтобы изменить время напоминаний.")
+        kb = reminders_schedule_kb(entries)
+    else:
+        lines.append("Сначала добавь тренировочные дни, чтобы настроить напоминания.")
+        kb = InlineKeyboardMarkup(
+            [[InlineKeyboardButton(BACK_BTN, callback_data="remedit:back")]]
+        )
+    await show_screen(q, context, "\n".join(lines), kb, user_id)
 
 
 def strip_emoji(text: str) -> str:
@@ -1046,7 +1120,7 @@ def render_day_text(
     if not groups:
         return (
             f"{t('DAY')} {i} — {label}\n"
-            "Пока нет упражнений||Добавь упражнения, чтобы запланировать тренировку."
+            "Пока нет упражнений. Добавь упражнения, чтобы запланировать тренировку."
         )
     lines = [
         f"{t('DAY')} {i} — {label}",
@@ -2023,7 +2097,7 @@ async def build_measurements_view(
             lines.append(title)
             lines.extend(category_lines)
     if not lines:
-        lines.append("Пока нет замеров||Добавь показатели, чтобы отслеживать прогресс.")
+        lines.append("Пока нет замеров. Добавь показатели, чтобы отслеживать прогресс.")
     text = header + "\n\n" + "\n".join(lines)
     return text, measurements_main_kb(show_all)
 
@@ -2813,7 +2887,7 @@ async def show_day_group_view(
     if items:
         lines.append("────────")
     else:
-        lines.append("Пока нет упражнений||Добавь упражнения, чтобы заполнить этот раздел.")
+        lines.append("Пока нет упражнений. Добавь упражнения, чтобы заполнить этот раздел.")
     text = "\n".join(lines)
     kb = day_group_kb(day, group, items, group_name=gname)
     await show_screen(q, context, text, kb, user_id)
@@ -2831,7 +2905,7 @@ async def render_library_group_text(
     if not items:
         return (
             f"{gname}\n"
-            "Пока нет упражнений||Нажми «Добавить», чтобы сохранить упражнения и вести учёт."
+            "Пока нет упражнений. Нажми «Добавить», чтобы сохранить упражнения и вести учёт."
         )
     today = datetime.now(UTC).strftime("%Y-%m-%d")
     last_done_rows = await list_last_done_dates(user_id)
@@ -2923,7 +2997,7 @@ async def show_library_exercise_view(
         )
     else:
         attach_lines = [
-            "Пока не прикреплено ни к одному дню||Добавь упражнение через нужный день тренировок, чтобы видеть его в расписании.",
+            "Пока не прикреплено ни к одному дню. Добавь упражнение через нужный день тренировок, чтобы видеть его в расписании.",
         ]
     full_text = view.text + "\n\n" + "\n".join(attach_lines)
     set_flex_selected(context, 0, ue_id, view.selected_set)
@@ -3952,22 +4026,16 @@ async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAUL
                 tz = parts[3]
                 context.user_data["tz"] = tz
                 await set_user_timezone(user_id, tz)
-                tz_only_change = context.user_data.pop("tz_only_change", None)
-                editing_times = context.user_data.pop("edit_reminders", None)
-                if editing_times:
-                    await clear_user_reminders(user_id)
-                    for job in context.job_queue.jobs():
-                        if job.name and job.name.startswith(f"rem_{user_id}_"):
-                            job.schedule_removal()
                 day_no = context.user_data.get("reminder_day", 1)
-                if editing_times:
-                    context.user_data["reminder_day"] = day_no
-                    await show_screen(q, context, f"{t('DAY')} {day_no}. В какой день недели тренировка?", reminder_day_kb(), user_id)
-                elif tz_only_change:
-                    tz_label = next((label for code, label in TIMEZONES if code == tz), tz)
+                tz_only_change = context.user_data.pop("tz_only_change", None)
+                if tz_only_change:
+                    tz_label = get_timezone_label(tz)
                     rems = await list_user_reminders(user_id)
                     if rems:
-                        parts = [f"{dict(WEEKDAYS)[d]} {h:02d}:{m:02d}" for d, h, m in rems]
+                        parts = [
+                            f"{dict(WEEKDAYS)[d]} {h:02d}:{m:02d}"
+                            for _day, d, h, m in rems
+                        ]
                         rem_text = ", ".join(parts)
                         text = f"Часовой пояс обновлён: {tz_label}. Напоминания: {rem_text}."
                     else:
@@ -3975,7 +4043,13 @@ async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAUL
                     await show_screen(q, context, text, reminders_edit_kb(), user_id)
                 else:
                     context.user_data["reminder_day"] = day_no
-                    await show_screen(q, context, f"{t('DAY')} {day_no}. В какой день недели тренировка?", reminder_day_kb(), user_id)
+                    await show_screen(
+                        q,
+                        context,
+                        f"{t('DAY')} {day_no}. В какой день недели тренировка?",
+                        reminder_day_kb(),
+                        user_id,
+                    )
             elif action == "back":
                 if context.user_data.get("from_settings"):
                     context.user_data.pop("from_settings", None)
@@ -4000,7 +4074,8 @@ async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAUL
             _, _, hh, mm = data.split(":")
             hour, minute = int(hh), int(mm)
             dow = context.user_data.get("selected_dow")
-            await add_user_reminder(user_id, dow, hour, minute)
+            day_no = context.user_data.get("reminder_day", 1)
+            await add_user_reminder(user_id, dow, hour, minute, day_no=day_no)
             tz = context.user_data.get("tz", "UTC")
             zone = resolve_user_zone(tz)
             reminder_time = time(hour, minute, tzinfo=zone)
@@ -4424,9 +4499,12 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             n = settings[1] if settings else 0
             tz = await get_user_timezone(user_id)
             rems = await list_user_reminders(user_id)
-            tz_label = next((label for code, label in TIMEZONES if code == tz), tz)
+            tz_label = get_timezone_label(tz)
             if rems:
-                parts = [f"{dict(WEEKDAYS)[d]} {h:02d}:{m:02d}" for d, h, m in rems]
+                parts = [
+                    f"{dict(WEEKDAYS)[d]} {h:02d}:{m:02d}"
+                    for _day, d, h, m in rems
+                ]
                 rem_text = ", ".join(parts)
             else:
                 rem_text = t("NOT_SET")
@@ -5068,8 +5146,11 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     tz = await get_user_timezone(user_id)
                     rems = await list_user_reminders(user_id)
                     if tz and rems:
-                        tz_label = next((label for code, label in TIMEZONES if code == tz), tz)
-                        parts = [f"{dict(WEEKDAYS)[d]} {h:02d}:{m:02d}" for d, h, m in rems]
+                        tz_label = get_timezone_label(tz)
+                        parts = [
+                            f"{dict(WEEKDAYS)[d]} {h:02d}:{m:02d}"
+                            for _day, d, h, m in rems
+                        ]
                         rem_text = ", ".join(parts)
                         text = f"Сейчас выбран {tz_label}, напоминания: {rem_text}."
                         await show_screen(q, context, text, reminders_edit_kb(), user_id)
@@ -5087,17 +5168,174 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     return
                 if sub == "time":
                     context.user_data["from_settings"] = True
-                    context.user_data["tz_page"] = 0
-                    context.user_data["edit_reminders"] = True
                     context.user_data.pop("tz_only_change", None)
-                    if "workouts_per_week" not in context.user_data:
-                        settings = await fetch_user_settings(user_id)
-                        context.user_data["workouts_per_week"] = settings[1] if settings else 0
-                    await show_screen(q, context, 'Выбери свой часовой пояс:', tz_select_kb(0), user_id)
+                    context.user_data.pop(REMINDER_EDIT_POSITION_KEY, None)
+                    context.user_data.pop(REMINDER_EDIT_LABEL_KEY, None)
+                    context.user_data.pop(REMINDER_SELECTED_DOW_KEY, None)
+                    await show_reminders_overview(q, context, user_id)
                     return
             if action == "subscription":
                 await show_screen(q, context, 'Подписка пока в разработке.', settings_kb(), user_id)
                 return
+
+        if parts[0] == "remedit":
+            action = parts[1] if len(parts) > 1 else ""
+            if action == "back":
+                context.user_data.pop(REMINDER_EDIT_POSITION_KEY, None)
+                context.user_data.pop(REMINDER_EDIT_LABEL_KEY, None)
+                context.user_data.pop(REMINDER_EDIT_DAY_INDEX_KEY, None)
+                context.user_data.pop(REMINDER_SELECTED_DOW_KEY, None)
+                await show_screen(
+                    q,
+                    context,
+                    'Настройки уведомлений:',
+                    reminders_edit_kb(),
+                    user_id,
+                )
+                return
+            if action == "day":
+                if len(parts) < 3:
+                    await show_reminders_overview(q, context, user_id)
+                    return
+                try:
+                    position = int(parts[2])
+                except ValueError:
+                    await show_reminders_overview(q, context, user_id)
+                    return
+                days = await list_active_days(user_id)
+                if position < 1 or position > len(days):
+                    await q.answer("День не найден.", show_alert=True)
+                    await show_reminders_overview(q, context, user_id)
+                    return
+                day_index, raw_label = days[position - 1]
+                await start_reminder_day_edit(q, context, user_id, position, day_index, raw_label)
+                return
+            if action == "dow":
+                if len(parts) >= 4 and parts[3] == "back":
+                    await show_reminders_overview(q, context, user_id)
+                    return
+                if len(parts) < 4:
+                    await show_reminders_overview(q, context, user_id)
+                    return
+                try:
+                    position = int(parts[2])
+                    dow = int(parts[3])
+                except ValueError:
+                    await show_reminders_overview(q, context, user_id)
+                    return
+                day_index = context.user_data.get(REMINDER_EDIT_DAY_INDEX_KEY, position)
+                context.user_data[REMINDER_EDIT_POSITION_KEY] = position
+                context.user_data[REMINDER_SELECTED_DOW_KEY] = dow
+                label = context.user_data.get(REMINDER_EDIT_LABEL_KEY)
+                if not label:
+                    days = await list_active_days(user_id)
+                    if 1 <= position <= len(days):
+                        _, raw_label = days[position - 1]
+                        label = (raw_label or "").strip() or f"{t('DAY')} {day_index}"
+                        context.user_data[REMINDER_EDIT_LABEL_KEY] = label
+                    else:
+                        label = f"{t('DAY')} {day_index}"
+                reminders = await list_user_reminders(user_id)
+                reminder_map = {day_no: (d, h, m) for day_no, d, h, m in reminders}
+                current = reminder_map.get(day_index)
+                selected_time = (current[1], current[2]) if current else None
+                tz_code = await get_user_timezone(user_id)
+                tz_label = get_timezone_label(tz_code)
+                text = (
+                    f"{label}. Во сколько напоминать? Выбери время (по {tz_label})."
+                )
+                kb = reminder_time_kb(
+                    prefix=f"remedit:time:{position}:{dow}",
+                    selected=selected_time,
+                )
+                await show_screen(q, context, text, kb, user_id)
+                return
+            if action == "time":
+                if len(parts) < 4:
+                    await show_reminders_overview(q, context, user_id)
+                    return
+                try:
+                    position = int(parts[2])
+                except ValueError:
+                    await show_reminders_overview(q, context, user_id)
+                    return
+                if len(parts) >= 5 and parts[-1] == "back":
+                    try:
+                        dow = int(parts[3])
+                    except ValueError:
+                        dow = context.user_data.get(REMINDER_SELECTED_DOW_KEY)
+                    context.user_data[REMINDER_SELECTED_DOW_KEY] = dow
+                    label = context.user_data.get(
+                        REMINDER_EDIT_LABEL_KEY,
+                        f"{t('DAY')} {position}",
+                    )
+                    tz_code = await get_user_timezone(user_id)
+                    tz_label = get_timezone_label(tz_code)
+                    kb = reminder_day_kb(
+                        prefix=f"remedit:dow:{position}", selected=dow
+                    )
+                    await show_screen(
+                        q,
+                        context,
+                        f"{label}. В какой день недели тренировка?",
+                        kb,
+                        user_id,
+                    )
+                    return
+                if len(parts) < 6:
+                    await show_reminders_overview(q, context, user_id)
+                    return
+                try:
+                    dow = int(parts[3])
+                    hour = int(parts[4])
+                    minute = int(parts[5])
+                except ValueError:
+                    await show_reminders_overview(q, context, user_id)
+                    return
+                day_index = context.user_data.get(REMINDER_EDIT_DAY_INDEX_KEY, position)
+                label = context.user_data.get(
+                    REMINDER_EDIT_LABEL_KEY,
+                    f"{t('DAY')} {day_index}",
+                )
+                reminders = await list_user_reminders(user_id)
+                reminder_map = {day_no: (d, h, m) for day_no, d, h, m in reminders}
+                previous = reminder_map.get(day_index)
+                prev_dow = previous[0] if previous else None
+                await add_user_reminder(
+                    user_id, dow, hour, minute, day_no=day_index
+                )
+                if prev_dow is not None:
+                    for job in context.job_queue.get_jobs_by_name(
+                        f"rem_{user_id}_{prev_dow}"
+                    ):
+                        job.schedule_removal()
+                for job in context.job_queue.get_jobs_by_name(
+                    f"rem_{user_id}_{dow}"
+                ):
+                    job.schedule_removal()
+                tz_code = await get_user_timezone(user_id)
+                zone = resolve_user_zone(tz_code)
+                reminder_time = time(hour, minute, tzinfo=zone)
+                message = getattr(q, "message", None)
+                chat_id = getattr(message, "chat_id", None)
+                if chat_id is None:
+                    chat = getattr(message, "chat", None)
+                    chat_id = getattr(chat, "id", None)
+                if chat_id is not None:
+                    context.job_queue.run_daily(
+                        reminder_job,
+                        reminder_time,
+                        days=(dow,),
+                        chat_id=chat_id,
+                        name=f"rem_{user_id}_{dow}",
+                        data={"user_id": user_id},
+                    )
+                context.user_data[REMINDER_SELECTED_DOW_KEY] = dow
+                confirmation = format_reminder_status(label, (dow, hour, minute))
+                await q.answer(confirmation)
+                await show_reminders_overview(q, context, user_id)
+                return
+            return
 
         if parts[0] == "day":
             action = parts[1]

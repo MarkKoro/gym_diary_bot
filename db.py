@@ -339,6 +339,24 @@ async def init_db():
             await db.execute("ALTER TABLE session_exercises ADD COLUMN last_weight REAL")
         except Exception:
             pass
+        if not await _column_exists(db, "user_reminders", "day_no"):
+            await db.execute("ALTER TABLE user_reminders ADD COLUMN day_no INTEGER")
+            cur = await db.execute(
+                "SELECT id, user_id FROM user_reminders WHERE day_no IS NULL ORDER BY user_id, id"
+            )
+            rows = await cur.fetchall()
+            last_user: int | None = None
+            position = 0
+            for row_id, user_id in rows:
+                if user_id != last_user:
+                    last_user = user_id
+                    position = 0
+                position += 1
+                await db.execute(
+                    "UPDATE user_reminders SET day_no=? WHERE id=?",
+                    (position, row_id),
+                )
+            await db.commit()
         await db.commit()
 
         await _seed_exercises(db, DEFAULT_EXERCISES)
@@ -1019,11 +1037,24 @@ async def get_user_timezone(user_id: int):
         row = await cur.fetchone()
         return row[0] if row else "UTC"
 
-async def add_user_reminder(user_id: int, dow: int, hour: int, minute: int):
+async def add_user_reminder(
+    user_id: int, dow: int, hour: int, minute: int, day_no: int | None = None
+):
     async with connect_db() as db:
+        if day_no is None:
+            cur = await db.execute(
+                "SELECT COALESCE(MAX(day_no), 0) FROM user_reminders WHERE user_id=?",
+                (user_id,),
+            )
+            row = await cur.fetchone()
+            day_no = int(row[0] or 0) + 1
         await db.execute(
-            "INSERT INTO user_reminders(user_id, dow, hour, minute) VALUES(?,?,?,?)",
-            (user_id, dow, hour, minute),
+            "DELETE FROM user_reminders WHERE user_id=? AND day_no=?",
+            (user_id, day_no),
+        )
+        await db.execute(
+            "INSERT INTO user_reminders(user_id, day_no, dow, hour, minute) VALUES(?,?,?,?,?)",
+            (user_id, day_no, dow, hour, minute),
         )
         await db.commit()
 
@@ -1031,10 +1062,22 @@ async def add_user_reminder(user_id: int, dow: int, hour: int, minute: int):
 async def list_user_reminders(user_id: int):
     async with connect_db() as db:
         cur = await db.execute(
-            "SELECT dow, hour, minute FROM user_reminders WHERE user_id=? ORDER BY id",
+            """
+            SELECT day_no, dow, hour, minute
+            FROM user_reminders
+            WHERE user_id=?
+            ORDER BY COALESCE(day_no, id)
+            """,
             (user_id,),
         )
-        return await cur.fetchall()
+        rows = await cur.fetchall()
+    result: list[tuple[int, int, int, int]] = []
+    next_fallback = 1
+    for day_no, dow, hour, minute in rows:
+        day_idx = int(day_no) if day_no is not None else next_fallback
+        result.append((day_idx, dow, hour, minute))
+        next_fallback = max(next_fallback, day_idx + 1)
+    return result
 
 
 async def clear_user_reminders(user_id: int):
@@ -1047,7 +1090,8 @@ async def list_users_with_reminders():
     async with connect_db() as db:
         cur = await db.execute(
             "SELECT r.user_id, u.tg_id, r.dow, r.hour, r.minute FROM user_reminders r "
-            "JOIN users u ON u.id = r.user_id"
+            "JOIN users u ON u.id = r.user_id "
+            "ORDER BY r.user_id, COALESCE(r.day_no, r.id)"
         )
         return await cur.fetchall()
 

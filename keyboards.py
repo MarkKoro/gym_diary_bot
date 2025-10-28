@@ -6,8 +6,8 @@ from ui_texts import t
 from kb_catalog import get_kb_catalog_page, KB_MISC_CATEGORY
 
 
-def dual(compact: str, detailed: str) -> str:
-    return f"{compact}||{detailed}"
+def dual(compact: str, detailed: str | None = None) -> str:
+    return compact
 
 
 BACK_BTN = dual("‹ Назад", "Назад")
@@ -41,14 +41,12 @@ def main_menu_kb(
     completed_days = completed_days or set()
     rows = []
     for idx, label in days:
+        display_label = label or f"{t('DAY')} {idx}"
         mark = "✅ " if idx in completed_days else ""
         rows.append(
             [
                 InlineKeyboardButton(
-                    dual(
-                        f"{mark}{t('DAY')} {idx} — {label}",
-                        f"Открыть {t('DAY')} {idx} — {label}",
-                    ),
+                    dual(f"{mark}{display_label}", f"Открыть {display_label}"),
                     callback_data=f"day:open:{idx}",
                 )
             ]
@@ -146,13 +144,11 @@ def settings_kb():
 def rename_day_kb(days: list[tuple[int, str]]):
     rows = []
     for idx, label in days:
+        display_label = (label or "").strip() or f"{t('DAY')} {idx}"
         rows.append(
             [
                 InlineKeyboardButton(
-                    dual(
-                        f"{t('DAY')} {idx} — {label}",
-                        f"Переименовать {t('DAY')} {idx} — {label}",
-                    ),
+                    dual(display_label, f"Переименовать {display_label}"),
                     callback_data=f"set:rename_day:{idx}",
                 )
             ]
@@ -179,13 +175,11 @@ def settings_groups_kb(groups: list[tuple[str, str]]):
 def edit_day_select_kb(days: list[tuple[int, str]]):
     rows = []
     for idx, label in days:
+        display_label = (label or "").strip() or f"{t('DAY')} {idx}"
         rows.append(
             [
                 InlineKeyboardButton(
-                    dual(
-                        f"{t('DAY')} {idx} — {label}",
-                        f"Настроить {t('DAY')} {idx} — {label}",
-                    ),
+                    dual(display_label, f"Настроить {display_label}"),
                     callback_data=f"set:edit_day:{idx}",
                 )
             ]
@@ -593,6 +587,21 @@ def reminders_edit_kb():
         [InlineKeyboardButton(BACK_BTN, callback_data="menu:settings")],
     ])
 
+
+def reminders_schedule_kb(entries: list[tuple[int, str]]):
+    rows = []
+    for position, label in entries:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    dual(label, f"Настроить уведомление для {label}"),
+                    callback_data=f"remedit:day:{position}",
+                )
+            ]
+        )
+    rows.append([InlineKeyboardButton(BACK_BTN, callback_data="remedit:back")])
+    return InlineKeyboardMarkup(rows)
+
 TIMEZONES = [
     ("Europe/Kaliningrad", "GMT+2 (Калининград)"),
     ("Europe/Moscow", "GMT+3 (Москва)"),
@@ -652,19 +661,24 @@ def tz_select_kb(page: int = 0, per_page: int = 6):
     rows.append([InlineKeyboardButton(BACK_BTN, callback_data="wiz:tzsel:back")])
     return InlineKeyboardMarkup(rows)
 
-def reminder_time_kb():
+def reminder_time_kb(
+    prefix: str = "wiz:remind", selected: tuple[int, int] | None = None
+):
     rows = []
     for h in range(6, 23):
         time_label = f"{h:02d}:00"
+        display = time_label
+        if selected and selected == (h, 0):
+            display = f"✅ {time_label}"
         rows.append(
             [
                 InlineKeyboardButton(
-                    dual(time_label, f"Выбрать время {time_label}"),
-                    callback_data=f"wiz:remind:{time_label}",
+                    dual(display, f"Выбрать время {time_label}"),
+                    callback_data=f"{prefix}:{time_label}",
                 )
             ]
         )
-    rows.append([InlineKeyboardButton(BACK_BTN, callback_data="wiz:remind:back")])
+    rows.append([InlineKeyboardButton(BACK_BTN, callback_data=f"{prefix}:back")])
     return InlineKeyboardMarkup(rows)
 
 
@@ -679,18 +693,21 @@ WEEKDAYS = [
 ]
 
 
-def reminder_day_kb():
+def reminder_day_kb(prefix: str = "wiz:rday", selected: int | None = None):
     rows = []
     for dow, label in WEEKDAYS:
+        display = label
+        if selected is not None and selected == dow:
+            display = f"✅ {label}"
         rows.append(
             [
                 InlineKeyboardButton(
-                    dual(label, f"Добавить день {label}"),
-                    callback_data=f"wiz:rday:{dow}",
+                    dual(display, f"Добавить день {label}"),
+                    callback_data=f"{prefix}:{dow}",
                 )
             ]
         )
-    rows.append([InlineKeyboardButton(BACK_BTN, callback_data="wiz:rday:back")])
+    rows.append([InlineKeyboardButton(BACK_BTN, callback_data=f"{prefix}:back")])
     return InlineKeyboardMarkup(rows)
 
 def day_kb(day_index: int, ex_rows: list[tuple[int, str, str, int, int]]):
