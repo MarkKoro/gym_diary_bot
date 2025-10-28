@@ -172,6 +172,15 @@ ORDINAL_WORDS = {
     9: "девятая",
     10: "десятая",
 }
+WEEKDAY_FULL_NAMES = {
+    0: "Понедельник",
+    1: "Вторник",
+    2: "Среда",
+    3: "Четверг",
+    4: "Пятница",
+    5: "Суббота",
+    6: "Воскресенье",
+}
 WEIGHT_ROUND_STEP = 0.5
 
 AMRAP_EXERCISE_NAME = "Меткон — AMRAP (кастом)"
@@ -349,11 +358,42 @@ def build_main_menu_text(prefs: UiPreferences) -> str:
     return "\n".join(lines)
 
 
+def _format_day_label(day_index: int, raw_label: str | None, weekday_label: str | None) -> str:
+    base = (raw_label or "").strip() or f"{t('DAY')} {day_index}"
+    if weekday_label:
+        if base.casefold() == weekday_label.casefold():
+            base = f"{t('DAY')} {day_index}"
+        return f"{base} — {weekday_label}"
+    return base
+
+
+def _build_day_weekday_map(
+    days: list[tuple[int, str]], reminders: list[tuple[int, int, int]]
+) -> dict[int, str]:
+    mapping: dict[int, str] = {}
+    has_any_reminders = bool(reminders)
+    for idx, (day_index, _label) in enumerate(days):
+        if idx < len(reminders):
+            dow, _hour, _minute = reminders[idx]
+            mapping[day_index] = WEEKDAY_FULL_NAMES.get(
+                dow, t("NOT_SET").capitalize()
+            )
+        elif has_any_reminders:
+            mapping[day_index] = t("NOT_SET").capitalize()
+    return mapping
+
+
 async def compose_main_menu(
     user_id: int, prefs: UiPreferences | None = None
 ) -> tuple[str, InlineKeyboardMarkup, UiPreferences]:
     prefs = prefs or await load_ui_preferences(user_id)
-    days = await list_active_days(user_id)
+    raw_days = await list_active_days(user_id)
+    reminders = await list_user_reminders(user_id)
+    weekday_map = _build_day_weekday_map(raw_days, reminders) if raw_days else {}
+    days = [
+        (day_index, _format_day_label(day_index, label, weekday_map.get(day_index)))
+        for day_index, label in raw_days
+    ]
     completions = await get_active_day_completions(user_id)
     text = build_main_menu_text(prefs)
     kb = main_menu_kb(days, SUPPORT_DEEPLINK, completions)
@@ -728,6 +768,17 @@ def format_measurement_timestamp(value: str, tz: ZoneInfo) -> str:
             dt = dt.replace(tzinfo=ZoneInfo("UTC"))
         dt = dt.astimezone(tz)
         return dt.strftime("%d.%m.%Y %H:%M")
+    except Exception:
+        return value.split("T")[0]
+
+
+def format_measurement_date(value: str, tz: ZoneInfo) -> str:
+    try:
+        dt = datetime.fromisoformat(value)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=ZoneInfo("UTC"))
+        dt = dt.astimezone(tz)
+        return dt.strftime("%d.%m.%Y")
     except Exception:
         return value.split("T")[0]
 
@@ -1888,21 +1939,25 @@ async def get_measurement_history(
     user_id: int,
     code: str,
     cache: dict[str, list[tuple[float, str | None, str]]],
+    limit: int = 5,
 ) -> list[tuple[float, str | None, str]]:
-    if code in cache:
-        return cache[code]
+    cache_key = f"{code}:{limit}"
+    if cache_key in cache:
+        return cache[cache_key]
     item = get_measurement_item(code)
     if not item:
-        cache[code] = []
+        cache[cache_key] = []
         return []
     if item.get("derived") == "lean_mass":
-        weight_history = await get_measurement_history(user_id, "body_weight", cache)
-        fat_history = await get_measurement_history(user_id, "body_fat", cache)
-        history = compute_lean_mass_history(weight_history, fat_history)
+        weight_history = await get_measurement_history(
+            user_id, "body_weight", cache, limit
+        )
+        fat_history = await get_measurement_history(user_id, "body_fat", cache, limit)
+        history = compute_lean_mass_history(weight_history, fat_history)[:limit]
     else:
-        rows = await fetch_measurement_history(user_id, code, limit=5)
+        rows = await fetch_measurement_history(user_id, code, limit=limit)
         history = rows or []
-    cache[code] = history
+    cache[cache_key] = history
     return history
 
 
@@ -1971,6 +2026,58 @@ async def build_measurements_view(
         lines.append("Пока нет замеров||Добавь показатели, чтобы отслеживать прогресс.")
     text = header + "\n\n" + "\n".join(lines)
     return text, measurements_main_kb(show_all)
+
+
+def _format_measurement_history_entries(
+    item: dict, history: list[tuple[float, str | None, str]], zone: ZoneInfo
+) -> list[str]:
+    lines: list[str] = []
+    for idx, entry in enumerate(history):
+        value_text = format_measurement_value(item, entry)
+        date_text = format_measurement_date(entry[2], zone)
+        delta_text = ""
+        if idx + 1 < len(history):
+            delta = format_measurement_delta(item, entry, history[idx + 1])
+            if delta:
+                delta_text = f" ({delta})"
+        lines.append(f"{date_text} — {value_text}{delta_text}")
+    return lines
+
+
+async def build_measurements_history_view(
+    user_id: int, context: ContextTypes.DEFAULT_TYPE
+) -> tuple[str, InlineKeyboardMarkup]:
+    tz_name = await get_user_timezone(user_id)
+    zone = resolve_user_zone(tz_name)
+    cache: dict[str, list[tuple[float, str | None, str]]] = {}
+    lines: list[str] = []
+    for code, title in measurement_categories_list():
+        items = get_measurement_items(code)
+        category_lines: list[str] = []
+        for item in items:
+            history = await get_measurement_history(
+                user_id, item["code"], cache, limit=10
+            )
+            if len(history) < 2:
+                continue
+            category_lines.append(item["name"])
+            category_lines.extend(
+                _format_measurement_history_entries(item, history, zone)
+            )
+        if category_lines:
+            if lines:
+                lines.append("────────")
+            lines.append(title)
+            lines.extend(category_lines)
+    if not lines:
+        lines.append(
+            "История пока пуста. Добавь как минимум два значения для показателя, чтобы увидеть изменения."
+        )
+    text = "История замеров:\n\n" + "\n".join(lines)
+    kb = InlineKeyboardMarkup(
+        [[InlineKeyboardButton(BACK_BTN, callback_data="measure:back")]]
+    )
+    return text, kb
 
 
 def summarize_previous_sets(
@@ -3059,9 +3166,8 @@ async def reminder_job(context: ContextTypes.DEFAULT_TYPE):
         reply_markup = None
         cheer = ""
         if user_id:
-            days = await list_active_days(user_id)
             completions = await get_active_day_completions(user_id)
-            reply_markup = main_menu_kb(days, SUPPORT_DEEPLINK, completions)
+            _text, reply_markup, _ = await compose_main_menu(user_id)
             cheer = format_reminder_cheer(len(completions))
         text = (
             "Напоминание о тренировке!\n"
@@ -4029,13 +4135,15 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data.pop(MEASUREMENT_INPUT_KEY, None)
         if chat_id and msg_id:
             text, kb = await build_measurements_view(user_id, context)
-        await context.bot.edit_message_text(
-            text,
-            chat_id=chat_id,
-            message_id=msg_id,
-            reply_markup=kb,
-        )
-        remember_message(chat_id, msg_id)
+            prefs = await load_ui_preferences(user_id)
+            text, kb = prepare_ui_output(text, kb, prefs)
+            await context.bot.edit_message_text(
+                text,
+                chat_id=chat_id,
+                message_id=msg_id,
+                reply_markup=kb,
+            )
+            remember_message(chat_id, msg_id)
         return
     amrap_state = context.user_data.get(AMRAP_SCHEME_KEY)
     if amrap_state:
@@ -4354,8 +4462,11 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await show_screen(q, context, text, kb, user_id)
             return
 
-        if data == "measure:graph":
-            await q.answer("Графики появятся позже.", show_alert=True)
+        if data == "measure:history":
+            context.user_data.pop(MEASUREMENT_INPUT_KEY, None)
+            context.user_data.pop(MEASUREMENT_EXISTING_KEY, None)
+            text, kb = await build_measurements_history_view(user_id, context)
+            await show_screen(q, context, text, kb, user_id)
             return
 
         if data == "measure:add":
