@@ -73,6 +73,7 @@ from keyboards import (
     measurements_metric_kb,
     measurements_existing_kb,
     ui_footer_rows,
+    HISTORY_BTN,
 )
 from settings import (
     TG_TOKEN,
@@ -338,7 +339,9 @@ def emoji_for(prefs: UiPreferences, key: str) -> str:
 
 
 def status_icon(prefs: UiPreferences, done: bool) -> str:
-    return emoji_for(prefs, "done" if done else "generic")
+    if done:
+        return emoji_for(prefs, "done")
+    return ""
 
 
 def maybe_hint(lines: list[str], prefs: UiPreferences, text: str | tuple[str, str]):
@@ -2885,6 +2888,7 @@ async def send_day_cards_view(
     back_cb = "menu:root"
     content_rows: list[list[InlineKeyboardButton]] = []
     primary_actions: list[tuple[str, str]] = []
+    completion_action: tuple[str, str] | None = None
     for row in base_markup.inline_keyboard:
         if not row:
             continue
@@ -2894,6 +2898,16 @@ async def send_day_cards_view(
             back_cb = callback
             continue
         callbacks = [btn.callback_data or "" for btn in row]
+        if f"day:complete:{day}" in callbacks:
+            for btn in row:
+                cb = btn.callback_data or ""
+                if cb == back_cb:
+                    continue
+                if cb == f"day:complete:{day}":
+                    completion_action = (btn.text, cb)
+                elif cb:
+                    primary_actions.append((btn.text, cb))
+            continue
         if any(
             cb.startswith(f"day:add_ex:{day}")
             or cb.startswith(f"day:del_ex:{day}")
@@ -2913,6 +2927,10 @@ async def send_day_cards_view(
     rows: list[list[InlineKeyboardButton]] = []
     rows += content_rows
     rows += ui_footer_rows(primary_actions, None)
+    if completion_action:
+        rows.append(
+            [InlineKeyboardButton(completion_action[0], callback_data=completion_action[1])]
+        )
     rows.append([InlineKeyboardButton(BACK_BTN, callback_data=back_cb)])
     kb = InlineKeyboardMarkup(rows)
     await show_screen(q, context, text, kb, user_id)
@@ -3168,8 +3186,7 @@ async def render_library_group_text(
         if not first_entry:
             lines.append("")
         first_entry = False
-        mark = e("generic")
-        prefix = f"{mark} " if mark else ""
+        prefix = ""
         result_text = summary or t("NOT_FIXED")
         lines.append(f"{prefix}{name}")
         lines.append(f"• Последний результат: {result_text}")

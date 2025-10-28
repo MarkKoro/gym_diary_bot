@@ -15,6 +15,7 @@ DONE_BTN = dual("✅ Готово", "Готово")
 CANCEL_BTN = dual("↩︎ Отмена", "Отмена")
 HISTORY_BTN = dual("📈 История", "Посмотреть историю")
 CUSTOM_OPTION_BTN = dual("📝 Свой вариант", "Добавить свой вариант")
+RUNNING_GROUP = "run"
 
 if TYPE_CHECKING:
     from bot import UiPreferences
@@ -960,13 +961,15 @@ def day_add_exercises_kb(
             )
         if nav_row:
             rows.append(nav_row)
-    rows.append(
-        [
-            InlineKeyboardButton(
-                CUSTOM_OPTION_BTN, callback_data=f"day:add:{day_index}:custom:{group}"
-            )
-        ]
-    )
+    if group != RUNNING_GROUP:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    CUSTOM_OPTION_BTN,
+                    callback_data=f"day:add:{day_index}:custom:{group}",
+                )
+            ]
+        )
     rows.append([InlineKeyboardButton(DONE_BTN, callback_data=f"day:add:{day_index}:done")])
     return InlineKeyboardMarkup(rows), page, total_pages
 
@@ -1497,7 +1500,14 @@ def library_add_exercises_kb(
             )
         if nav_row:
             rows.append(nav_row)
-    rows.append([InlineKeyboardButton(CUSTOM_OPTION_BTN, callback_data=f"lib:add:custom:{group}")])
+    if group != RUNNING_GROUP:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    CUSTOM_OPTION_BTN, callback_data=f"lib:add:custom:{group}"
+                )
+            ]
+        )
     rows.append(
         [
             InlineKeyboardButton(DONE_BTN, callback_data="lib:add:done"),
