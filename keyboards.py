@@ -124,20 +124,8 @@ def settings_kb():
         ],
         [
             InlineKeyboardButton(
-                dual("🎨 Оформление интерфейса", "Настроить внешний вид интерфейса"),
-                callback_data="set:ui",
-            )
-        ],
-        [
-            InlineKeyboardButton(
                 dual("🗑 Удаление моих групп мышц", "Удалить созданные группы мышц"),
                 callback_data="set:groups",
-            )
-        ],
-        [
-            InlineKeyboardButton(
-                dual("📝 Выбор записи", "Настроить режим записи подходов"),
-                callback_data="set:recording",
             )
         ],
         [
@@ -289,23 +277,6 @@ def days_count_kb():
 def _option_marker(active: bool) -> str:
     return "◉" if active else "○"
 
-
-def ui_preferences_kb(verbose_level: int):
-    return InlineKeyboardMarkup(
-        [
-            [
-                InlineKeyboardButton(
-                    f"{_option_marker(verbose_level == 0)} Краткие",
-                    callback_data="set:ui:verbose:0",
-                ),
-                InlineKeyboardButton(
-                    f"{_option_marker(verbose_level == 1)} Обычные",
-                    callback_data="set:ui:verbose:1",
-                ),
-            ],
-            [InlineKeyboardButton(BACK_BTN, callback_data="menu:settings")],
-        ]
-    )
 
 def system_kb():
     rows = [
@@ -1175,7 +1146,10 @@ def exercise_actions_kb(
             rows.append(major_row)
         else:
             rep_major_row: list[InlineKeyboardButton] = []
-            for step in (5,):
+            steps = [5]
+            if group == "workout":
+                steps.append(15)
+            for step in steps:
                 compact, detailed = _format_major_rep_label(kind, step, True)
                 rep_major_row.append(
                     InlineKeyboardButton(
@@ -1220,32 +1194,6 @@ def exercise_actions_kb(
         ]
     )
     return InlineKeyboardMarkup(rows)
-
-
-def recording_mode_kb(current: str):
-    mark_single = "✅ " if current == "single" else ""
-    mark_flex = "✅ " if current == "flex" else ""
-    return InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton(
-                dual(
-                    f"{mark_single}Одинаковый вес",
-                    "Одинаковый вес для всех подходов",
-                ),
-                callback_data="set:recording:single",
-            )
-        ],
-        [
-            InlineKeyboardButton(
-                dual(
-                    f"{mark_flex}Гибкая запись",
-                    "Гибкая запись веса и повторов",
-                ),
-                callback_data="set:recording:flex",
-            )
-        ],
-        [InlineKeyboardButton(BACK_BTN, callback_data="menu:settings")],
-    ])
 
 
 def library_menu_kb(groups: list[tuple[str, int]], custom: dict[str, str] | None = None):

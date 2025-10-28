@@ -239,7 +239,7 @@ async def init_db():
         CREATE TABLE IF NOT EXISTS user_prefs(
             user_id INTEGER PRIMARY KEY,
             weight_step REAL DEFAULT 0.5,
-            recording_mode TEXT DEFAULT 'single',
+            recording_mode TEXT DEFAULT 'flex',
             day_view_mode TEXT DEFAULT 'detailed',
             ui_mode TEXT CHECK(ui_mode IN ('compact','detailed')) DEFAULT 'detailed',
             ui_emoji_enabled INTEGER CHECK(ui_emoji_enabled IN (0,1)) DEFAULT 1,
@@ -1429,9 +1429,15 @@ async def get_recording_mode(user_id: int) -> str:
             (user_id,),
         )
         row = await cur.fetchone()
-        return row[0] if row and row[0] else "single"
+        if row and row[0] == "flex":
+            return "flex"
+    await set_recording_mode(user_id, "flex")
+    return "flex"
+
 
 async def set_recording_mode(user_id: int, mode: str):
+    if mode != "flex":
+        mode = "flex"
     async with connect_db() as db:
         await db.execute(
             """

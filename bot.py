@@ -56,8 +56,6 @@ from keyboards import (
     edit_day_special_kb,
     rename_day_kb,
     days_count_kb,
-    recording_mode_kb,
-    ui_preferences_kb,
     confirm_day_group_delete_kb,
     confirm_settings_group_delete_kb,
     confirm_day_reset_kb,
@@ -121,8 +119,6 @@ from db import (
     count_exercise_progress_entries,
     list_last_done_dates,
     rename_day,
-    get_recording_mode,
-    set_recording_mode,
     get_ui_preferences,
     set_ui_mode,
     set_ui_emoji_enabled,
@@ -218,7 +214,6 @@ class ExerciseView:
     name: str
     group: str
     sets: list[tuple[int, int, float, int]]
-    recording_mode: str
     selected_set: int | None
     with_weight: bool
     kind: str
@@ -235,7 +230,10 @@ async def load_ui_preferences(user_id: int) -> UiPreferences:
     if not emoji:
         await set_ui_emoji_enabled(user_id, True)
         emoji = 1
-    return UiPreferences(mode=mode, emoji_enabled=True, verbose_level=1 if verbose else 0)
+    if verbose:
+        await set_ui_verbose_level(user_id, 0)
+        verbose = 0
+    return UiPreferences(mode=mode, emoji_enabled=True, verbose_level=0)
 
 
 def _parse_completion_rows(
@@ -1056,7 +1054,6 @@ FILL_EDITOR_KEY = "fill_editor"
 
 @dataclass
 class FillEditorState:
-    mode: str
     day: int
     ue_id: int
     is_library: bool
@@ -1067,9 +1064,6 @@ class FillEditorState:
     sheet_day: int | None
     sheet_page: int
     selected_before: int | None
-    summary_sets: int = 0
-    summary_reps: int = 0
-    summary_weight: float = 0.0
     sets: list[dict[str, float]] = field(default_factory=list)
     pointer: int = 0
     default_reps: int = 0
@@ -1237,56 +1231,12 @@ def _fill_icon_key(group: str) -> str:
     return "strength"
 
 
-def _format_single_value(state: FillEditorState) -> str:
-    sets = max(state.summary_sets, 0)
-    reps = max(state.summary_reps, 0)
-    if state.kind == "duration":
-        return f"{sets}×{reps} сек"
-    if state.with_weight:
-        weight = format_weight_value(max(state.summary_weight, 0.0))
-        return f"{sets}×{reps} повт. при {weight} кг"
-    return f"{sets}×{reps} повт."
 
 
 def render_fill_editor(state: FillEditorState, prefs: UiPreferences) -> str:
     icon = emoji_for(prefs, _fill_icon_key(state.group)) if prefs.emoji_enabled else ""
     title = f"{icon} {state.name}".strip() if icon else state.name
     lines = [title, ""]
-    if state.mode == "single":
-        if state.with_weight:
-            lines.append(
-                "Укажи количество рабочих сетов, повторения последнего и рабочий вес."
-            )
-            lines.append(
-                "Кнопки ниже помогут быстро записать итоговую нагрузку за тренировку."
-            )
-            lines.append(
-                "Каждый сет сохранится с одинаковыми значениями — удобно, когда весь воркаут выполнен в одном темпе."
-            )
-        elif state.kind == "duration":
-            lines.append(
-                "Укажи, сколько подходов выполнил и сколько секунд держалась позиция в последнем."
-            )
-            lines.append(
-                "Используй кнопки, чтобы мгновенно выставить суммарное время."
-            )
-            lines.append(
-                "Сохранится указанное количество подходов, и каждый получит последнюю длительность."
-            )
-        else:
-            lines.append(
-                "Укажи, сколько рабочих сетов сделал и сколько повторений было в последнем."
-            )
-            lines.append(
-                "Кнопки позволяют за пару нажатий обновить запись без лишнего набора текста."
-            )
-            lines.append(
-                "Сохранится указанное количество подходов с одинаковым числом повторений."
-            )
-        lines.append("")
-        lines.append(f"Текущее значение: {_format_single_value(state)}")
-        return "\n".join(lines)
-
     if state.kind == "duration":
         lines.append(
             "Редактируй каждый сет отдельно: переключайся между ними стрелками и меняй показатели кнопками ниже."
@@ -1317,11 +1267,11 @@ def render_fill_editor(state: FillEditorState, prefs: UiPreferences) -> str:
         lines.append("Когда будешь готов, нажми «＋ сет» и начни фиксировать подходы один за другим.")
         return "\n".join(lines)
 
-    lines.append("Теперь запиши каждый сет своим чередом.")
-    lines.append(
-        "Заполни количество повторений и килограмм в текущей строке: стрелки листают сеты, кнопки снизу меняют значения."
-    )
-    lines.append(
+        lines.append("Теперь запиши каждый сет своим чередом.")
+        lines.append(
+            "Заполни количество повторений и килограмм в текущей строке: стрелки листают сеты, кнопки снизу меняют значения."
+        )
+        lines.append(
         "Нажимай «＋ сет», чтобы добавить следующий — новые строки копируют предыдущие значения для быстрой правки."
     )
     lines.append("Текущий сет помечен стрелкой ▶︎ слева от строки.")
@@ -1335,73 +1285,13 @@ def render_fill_editor(state: FillEditorState, prefs: UiPreferences) -> str:
     return "\n".join(lines)
 
 
-def _single_unit(kind: str) -> str:
+def _rep_unit(kind: str) -> str:
     return "сек" if kind == "duration" else "повт"
 
 
-def _single_major_step(kind: str) -> int:
+def _major_rep_step(kind: str) -> int:
     return 10 if kind == "duration" else 5
 
-
-def _build_single_fill_keyboard(state: FillEditorState) -> InlineKeyboardMarkup:
-    unit = _single_unit(state.kind)
-    major = _single_major_step(state.kind)
-    rows: list[list[InlineKeyboardButton]] = [
-        [
-            InlineKeyboardButton("＋1 сет", callback_data="fill:single:inc:sets:1"),
-            InlineKeyboardButton("−1 сет", callback_data="fill:single:inc:sets:-1"),
-        ],
-        [
-            InlineKeyboardButton(
-                f"＋{major} {unit}", callback_data=f"fill:single:inc:reps:{major}"
-            ),
-            InlineKeyboardButton(
-                f"−{major} {unit}", callback_data=f"fill:single:inc:reps:-{major}"
-            ),
-        ],
-        [
-            InlineKeyboardButton(
-                f"＋1 {unit}", callback_data="fill:single:inc:reps:1"
-            ),
-            InlineKeyboardButton(
-                f"−1 {unit}", callback_data="fill:single:inc:reps:-1"
-            ),
-        ],
-    ]
-    if state.with_weight:
-        rows.extend(
-            [
-                [
-                    InlineKeyboardButton(
-                        "＋0.5 кг", callback_data="fill:single:inc:kg:0.5"
-                    ),
-                    InlineKeyboardButton(
-                        "＋3 кг", callback_data="fill:single:inc:kg:3"
-                    ),
-                    InlineKeyboardButton(
-                        "＋10 кг", callback_data="fill:single:inc:kg:10"
-                    ),
-                ],
-                [
-                    InlineKeyboardButton(
-                        "−0.5 кг", callback_data="fill:single:inc:kg:-0.5"
-                    ),
-                    InlineKeyboardButton(
-                        "−3 кг", callback_data="fill:single:inc:kg:-3"
-                    ),
-                    InlineKeyboardButton(
-                        "−10 кг", callback_data="fill:single:inc:kg:-10"
-                    ),
-                ],
-            ]
-        )
-    rows.append(
-        [
-            InlineKeyboardButton("Сохранить", callback_data="fill:single:apply"),
-            InlineKeyboardButton("Отмена", callback_data="fill:single:cancel"),
-        ]
-    )
-    return InlineKeyboardMarkup(rows)
 
 
 def _build_flex_fill_keyboard(state: FillEditorState) -> InlineKeyboardMarkup:
@@ -1423,8 +1313,8 @@ def _build_flex_fill_keyboard(state: FillEditorState) -> InlineKeyboardMarkup:
             InlineKeyboardButton("− сет", callback_data="fill:flex:del"),
         ]
     )
-    unit = _single_unit(state.kind)
-    major = _single_major_step(state.kind)
+    unit = _rep_unit(state.kind)
+    major = _major_rep_step(state.kind)
     rows.append(
         [
             InlineKeyboardButton(
@@ -1482,11 +1372,7 @@ def _build_flex_fill_keyboard(state: FillEditorState) -> InlineKeyboardMarkup:
 
 
 def build_fill_keyboard(state: FillEditorState) -> InlineKeyboardMarkup:
-    return (
-        _build_single_fill_keyboard(state)
-        if state.mode == "single"
-        else _build_flex_fill_keyboard(state)
-    )
+    return _build_flex_fill_keyboard(state)
 
 
 async def finish_fill_editor(
@@ -1504,10 +1390,7 @@ async def finish_fill_editor(
     view = await render_exercise_view(
         user_id, state.day, state.ue_id, selected, prefs=prefs
     )
-    if view.recording_mode == "flex":
-        set_flex_selected(context, state.day, state.ue_id, view.selected_set)
-    else:
-        set_flex_selected(context, state.day, state.ue_id, None)
+    set_flex_selected(context, state.day, state.ue_id, view.selected_set)
     kb = build_exercise_actions_markup(
         view,
         day=state.day,
@@ -1527,27 +1410,19 @@ async def apply_fill_changes(
 ):
     today_str = await get_user_local_date(user_id)
     session_id = await get_or_create_today_session(user_id, today_str, state.day)
-    if state.mode == "single":
-        reps = max(state.summary_reps, 0)
-        weight = max(state.summary_weight, 0.0) if state.with_weight else 0.0
-        template = [(reps, weight) for _ in range(max(state.summary_sets, 0))]
-    else:
-        template = [
-            (
-                int(max(item.get("reps", 0), 0)),
-                float(max(item.get("weight", 0.0), 0.0)) if state.with_weight else 0.0,
-            )
-            for item in state.sets
-        ]
+    template = [
+        (
+            int(max(item.get("reps", 0), 0)),
+            float(max(item.get("weight", 0.0), 0.0)) if state.with_weight else 0.0,
+        )
+        for item in state.sets
+    ]
     await apply_sets_template(session_id, state.ue_id, template)
-    if state.mode == "flex":
-        if template:
-            sets = await fetch_exercise_sets(session_id, state.ue_id)
-            if sets:
-                target_index = min(state.pointer, len(sets) - 1)
-                set_flex_selected(context, state.day, state.ue_id, sets[target_index][0])
-            else:
-                set_flex_selected(context, state.day, state.ue_id, None)
+    if template:
+        sets = await fetch_exercise_sets(session_id, state.ue_id)
+        if sets:
+            target_index = min(state.pointer, len(sets) - 1)
+            set_flex_selected(context, state.day, state.ue_id, sets[target_index][0])
         else:
             set_flex_selected(context, state.day, state.ue_id, None)
     else:
@@ -1561,7 +1436,6 @@ async def open_fill_editor(
     day: int,
     ue_id: int,
     session_id: int,
-    mode: str,
     is_library: bool,
     sheet_day: int | None,
     sheet_page: int,
@@ -1586,80 +1460,48 @@ async def open_fill_editor(
         if with_weight:
             default_weight = max(last_values[1], 0.0)
 
-    if mode == "flex":
-        sets_payload: list[dict[str, float]] = [
-            {
-                "reps": int(max(reps, 0)),
-                "weight": float(max(weight, 0.0)) if with_weight else 0.0,
-            }
-            for _, reps, weight in work_sets
-        ]
-        if not sets_payload:
-            if baseline and baseline[0] > 0:
-                sets_payload = [
-                    {
-                        "reps": max(baseline[1], 0),
-                        "weight": baseline[2] if with_weight else 0.0,
-                    }
-                    for _ in range(baseline[0])
-                ]
-            elif default_reps or default_weight:
-                sets_payload = [
-                    {
-                        "reps": default_reps,
-                        "weight": default_weight if with_weight else 0.0,
-                    }
-                ]
-        pointer = 0
-        if sets_payload and selected_before:
-            pointer = min(max(selected_before - 1, 0), len(sets_payload) - 1)
-        state = FillEditorState(
-            mode="flex",
-            day=day,
-            ue_id=ue_id,
-            is_library=is_library,
-            with_weight=with_weight,
-            kind=kind,
-            name=name,
-            group=group,
-            sheet_day=sheet_day,
-            sheet_page=sheet_page,
-            selected_before=selected_before,
-            sets=sets_payload,
-            pointer=pointer,
-            default_reps=default_reps,
-            default_weight=default_weight if with_weight else 0.0,
-        )
-    else:
-        summary_sets = len(work_sets)
-        summary_reps = int(work_sets[-1][1]) if work_sets else default_reps
-        summary_weight = (
-            float(work_sets[-1][2]) if work_sets and with_weight else default_weight
-        )
-        if summary_sets == 0 and baseline:
-            summary_sets = max(baseline[0], 0)
-            summary_reps = max(baseline[1], 0)
-            summary_weight = baseline[2] if with_weight else 0.0
-        if not with_weight:
-            summary_weight = 0.0
-        state = FillEditorState(
-            mode="single",
-            day=day,
-            ue_id=ue_id,
-            is_library=is_library,
-            with_weight=with_weight,
-            kind=kind,
-            name=name,
-            group=group,
-            sheet_day=sheet_day,
-            sheet_page=sheet_page,
-            selected_before=selected_before,
-            summary_sets=max(summary_sets, 0),
-            summary_reps=max(summary_reps, 0),
-            summary_weight=max(summary_weight, 0.0),
-            default_reps=default_reps,
-            default_weight=default_weight if with_weight else 0.0,
-        )
+    sets_payload: list[dict[str, float]] = [
+        {
+            "reps": int(max(reps, 0)),
+            "weight": float(max(weight, 0.0)) if with_weight else 0.0,
+        }
+        for _, reps, weight in work_sets
+    ]
+    if not sets_payload:
+        if baseline and baseline[0] > 0:
+            sets_payload = [
+                {
+                    "reps": max(baseline[1], 0),
+                    "weight": baseline[2] if with_weight else 0.0,
+                }
+                for _ in range(baseline[0])
+            ]
+        elif default_reps or default_weight:
+            sets_payload = [
+                {
+                    "reps": default_reps,
+                    "weight": default_weight if with_weight else 0.0,
+                }
+            ]
+    pointer = 0
+    if sets_payload and selected_before:
+        pointer = min(max(selected_before - 1, 0), len(sets_payload) - 1)
+    state = FillEditorState(
+        day=day,
+        ue_id=ue_id,
+        is_library=is_library,
+        with_weight=with_weight,
+        kind=kind,
+        name=name,
+        group=group,
+        sheet_day=sheet_day,
+        sheet_page=sheet_page,
+        selected_before=selected_before,
+        sets=sets_payload,
+        pointer=pointer,
+        default_reps=default_reps,
+        default_weight=default_weight if with_weight else 0.0,
+    )
     clear_fill_state(context, q.message.chat_id, q.message.message_id)
     set_fill_state(context, q.message.chat_id, q.message.message_id, state)
     text = render_fill_editor(state, prefs)
@@ -1679,32 +1521,10 @@ async def handle_fill_callback(
         await q.answer()
         return
     mode = parts[1]
+    if mode != "flex":
+        await q.answer()
+        return
     action = parts[2]
-    if state.mode != mode:
-        await q.answer()
-        return
-    if mode == "single":
-        if action == "inc" and len(parts) >= 5:
-            field = parts[3]
-            delta = float(parts[4])
-            if field == "sets":
-                state.summary_sets = max(0, state.summary_sets + int(delta))
-            elif field == "reps":
-                state.summary_reps = max(0, state.summary_reps + int(delta))
-            elif field == "kg" and state.with_weight:
-                state.summary_weight = max(0.0, state.summary_weight + delta)
-        elif action == "apply":
-            await apply_fill_changes(q, context, user_id, state, prefs)
-            return
-        elif action == "cancel":
-            await finish_fill_editor(q, context, user_id, state, prefs)
-            return
-        text = render_fill_editor(state, prefs)
-        kb = build_fill_keyboard(state)
-        await show_screen(q, context, text, kb, user_id)
-        await q.answer()
-        return
-
     if action == "nav" and len(parts) >= 4 and state.sets:
         delta = int(parts[3])
         state.pointer = max(0, min(state.pointer + delta, len(state.sets) - 1))
@@ -2155,34 +1975,28 @@ async def build_measurements_view(
 
 def summarize_previous_sets(
     sets: list[tuple[int, int, float]],
-    mode: str,
     *,
     with_weight: bool = True,
     kind: str = "reps",
 ) -> str:
     if not sets:
         return ""
-    if mode == "flex":
-        grouped = _compress_flex_triplets(sets, with_weight=with_weight, kind=kind)
-        parts: list[str] = []
-        for entry in grouped:
-            value = format_flex_value(
-                int(entry["reps"]), float(entry["weight"]), with_weight, kind
-            )
-            count = int(entry["count"])
-            if count > 1:
-                parts.append(f"{count}× {value}")
-            else:
-                parts.append(value)
-        return " · ".join(parts)
-    reps = sets[-1][1]
-    weight = sets[-1][2]
-    return format_sets_value(len(sets), reps, weight, with_weight)
+    grouped = _compress_flex_triplets(sets, with_weight=with_weight, kind=kind)
+    parts: list[str] = []
+    for entry in grouped:
+        value = format_flex_value(
+            int(entry["reps"]), float(entry["weight"]), with_weight, kind
+        )
+        count = int(entry["count"])
+        if count > 1:
+            parts.append(f"{count}× {value}")
+        else:
+            parts.append(value)
+    return " · ".join(parts)
 
 
 def summarize_baseline(
     values: tuple[int, int, float] | None,
-    mode: str,
     *,
     with_weight: bool = True,
     kind: str = "reps",
@@ -2190,10 +2004,8 @@ def summarize_baseline(
     if not values:
         return ""
     sets, reps, weight = values
-    if mode == "flex":
-        formatted = format_flex_value(reps, weight, with_weight, kind)
-        return f"{sets}× {formatted}"
-    return format_sets_value(sets, reps, weight, with_weight)
+    formatted = format_flex_value(reps, weight, with_weight, kind)
+    return f"{sets}× {formatted}"
 
 
 def format_last_done_label(date_str: str, reference: datetime | None = None) -> str:
@@ -2297,7 +2109,6 @@ async def fetch_day_sheet_data(
 ) -> list[dict]:
     ex_rows = await fetch_day_exercises(user_id, day_index, date_str)
     session_id = await get_session_for_day(user_id, date_str, day_index)
-    mode = await get_recording_mode(user_id)
     last_done_map = build_last_done_dict(await list_last_done_dates(user_id))
     data: list[dict] = []
     for_time_loaded = False
@@ -2354,7 +2165,7 @@ async def fetch_day_sheet_data(
                 entry["prev_summary"] = format_kb_previous(last_sets)
             else:
                 entry["prev_summary"] = summarize_previous_sets(
-                    last_sets, mode, with_weight=with_weight, kind=kind
+                    last_sets, with_weight=with_weight, kind=kind
                 )
         data.append(entry)
     return data
@@ -2514,6 +2325,19 @@ async def build_day_sheet_message(
                 ),
             ]
             kb_rows.append(controls_row)
+            if group_key == "workout" and kind != "duration":
+                kb_rows.append(
+                    [
+                        InlineKeyboardButton("＋5", callback_data=f"{base_cb}:reps:5"),
+                        InlineKeyboardButton("−5", callback_data=f"{base_cb}:reps:-5"),
+                    ]
+                )
+                kb_rows.append(
+                    [
+                        InlineKeyboardButton("＋15", callback_data=f"{base_cb}:reps:15"),
+                        InlineKeyboardButton("−15", callback_data=f"{base_cb}:reps:-15"),
+                    ]
+                )
             if kind == "duration":
                 kb_rows.append(
                     [
@@ -2649,8 +2473,7 @@ async def send_day_cards_view(
     today_str = await get_user_local_date(user_id)
     ex_rows = await fetch_day_exercises(user_id, day, today_str)
     custom = await get_custom_groups(user_id, context)
-    mode = await get_recording_mode(user_id)
-    summaries = await build_summary_map(user_id, day, ex_rows, today_str, mode)
+    summaries = await build_summary_map(user_id, day, ex_rows, today_str)
     last_done_rows = await list_last_done_dates(user_id)
     last_done_map = build_last_done_dict(last_done_rows)
     text = render_day_text(
@@ -2701,42 +2524,35 @@ async def send_day_cards_view(
 
 def format_current_training(
     sets: list[tuple[int, int, float, int]],
-    mode: str,
     selected: int | None,
     *,
     with_weight: bool = True,
     kind: str = "reps",
 ) -> list[str]:
-    if mode == "flex":
-        if not sets:
-            empty = format_sets_value(0, 0, 0.0, with_weight)
-            return [f"Текущая тренировка: {empty}"]
-        lines = ["Текущая тренировка:"]
-        grouped = _compress_flex_entries(sets, with_weight=with_weight, kind=kind)
-        for entry in grouped:
-            start = int(entry["start"])
-            end = int(entry["end"])
-            count = int(entry["count"])
-            marker = ""
-            if selected is not None:
-                if end < selected:
-                    marker = "✅ "
-                elif start <= selected <= end:
-                    marker = "▶︎ "
-            value = format_flex_value(
-                int(entry["reps"]), float(entry["weight"]), with_weight, kind
-            )
-            if count > 1:
-                label = _format_flex_span(start, end)
-                lines.append(f"{marker}{label}. {count}× {value}")
-            else:
-                lines.append(f"{marker}{start}. {value}")
-        return lines
-    reps = sets[-1][1] if sets else 0
-    weight = sets[-1][2] if sets else 0.0
-    return [
-        f"Текущая тренировка: {format_sets_value(len(sets), reps, weight, with_weight)}"
-    ]
+    if not sets:
+        empty = format_sets_value(0, 0, 0.0, with_weight)
+        return [f"Текущая тренировка: {empty}"]
+    lines = ["Текущая тренировка:"]
+    grouped = _compress_flex_entries(sets, with_weight=with_weight, kind=kind)
+    for entry in grouped:
+        start = int(entry["start"])
+        end = int(entry["end"])
+        count = int(entry["count"])
+        marker = ""
+        if selected is not None:
+            if end < selected:
+                marker = "✅ "
+            elif start <= selected <= end:
+                marker = "▶︎ "
+        value = format_flex_value(
+            int(entry["reps"]), float(entry["weight"]), with_weight, kind
+        )
+        if count > 1:
+            label = _format_flex_span(start, end)
+            lines.append(f"{marker}{label}. {count}× {value}")
+        else:
+            lines.append(f"{marker}{start}. {value}")
+    return lines
 
 
 def build_flex_session_lines(
@@ -2790,7 +2606,6 @@ async def build_summary_map(
     day: int,
     ex_rows: list[tuple[int, str, str, int, int]],
     today: str,
-    mode: str,
 ) -> dict[int, str]:
     summary: dict[int, str] = {}
     session_id = await get_session_for_day(user_id, today, day)
@@ -2833,17 +2648,17 @@ async def build_summary_map(
             ]
             if filtered:
                 text = summarize_previous_sets(
-                    filtered, mode, with_weight=with_weight, kind=kind
+                    filtered, with_weight=with_weight, kind=kind
                 )
             if not text:
                 last_sets = await fetch_last_session_sets(user_id, day, ue_id, today)
                 text = summarize_previous_sets(
-                    last_sets, mode, with_weight=with_weight, kind=kind
+                    last_sets, with_weight=with_weight, kind=kind
                 )
                 if not text:
                     base = await get_baseline(user_id, day, ex_id)
                     text = summarize_baseline(
-                        base, mode, with_weight=with_weight, kind=kind
+                        base, with_weight=with_weight, kind=kind
                     )
         if text:
             summary[ue_id] = text
@@ -2862,8 +2677,7 @@ async def show_day_group_view(
     today_str = await get_user_local_date(user_id)
     ex_rows = await fetch_day_exercises(user_id, day, today_str)
     context.user_data.pop(DAY_DELETE_SCOPE_KEY, None)
-    mode = await get_recording_mode(user_id)
-    summaries = await build_summary_map(user_id, day, ex_rows, today_str, mode)
+    summaries = await build_summary_map(user_id, day, ex_rows, today_str)
     last_done_rows = await list_last_done_dates(user_id)
     last_done_map = build_last_done_dict(last_done_rows)
     custom = await get_custom_groups(user_id, context)
@@ -2912,7 +2726,6 @@ async def render_library_group_text(
             f"{gname}\n"
             "Пока нет упражнений||Нажми «Добавить», чтобы сохранить упражнения и вести учёт."
         )
-    mode = await get_recording_mode(user_id)
     today = datetime.now(UTC).strftime("%Y-%m-%d")
     last_done_rows = await list_last_done_dates(user_id)
     last_done_map = build_last_done_dict(last_done_rows)
@@ -2945,7 +2758,7 @@ async def render_library_group_text(
             last_sets = await fetch_last_session_sets(user_id, 0, ue_id, today)
             with_weight, kind = get_display_flags(resolved_group, name)
             summary = summarize_previous_sets(
-                last_sets, mode, with_weight=with_weight, kind=kind
+                last_sets, with_weight=with_weight, kind=kind
             )
             base = await get_baseline(user_id, 0, ex_id)
             plan_text = format_plan_value(
@@ -2953,7 +2766,7 @@ async def render_library_group_text(
             )
             if not summary:
                 summary = summarize_baseline(
-                    base, mode, with_weight=with_weight, kind=kind
+                    base, with_weight=with_weight, kind=kind
                 )
         last = last_done_map.get(ex_id)
         if not first_entry:
@@ -3006,10 +2819,7 @@ async def show_library_exercise_view(
             "Пока не прикреплено ни к одному дню||Добавь упражнение через нужный день тренировок, чтобы видеть его в расписании.",
         ]
     full_text = view.text + "\n\n" + "\n".join(attach_lines)
-    if view.recording_mode == "flex":
-        set_flex_selected(context, 0, ue_id, view.selected_set)
-    else:
-        set_flex_selected(context, 0, ue_id, None)
+    set_flex_selected(context, 0, ue_id, view.selected_set)
     kb = build_exercise_actions_markup(
         view,
         day=0,
@@ -3032,7 +2842,6 @@ async def render_exercise_view(
     ex_id, name, raw_group = await get_exercise_info(ue_id)
     group = resolve_group(name, raw_group)
     today = datetime.now(UTC).strftime("%Y-%m-%d")
-    mode = await get_recording_mode(user_id)
     session_id = await get_or_create_today_session(user_id, today, day)
     sets = await fetch_exercise_sets(session_id, ue_id)
     baseline = await get_baseline(user_id, day, ex_id)
@@ -3043,12 +2852,11 @@ async def render_exercise_view(
     is_for_time = group == "metcon" and name == FOR_TIME_EXERCISE_NAME
 
     work_sets = filter_work_sets(sets)
-    if mode == "flex":
-        if work_sets:
-            if selected_set is None or all(no != selected_set for no, *_ in work_sets):
-                selected_set = work_sets[-1][0]
-        else:
-            selected_set = None
+    if work_sets:
+        if selected_set is None or all(no != selected_set for no, *_ in work_sets):
+            selected_set = work_sets[-1][0]
+    else:
+        selected_set = None
 
     type_labels = {
         "kb": "Гири",
@@ -3091,11 +2899,11 @@ async def render_exercise_view(
         done_text = value_text
     else:
         prev_text = summarize_previous_sets(
-            last_sets, mode, with_weight=with_weight, kind=kind
+            last_sets, with_weight=with_weight, kind=kind
         )
         if not prev_text:
             prev_text = summarize_baseline(
-                baseline, mode, with_weight=with_weight, kind=kind
+                baseline, with_weight=with_weight, kind=kind
             )
         prev_text = prev_text or t("NOT_FIXED")
         plan_text = format_plan_value(baseline, group, with_weight=with_weight)
@@ -3110,17 +2918,15 @@ async def render_exercise_view(
         f"{t('PLAN')}: {plan_text}",
         f"{t('MADE')}: {done_text}",
     ]
-    if mode == "flex":
-        extra_lines = format_current_training(
-            sets,
-            mode,
-            selected_set,
-            with_weight=with_weight,
-            kind=kind,
-        )
-        if extra_lines:
-            lines.append("")
-            lines.extend(extra_lines)
+    extra_lines = format_current_training(
+        sets,
+        selected_set,
+        with_weight=with_weight,
+        kind=kind,
+    )
+    if extra_lines:
+        lines.append("")
+        lines.extend(extra_lines)
 
     text = "\n".join(lines)
     return ExerciseView(
@@ -3130,7 +2936,6 @@ async def render_exercise_view(
         name=name,
         group=group,
         sets=sets,
-        recording_mode=mode,
         selected_set=selected_set,
         with_weight=with_weight,
         kind=kind,
@@ -4177,10 +3982,7 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 view = await render_exercise_view(
                     user_id, day, ue_id, selected, prefs=prefs
                 )
-                if view.recording_mode == "flex":
-                    set_flex_selected(context, day, ue_id, view.selected_set)
-                else:
-                    set_flex_selected(context, day, ue_id, None)
+                set_flex_selected(context, day, ue_id, view.selected_set)
                 kb = build_exercise_actions_markup(
                     view,
                     day=day,
@@ -4257,10 +4059,7 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         prefs = await load_ui_preferences(user_id)
         view = await render_exercise_view(user_id, day, ue_id, selected, prefs=prefs)
         is_library = day == 0
-        if view.recording_mode == "flex":
-            set_flex_selected(context, day, ue_id, view.selected_set)
-        else:
-            set_flex_selected(context, day, ue_id, None)
+        set_flex_selected(context, day, ue_id, view.selected_set)
         kb = build_exercise_actions_markup(
             view,
             day=day,
@@ -4524,7 +4323,6 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             else:
                 rem_text = t("NOT_SET")
             prefs = await load_ui_preferences(user_id)
-            verbose_label = "обычные пояснения" if prefs.verbose_level else "краткие пояснения"
             text = (
                 "Настройки:\n"
                 "Выбирай пункт ниже, чтобы обновить дневник под себя.\n"
@@ -4532,11 +4330,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "✏️ Переименовать дни — поменять названия тренировочных дней.\n"
                 "🔁 Изменить день — переключи тип тренировки (силовая, гири, кроссфит, воркаут) и открой подходящие упражнения. После переключения можно добавлять упражнения из любых групп.\n"
                 f"📅 Количество тренировок — сейчас {n}. Укажи, сколько раз планируешь тренироваться.\n"
-                f"🎨 Оформление интерфейса — выбирай краткие или обычные пояснения. Сейчас: {verbose_label}.\n"
                 "🗑 Удаление моих групп мышц — удаляй созданные группы мышц. Все упражнения из удалённых групп исчезнут из расписания и библиотеки.\n"
-                "📝 Выбор записи — расскажи боту, как фиксировать подходы. Бот хранит каждый рабочий сет, в том числе парные (левая/правая, две гири подряд).\n"
-                "   • Одинаковый вес — каждый сет с одной схемой повторов и веса.\n"
-                "   • Гибкая запись — настраивай вес и повторы отдельно для каждого подхода.\n"
                 f"⏰ Уведомления — {tz_label}, {rem_text}. Настрой время напоминаний.\n"
                 "⭐ Подписка — информация о подписке."
             )
@@ -5157,65 +4951,6 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         await show_screen(q, context, text, settings_groups_kb(rows), user_id)
                         return
                 return
-            if action == "recording":
-                if len(parts) == 2:
-                    mode = await get_recording_mode(user_id)
-                    await show_screen(q, context, 'Как фиксировать подходы?\nФиксация подходов помогает сохранять каждую пару рабочих сетов — бот запомнит и левую, и правую сторону, если добавишь их отдельными сетами.\nОдинаковый вес — один шаблон для всех сетов. Удобно для классических тренировок.\nГибкая запись — индивидуальные вес и повторы для каждого подхода, подходит для пирамид, суперсетов и парных подходов с разными весами.', recording_mode_kb(mode), user_id)
-                else:
-                    mode = parts[2]
-                    if mode not in ("single", "flex"):
-                        return
-                    await set_recording_mode(user_id, mode)
-                    label = "Гибкая запись" if mode == "flex" else "Одинаковый вес"
-                    hint = (
-                        "Теперь можно задавать вес и повторы отдельно для каждого сета, фиксируя любые парные комбинации."
-                        if mode == "flex"
-                        else "Каждый новый сет наследует повторы и вес из предыдущего — удобно для одинаковых пар подходов."
-                    )
-                    await show_screen(q, context, f'Режим записи обновлён: {label}. {hint}', recording_mode_kb(mode), user_id)
-                return
-            if action == "ui":
-                prefs = await load_ui_preferences(user_id)
-                if len(parts) == 2:
-                    verbose_state = (
-                        "Обычные пояснения" if prefs.verbose_level else "Краткие пояснения"
-                    )
-                    text = (
-                        "Оформление интерфейса:\n"
-                        "Выбери уровень подсказок, чтобы сообщения были либо лаконичными,"
-                        " либо с подробными инструкциями по настройке упражнений.\n"
-                        "────────\n"
-                        f"Пояснения: {verbose_state}."
-                    )
-                    kb = ui_preferences_kb(prefs.verbose_level)
-                    await show_screen(q, context, text, kb, user_id)
-                    return
-                if len(parts) >= 4:
-                    sub = parts[2]
-                    value = parts[3]
-                    if sub == "verbose" and value in {"0", "1"}:
-                        await set_ui_verbose_level(user_id, int(value))
-                        prefs = await load_ui_preferences(user_id)
-                        state = (
-                            "Теперь включены обычные пояснения."
-                            if prefs.verbose_level
-                            else "Выбраны краткие пояснения."
-                        )
-                        msg = f"Настройка пояснений обновлена. {state}"
-                    elif sub in {"mode", "emoji"}:
-                        await q.answer(
-                            "Режим показа и эмодзи теперь фиксированы и не требуют настройки.",
-                            show_alert=True,
-                        )
-                        prefs = await load_ui_preferences(user_id)
-                        msg = (
-                            "Оформление уже настроено: включены эмодзи и подробные карточки упражнений."
-                        )
-                    else:
-                        return
-                    kb = ui_preferences_kb(prefs.verbose_level)
-                    await show_screen(q, context, msg, kb, user_id)
-                return
             if action == "reminders":
                 if len(parts) == 2:
                     context.user_data.pop("tz_only_change", None)
@@ -5701,10 +5436,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 view = await render_exercise_view(
                     user_id, day, ue_id, set_no, prefs=prefs
                 )
-                if view.recording_mode == "flex":
-                    set_flex_selected(context, day, ue_id, view.selected_set)
-                else:
-                    set_flex_selected(context, day, ue_id, None)
+                set_flex_selected(context, day, ue_id, view.selected_set)
                 kb = build_exercise_actions_markup(
                     view,
                     day=day,
@@ -5719,10 +5451,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 view = await render_exercise_view(
                     user_id, day, ue_id, selected, prefs=prefs
                 )
-                if view.recording_mode == "flex":
-                    set_flex_selected(context, day, ue_id, view.selected_set)
-                else:
-                    set_flex_selected(context, day, ue_id, None)
+                set_flex_selected(context, day, ue_id, view.selected_set)
                 kb = build_exercise_actions_markup(
                     view,
                     day=day,
@@ -5734,7 +5463,6 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await show_screen(q, context, view.text, kb, user_id)
                 return
             today_str = await get_user_local_date(user_id)
-            mode = await get_recording_mode(user_id)
             async with user_locks[user_id]:
                 session_id = await get_or_create_today_session(user_id, today_str, day)
                 if action == "fill":
@@ -5745,7 +5473,6 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         day,
                         ue_id,
                         session_id,
-                        mode,
                         is_library,
                         sheet_day,
                         sheet_page,
@@ -5762,10 +5489,11 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             await add_set(session_id, ue_id, 1, 0.0)
                         else:
                             await inc_last_set(ue_id, session_id, "reps", 1)
-                        if mode == "flex":
-                            sets = await fetch_exercise_sets(session_id, ue_id)
-                            if sets:
-                                set_flex_selected(context, day, ue_id, sets[-1][0])
+                        sets = await fetch_exercise_sets(session_id, ue_id)
+                        if sets:
+                            set_flex_selected(context, day, ue_id, sets[-1][0])
+                        else:
+                            set_flex_selected(context, day, ue_id, None)
                     else:
                         if sets:
                             reps = max(int(sets[-1][1] or 0), 0)
@@ -5795,8 +5523,10 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                 weight = 0.0
                         await add_set(session_id, ue_id, reps, weight)
                         sets = await fetch_exercise_sets(session_id, ue_id)
-                        if mode == "flex" and sets:
+                        if sets:
                             set_flex_selected(context, day, ue_id, sets[-1][0])
+                        else:
+                            set_flex_selected(context, day, ue_id, None)
                     if sheet_context and not is_library:
                         target_day = sheet_day if sheet_day is not None else day
                         await render_day_sheet_from_callback(
@@ -5816,20 +5546,18 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                 await remove_last_set(ue_id, session_id)
                             else:
                                 await inc_last_set(ue_id, session_id, "reps", -1)
-                        if mode == "flex":
-                            sets = await fetch_exercise_sets(session_id, ue_id)
-                            if sets:
-                                set_flex_selected(context, day, ue_id, sets[-1][0])
-                            else:
-                                set_flex_selected(context, day, ue_id, None)
+                        sets = await fetch_exercise_sets(session_id, ue_id)
+                        if sets:
+                            set_flex_selected(context, day, ue_id, sets[-1][0])
+                        else:
+                            set_flex_selected(context, day, ue_id, None)
                     else:
                         await remove_last_set(ue_id, session_id)
-                        if mode == "flex":
-                            sets = await fetch_exercise_sets(session_id, ue_id)
-                            if sets:
-                                set_flex_selected(context, day, ue_id, sets[-1][0])
-                            else:
-                                set_flex_selected(context, day, ue_id, None)
+                        sets = await fetch_exercise_sets(session_id, ue_id)
+                        if sets:
+                            set_flex_selected(context, day, ue_id, sets[-1][0])
+                        else:
+                            set_flex_selected(context, day, ue_id, None)
                     if sheet_context and not is_library:
                         target_day = sheet_day if sheet_day is not None else day
                         await render_day_sheet_from_callback(
@@ -5846,10 +5574,11 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     if not sets:
                         await add_set(session_id, ue_id, 0, 0.0)
                     await inc_last_set(ue_id, session_id, "weight_kg", delta)
-                    if mode == "flex":
-                        sets = await fetch_exercise_sets(session_id, ue_id)
-                        if sets:
-                            set_flex_selected(context, day, ue_id, sets[-1][0])
+                    sets = await fetch_exercise_sets(session_id, ue_id)
+                    if sets:
+                        set_flex_selected(context, day, ue_id, sets[-1][0])
+                    else:
+                        set_flex_selected(context, day, ue_id, None)
                     if sheet_context and not is_library:
                         target_day = sheet_day if sheet_day is not None else day
                         await render_day_sheet_from_callback(
@@ -5894,15 +5623,14 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         if target == "weight_kg" and not with_weight:
                             await q.answer()
                             return
-                        if mode == "flex":
-                            selected = get_flex_selected(context, day, ue_id)
-                            if selected is None and sets:
-                                selected = sets[-1][0]
-                                set_flex_selected(context, day, ue_id, selected)
-                            if selected is not None:
-                                await inc_specific_set(
-                                    ue_id, session_id, selected, target, delta_value
-                                )
+                        selected = get_flex_selected(context, day, ue_id)
+                        if selected is None and sets:
+                            selected = sets[-1][0]
+                            set_flex_selected(context, day, ue_id, selected)
+                        if selected is not None:
+                            await inc_specific_set(
+                                ue_id, session_id, selected, target, delta_value
+                            )
                         else:
                             await inc_last_set(ue_id, session_id, target, delta_value)
                         if sheet_context and not is_library:
@@ -5994,10 +5722,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     view = await render_exercise_view(
                         user_id, day, ue_id, get_flex_selected(context, day, ue_id), prefs=prefs
                     )
-                    if view.recording_mode == "flex":
-                        set_flex_selected(context, day, ue_id, view.selected_set)
-                    else:
-                        set_flex_selected(context, day, ue_id, None)
+                    set_flex_selected(context, day, ue_id, view.selected_set)
                     base = await get_baseline(user_id, day, view.exercise_id)
                     prog_lines = []
                     if base:
@@ -6110,10 +5835,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         view = await render_exercise_view(
             user_id, day, ue_id, get_flex_selected(context, day, ue_id), prefs=prefs
         )
-        if view.recording_mode == "flex":
-            set_flex_selected(context, day, ue_id, view.selected_set)
-        else:
-            set_flex_selected(context, day, ue_id, None)
+        set_flex_selected(context, day, ue_id, view.selected_set)
         kb = build_exercise_actions_markup(
             view,
             day=day,
