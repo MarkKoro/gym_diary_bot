@@ -139,6 +139,7 @@ from db import (
     add_measurement_entry,
     update_last_measurement,
     delete_last_measurement,
+    delete_custom_measurement,
     list_measurement_metrics,
     fetch_measurement_history,
     get_measurements_last_update,
@@ -648,6 +649,23 @@ def format_sets_value(sets: int, reps: int, weight: float, with_weight: bool) ->
     if not with_weight:
         return base
     return f"{base} при {format_weight_value(weight)} кг"
+
+
+def format_progress_sets_details(
+    details: list[tuple[int, float]], with_weight: bool, kind: str
+) -> str:
+    parts: list[str] = []
+    for reps, weight in details:
+        reps_val = max(int(reps or 0), 0)
+        if kind == "duration":
+            parts.append(f"{reps_val} сек")
+            continue
+        entry = f"{reps_val} повт."
+        if with_weight:
+            weight_val = float(weight or 0.0)
+            entry = f"{entry} при {format_weight_value(weight_val)} кг"
+        parts.append(entry)
+    return "; ".join(parts) if parts else "—"
 
 
 def format_compact_sets_value(
@@ -2063,6 +2081,38 @@ def measurement_categories_list(include_custom: bool = False) -> list[tuple[str,
     if include_custom:
         categories.append(MEASUREMENT_CUSTOM_CATEGORY)
     return categories
+
+
+async def show_measure_edit_menu(q, context: ContextTypes.DEFAULT_TYPE, user_id: int) -> bool:
+    await load_custom_measurements(user_id, context)
+    rows = await list_measurement_metrics(user_id)
+    metrics_by_category: dict[str, list[tuple[str, str]]] = {}
+    for code, _ in rows:
+        item = get_measurement_item(code)
+        if item and not item.get("derived"):
+            metrics_by_category.setdefault(item["category"], []).append(
+                (code, item["name"])
+            )
+    if not metrics_by_category:
+        await q.answer("Пока нечего изменять.", show_alert=True)
+        return False
+    context.user_data[MEASUREMENT_EXISTING_KEY] = metrics_by_category
+    available = [
+        (code, title)
+        for code, title in measurement_categories_list(include_custom=True)
+        if code in metrics_by_category
+    ]
+    if not available:
+        await q.answer("Пока нечего изменять.", show_alert=True)
+        return False
+    await show_screen(
+        q,
+        context,
+        "Какую группу изменить?",
+        measurements_category_kb("edit", available),
+        user_id,
+    )
+    return True
 
 
 def get_measurement_items(category: str) -> list[dict]:
@@ -4793,6 +4843,7 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await load_custom_measurements(user_id, context)
         chat_id = custom_state.get("chat_id")
         msg_id = custom_state.get("message_id")
+        back_callback = custom_state.get("back", "measure:add")
         if not chat_id or not msg_id:
             return
         context.user_data[MEASUREMENT_INPUT_KEY] = {
@@ -4804,7 +4855,7 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         }
         prompt = f"Введи значение для «{name}» (например: 10)."
         kb = InlineKeyboardMarkup(
-            [[InlineKeyboardButton(BACK_BTN, callback_data="measure:add")]]
+            [[InlineKeyboardButton(BACK_BTN, callback_data=back_callback)]]
         )
         prefs = await load_ui_preferences(user_id)
         text, kb = prepare_ui_output(prompt, kb, prefs)
@@ -5184,6 +5235,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if data == "measure:add":
             context.user_data.pop(MEASUREMENT_INPUT_KEY, None)
             context.user_data.pop(MEASUREMENT_EXISTING_KEY, None)
+            context.user_data.pop(MEASUREMENT_CUSTOM_KEY, None)
             await load_custom_measurements(user_id, context)
             categories = measurement_categories_list(include_custom=True)
             await show_screen(q, context, 'Выбери категорию:', measurements_category_kb('add', categories), user_id)
@@ -5195,9 +5247,42 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parts = data.split(":")
             category = parts[3]
             if category == MEASUREMENT_CUSTOM_CATEGORY[0]:
+                custom_items = await load_custom_measurements(user_id, context)
+                metrics = [
+                    (item["code"], item["name"]) for item in custom_items if item.get("code")
+                ]
+                if metrics:
+                    rows = [
+                        [
+                            InlineKeyboardButton(
+                                label,
+                                callback_data=f"measure:add:item:{category}:{code}",
+                            )
+                        ]
+                        for code, label in metrics
+                    ]
+                    rows.append(
+                        [
+                            InlineKeyboardButton(
+                                "＋ Новый замер", callback_data="measure:add:custom:new"
+                            )
+                        ]
+                    )
+                    rows.append(
+                        [InlineKeyboardButton(BACK_BTN, callback_data="measure:add")]
+                    )
+                    await show_screen(
+                        q,
+                        context,
+                        "Выбери замер:",
+                        InlineKeyboardMarkup(rows),
+                        user_id,
+                    )
+                    return
                 context.user_data[MEASUREMENT_CUSTOM_KEY] = {
                     "chat_id": q.message.chat_id,
                     "message_id": q.message.message_id,
+                    "back": "measure:add",
                 }
                 kb = InlineKeyboardMarkup(
                     [[InlineKeyboardButton(BACK_BTN, callback_data="measure:add")]]
@@ -5242,32 +5327,30 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await show_screen(q, context, item['prompt'], kb, user_id)
             return
 
-        if data == "measure:edit":
+        if data == "measure:add:custom:new":
             context.user_data.pop(MEASUREMENT_INPUT_KEY, None)
-            rows = await list_measurement_metrics(user_id)
-            metrics_by_category: dict[str, list[tuple[str, str]]] = {}
-            for code, _ in rows:
-                item = get_measurement_item(code)
-                if item and not item.get("derived"):
-                    metrics_by_category.setdefault(item["category"], []).append(
-                        (code, item["name"])
-                    )
-            if not metrics_by_category:
-                await q.answer("Пока нечего изменять.", show_alert=True)
-                return
-            context.user_data[MEASUREMENT_EXISTING_KEY] = metrics_by_category
-            available = [
-                (code, title)
-                for code, title in measurement_categories_list(include_custom=True)
-                if code in metrics_by_category
-            ]
+            context.user_data.pop(MEASUREMENT_EXISTING_KEY, None)
+            context.user_data[MEASUREMENT_CUSTOM_KEY] = {
+                "chat_id": q.message.chat_id,
+                "message_id": q.message.message_id,
+                "back": "measure:add:cat:custom",
+            }
+            kb = InlineKeyboardMarkup(
+                [[InlineKeyboardButton(BACK_BTN, callback_data="measure:add:cat:custom")]]
+            )
             await show_screen(
                 q,
                 context,
-                'Какую группу изменить?',
-                measurements_category_kb('edit', available),
+                "Как назвать замер? Напиши понятное название, например «Гибкость» или «Шагов в день».",
+                kb,
                 user_id,
             )
+            return
+
+        if data == "measure:edit":
+            context.user_data.pop(MEASUREMENT_INPUT_KEY, None)
+            context.user_data.pop(MEASUREMENT_CUSTOM_KEY, None)
+            await show_measure_edit_menu(q, context, user_id)
             return
 
         if data.startswith("measure:edit:cat:"):
@@ -5279,6 +5362,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if isinstance(stored, dict):
                 metrics = stored.get(category)
             if metrics is None:
+                await load_custom_measurements(user_id, context)
                 rows = await list_measurement_metrics(user_id)
                 metrics = []
                 for code, _ in rows:
@@ -5330,25 +5414,76 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "chat_id": q.message.chat_id,
                 "message_id": q.message.message_id,
             }
-            kb = InlineKeyboardMarkup(
-                [
+            back_target = (
+                f"measure:edit:cat:{item.get('category')}"
+                if item.get("category")
+                else "measure:edit"
+            )
+            rows = []
+            if item.get("category") == MEASUREMENT_CUSTOM_CATEGORY[0]:
+                rows.append(
                     [
                         InlineKeyboardButton(
-                            t("BACK"),
-                            callback_data=(
-                                f"measure:edit:cat:{item.get('category')}"
-                                if item.get("category")
-                                else "measure:edit"
-                            ),
+                            "Удалить замер",
+                            callback_data=f"measure:edit:customdel:{code}",
                         )
                     ]
-                ]
-            )
+                )
+                prefix = (
+                    "Чтобы удалить замер вместе со всей историей, воспользуйся кнопкой ниже.\n\n"
+                    + prefix
+                )
+            rows.append([InlineKeyboardButton(t("BACK"), callback_data=back_target)])
+            kb = InlineKeyboardMarkup(rows)
             await show_screen(q, context, prefix + item['prompt'], kb, user_id)
             return
 
+        if data.startswith("measure:edit:customdel:"):
+            parts = data.split(":")
+            if len(parts) >= 4 and parts[-1] != "ok":
+                code = parts[3]
+                item = get_measurement_item(code)
+                if not item or item.get("category") != MEASUREMENT_CUSTOM_CATEGORY[0]:
+                    await q.answer()
+                    return
+                kb = InlineKeyboardMarkup(
+                    [
+                        [
+                            InlineKeyboardButton(
+                                "✅ Удалить",
+                                callback_data=f"measure:edit:customdel:{code}:ok",
+                            )
+                        ],
+                        [
+                            InlineKeyboardButton(
+                                BACK_BTN,
+                                callback_data=f"measure:edit:metric:{code}",
+                            )
+                        ],
+                    ]
+                )
+                await show_screen(
+                    q,
+                    context,
+                    f"Удалить замер «{item['name']}»? Все сохранённые значения будут стерты.",
+                    kb,
+                    user_id,
+                )
+                return
+            if len(parts) >= 5 and parts[-1] == "ok":
+                code = parts[3]
+                removed = await delete_custom_measurement(user_id, code)
+                if not removed:
+                    await q.answer("Не удалось удалить замер.", show_alert=True)
+                    return
+                await load_custom_measurements(user_id, context)
+                context.user_data.pop(MEASUREMENT_INPUT_KEY, None)
+                await show_measure_edit_menu(q, context, user_id)
+                return
+
         if data == "measure:delete":
             context.user_data.pop(MEASUREMENT_INPUT_KEY, None)
+            await load_custom_measurements(user_id, context)
             rows = await list_measurement_metrics(user_id)
             metrics = []
             for code, _ in rows:
@@ -6948,14 +7083,20 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         prog_lines.append(
                             f"Базовое: {format_sets_value(base[0], base[1], base[2], view.with_weight)}"
                         )
-                    for date_text, s, r, w in rows:
+                    for date_text, s, r, w, details in rows:
                         sets_cnt = s or 0
                         reps_cnt = r or 0
                         weight_val = w or 0.0
                         label = format_progress_date(date_text)
-                        prog_lines.append(
-                            f"{label}: {format_sets_value(sets_cnt, reps_cnt, weight_val, view.with_weight)}"
-                        )
+                        if details:
+                            detail_text = format_progress_sets_details(
+                                details, view.with_weight, view.kind
+                            )
+                        else:
+                            detail_text = format_sets_value(
+                                sets_cnt, reps_cnt, weight_val, view.with_weight
+                            )
+                        prog_lines.append(f"{label}: {detail_text}")
                     if prog_lines:
                         header = "Прогресс"
                         if total_pages > 1:
