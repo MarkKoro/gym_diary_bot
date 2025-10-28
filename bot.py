@@ -160,7 +160,7 @@ PROGRESS_PAGE_SIZE = 5
 DAY_SHEET_PAGE_SIZE = 6
 SHEET_VIEWS_KEY = "day_sheet_views"
 
-DAY_COMPLETION_TTL = timedelta(hours=12)
+DAY_COMPLETION_TTL = timedelta(hours=6)
 ORDINAL_WORDS = {
     1: "первая",
     2: "вторая",
@@ -194,6 +194,7 @@ REMINDER_EDIT_POSITION_KEY = "reminder_edit_position"
 REMINDER_EDIT_LABEL_KEY = "reminder_edit_label"
 REMINDER_SELECTED_DOW_KEY = "reminder_selected_dow"
 REMINDER_EDIT_DAY_INDEX_KEY = "reminder_edit_day_index"
+REMINDER_TIME_PAGE_KEY = "reminder_time_page"
 
 EMOJI_RE = re.compile(
     "["
@@ -271,10 +272,25 @@ def _parse_completion_rows(
     return parsed, latest
 
 
+async def _should_clear_day_completions(
+    user_id: int, latest: datetime | None
+) -> bool:
+    if latest is None:
+        return False
+    now = datetime.now(UTC)
+    if now - latest >= DAY_COMPLETION_TTL:
+        return True
+    tz_name = await get_user_timezone(user_id)
+    zone = resolve_user_zone(tz_name)
+    latest_local = latest.astimezone(zone)
+    now_local = now.astimezone(zone)
+    return now_local.date() != latest_local.date()
+
+
 async def get_active_day_completions(user_id: int) -> set[int]:
     rows = await list_day_completions(user_id)
     parsed, latest = _parse_completion_rows(rows)
-    if latest is not None and datetime.now(UTC) - latest >= DAY_COMPLETION_TTL:
+    if await _should_clear_day_completions(user_id, latest):
         await clear_day_completions(user_id)
         return set()
     return {day for day, _ in parsed}
@@ -284,7 +300,7 @@ async def record_day_completion(user_id: int, day_index: int) -> set[int]:
     rows = await list_day_completions(user_id)
     parsed, latest = _parse_completion_rows(rows)
     now = datetime.now(UTC)
-    if latest is not None and now - latest >= DAY_COMPLETION_TTL:
+    if await _should_clear_day_completions(user_id, latest):
         await clear_day_completions(user_id)
         parsed = []
     await mark_day_completed(user_id, day_index, now.isoformat())
@@ -3993,6 +4009,23 @@ async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAUL
             await show_screen(q, context, f"{t('DAY')} {day} сохранён. Перейти к {t('DAY')} {day + 1}?", day_done_kb(day), user_id)
             return
         if data == "wiz:reminders:yes":
+            skip_tz = context.user_data.pop("reminder_skip_tz", None)
+            if skip_tz:
+                tz_code = context.user_data.get("tz")
+                if not tz_code:
+                    tz_code = await get_user_timezone(user_id)
+                    context.user_data["tz"] = tz_code
+                context.user_data[REMINDER_TIME_PAGE_KEY] = 0
+                day_no = context.user_data.get("reminder_day", 1)
+                await show_screen(
+                    q,
+                    context,
+                    f"{t('DAY')} {day_no}. В какой день недели тренировка?",
+                    reminder_day_kb(),
+                    user_id,
+                )
+                return
+            context.user_data.pop(REMINDER_TIME_PAGE_KEY, None)
             context.user_data["tz_page"] = 0
             if "workouts_per_week" not in context.user_data:
                 settings = await fetch_user_settings(user_id)
@@ -4000,6 +4033,8 @@ async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAUL
             await show_screen(q, context, 'Выбери свой часовой пояс:', tz_select_kb(0), user_id)
             return
         if data == "wiz:reminders:no":
+            context.user_data.pop("reminder_skip_tz", None)
+            context.user_data.pop(REMINDER_TIME_PAGE_KEY, None)
             if context.user_data.get("from_settings"):
                 context.user_data.pop("from_settings", None)
                 await show_screen(q, context, 'Настройки:', settings_kb(), user_id)
@@ -4008,6 +4043,8 @@ async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAUL
                 await show_screen(q, context, 'Настройка завершена.', menu_kb, user_id)
             return
         if data == "wiz:reminders:back":
+            context.user_data.pop("reminder_skip_tz", None)
+            context.user_data.pop(REMINDER_TIME_PAGE_KEY, None)
             if context.user_data.get("from_settings"):
                 context.user_data.pop("from_settings", None)
                 await show_screen(q, context, 'Настройки:', settings_kb(), user_id)
@@ -4064,14 +4101,49 @@ async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAUL
                 await show_screen(q, context, 'Выбери свой часовой пояс:', tz_select_kb(page), user_id)
             else:
                 context.user_data["selected_dow"] = int(action)
-                await show_screen(q, context, 'Во сколько напоминать в этот день? Выбери время (по твоему часовому поясу)', reminder_time_kb(), user_id)
+                context.user_data[REMINDER_TIME_PAGE_KEY] = 0
+                tz_code = context.user_data.get("tz")
+                if not tz_code:
+                    tz_code = await get_user_timezone(user_id)
+                    context.user_data["tz"] = tz_code
+                tz_label = get_timezone_label(tz_code)
+                await show_screen(
+                    q,
+                    context,
+                    f"Во сколько напоминать в этот день? Выбери время (по {tz_label}).",
+                    reminder_time_kb(page=0),
+                    user_id,
+                )
             return
         if data == "wiz:remind:back":
             day_no = context.user_data.get("reminder_day", 1)
+            context.user_data.pop(REMINDER_TIME_PAGE_KEY, None)
             await show_screen(q, context, f"{t('DAY')} {day_no}. В какой день недели тренировка?", reminder_day_kb(), user_id)
             return
         if data.startswith("wiz:remind:"):
-            _, _, hh, mm = data.split(":")
+            parts = data.split(":")
+            if len(parts) >= 4 and parts[2] == "page":
+                try:
+                    page = max(int(parts[3]), 0)
+                except ValueError:
+                    page = 0
+                context.user_data[REMINDER_TIME_PAGE_KEY] = page
+                tz_code = context.user_data.get("tz")
+                if not tz_code:
+                    tz_code = await get_user_timezone(user_id)
+                    context.user_data["tz"] = tz_code
+                tz_label = get_timezone_label(tz_code)
+                await show_screen(
+                    q,
+                    context,
+                    f"Во сколько напоминать в этот день? Выбери время (по {tz_label}).",
+                    reminder_time_kb(page=page),
+                    user_id,
+                )
+                return
+            if len(parts) < 4:
+                return
+            _, _, hh, mm = parts[:4]
             hour, minute = int(hh), int(mm)
             dow = context.user_data.get("selected_dow")
             day_no = context.user_data.get("reminder_day", 1)
@@ -4092,6 +4164,7 @@ async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAUL
             )
             day_no = context.user_data.get("reminder_day", 1)
             total = context.user_data.get("workouts_per_week", 0)
+            context.user_data.pop(REMINDER_TIME_PAGE_KEY, None)
             if day_no < total:
                 context.user_data["reminder_day"] = day_no + 1
                 await show_screen(q, context, f"{t('DAY')} {day_no + 1}. В какой день недели тренировка?", reminder_day_kb(), user_id)
@@ -5078,6 +5151,11 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         context.user_data["tz_page"] = 0
                         context.user_data["workouts_per_week"] = n
                         context.user_data["reminder_day"] = len(rems) + 1
+                        if rems:
+                            tz_code = await get_user_timezone(user_id)
+                            if tz_code:
+                                context.user_data["tz"] = tz_code
+                                context.user_data["reminder_skip_tz"] = True
                         await show_screen(q, context, 'Хотите настроить уведомления для новых дней?', reminders_kb(), user_id)
                     else:
                         await show_screen(q, context, 'Количество тренировок обновлено.', settings_kb(), user_id)
@@ -5185,6 +5263,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 context.user_data.pop(REMINDER_EDIT_LABEL_KEY, None)
                 context.user_data.pop(REMINDER_EDIT_DAY_INDEX_KEY, None)
                 context.user_data.pop(REMINDER_SELECTED_DOW_KEY, None)
+                context.user_data.pop(REMINDER_TIME_PAGE_KEY, None)
                 await show_screen(
                     q,
                     context,
@@ -5244,9 +5323,11 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 text = (
                     f"{label}. Во сколько напоминать? Выбери время (по {tz_label})."
                 )
+                context.user_data[REMINDER_TIME_PAGE_KEY] = 0
                 kb = reminder_time_kb(
                     prefix=f"remedit:time:{position}:{dow}",
                     selected=selected_time,
+                    page=0,
                 )
                 await show_screen(q, context, text, kb, user_id)
                 return
@@ -5265,6 +5346,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     except ValueError:
                         dow = context.user_data.get(REMINDER_SELECTED_DOW_KEY)
                     context.user_data[REMINDER_SELECTED_DOW_KEY] = dow
+                    context.user_data.pop(REMINDER_TIME_PAGE_KEY, None)
                     label = context.user_data.get(
                         REMINDER_EDIT_LABEL_KEY,
                         f"{t('DAY')} {position}",
@@ -5278,6 +5360,42 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         q,
                         context,
                         f"{label}. В какой день недели тренировка?",
+                        kb,
+                        user_id,
+                    )
+                    return
+                if len(parts) >= 6 and parts[4] == "page":
+                    try:
+                        page = max(int(parts[5]), 0)
+                    except ValueError:
+                        page = 0
+                    try:
+                        dow = int(parts[3])
+                    except ValueError:
+                        dow = context.user_data.get(REMINDER_SELECTED_DOW_KEY)
+                    context.user_data[REMINDER_SELECTED_DOW_KEY] = dow
+                    position = context.user_data.get(REMINDER_EDIT_POSITION_KEY, position)
+                    label = context.user_data.get(
+                        REMINDER_EDIT_LABEL_KEY,
+                        f"{t('DAY')} {position}",
+                    )
+                    reminders = await list_user_reminders(user_id)
+                    reminder_map = {day_no: (d, h, m) for day_no, d, h, m in reminders}
+                    day_index = context.user_data.get(REMINDER_EDIT_DAY_INDEX_KEY, position)
+                    current = reminder_map.get(day_index)
+                    selected_time = (current[1], current[2]) if current else None
+                    tz_code = await get_user_timezone(user_id)
+                    tz_label = get_timezone_label(tz_code)
+                    context.user_data[REMINDER_TIME_PAGE_KEY] = page
+                    kb = reminder_time_kb(
+                        prefix=f"remedit:time:{position}:{dow}",
+                        selected=selected_time,
+                        page=page,
+                    )
+                    await show_screen(
+                        q,
+                        context,
+                        f"{label}. Во сколько напоминать? Выбери время (по {tz_label}).",
                         kb,
                         user_id,
                     )
@@ -5333,6 +5451,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 context.user_data[REMINDER_SELECTED_DOW_KEY] = dow
                 confirmation = format_reminder_status(label, (dow, hour, minute))
                 await q.answer(confirmation)
+                context.user_data.pop(REMINDER_TIME_PAGE_KEY, None)
                 await show_reminders_overview(q, context, user_id)
                 return
             return

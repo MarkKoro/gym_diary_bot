@@ -662,22 +662,50 @@ def tz_select_kb(page: int = 0, per_page: int = 6):
     return InlineKeyboardMarkup(rows)
 
 def reminder_time_kb(
-    prefix: str = "wiz:remind", selected: tuple[int, int] | None = None
+    prefix: str = "wiz:remind",
+    selected: tuple[int, int] | None = None,
+    page: int = 0,
 ):
-    rows = []
-    for h in range(6, 23):
-        time_label = f"{h:02d}:00"
+    slots = [(h, m) for h in range(6, 23) for m in (0, 30)]
+    page_size = 16
+    total_pages = (len(slots) + page_size - 1) // page_size or 1
+    page = max(0, min(page, total_pages - 1))
+    start = page * page_size
+    end = start + page_size
+    page_slots = slots[start:end]
+    rows: list[list[InlineKeyboardButton]] = []
+    buttons: list[InlineKeyboardButton] = []
+    for hour, minute in page_slots:
+        time_label = f"{hour:02d}:{minute:02d}"
         display = time_label
-        if selected and selected == (h, 0):
+        if selected and selected == (hour, minute):
             display = f"✅ {time_label}"
-        rows.append(
-            [
-                InlineKeyboardButton(
-                    dual(display, f"Выбрать время {time_label}"),
-                    callback_data=f"{prefix}:{time_label}",
-                )
-            ]
+        buttons.append(
+            InlineKeyboardButton(
+                dual(display, f"Выбрать время {time_label}"),
+                callback_data=f"{prefix}:{time_label}",
+            )
         )
+    for idx in range(0, len(buttons), 2):
+        rows.append(buttons[idx : idx + 2])
+    if total_pages > 1:
+        nav_row: list[InlineKeyboardButton] = []
+        if page > 0:
+            nav_row.append(
+                InlineKeyboardButton(
+                    dual("◀︎ Раньше", "Предыдущие варианты"),
+                    callback_data=f"{prefix}:page:{page-1}",
+                )
+            )
+        if page < total_pages - 1:
+            nav_row.append(
+                InlineKeyboardButton(
+                    dual("Позже ▶︎", "Следующие варианты"),
+                    callback_data=f"{prefix}:page:{page+1}",
+                )
+            )
+        if nav_row:
+            rows.append(nav_row)
     rows.append([InlineKeyboardButton(BACK_BTN, callback_data=f"{prefix}:back")])
     return InlineKeyboardMarkup(rows)
 
@@ -771,10 +799,6 @@ def day_group_kb(
             InlineKeyboardButton(
                 dual("➕ Добавить", "Добавить упражнения"),
                 callback_data=f"day:manage:{day_index}:{group}:add",
-            ),
-            InlineKeyboardButton(
-                dual(t("CLOSE_DAY"), "Отметить тренировку завершённой"),
-                callback_data=f"day:complete:{day_index}",
             ),
             InlineKeyboardButton(
                 dual("🗑 Удалить", "Удалить упражнения"),
