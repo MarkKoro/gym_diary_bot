@@ -1565,7 +1565,7 @@ def measurements_main_kb(show_all: bool):
                 dual("＋ Добавить", "Добавить замер"), callback_data="measure:add"
             ),
             InlineKeyboardButton(
-                dual("✏️ Изменить", "Изменить существующие замеры"),
+                dual("🛠 Редактировать список", "Редактировать список замеров"),
                 callback_data="measure:edit",
             ),
         ],

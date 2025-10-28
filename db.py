@@ -1435,22 +1435,37 @@ async def list_recent_progress(user_id: int, day_index: int, ue_id: int, limit: 
         exercise_id = row[0]
         cur = await db.execute(
             """
-            SELECT s.date,
-                   COUNT(st.id) as sets,
-                   MAX(st.reps) as reps,
-                   MAX(st.weight_kg) as weight
+            SELECT s.id, s.date
             FROM sessions s
             JOIN session_exercises se ON se.session_id=s.id
             JOIN user_exercises ue ON ue.id=se.user_exercise_id
-            LEFT JOIN sets st ON st.session_id=s.id AND st.user_exercise_id=se.user_exercise_id AND st.is_warmup=0
             WHERE s.user_id=? AND ue.exercise_id=? AND se.is_done=1
-            GROUP BY s.id
             ORDER BY s.date DESC
             LIMIT ? OFFSET ?
             """,
             (user_id, exercise_id, limit, offset),
         )
-        return await cur.fetchall()
+        sessions = await cur.fetchall()
+        results: list[tuple[str, int, int, float, list[tuple[int, float]]]] = []
+        for session_id, date_value in sessions:
+            cur_sets = await db.execute(
+                """
+                SELECT reps, weight_kg
+                FROM sets
+                WHERE session_id=? AND user_exercise_id=? AND is_warmup=0
+                ORDER BY set_no, id
+                """,
+                (session_id, ue_id),
+            )
+            set_rows = await cur_sets.fetchall()
+            details: list[tuple[int, float]] = [
+                (int(row[0] or 0), float(row[1] or 0.0)) for row in set_rows
+            ]
+            sets_cnt = len(details)
+            max_reps = max((row[0] or 0 for row in set_rows), default=0)
+            max_weight = max((row[1] or 0.0 for row in set_rows), default=0.0)
+            results.append((date_value, sets_cnt, max_reps, max_weight, details))
+        return results
 
 async def count_exercise_progress_entries(user_id: int, day_index: int, ue_id: int) -> int:
     async with connect_db() as db:
@@ -1873,3 +1888,17 @@ async def get_custom_measurement(user_id: int, code: str) -> tuple[str, str] | N
         if not row:
             return None
         return row[0], row[1]
+
+
+async def delete_custom_measurement(user_id: int, code: str) -> bool:
+    async with connect_db() as db:
+        await db.execute(
+            "DELETE FROM user_measurements WHERE user_id=? AND metric=?",
+            (user_id, code),
+        )
+        cur = await db.execute(
+            "DELETE FROM user_measurement_custom WHERE user_id=? AND code=?",
+            (user_id, code),
+        )
+        await db.commit()
+        return cur.rowcount > 0
