@@ -1524,7 +1524,8 @@ def measurements_main_kb(show_all: bool):
         ],
         [
             InlineKeyboardButton(
-                dual("📊 График", "Открыть график замеров"), callback_data="measure:graph"
+                dual("🗂 История", "Показать историю замеров"),
+                callback_data="measure:history",
             ),
             InlineKeyboardButton(BACK_BTN, callback_data="menu:root"),
         ],
