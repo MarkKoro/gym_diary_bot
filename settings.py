@@ -16,8 +16,5 @@ TG_POOL_SIZE = int(os.getenv("TG_POOL_SIZE", "10"))
 # Количество одновременных операций с SQLite
 DB_POOL_SIZE = int(os.getenv("DB_POOL_SIZE", "5"))
 # Список администраторов (tg_id), которые могут выполнять административные команды
-ADMIN_IDS = {
-    int(value)
-    for value in os.getenv("ADMIN_IDS", "").split(",")
-    if value.strip()
-}
+_admins_raw = os.getenv("ADMIN_IDS") or os.getenv("ADMINS") or ""
+ADMIN_IDS = {int(x) for x in _admins_raw.replace(" ", "").split(",") if x}
