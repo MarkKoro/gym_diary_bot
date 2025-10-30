@@ -88,6 +88,14 @@ def main_menu_kb(
     rows.append(
         [
             InlineKeyboardButton(
+                dual("💳 Подписка", "Управление подпиской"),
+                callback_data="menu:subscription",
+            )
+        ]
+    )
+    rows.append(
+        [
+            InlineKeyboardButton(
                 dual("📩 Техподдержка", "Связаться с техподдержкой"),
                 url=support_url,
             )
@@ -135,7 +143,7 @@ def settings_kb():
         ],
         [
             InlineKeyboardButton(
-                dual("💳 Подписка", "Управление подпиской"),
+                dual("Подписка", "Управление подпиской"),
                 callback_data="menu:subscription",
             )
         ],

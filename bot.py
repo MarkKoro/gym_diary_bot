@@ -4405,7 +4405,7 @@ def build_subscription_keyboard() -> InlineKeyboardMarkup:
             [InlineKeyboardButton("1 месяц — 100 ₽", callback_data="sub:1m")],
             [InlineKeyboardButton("6 месяцев — 600 ₽", callback_data="sub:6m")],
             [InlineKeyboardButton("12 месяцев — 1000 ₽", callback_data="sub:12m")],
-            [InlineKeyboardButton("⬅️ Назад", callback_data="back:settings")],
+            [InlineKeyboardButton("⬅️ Назад", callback_data="back:main")],
         ]
     )
 
@@ -4469,62 +4469,19 @@ async def on_subscription_choose(update: Update, context: ContextTypes.DEFAULT_T
         need_email=False,
         need_shipping_address=False,
         is_flexible=False,
-        reply_markup=InlineKeyboardMarkup(
-            [[InlineKeyboardButton("⬅️ Назад", callback_data="sub:back")]]
-        ),
     )
-
-    message = query.message
-    chat = getattr(message, "chat", None) if message else None
-    chat_id = getattr(chat, "id", None) if chat else getattr(message, "chat_id", None)
-    if message and chat_id is not None:
-        try:
-            await message.delete()
-        except BadRequest:
-            pass
-        last_messages.pop(chat_id, None)
-
-
-async def on_subscription_invoice_back(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Закрыть инвойс и вернуться к выбору тарифов."""
-
-    query = update.callback_query
-    await query.answer()
-
-    message = query.message
-    chat_id = getattr(message, "chat_id", None)
-
-    user = update.effective_user
-    user_id = await get_or_create_user(user.id, user.username)
-    prefs = await load_ui_preferences(user_id)
-    text, markup = prepare_ui_output(
-        "Выбери вариант подписки:",
-        build_subscription_keyboard(),
-        prefs,
-    )
-
-    if chat_id is not None:
-        try:
-            await query.message.delete()
-        except BadRequest:
-            pass
-        await send_main_message(
-            context.bot,
-            chat_id,
-            text,
-            reply_markup=markup,
-        )
 
 
 async def on_subscription_back(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Вернуться в настройки из списка подписок."""
+    """Вернуться в главное меню из списка подписок."""
 
     query = update.callback_query
     await query.answer()
 
     user = update.effective_user
     user_id = await get_or_create_user(user.id, user.username)
-    await show_screen(query, context, "Настройки:", settings_kb(), user_id)
+    text, kb, _ = await compose_main_menu(user_id)
+    await show_screen(query, context, text, kb, user_id)
 
 
 async def show_subscription_overview(
@@ -8272,9 +8229,8 @@ def main():
     app.add_handler(CommandHandler("cancel", cancel_command))
     app.add_handler(CommandHandler(("grant", "grunt"), grant_command))
     app.add_handler(CallbackQueryHandler(on_subscription_menu, pattern="^menu:subscription$"))
-    app.add_handler(CallbackQueryHandler(on_subscription_invoice_back, pattern="^sub:back$"))
     app.add_handler(CallbackQueryHandler(on_subscription_choose, pattern="^sub:"))
-    app.add_handler(CallbackQueryHandler(on_subscription_back, pattern="^back:settings$"))
+    app.add_handler(CallbackQueryHandler(on_subscription_back, pattern="^back:main$"))
     app.add_handler(PreCheckoutQueryHandler(precheckout_handler))
     app.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment_handler))
     app.add_handler(CallbackQueryHandler(menu_router))
