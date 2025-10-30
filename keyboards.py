@@ -135,7 +135,7 @@ def settings_kb():
         ],
         [
             InlineKeyboardButton(
-                dual("⭐ Подписка", "Управлять подпиской"),
+                dual("⭐ Подписка донат", "Подписка донат — отключить рекламу"),
                 callback_data="set:subscription",
             )
         ],

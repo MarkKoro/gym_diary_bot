@@ -1,10 +1,12 @@
 import asyncio
 import logging
 import math
+import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, time, timedelta, UTC
 from zoneinfo import ZoneInfo
 from collections import defaultdict
+import httpx
 import re
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton, Message
 from telegram.error import (
@@ -82,6 +84,7 @@ from settings import (
     SUBSCRIPTION_CHAT,
     JOIN_URL,
     ADMIN_IDS,
+    YK_TOKEN,
 )
 from db import (
     init_db,
@@ -158,7 +161,17 @@ from db import (
     get_running_entry_by_id,
     add_custom_measurement,
     list_custom_measurements,
+    cleanup_expired_subscriptions,
     get_custom_measurement,
+    get_active_subscription,
+    grant_subscription_days,
+    create_payment_record,
+    update_payment_status,
+    get_payment_by_external_id,
+    get_latest_pending_payment,
+    list_broadcast_targets,
+    find_user_by_tg_id,
+    find_user_by_id,
 )
 from text_utils import normalize_whitespace
 from ui_texts import t, e
@@ -169,6 +182,27 @@ last_messages: dict[int, int] = {}
 PROGRESS_PAGE_SIZE = 5
 DAY_SHEET_PAGE_SIZE = 6
 SHEET_VIEWS_KEY = "day_sheet_views"
+BROADCAST_STATE_KEY = "broadcast_state"
+SUBSCRIPTION_PAYMENT_KEY = "subscription_payment"
+YK_PROVIDER = "yookassa"
+
+SUBSCRIPTION_PLANS = {
+    "month": {
+        "label": "1 месяц",
+        "amount": 100,
+        "days": 30,
+    },
+    "halfyear": {
+        "label": "6 месяцев",
+        "amount": 600,
+        "days": 182,
+    },
+    "year": {
+        "label": "1 год",
+        "amount": 1000,
+        "days": 365,
+    },
+}
 
 DAY_COMPLETION_TTL = timedelta(hours=6)
 ORDINAL_WORDS = {
@@ -2207,7 +2241,8 @@ async def show_custom_measurements_delete_menu(
 ) -> bool:
     items = await load_custom_measurements(user_id, context)
     if not items:
-        await q.answer("Пока нечего удалять.", show_alert=True)
+        await q.answer("Собственных замеров больше нет.", show_alert=True)
+        await show_measure_edit_menu(q, context, user_id)
         return False
     rows: list[list[InlineKeyboardButton]] = []
     for item in items:
@@ -2873,10 +2908,13 @@ async def build_day_sheet_message(
             done_text = format_strength_done_value(
                 item.get("today_summary"), with_weight=with_weight
             )
-            last_text = prev_label or t("NOT_FIXED")
+            last_text = prev_label
+            if not last_text and plan_text and plan_text != t("NOT_SET"):
+                last_text = plan_text
+            if not last_text:
+                last_text = t("NOT_FIXED")
             lines.append(f"{prefix}{name}")
             lines.append(f"• Прошлый раз: {last_text}")
-            lines.append(f"• План: {plan_text}")
             lines.append(f"• Сегодня: {done_text}")
             base_cb = f"ex:inc:{day_index}:{ue_id}"
             add_label = t("ADD_REP") if kind != "duration" else f"{t('ADD_REP')} сек"
@@ -3208,65 +3246,83 @@ async def build_summary_map(
     for ue_id, name, group, _, ex_id in ex_rows:
         resolved = resolve_group(name, group)
         with_weight, kind = get_display_flags(resolved, name)
-        text = ""
         current_sets_full: list[tuple[int, int, float, int]] = []
         if session_id:
             current_sets_full = await fetch_exercise_sets(session_id, ue_id)
+        baseline = await get_baseline(user_id, day, ex_id)
+        last_label = ""
         if resolved == "kb":
             work_sets = filter_work_sets(current_sets_full)
-            last_sets = await fetch_last_session_sets(user_id, day, ue_id, today)
-            base = await get_baseline(user_id, day, ex_id)
-            plan = format_kb_plan(base)
-            plan_part = f"{t('PLAN')} {plan}" if plan != "—" else f"{t('PLAN')} —"
-            done_part = format_kb_summary(work_sets, last_sets)
-            text = f"{plan_part} | {done_part}"
+            if work_sets:
+                last_label = format_kb_previous(work_sets)
+            else:
+                last_sets = await fetch_last_session_sets(user_id, day, ue_id, today)
+                if last_sets:
+                    last_label = format_kb_previous(last_sets)
+            if (not last_label or last_label == "—") and baseline:
+                plan_value = format_kb_plan(baseline)
+                if plan_value and plan_value != "—":
+                    last_label = plan_value
         elif resolved == "metcon" and name == AMRAP_EXERCISE_NAME:
             rounds, extra = parse_amrap_sets(current_sets_full)
-            last_sets = await fetch_last_session_sets(user_id, day, ue_id, today)
-            last_rounds, last_extra = parse_amrap_history(last_sets)
-            text = format_amrap_summary(rounds, extra, last_rounds, last_extra)
+            if rounds or extra:
+                last_label = format_amrap_done(rounds, extra)
+            else:
+                last_sets = await fetch_last_session_sets(user_id, day, ue_id, today)
+                last_rounds, last_extra = parse_amrap_history(last_sets)
+                if last_rounds or last_extra:
+                    last_label = format_amrap_done(last_rounds, last_extra)
         elif resolved == "metcon" and name == FOR_TIME_EXERCISE_NAME:
             rows = await fetch_measurement_history(user_id, FOR_TIME_METRIC, limit=1)
-            seconds = None
             if rows:
                 value = rows[0][0]
                 if value is not None:
-                    seconds = int(round(value))
-            if seconds is not None:
-                text = t("FTIME_LINE", time=format_duration_value(seconds))
-            else:
-                text = t("FTIME_LINE", time=t("NOT_FIXED"))
-        else:
-            filtered = [
-                (no, reps, weight)
-                for no, reps, weight, warm in current_sets_full
-                if not warm
-            ]
-            baseline = await get_baseline(user_id, day, ex_id)
-            plan_text = format_plan_value(
-                baseline, resolved, with_weight=with_weight
-            )
-            done_text = ""
-            if filtered:
-                done_text = summarize_previous_sets(
-                    filtered, with_weight=with_weight, kind=kind
+                    last_label = format_duration_value(int(round(value)))
+        elif resolved == RUNNING_GROUP:
+            running_entry = None
+            if session_id is not None:
+                running_entry = await get_running_entry(
+                    user_id,
+                    ue_id,
+                    session_id=session_id,
+                    day_index=day,
+                    create=False,
                 )
-            if not done_text:
+            if running_entry and not int(running_entry[4] or 0):
+                distance_value = float(running_entry[1] or 0.0)
+                duration_value = int(running_entry[2] or 0)
+                calories_value = int(running_entry[3] or 0)
+                if distance_value or duration_value or calories_value:
+                    last_label = format_running_line(
+                        distance_value, duration_value, calories_value
+                    )
+            if not last_label:
+                history_rows = await list_running_history(user_id, ue_id, limit=1)
+                if history_rows:
+                    _, dist, dur, cal, _created_at, _ = history_rows[0]
+                    last_label = format_running_line(
+                        float(dist or 0.0), int(dur or 0), int(cal or 0)
+                    )
+        else:
+            work_sets = filter_work_sets(current_sets_full)
+            if work_sets:
+                last_label = summarize_previous_sets(
+                    work_sets, with_weight=with_weight, kind=kind
+                )
+            if not last_label:
                 last_sets = await fetch_last_session_sets(
                     user_id, day, ue_id, today
                 )
-                done_text = summarize_previous_sets(
+                last_label = summarize_previous_sets(
                     last_sets, with_weight=with_weight, kind=kind
                 )
-            if not done_text and baseline:
-                done_text = summarize_baseline(
+            if not last_label and baseline:
+                last_label = summarize_baseline(
                     baseline, with_weight=with_weight, kind=kind
                 )
-            if not done_text:
-                done_text = t("NOT_FIXED")
-            text = f"{t('PLAN')} {plan_text} | {t('MADE')} {done_text}"
-        if text:
-            summary[ue_id] = text
+        if not last_label:
+            last_label = t("NOT_FIXED")
+        summary[ue_id] = f"{t('LAST_TIME')}: {last_label}"
     return summary
 
 
@@ -3378,10 +3434,13 @@ async def render_library_group_text(
             lines.append("")
         first_entry = False
         prefix = ""
-        result_text = summary or t("NOT_FIXED")
+        result_text = summary
+        if not result_text and plan_text and plan_text != t("NOT_SET"):
+            result_text = plan_text
+        if not result_text:
+            result_text = t("NOT_FIXED")
         lines.append(f"{prefix}{name}")
         lines.append(f"• Последний результат: {result_text}")
-        lines.append(f"• План: {plan_text}")
         if last:
             lines.append(f"• Тренировка: {last}")
     lines.append("")
@@ -3959,7 +4018,110 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         remember_message(msg.chat_id, msg.message_id)
 
 
+def get_broadcast_state(context: ContextTypes.DEFAULT_TYPE) -> dict | None:
+    state = context.user_data.get(BROADCAST_STATE_KEY)
+    if isinstance(state, dict):
+        return state
+    return None
+
+
+def reset_broadcast_state(context: ContextTypes.DEFAULT_TYPE) -> None:
+    context.user_data.pop(BROADCAST_STATE_KEY, None)
+
+
+def broadcast_photo_choice_markup() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton("Да", callback_data="broadcast:photo:yes"),
+                InlineKeyboardButton("Нет", callback_data="broadcast:photo:no"),
+            ]
+        ]
+    )
+
+
+def broadcast_photo_manage_markup(has_photo: bool) -> InlineKeyboardMarkup:
+    if has_photo:
+        return InlineKeyboardMarkup(
+            [
+                [InlineKeyboardButton("Удалить фото", callback_data="broadcast:photo:remove")],
+                [InlineKeyboardButton(BACK_BTN, callback_data="broadcast:preview")],
+            ]
+        )
+    return InlineKeyboardMarkup([[InlineKeyboardButton(BACK_BTN, callback_data="broadcast:preview")]])
+
+
+def build_broadcast_preview_text(state: dict) -> str:
+    payload = (state.get("text") or "").strip()
+    lines = ["Сообщение для рассылки:", ""]
+    lines.append(payload or "— Текст не задан —")
+    lines.append("")
+    if state.get("photo"):
+        lines.append("📷 Фото будет отправлено вместе с текстом.")
+    else:
+        lines.append("Фото не прикреплено.")
+    lines.append("")
+    lines.append("Проверь сообщение и используй кнопки ниже, чтобы его скорректировать или отправить.")
+    return "\n".join(lines)
+
+
+def build_broadcast_preview_markup(state: dict) -> InlineKeyboardMarkup:
+    photo_label = "🖼 Изменить фото" if state.get("photo") else "🖼 Добавить фото"
+    rows = [
+        [
+            InlineKeyboardButton("✏️ Изменить текст", callback_data="broadcast:edit:text"),
+            InlineKeyboardButton(photo_label, callback_data="broadcast:edit:photo"),
+        ],
+        [
+            InlineKeyboardButton("🚀 Отправить", callback_data="broadcast:send"),
+            InlineKeyboardButton("✖️ Отмена", callback_data="broadcast:cancel"),
+        ],
+    ]
+    return InlineKeyboardMarkup(rows)
+
+
+async def send_broadcast_preview(
+    chat_id: int,
+    context: ContextTypes.DEFAULT_TYPE,
+    state: dict,
+) -> None:
+    text = build_broadcast_preview_text(state)
+    markup = build_broadcast_preview_markup(state)
+    await context.bot.send_message(chat_id, text, reply_markup=markup)
+
+
 async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    if not user or user.id not in ADMIN_IDS:
+        if update.message:
+            await update.message.reply_text("Команда доступна только администратору.")
+        return
+    state = {
+        "step": "await_text",
+        "text": None,
+        "photo": None,
+        "skip_photo_prompt": False,
+    }
+    context.user_data[BROADCAST_STATE_KEY] = state
+    if update.message:
+        await update.message.reply_text(
+            "Пришли текст сообщения для рассылки. После текста можно добавить фотографию. Отправь /cancel, чтобы отменить рассылку."
+        )
+
+
+async def cancel_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    if not update.message:
+        return
+    state = get_broadcast_state(context)
+    if user and user.id in ADMIN_IDS and state:
+        reset_broadcast_state(context)
+        await update.message.reply_text("Рассылка отменена.")
+        return
+    await update.message.reply_text("Нет активных действий, которые можно отменить.")
+
+
+async def grant_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     if not user or user.id not in ADMIN_IDS:
         if update.message:
@@ -3967,25 +4129,177 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     if not update.message or not update.message.text:
         return
-    parts = update.message.text.split(None, 1)
-    if len(parts) < 2 or not parts[1].strip():
-        await update.message.reply_text("Использование: /broadcast <текст сообщения>.")
+    parts = update.message.text.split()
+    if len(parts) < 3:
+        await update.message.reply_text("Использование: /grant <tg_id|user_id> <дней>.")
         return
-    payload = parts[1].strip()
+    try:
+        target_raw = int(parts[1])
+        days = int(parts[2])
+    except ValueError:
+        await update.message.reply_text("Укажи числовые значения: идентификатор и количество дней.")
+        return
+    if days <= 0:
+        await update.message.reply_text("Количество дней должно быть больше нуля.")
+        return
+    found = await find_user_by_tg_id(target_raw)
+    user_id: int | None = None
+    tg_id: int | None = None
+    username: str | None = None
+    if found:
+        user_id, username = found
+        tg_id = target_raw
+    else:
+        entry = await find_user_by_id(target_raw)
+        if not entry:
+            await update.message.reply_text("Пользователь с таким ID не найден.")
+            return
+        user_id, tg_id, username = entry
+    try:
+        expires_at = await grant_subscription_days(user_id, days, plan="manual")
+    except Exception:
+        logger.exception("Failed to grant subscription")
+        await update.message.reply_text("Не удалось обновить подписку. Попробуй позже.")
+        return
+    await cleanup_expired_subscriptions(user_id)
+    label_parts: list[str] = []
+    if tg_id:
+        label_parts.append(str(tg_id))
+    if username:
+        label_parts.append(f"@{username}")
+    label = " ".join(label_parts) or f"user_id={user_id}"
+    expires_label = expires_at.astimezone(ZoneInfo("UTC")).strftime("%d.%m.%Y")
+    await update.message.reply_text(
+        f"Подписка для {label} активна до {expires_label}. Добавлено {days} дн."
+    )
+
+
+async def handle_broadcast_text(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    state: dict,
+) -> bool:
+    message = update.message
+    if not message or message.text is None:
+        return False
+    text = message.text.strip()
+    step = state.get("step")
+    chat_id = message.chat_id
+    if step == "await_text":
+        if not text:
+            await message.reply_text("Текст не должен быть пустым.")
+            return True
+        state["text"] = text
+        skip_prompt = bool(state.pop("skip_photo_prompt", False))
+        if skip_prompt:
+            state["step"] = "await_confirm"
+            await message.reply_text("Текст обновлён.")
+            await send_broadcast_preview(chat_id, context, state)
+        else:
+            state["step"] = "await_photo_choice"
+            await message.reply_text(
+                "Хочешь добавить фотографию к рассылке? Ответь «да» или «нет».",
+                reply_markup=broadcast_photo_choice_markup(),
+            )
+        return True
+    if step == "await_photo_choice":
+        lowered = text.lower()
+        if lowered in {"да", "yes", "y"}:
+            state["step"] = "await_photo"
+            await message.reply_text(
+                "Пришли фотографию для рассылки.",
+                reply_markup=broadcast_photo_manage_markup(bool(state.get("photo"))),
+            )
+            return True
+        if lowered in {"нет", "no", "n"}:
+            state["step"] = "await_confirm"
+            await send_broadcast_preview(chat_id, context, state)
+            return True
+        await message.reply_text("Ответь «да» или «нет», чтобы продолжить.")
+        return True
+    if step == "await_photo":
+        lowered = text.lower()
+        if lowered in {"назад", "отмена", "back"}:
+            state["step"] = "await_confirm"
+            await send_broadcast_preview(chat_id, context, state)
+            return True
+        if lowered in {"удалить", "remove"}:
+            state["photo"] = None
+            state["step"] = "await_confirm"
+            await message.reply_text("Фото удалено.")
+            await send_broadcast_preview(chat_id, context, state)
+            return True
+        await message.reply_text("Пришли фотографию или напиши «назад», чтобы вернуться.")
+        return True
+    if step == "await_confirm":
+        if not text:
+            await message.reply_text("Текст не должен быть пустым.")
+            return True
+        state["text"] = text
+        await message.reply_text("Текст обновлён.")
+        await send_broadcast_preview(chat_id, context, state)
+        return True
+    return False
+
+
+async def handle_broadcast_photo(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    state: dict,
+) -> bool:
+    message = update.message
+    if not message or not message.photo:
+        return False
+    photo = message.photo[-1]
+    state["photo"] = photo.file_id
+    state["step"] = "await_confirm"
+    await message.reply_text("Фото добавлено.")
+    await send_broadcast_preview(message.chat_id, context, state)
+    return True
+
+
+async def execute_broadcast(q, context: ContextTypes.DEFAULT_TYPE, state: dict) -> None:
+    text = (state.get("text") or "").strip()
+    if not text:
+        await q.answer("Добавь текст для рассылки.", show_alert=True)
+        return
+    try:
+        targets = await list_broadcast_targets(ADMIN_IDS)
+    except Exception:
+        logger.exception("Failed to prepare broadcast targets")
+        await context.bot.send_message(
+            q.message.chat_id,
+            "Не удалось подготовить рассылку. Попробуй позже.",
+        )
+        return
+    photo_id = state.get("photo")
+    total = len(targets)
+    if total == 0:
+        reset_broadcast_state(context)
+        await context.bot.send_message(
+            q.message.chat_id,
+            "Нет пользователей без активной подписки для рассылки.",
+        )
+        return
     delivered = 0
     skipped = 0
-    tg_ids = await list_all_user_tg_ids()
-    for tg_id in tg_ids:
+    for tg_id, _ in targets:
         try:
-            await context.bot.send_message(tg_id, payload)
+            if photo_id:
+                await context.bot.send_photo(tg_id, photo=photo_id, caption=text)
+            else:
+                await context.bot.send_message(tg_id, text)
             delivered += 1
             await asyncio.sleep(0.05)
         except Forbidden:
             skipped += 1
         except RetryAfter as exc:
-            await asyncio.sleep(exc.retry_after)
+            await asyncio.sleep(int(getattr(exc, "retry_after", 1)))
             try:
-                await context.bot.send_message(tg_id, payload)
+                if photo_id:
+                    await context.bot.send_photo(tg_id, photo=photo_id, caption=text)
+                else:
+                    await context.bot.send_message(tg_id, text)
                 delivered += 1
             except Forbidden:
                 skipped += 1
@@ -3995,9 +4309,317 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except TelegramError as err:
             skipped += 1
             logger.warning("Broadcast failed for %s: %s", tg_id, err)
-    await update.message.reply_text(
-        f"Рассылка завершена. Доставлено: {delivered}. Недоступно: {skipped}."
+    reset_broadcast_state(context)
+    summary = (
+        f"Рассылка завершена. Получатели без подписки: {total}. "
+        f"Доставлено: {delivered}. Недоступно: {skipped}."
     )
+    await context.bot.send_message(q.message.chat_id, summary)
+
+
+async def handle_broadcast_callback(q, context: ContextTypes.DEFAULT_TYPE):
+    state = get_broadcast_state(context)
+    if not state:
+        await q.answer("Нет активной рассылки.", show_alert=True)
+        return
+    data = q.data or ""
+    chat_id = q.message.chat_id
+    if data == "broadcast:photo:yes":
+        state["step"] = "await_photo"
+        await context.bot.send_message(
+            chat_id,
+            "Пришли фотографию для рассылки.",
+            reply_markup=broadcast_photo_manage_markup(bool(state.get("photo"))),
+        )
+        return
+    if data == "broadcast:photo:no":
+        state["step"] = "await_confirm"
+        await send_broadcast_preview(chat_id, context, state)
+        return
+    if data == "broadcast:edit:text":
+        state["step"] = "await_text"
+        state["skip_photo_prompt"] = True
+        await context.bot.send_message(chat_id, "Пришли новый текст для рассылки.")
+        return
+    if data == "broadcast:edit:photo":
+        state["step"] = "await_photo"
+        has_photo = bool(state.get("photo"))
+        prompt = (
+            "Пришли новую фотографию или удали текущую кнопкой ниже."
+            if has_photo
+            else "Пришли фотографию для рассылки."
+        )
+        await context.bot.send_message(
+            chat_id,
+            prompt,
+            reply_markup=broadcast_photo_manage_markup(has_photo),
+        )
+        return
+    if data == "broadcast:photo:remove":
+        state["photo"] = None
+        state["step"] = "await_confirm"
+        await context.bot.send_message(chat_id, "Фото удалено.")
+        await send_broadcast_preview(chat_id, context, state)
+        return
+    if data == "broadcast:preview":
+        state["step"] = "await_confirm"
+        await send_broadcast_preview(chat_id, context, state)
+        return
+    if data == "broadcast:cancel":
+        reset_broadcast_state(context)
+        await context.bot.send_message(chat_id, "Рассылка отменена.")
+        return
+    if data == "broadcast:send":
+        await execute_broadcast(q, context, state)
+        return
+
+
+async def show_subscription_overview(
+    q, context: ContextTypes.DEFAULT_TYPE, user_id: int
+):
+    await cleanup_expired_subscriptions(user_id)
+    active = await get_active_subscription(user_id)
+    pending = await get_latest_pending_payment(user_id)
+    tz_code = await get_user_timezone(user_id)
+    zone = resolve_user_zone(tz_code)
+    lines = [
+        "Подписка донат отключает рекламные рассылки и помогает развивать бота.",
+        "",
+    ]
+    if active and active.get("expires_at"):
+        expires_at = active["expires_at"]
+        expires_label = expires_at.astimezone(zone).strftime("%d.%m.%Y")
+        lines.append(f"Активна до {expires_label}.")
+    else:
+        lines.append("Подписка не оформлена.")
+    if pending:
+        payload = pending.get("payload") or {}
+        plan_code = payload.get("plan")
+        plan_label = SUBSCRIPTION_PLANS.get(plan_code, {}).get("label")
+        amount_val = pending.get("amount") or 0
+        amount_rub = amount_val / 100 if amount_val else 0
+        lines.append("")
+        if plan_label and amount_rub:
+            lines.append(
+                f"Есть неоплаченный счёт: {plan_label} за {int(amount_rub)} ₽."
+            )
+        else:
+            lines.append("Есть неоплаченный счёт — можно проверить оплату ниже.")
+    if YK_TOKEN:
+        lines.append("")
+        lines.append(
+            "После оплаты вернись и нажми «Проверить оплату», чтобы активировать подписку."
+        )
+    else:
+        lines.append("")
+        lines.append("Приём платежей временно недоступен.")
+    rows: list[list[InlineKeyboardButton]] = []
+    if YK_TOKEN:
+        for code, plan in SUBSCRIPTION_PLANS.items():
+            label = f"{plan['label']} — {plan['amount']} ₽"
+            rows.append(
+                [InlineKeyboardButton(label, callback_data=f"set:subscription:plan:{code}")]
+            )
+    if pending:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    "🔄 Проверить оплату",
+                    callback_data=f"set:subscription:check:{pending['external_id']}",
+                )
+            ]
+        )
+    rows.append([InlineKeyboardButton(BACK_BTN, callback_data="menu:settings")])
+    kb = InlineKeyboardMarkup(rows)
+    await show_screen(q, context, "\n".join(lines), kb, user_id)
+
+
+async def start_subscription_payment(
+    q, context: ContextTypes.DEFAULT_TYPE, user_id: int, plan_code: str
+):
+    plan = SUBSCRIPTION_PLANS.get(plan_code)
+    if not plan:
+        await q.answer("Тариф не найден.", show_alert=True)
+        return
+    if not YK_TOKEN:
+        await q.answer("Оплата временно недоступна.", show_alert=True)
+        return
+    amount = plan["amount"]
+    description = f"Подписка донат — {plan['label']}"
+    try:
+        bot_username = context.bot.username
+        if not bot_username:
+            me = await context.bot.get_me()
+            bot_username = me.username or ""
+    except TelegramError:
+        bot_username = ""
+    return_url = SUPPORT_DEEPLINK or (JOIN_URL if JOIN_URL else None)
+    if not return_url:
+        return_url = f"https://t.me/{bot_username}" if bot_username else "https://t.me"
+    payload = {
+        "amount": {"value": f"{amount:.2f}", "currency": "RUB"},
+        "capture": True,
+        "confirmation": {"type": "redirect", "return_url": return_url},
+        "description": description,
+        "metadata": {"user_id": user_id, "plan": plan_code},
+    }
+    headers = {
+        "Authorization": f"Basic {YK_TOKEN}",
+        "Idempotence-Key": uuid.uuid4().hex,
+    }
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.post(
+                "https://api.yookassa.ru/v3/payments",
+                json=payload,
+                headers=headers,
+            )
+            response.raise_for_status()
+    except httpx.HTTPStatusError as exc:
+        logger.warning(
+            "Yookassa payment creation failed: %s %s",
+            exc.response.status_code,
+            exc.response.text,
+        )
+        await context.bot.send_message(
+            q.message.chat_id,
+            "Не удалось создать платёж. Попробуй позже.",
+        )
+        return
+    except httpx.RequestError:
+        logger.exception("Yookassa payment creation error")
+        await context.bot.send_message(
+            q.message.chat_id,
+            "Не удалось связаться с платёжным сервисом. Попробуй позже.",
+        )
+        return
+    data = response.json()
+    payment_id = data.get("id")
+    confirmation = data.get("confirmation") or {}
+    confirmation_url = confirmation.get("confirmation_url")
+    if not payment_id or not confirmation_url:
+        logger.warning("Yookassa response missing payment data: %s", data)
+        await context.bot.send_message(
+            q.message.chat_id, "Не удалось получить ссылку на оплату."
+        )
+        return
+    payload_data = {
+        "plan": plan_code,
+        "amount": amount,
+        "label": plan["label"],
+        "confirmation_url": confirmation_url,
+    }
+    amount_kopecks = int(amount * 100)
+    await create_payment_record(
+        user_id,
+        YK_PROVIDER,
+        amount_kopecks,
+        "RUB",
+        "pending",
+        payload_data,
+        payment_id,
+    )
+    context.user_data[SUBSCRIPTION_PAYMENT_KEY] = {
+        "payment_id": payment_id,
+        "plan": plan_code,
+    }
+    text = (
+        f"{plan['label']} — {amount} ₽.\n"
+        "Оплата пройдёт через ЮKassa.\n"
+        "После оплаты вернись и нажми «Проверить оплату», чтобы активировать подписку."
+    )
+    kb = InlineKeyboardMarkup(
+        [
+            [InlineKeyboardButton("💳 Оплатить", url=confirmation_url)],
+            [
+                InlineKeyboardButton(
+                    "🔄 Проверить оплату",
+                    callback_data=f"set:subscription:check:{payment_id}",
+                )
+            ],
+            [InlineKeyboardButton(BACK_BTN, callback_data="set:subscription")],
+        ]
+    )
+    await show_screen(q, context, text, kb, user_id)
+
+
+async def check_subscription_payment(
+    q, context: ContextTypes.DEFAULT_TYPE, user_id: int, payment_id: str
+):
+    if not YK_TOKEN:
+        await q.answer("Проверка недоступна.", show_alert=True)
+        return
+    record = await get_payment_by_external_id(payment_id)
+    if not record:
+        await q.answer("Платёж не найден.", show_alert=True)
+        return
+    headers = {
+        "Authorization": f"Basic {YK_TOKEN}",
+    }
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.get(
+                f"https://api.yookassa.ru/v3/payments/{payment_id}",
+                headers=headers,
+            )
+            response.raise_for_status()
+    except httpx.HTTPStatusError as exc:
+        logger.warning(
+            "Yookassa payment status failed: %s %s",
+            exc.response.status_code,
+            exc.response.text,
+        )
+        await context.bot.send_message(
+            q.message.chat_id,
+            "Не удалось проверить оплату. Попробуй позже.",
+        )
+        return
+    except httpx.RequestError:
+        logger.exception("Yookassa status request error")
+        await context.bot.send_message(
+            q.message.chat_id,
+            "Не удалось проверить оплату. Попробуй позже.",
+        )
+        return
+    data = response.json()
+    status = data.get("status", "")
+    await update_payment_status(payment_id, status, data)
+    if status == "succeeded":
+        payload = record.get("payload") or {}
+        plan_code = payload.get("plan") or "manual"
+        plan = SUBSCRIPTION_PLANS.get(plan_code)
+        days = plan["days"] if plan else 30
+        expires_at = await grant_subscription_days(user_id, days, plan=plan_code)
+        await cleanup_expired_subscriptions(user_id)
+        tz_code = await get_user_timezone(user_id)
+        zone = resolve_user_zone(tz_code)
+        expires_label = expires_at.astimezone(zone).strftime("%d.%m.%Y")
+        context.user_data.pop(SUBSCRIPTION_PAYMENT_KEY, None)
+        await context.bot.send_message(
+            q.message.chat_id,
+            f"Оплата получена. Подписка активна до {expires_label}.",
+        )
+        await show_subscription_overview(q, context, user_id)
+        return
+    if status in {"pending", "waiting_for_capture"}:
+        await context.bot.send_message(
+            q.message.chat_id,
+            "Платёж ещё обрабатывается. Проверь его чуть позже.",
+        )
+        return
+    if status == "canceled":
+        context.user_data.pop(SUBSCRIPTION_PAYMENT_KEY, None)
+        await context.bot.send_message(
+            q.message.chat_id,
+            "Платёж отменён. Если нужна помощь, напиши в поддержку.",
+        )
+        await show_subscription_overview(q, context, user_id)
+        return
+    await context.bot.send_message(
+        q.message.chat_id,
+        f"Текущий статус платежа: {status}.",
+    )
+    await show_subscription_overview(q, context, user_id)
 
 
 def wizard_catalog_text(day: int, group: str, prefs: UiPreferences) -> str:
@@ -4813,6 +5435,11 @@ async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAUL
 
 
 async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    if user and user.id in ADMIN_IDS:
+        state = get_broadcast_state(context)
+        if state and await handle_broadcast_text(update, context, state):
+            return
     if not await require_subscription(update, context):
         return
     for_time_state = context.user_data.get(FOR_TIME_INPUT_KEY)
@@ -5241,13 +5868,31 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await edit_instant(day_exercises_text(day, group, custom), kb)
         return
 
+async def photo_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    if user and user.id in ADMIN_IDS:
+        state = get_broadcast_state(context)
+        if state and state.get("step") == "await_photo":
+            if await handle_broadcast_photo(update, context, state):
+                return
+    if not await require_subscription(update, context):
+        return
+
+
 async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         q = update.callback_query
         await q.answer()
+        data = q.data or ""
+        if data.startswith("broadcast:"):
+            user = update.effective_user
+            if user and user.id in ADMIN_IDS:
+                await handle_broadcast_callback(q, context)
+            else:
+                await q.answer("Недоступно.", show_alert=True)
+            return
         if not await require_subscription(update, context):
             return
-        data = q.data
         if data == "noop":
             return
         u = update.effective_user
@@ -5346,7 +5991,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"📅 Количество тренировок — сейчас {n}. Укажи, сколько раз планируешь тренироваться.\n"
                 "🗑 Удаление моих групп мышц — удаляй созданные группы мышц. Все упражнения из удалённых групп исчезнут из расписания и библиотеки.\n"
                 f"⏰ Уведомления — {tz_label}, {rem_text}. Настрой время напоминаний.\n"
-                "⭐ Подписка — информация о подписке."
+                "⭐ Подписка донат — отключи рекламные рассылки и поддержи разработчиков."
             )
             kb = settings_kb()
             await show_screen(q, context, text, kb, user_id)
@@ -6325,7 +6970,17 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     await show_reminders_overview(q, context, user_id)
                     return
             if action == "subscription":
-                await show_screen(q, context, 'Подписка пока в разработке.', settings_kb(), user_id)
+                if len(parts) == 2:
+                    await show_subscription_overview(q, context, user_id)
+                    return
+                sub_action = parts[2]
+                if sub_action == "plan" and len(parts) >= 4:
+                    await start_subscription_payment(q, context, user_id, parts[3])
+                    return
+                if sub_action == "check" and len(parts) >= 4:
+                    await check_subscription_payment(q, context, user_id, parts[3])
+                    return
+                await show_subscription_overview(q, context, user_id)
                 return
 
         if parts[0] == "remedit":
@@ -7415,7 +8070,10 @@ def main():
     )
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("broadcast", broadcast_command))
+    app.add_handler(CommandHandler("cancel", cancel_command))
+    app.add_handler(CommandHandler(("grant", "grunt"), grant_command))
     app.add_handler(CallbackQueryHandler(menu_router))
+    app.add_handler(MessageHandler(filters.PHOTO, photo_router))
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), text_router))
     app.add_error_handler(on_error)
     app.run_polling()
