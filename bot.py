@@ -8,7 +8,13 @@ from zoneinfo import ZoneInfo
 from collections import defaultdict
 import httpx
 import re
-from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton, Message
+from telegram import (
+    Update,
+    InlineKeyboardMarkup,
+    InlineKeyboardButton,
+    Message,
+    LabeledPrice,
+)
 from telegram.error import (
     BadRequest,
     Forbidden,
@@ -25,6 +31,7 @@ from telegram.ext import (
     AIORateLimiter,
     MessageHandler,
     filters,
+    PreCheckoutQueryHandler,
 )
 from keyboards import (
     main_menu_kb,
@@ -187,20 +194,23 @@ SUBSCRIPTION_PAYMENT_KEY = "subscription_payment"
 YK_PROVIDER = "yookassa"
 
 SUBSCRIPTION_PLANS = {
-    "month": {
-        "label": "1 месяц",
-        "amount": 100,
+    "1m": {
+        "title": "Подписка на 1 месяц",
+        "months": 1,
         "days": 30,
+        "amount_rub": 100,
     },
-    "halfyear": {
-        "label": "6 месяцев",
-        "amount": 600,
-        "days": 182,
+    "6m": {
+        "title": "Подписка на 6 месяцев",
+        "months": 6,
+        "days": 180,
+        "amount_rub": 600,
     },
-    "year": {
-        "label": "1 год",
-        "amount": 1000,
+    "12m": {
+        "title": "Подписка на 12 месяцев",
+        "months": 12,
         "days": 365,
+        "amount_rub": 1000,
     },
 }
 
@@ -4374,6 +4384,91 @@ async def handle_broadcast_callback(q, context: ContextTypes.DEFAULT_TYPE):
         return
 
 
+def build_subscription_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [InlineKeyboardButton("1 месяц — 100 ₽", callback_data="sub:1m")],
+            [InlineKeyboardButton("6 месяцев — 600 ₽", callback_data="sub:6m")],
+            [InlineKeyboardButton("12 месяцев — 1000 ₽", callback_data="sub:12m")],
+            [InlineKeyboardButton("⬅️ Назад", callback_data="back:main")],
+        ]
+    )
+
+
+async def on_subscription_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показать пользователю варианты подписки."""
+
+    query = update.callback_query
+    await query.answer()
+    user = update.effective_user
+    user_id = await get_or_create_user(user.id, user.username)
+    await show_screen(
+        query,
+        context,
+        "Выбери вариант подписки:",
+        build_subscription_keyboard(),
+        user_id,
+    )
+
+
+async def on_subscription_choose(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Пользователь выбрал конкретный план — шлём инвойс через Telegram."""
+
+    query = update.callback_query
+    await query.answer()
+
+    data = query.data
+    _, plan_code = data.split(":", 1)
+    plan = SUBSCRIPTION_PLANS.get(plan_code)
+    if not plan:
+        await query.edit_message_text("Неизвестный тариф. Попробуйте ещё раз.")
+        return
+
+    user = update.effective_user
+    db_user_id = await get_or_create_user(user.id, user.username)
+    title = plan["title"]
+    payload = f"sub:{user.id}:{plan_code}"
+    currency = "RUB"
+    price_rub = plan["amount_rub"]
+    prices = [LabeledPrice(label=title, amount=price_rub * 100)]
+
+    await create_payment_record(
+        user_id=db_user_id,
+        provider="telegram",
+        amount=price_rub * 100,
+        currency=currency,
+        status="pending",
+        payload={"plan": plan_code},
+        external_id=payload,
+    )
+
+    await query.message.reply_invoice(
+        title=title,
+        description="Оплата подписки в gym_diary_bot",
+        provider_token=YK_TOKEN,
+        currency=currency,
+        prices=prices,
+        payload=payload,
+        need_name=False,
+        need_phone_number=False,
+        need_email=False,
+        need_shipping_address=False,
+        is_flexible=False,
+    )
+
+
+async def on_subscription_back(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Вернуться в главное меню из списка подписок."""
+
+    query = update.callback_query
+    await query.answer()
+
+    user = update.effective_user
+    user_id = await get_or_create_user(user.id, user.username)
+    text, kb, _ = await compose_main_menu(user_id)
+    await show_screen(query, context, text, kb, user_id)
+
+
 async def show_subscription_overview(
     q, context: ContextTypes.DEFAULT_TYPE, user_id: int
 ):
@@ -4395,7 +4490,7 @@ async def show_subscription_overview(
     if pending:
         payload = pending.get("payload") or {}
         plan_code = payload.get("plan")
-        plan_label = SUBSCRIPTION_PLANS.get(plan_code, {}).get("label")
+        plan_label = SUBSCRIPTION_PLANS.get(plan_code, {}).get("title")
         amount_val = pending.get("amount") or 0
         amount_rub = amount_val / 100 if amount_val else 0
         lines.append("")
@@ -4416,7 +4511,7 @@ async def show_subscription_overview(
     rows: list[list[InlineKeyboardButton]] = []
     if YK_TOKEN:
         for code, plan in SUBSCRIPTION_PLANS.items():
-            label = f"{plan['label']} — {plan['amount']} ₽"
+            label = f"{plan['title']} — {plan['amount_rub']} ₽"
             rows.append(
                 [InlineKeyboardButton(label, callback_data=f"set:subscription:plan:{code}")]
             )
@@ -4444,8 +4539,8 @@ async def start_subscription_payment(
     if not YK_TOKEN:
         await q.answer("Оплата временно недоступна.", show_alert=True)
         return
-    amount = plan["amount"]
-    description = f"Подписка донат — {plan['label']}"
+    amount = plan["amount_rub"]
+    description = f"Подписка донат — {plan['title']}"
     try:
         bot_username = context.bot.username
         if not bot_username:
@@ -4506,7 +4601,7 @@ async def start_subscription_payment(
     payload_data = {
         "plan": plan_code,
         "amount": amount,
-        "label": plan["label"],
+        "title": plan["title"],
         "confirmation_url": confirmation_url,
     }
     amount_kopecks = int(amount * 100)
@@ -4524,7 +4619,7 @@ async def start_subscription_payment(
         "plan": plan_code,
     }
     text = (
-        f"{plan['label']} — {amount} ₽.\n"
+        f"{plan['title']} — {amount} ₽.\n"
         "Оплата пройдёт через ЮKassa.\n"
         "После оплаты вернись и нажми «Проверить оплату», чтобы активировать подписку."
     )
@@ -8055,6 +8150,52 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             remember_message(chat_id, getattr(message, "message_id", None))
 
 
+async def precheckout_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Телеграм прислал pre-checkout — нужно подтвердить."""
+
+    query = update.pre_checkout_query
+    await query.answer(ok=True)
+
+
+async def successful_payment_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Пользователь оплатил — активируем подписку и помечаем платёж как paid."""
+
+    payment = update.message.successful_payment
+    payload = payment.invoice_payload
+
+    parts = payload.split(":")
+    if len(parts) != 3:
+        return
+
+    _, user_id_str, plan_code = parts
+    tg_user_id = int(user_id_str)
+
+    user_info = await find_user_by_tg_id(tg_user_id)
+    if not user_info:
+        return
+    user_id = user_info[0]
+
+    plan = SUBSCRIPTION_PLANS.get(plan_code)
+    if not plan:
+        return
+
+    await update_payment_status(
+        payload,
+        "paid",
+        {"paid_at": datetime.utcnow().isoformat(timespec="seconds")},
+    )
+
+    await grant_subscription_days(
+        user_id=user_id,
+        days=plan["days"],
+        plan=plan_code,
+    )
+
+    await update.message.reply_text(
+        f"✅ Оплата получена. Подписка активна на {plan['days']} дней."
+    )
+
+
 def main():
     asyncio.run(init_db())
     loop = asyncio.new_event_loop()
@@ -8072,6 +8213,11 @@ def main():
     app.add_handler(CommandHandler("broadcast", broadcast_command))
     app.add_handler(CommandHandler("cancel", cancel_command))
     app.add_handler(CommandHandler(("grant", "grunt"), grant_command))
+    app.add_handler(CallbackQueryHandler(on_subscription_menu, pattern="^menu:subscription$"))
+    app.add_handler(CallbackQueryHandler(on_subscription_choose, pattern="^sub:"))
+    app.add_handler(CallbackQueryHandler(on_subscription_back, pattern="^back:main$"))
+    app.add_handler(PreCheckoutQueryHandler(precheckout_handler))
+    app.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment_handler))
     app.add_handler(CallbackQueryHandler(menu_router))
     app.add_handler(MessageHandler(filters.PHOTO, photo_router))
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), text_router))
