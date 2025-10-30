@@ -161,12 +161,8 @@ async def _ensure_sessions_unique_by_day(db) -> None:
     desired = ("user_id", "date", "day_index")
     if await _has_unique_index(db, "sessions", desired):
         return
-    already_in_tx = db.in_transaction
     await db.execute("PRAGMA foreign_keys=OFF")
-    if already_in_tx:
-        await db.execute("SAVEPOINT ensure_sessions_unique_by_day")
-    else:
-        await db.execute("BEGIN")
+    await db.execute("BEGIN")
     try:
         await db.execute("ALTER TABLE sessions RENAME TO sessions_old")
         await db.execute(
@@ -187,16 +183,9 @@ async def _ensure_sessions_unique_by_day(db) -> None:
             """
         )
         await db.execute("DROP TABLE sessions_old")
-        if already_in_tx:
-            await db.execute("RELEASE SAVEPOINT ensure_sessions_unique_by_day")
-        else:
-            await db.commit()
+        await db.commit()
     except Exception:
-        if already_in_tx:
-            await db.execute("ROLLBACK TO SAVEPOINT ensure_sessions_unique_by_day")
-            await db.execute("RELEASE SAVEPOINT ensure_sessions_unique_by_day")
-        else:
-            await db.rollback()
+        await db.rollback()
         raise
     finally:
         await db.execute("PRAGMA foreign_keys=ON")
