@@ -436,6 +436,7 @@ async def init_db():
                     (position, row_id),
                 )
             await db.commit()
+        await db.commit()
         await _ensure_sessions_unique_by_day(db)
         await db.commit()
 
