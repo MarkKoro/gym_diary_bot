@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, time, timedelta, UTC
 from zoneinfo import ZoneInfo
 from collections import defaultdict
+from types import SimpleNamespace
 import httpx
 import re
 from telegram import (
@@ -1077,6 +1078,9 @@ async def send_main_message(
             )
         except BadRequest as edit_error:
             error_text = (edit_error.message or "").lower()
+            if "message is not modified" in error_text or "not modified" in error_text:
+                remember_message(chat_id, previous_id)
+                return SimpleNamespace(chat_id=chat_id, message_id=previous_id)
             if "message to edit not found" in error_text:
                 last_messages.pop(chat_id, None)
             else:
@@ -1086,6 +1090,13 @@ async def send_main_message(
                     delete_text = (delete_error.message or "").lower()
                     if "message to delete not found" in delete_text:
                         last_messages.pop(chat_id, None)
+                    elif "can't be deleted" in delete_text:
+                        logger.debug(
+                            "Previous message %s in chat %s cannot be deleted",
+                            previous_id,
+                            chat_id,
+                        )
+                        last_messages.pop(chat_id, None)
                     else:
                         remember_message(chat_id, previous_id)
                         logger.warning(
@@ -1093,8 +1104,12 @@ async def send_main_message(
                         )
                         raise
                 except Forbidden:
-                    remember_message(chat_id, previous_id)
-                    raise
+                    logger.debug(
+                        "Bot is not allowed to delete message %s in chat %s",
+                        previous_id,
+                        chat_id,
+                    )
+                    last_messages.pop(chat_id, None)
                 else:
                     last_messages.pop(chat_id, None)
         except TelegramError:
