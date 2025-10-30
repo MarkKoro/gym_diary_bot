@@ -1,4 +1,5 @@
 import aiosqlite, asyncio
+import json
 from datetime import datetime, timedelta, UTC
 from contextlib import asynccontextmanager
 from typing import Sequence
@@ -362,7 +363,8 @@ async def init_db():
             currency TEXT,
             created_at TEXT,
             status TEXT,
-            payload_json TEXT
+            payload_json TEXT,
+            external_id TEXT
         );
         """)
         try:
@@ -397,6 +399,8 @@ async def init_db():
             await db.execute(
                 "ALTER TABLE user_prefs ADD COLUMN ui_verbose_level INTEGER CHECK(ui_verbose_level IN (0,1)) DEFAULT 0"
             )
+        if not await _column_exists(db, "payments", "external_id"):
+            await db.execute("ALTER TABLE payments ADD COLUMN external_id TEXT")
         await db.execute(
             "UPDATE user_prefs SET ui_mode = CASE WHEN ui_mode IN ('compact','detailed') THEN ui_mode ELSE COALESCE(day_view_mode, 'detailed') END"
         )
@@ -1191,6 +1195,256 @@ async def list_all_user_tg_ids():
         cur = await db.execute("SELECT tg_id FROM users WHERE tg_id IS NOT NULL")
         rows = await cur.fetchall()
         return [row[0] for row in rows]
+
+
+async def cleanup_expired_subscriptions(user_id: int | None = None):
+    now_iso = datetime.now(UTC).isoformat()
+    async with connect_db() as db:
+        if user_id is None:
+            await db.execute(
+                "UPDATE subscriptions SET status='expired' WHERE status='active' AND expires_at <= ?",
+                (now_iso,),
+            )
+        else:
+            await db.execute(
+                "UPDATE subscriptions SET status='expired' WHERE user_id=? AND status='active' AND expires_at <= ?",
+                (user_id, now_iso),
+            )
+        await db.commit()
+
+
+async def get_active_subscription(user_id: int) -> dict | None:
+    await cleanup_expired_subscriptions(user_id)
+    async with connect_db() as db:
+        cur = await db.execute(
+            """
+            SELECT plan, started_at, expires_at
+            FROM subscriptions
+            WHERE user_id=? AND status='active'
+            ORDER BY expires_at DESC
+            LIMIT 1
+            """,
+            (user_id,),
+        )
+        row = await cur.fetchone()
+        if not row:
+            return None
+        plan, started_at, expires_at = row
+        started = datetime.fromisoformat(started_at) if started_at else None
+        expires = datetime.fromisoformat(expires_at) if expires_at else None
+        return {
+            "plan": plan,
+            "started_at": started,
+            "expires_at": expires,
+        }
+
+
+async def grant_subscription_days(
+    user_id: int,
+    days: int,
+    plan: str = "manual",
+) -> datetime:
+    if days <= 0:
+        raise ValueError("days must be positive")
+    await cleanup_expired_subscriptions(user_id)
+    now = datetime.now(UTC)
+    base = now
+    async with connect_db() as db:
+        cur = await db.execute(
+            "SELECT expires_at FROM subscriptions WHERE user_id=? AND status='active' ORDER BY expires_at DESC LIMIT 1",
+            (user_id,),
+        )
+        row = await cur.fetchone()
+        if row and row[0]:
+            try:
+                candidate = datetime.fromisoformat(row[0])
+            except ValueError:
+                candidate = now
+            if candidate > base:
+                base = candidate
+        expires_at = base + timedelta(days=days)
+        await db.execute(
+            """
+            INSERT INTO subscriptions(user_id, plan, started_at, expires_at, status)
+            VALUES(?,?,?,?,?)
+            """,
+            (
+                user_id,
+                plan,
+                now.isoformat(),
+                expires_at.isoformat(),
+                "active",
+            ),
+        )
+        await db.commit()
+    return expires_at
+
+
+async def create_payment_record(
+    user_id: int,
+    provider: str,
+    amount: int,
+    currency: str,
+    status: str,
+    payload: dict | None = None,
+    external_id: str | None = None,
+) -> int:
+    payload_json = json.dumps(payload or {}, ensure_ascii=False)
+    async with connect_db() as db:
+        await db.execute(
+            """
+            INSERT INTO payments(user_id, provider, amount, currency, created_at, status, payload_json, external_id)
+            VALUES(?,?,?,?,?,?,?,?)
+            """,
+            (
+                user_id,
+                provider,
+                amount,
+                currency,
+                datetime.now(UTC).isoformat(),
+                status,
+                payload_json,
+                external_id,
+            ),
+        )
+        await db.commit()
+        cur = await db.execute("SELECT last_insert_rowid()")
+        row = await cur.fetchone()
+        return int(row[0]) if row and row[0] is not None else 0
+
+
+async def update_payment_status(
+    external_id: str,
+    status: str,
+    payload: dict | None = None,
+) -> None:
+    updates = ["status=?"]
+    params: list[object] = [status]
+    if payload is not None:
+        updates.append("payload_json=?")
+        params.append(json.dumps(payload, ensure_ascii=False))
+    params.append(external_id)
+    async with connect_db() as db:
+        await db.execute(
+            f"UPDATE payments SET {', '.join(updates)} WHERE external_id=?",
+            tuple(params),
+        )
+        await db.commit()
+
+
+async def get_payment_by_external_id(external_id: str) -> dict | None:
+    async with connect_db() as db:
+        cur = await db.execute(
+            """
+            SELECT id, user_id, provider, amount, currency, created_at, status, payload_json
+            FROM payments
+            WHERE external_id=?
+            LIMIT 1
+            """,
+            (external_id,),
+        )
+        row = await cur.fetchone()
+        if not row:
+            return None
+        payload = {}
+        if row[7]:
+            try:
+                payload = json.loads(row[7])
+            except json.JSONDecodeError:
+                payload = {}
+        return {
+            "id": row[0],
+            "user_id": row[1],
+            "provider": row[2],
+            "amount": row[3],
+            "currency": row[4],
+            "created_at": row[5],
+            "status": row[6],
+            "payload": payload,
+        }
+
+
+async def get_latest_pending_payment(user_id: int, provider: str = "yookassa") -> dict | None:
+    async with connect_db() as db:
+        cur = await db.execute(
+            """
+            SELECT external_id, amount, currency, payload_json, created_at
+            FROM payments
+            WHERE user_id=? AND provider=? AND status='pending'
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            (user_id, provider),
+        )
+        row = await cur.fetchone()
+        if not row:
+            return None
+        payload = {}
+        if row[3]:
+            try:
+                payload = json.loads(row[3])
+            except json.JSONDecodeError:
+                payload = {}
+        return {
+            "external_id": row[0],
+            "amount": row[1],
+            "currency": row[2],
+            "payload": payload,
+            "created_at": row[4],
+        }
+
+
+async def list_broadcast_targets(exclude_tg_ids: Sequence[int] | set[int]) -> list[tuple[int, int]]:
+    await cleanup_expired_subscriptions()
+    now_iso = datetime.now(UTC).isoformat()
+    async with connect_db() as db:
+        query = [
+            "SELECT u.tg_id, u.id",
+            "FROM users u",
+            "LEFT JOIN (",
+            "    SELECT user_id, MAX(expires_at) AS expires_at",
+            "    FROM subscriptions",
+            "    WHERE status='active'",
+            "    GROUP BY user_id",
+            ") s ON s.user_id = u.id",
+            "WHERE u.tg_id IS NOT NULL",
+            "  AND (s.expires_at IS NULL OR s.expires_at <= ?)",
+        ]
+        params: list[object] = [now_iso]
+        exclude = list(exclude_tg_ids)
+        if exclude:
+            placeholders = ",".join("?" for _ in exclude)
+            query.append(f"  AND u.tg_id NOT IN ({placeholders})")
+            params.extend(exclude)
+        sql = "\n".join(query)
+        cur = await db.execute(sql, tuple(params))
+        rows = await cur.fetchall()
+        return [(int(row[0]), int(row[1])) for row in rows if row[0] is not None]
+
+
+async def find_user_by_tg_id(tg_id: int) -> tuple[int, str | None] | None:
+    async with connect_db() as db:
+        cur = await db.execute(
+            "SELECT id, username FROM users WHERE tg_id=?",
+            (tg_id,),
+        )
+        row = await cur.fetchone()
+        if not row:
+            return None
+        return int(row[0]), row[1]
+
+
+async def find_user_by_id(user_id: int) -> tuple[int, int | None, str | None] | None:
+    async with connect_db() as db:
+        cur = await db.execute(
+            "SELECT id, tg_id, username FROM users WHERE id=?",
+            (user_id,),
+        )
+        row = await cur.fetchone()
+        if not row:
+            return None
+        tg_id = row[1] if row[1] is None else int(row[1])
+        return int(row[0]), tg_id, row[2]
 
 
 async def list_active_days(user_id: int):
