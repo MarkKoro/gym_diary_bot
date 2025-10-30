@@ -140,6 +140,122 @@ async def _column_exists(db, table: str, column: str) -> bool:
     rows = await cur.fetchall()
     return any(row[1] == column for row in rows)
 
+
+async def _has_unique_index(
+    db, table: str, columns: tuple[str, ...]
+) -> bool:
+    cur = await db.execute(f"PRAGMA index_list({table})")
+    indexes = await cur.fetchall()
+    for _seq, name, unique, *_ in indexes:
+        if not unique:
+            continue
+        cur_info = await db.execute(f"PRAGMA index_info({name})")
+        info_rows = await cur_info.fetchall()
+        index_columns = tuple(row[2] for row in info_rows)
+        if index_columns == columns:
+            return True
+    return False
+
+
+async def _ensure_sessions_unique_by_day(db) -> None:
+    desired = ("user_id", "date", "day_index")
+    if await _has_unique_index(db, "sessions", desired):
+        return
+
+    await db.execute("PRAGMA foreign_keys=OFF")
+    try:
+        await db.execute("DROP TABLE IF EXISTS temp.session_dups")
+        await db.execute(
+            """
+            CREATE TEMP TABLE session_dups(
+                old_id INTEGER PRIMARY KEY,
+                keep_id INTEGER
+            )
+            """
+        )
+        await db.execute(
+            """
+            INSERT INTO session_dups(old_id, keep_id)
+            SELECT s.id AS old_id, keeper.keep_id
+            FROM sessions AS s
+            JOIN (
+                SELECT user_id, date, day_index, MIN(id) AS keep_id
+                FROM sessions
+                GROUP BY user_id, date, day_index
+                HAVING COUNT(*) > 1
+            ) AS keeper
+            ON keeper.user_id = s.user_id
+            AND keeper.date = s.date
+            AND keeper.day_index = s.day_index
+            WHERE s.id != keeper.keep_id
+            """
+        )
+
+        cur = await db.execute("SELECT COUNT(*) FROM session_dups")
+        dup_count_row = await cur.fetchone()
+        dup_count = dup_count_row[0] if dup_count_row else 0
+
+        if dup_count:
+            await db.execute(
+                """
+                INSERT INTO session_exercises(
+                    session_id, user_exercise_id, is_done, is_microcycle, done_at, last_reps, last_weight
+                )
+                SELECT
+                    mapper.keep_id,
+                    se.user_exercise_id,
+                    se.is_done,
+                    se.is_microcycle,
+                    se.done_at,
+                    se.last_reps,
+                    se.last_weight
+                FROM session_exercises AS se
+                JOIN session_dups AS mapper ON mapper.old_id = se.session_id
+                ON CONFLICT(session_id, user_exercise_id) DO UPDATE SET
+                    is_done = MAX(session_exercises.is_done, excluded.is_done),
+                    is_microcycle = MAX(session_exercises.is_microcycle, excluded.is_microcycle),
+                    done_at = CASE
+                        WHEN session_exercises.done_at IS NOT NULL THEN session_exercises.done_at
+                        ELSE excluded.done_at
+                    END,
+                    last_reps = COALESCE(session_exercises.last_reps, excluded.last_reps),
+                    last_weight = COALESCE(session_exercises.last_weight, excluded.last_weight)
+                """
+            )
+
+            await db.execute(
+                "DELETE FROM session_exercises WHERE session_id IN (SELECT old_id FROM session_dups)"
+            )
+
+            for table_name in ("sets", "running_entries"):
+                await db.execute(
+                    f"""
+                    UPDATE {table_name}
+                    SET session_id = (
+                        SELECT keep_id FROM session_dups WHERE old_id = {table_name}.session_id
+                    )
+                    WHERE session_id IN (SELECT old_id FROM session_dups)
+                    """
+                )
+
+            await db.execute(
+                "DELETE FROM sessions WHERE id IN (SELECT old_id FROM session_dups)"
+            )
+
+        await db.execute("DROP TABLE session_dups")
+
+        await db.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_sessions_user_date_day
+            ON sessions(user_id, date, day_index)
+            """
+        )
+
+        await db.commit()
+    finally:
+        await db.execute("PRAGMA foreign_keys=ON")
+
+
 async def init_db():
     async with connect_db() as db:
         await db.executescript("""
@@ -186,7 +302,7 @@ async def init_db():
             user_id INTEGER,
             date TEXT,                    -- 'YYYY-MM-DD' (локально для юзера)
             day_index INTEGER,
-            UNIQUE(user_id, date)
+            UNIQUE(user_id, date, day_index)
         );
 
         CREATE TABLE IF NOT EXISTS sets(
@@ -385,6 +501,7 @@ async def init_db():
                     (position, row_id),
                 )
             await db.commit()
+        await _ensure_sessions_unique_by_day(db)
         await db.commit()
 
         await _seed_exercises(db, DEFAULT_EXERCISES)
@@ -435,12 +552,21 @@ async def ensure_default_plan(user_id: int):
                 pass
         await db.commit()
 
-async def get_or_create_today_session(user_id: int, date_str: str, day_index: int = 1):
+async def get_or_create_today_session(
+    user_id: int, date_str: str, day_index: int = 1
+):
     async with connect_db() as db:
-        cur = await db.execute("SELECT id FROM sessions WHERE user_id=? AND date=?", (user_id, date_str))
+        cur = await db.execute(
+            "SELECT id FROM sessions WHERE user_id=? AND date=? AND day_index=?",
+            (user_id, date_str, day_index),
+        )
         row = await cur.fetchone()
-        if row: return row[0]
-        await db.execute("INSERT INTO sessions(user_id, date, day_index) VALUES(?,?,?)", (user_id, date_str, day_index))
+        if row:
+            return row[0]
+        await db.execute(
+            "INSERT INTO sessions(user_id, date, day_index) VALUES(?,?,?)",
+            (user_id, date_str, day_index),
+        )
         await db.commit()
         cur = await db.execute("SELECT last_insert_rowid()")
         return (await cur.fetchone())[0]

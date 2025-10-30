@@ -755,10 +755,16 @@ def build_strength_summary_from_sets(
 ) -> dict[str, int | float]:
     work_sets = filter_work_sets(sets)
     if not work_sets:
-        return {"sets_count": 0, "last_reps": 0, "last_weight": 0.0}
+        return {
+            "sets": [],
+            "sets_count": 0,
+            "last_reps": 0,
+            "last_weight": 0.0,
+        }
     last_reps = int(work_sets[-1][1] or 0)
     last_weight = float(work_sets[-1][2] or 0.0)
     return {
+        "sets": work_sets,
         "sets_count": len(work_sets),
         "last_reps": last_reps,
         "last_weight": last_weight,
@@ -807,6 +813,9 @@ def format_kb_summary(
     last_sets: list[tuple[int, int, float]],
 ) -> str:
     if current_sets:
+        detailed = summarize_previous_sets(current_sets, with_weight=True)
+        if detailed:
+            return f"{t('MADE')} {detailed}"
         return f"{t('MADE')} {format_kb_done(current_sets)}"
     if last_sets:
         return f"{t('LAST_TIME')}: {format_kb_previous(last_sets)}"
@@ -1001,14 +1010,71 @@ async def send_main_message(
 ) -> Message:
     if chat_id is None:
         raise ValueError("chat_id is required to send a message")
-    previous_id = last_messages.pop(chat_id, None)
-    if previous_id:
+    previous_id = last_messages.get(chat_id)
+    editable_kwargs = {
+        key: value
+        for key, value in kwargs.items()
+        if key
+        in {
+            "parse_mode",
+            "disable_web_page_preview",
+            "entities",
+            "link_preview_options",
+        }
+    }
+    if previous_id is not None:
         try:
-            await bot.delete_message(chat_id, previous_id)
-        except (BadRequest, Forbidden):
-            pass
-        except Exception:
-            logger.warning("Failed to delete previous message", exc_info=True)
+            msg = await bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=previous_id,
+                text=text,
+                reply_markup=reply_markup,
+                **editable_kwargs,
+            )
+        except BadRequest as edit_error:
+            error_text = (edit_error.message or "").lower()
+            if "message to edit not found" in error_text:
+                last_messages.pop(chat_id, None)
+            else:
+                try:
+                    await bot.delete_message(chat_id, previous_id)
+                except BadRequest as delete_error:
+                    delete_text = (delete_error.message or "").lower()
+                    if "message to delete not found" in delete_text:
+                        last_messages.pop(chat_id, None)
+                    else:
+                        remember_message(chat_id, previous_id)
+                        logger.warning(
+                            "Failed to delete previous message", exc_info=True
+                        )
+                        raise
+                except Forbidden:
+                    remember_message(chat_id, previous_id)
+                    raise
+                else:
+                    last_messages.pop(chat_id, None)
+        except TelegramError:
+            try:
+                await bot.delete_message(chat_id, previous_id)
+            except BadRequest as delete_error:
+                delete_text = (delete_error.message or "").lower()
+                if "message to delete not found" in delete_text:
+                    last_messages.pop(chat_id, None)
+                else:
+                    remember_message(chat_id, previous_id)
+                    logger.warning(
+                        "Failed to delete previous message", exc_info=True
+                    )
+                    raise
+            except Forbidden:
+                remember_message(chat_id, previous_id)
+                raise
+            else:
+                last_messages.pop(chat_id, None)
+        else:
+            remember_message(chat_id, msg.message_id)
+            return msg
+    last_messages.pop(chat_id, None)
     msg = await bot.send_message(
         chat_id=chat_id,
         text=text,
@@ -2084,7 +2150,8 @@ def measurement_categories_list(include_custom: bool = False) -> list[tuple[str,
 
 
 async def show_measure_edit_menu(q, context: ContextTypes.DEFAULT_TYPE, user_id: int) -> bool:
-    await load_custom_measurements(user_id, context)
+    custom_items = await load_custom_measurements(user_id, context)
+    has_custom = bool(custom_items)
     rows = await list_measurement_metrics(user_id)
     metrics_by_category: dict[str, list[tuple[str, str]]] = {}
     for code, _ in rows:
@@ -2093,7 +2160,7 @@ async def show_measure_edit_menu(q, context: ContextTypes.DEFAULT_TYPE, user_id:
             metrics_by_category.setdefault(item["category"], []).append(
                 (code, item["name"])
             )
-    if not metrics_by_category:
+    if not metrics_by_category and not has_custom:
         await q.answer("Пока нечего изменять.", show_alert=True)
         return False
     context.user_data[MEASUREMENT_EXISTING_KEY] = metrics_by_category
@@ -2102,14 +2169,62 @@ async def show_measure_edit_menu(q, context: ContextTypes.DEFAULT_TYPE, user_id:
         for code, title in measurement_categories_list(include_custom=True)
         if code in metrics_by_category
     ]
-    if not available:
+    if not available and not has_custom:
         await q.answer("Пока нечего изменять.", show_alert=True)
         return False
+    rows_markup: list[list[InlineKeyboardButton]] = []
+    for code, title in available:
+        rows_markup.append(
+            [
+                InlineKeyboardButton(
+                    title,
+                    callback_data=f"measure:edit:cat:{code}",
+                )
+            ]
+        )
+    if has_custom:
+        rows_markup.append(
+            [
+                InlineKeyboardButton(
+                    "Удалить свои замеры",
+                    callback_data="measure:edit:customrm",
+                )
+            ]
+        )
+    rows_markup.append([InlineKeyboardButton(BACK_BTN, callback_data="measure:back")])
     await show_screen(
         q,
         context,
         "Какую группу изменить?",
-        measurements_category_kb("edit", available),
+        InlineKeyboardMarkup(rows_markup),
+        user_id,
+    )
+    return True
+
+
+async def show_custom_measurements_delete_menu(
+    q, context: ContextTypes.DEFAULT_TYPE, user_id: int
+) -> bool:
+    items = await load_custom_measurements(user_id, context)
+    if not items:
+        await q.answer("Пока нечего удалять.", show_alert=True)
+        return False
+    rows: list[list[InlineKeyboardButton]] = []
+    for item in items:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    f"− {item['name']}",
+                    callback_data=f"measure:edit:customrm:{item['code']}",
+                )
+            ]
+        )
+    rows.append([InlineKeyboardButton(BACK_BTN, callback_data="measure:edit")])
+    await show_screen(
+        q,
+        context,
+        "Какой замер удалить?",
+        InlineKeyboardMarkup(rows),
         user_id,
     )
     return True
@@ -2461,17 +2576,28 @@ def format_strength_done_value(
     summary: dict[str, int | float] | None, *, with_weight: bool = True
 ) -> str:
     if not summary:
-        detail = "0 повт." if not with_weight else "0 повт. при 0 кг"
-        return f"0 (последний {detail})"
+        return "0 сетов"
+    sets = summary.get("sets") if isinstance(summary, dict) else None
+    if isinstance(sets, list):
+        work_sets: list[tuple[int, int, float]] = list(sets)
+        count = len(work_sets)
+        if count == 0:
+            return "0 сетов"
+        kind = str(summary.get("kind", "reps"))
+        details = summarize_previous_sets(
+            work_sets, with_weight=with_weight, kind=kind
+        )
+        label = f"{count} {pluralize_sets(count)}"
+        return f"{label} — {details}" if details else label
     count = int(summary.get("sets_count") or 0)
     reps = int(summary.get("last_reps") or 0)
     weight = float(summary.get("last_weight") or 0.0)
+    if count <= 0:
+        return "0 сетов"
     if with_weight:
         detail = f"{reps} повт. при {format_weight_value(weight)} кг"
     else:
         detail = f"{reps} повт."
-    if count <= 0:
-        return f"0 (последний {detail})"
     return f"{count} (последний {detail})"
 
 
@@ -2581,15 +2707,9 @@ async def fetch_day_sheet_data(
                 entry["prev_date"] = prev_created
             entry["has_history"] = bool(history_rows)
         else:
-            work_sets = filter_work_sets(today_sets_full)
-            sets_count = len(work_sets)
-            last_reps = work_sets[-1][1] if work_sets else 0
-            last_weight = work_sets[-1][2] if work_sets else 0.0
-            entry["today_summary"] = {
-                "sets_count": sets_count,
-                "last_reps": last_reps,
-                "last_weight": last_weight,
-            }
+            summary = build_strength_summary_from_sets(today_sets_full)
+            summary["kind"] = kind
+            entry["today_summary"] = summary
             if resolved_group == "kb":
                 entry["prev_summary"] = format_kb_previous(last_sets)
             else:
@@ -2791,13 +2911,25 @@ async def build_day_sheet_message(
                 kb_rows.append(
                     [
                         InlineKeyboardButton("＋5 сек", callback_data=f"{base_cb}:reps:5"),
-                        InlineKeyboardButton("＋10 сек", callback_data=f"{base_cb}:reps:10"),
+                        InlineKeyboardButton("＋15 сек", callback_data=f"{base_cb}:reps:15"),
+                    ]
+                )
+                kb_rows.append(
+                    [
+                        InlineKeyboardButton("＋30 сек", callback_data=f"{base_cb}:reps:30"),
+                        InlineKeyboardButton("＋1 мин", callback_data=f"{base_cb}:reps:60"),
                     ]
                 )
                 kb_rows.append(
                     [
                         InlineKeyboardButton("−5 сек", callback_data=f"{base_cb}:reps:-5"),
-                        InlineKeyboardButton("−10 сек", callback_data=f"{base_cb}:reps:-10"),
+                        InlineKeyboardButton("−15 сек", callback_data=f"{base_cb}:reps:-15"),
+                    ]
+                )
+                kb_rows.append(
+                    [
+                        InlineKeyboardButton("−30 сек", callback_data=f"{base_cb}:reps:-30"),
+                        InlineKeyboardButton("−1 мин", callback_data=f"{base_cb}:reps:-60"),
                     ]
                 )
                 kb_rows.append(
@@ -3110,20 +3242,29 @@ async def build_summary_map(
                 for no, reps, weight, warm in current_sets_full
                 if not warm
             ]
+            baseline = await get_baseline(user_id, day, ex_id)
+            plan_text = format_plan_value(
+                baseline, resolved, with_weight=with_weight
+            )
+            done_text = ""
             if filtered:
-                text = summarize_previous_sets(
+                done_text = summarize_previous_sets(
                     filtered, with_weight=with_weight, kind=kind
                 )
-            if not text:
-                last_sets = await fetch_last_session_sets(user_id, day, ue_id, today)
-                text = summarize_previous_sets(
+            if not done_text:
+                last_sets = await fetch_last_session_sets(
+                    user_id, day, ue_id, today
+                )
+                done_text = summarize_previous_sets(
                     last_sets, with_weight=with_weight, kind=kind
                 )
-                if not text:
-                    base = await get_baseline(user_id, day, ex_id)
-                    text = summarize_baseline(
-                        base, with_weight=with_weight, kind=kind
-                    )
+            if not done_text and baseline:
+                done_text = summarize_baseline(
+                    baseline, with_weight=with_weight, kind=kind
+                )
+            if not done_text:
+                done_text = t("NOT_FIXED")
+            text = f"{t('PLAN')} {plan_text} | {t('MADE')} {done_text}"
         if text:
             summary[ue_id] = text
     return summary
@@ -3336,6 +3477,7 @@ async def render_exercise_view(
             prev_text = t("NOT_FIXED")
         plan_text = format_plan_value(baseline, "kb")
         summary = build_strength_summary_from_sets(sets)
+        summary["kind"] = kind
         done_text = format_strength_done_value(summary)
     elif group == RUNNING_GROUP:
         running_entry = await get_running_entry(
@@ -3442,6 +3584,7 @@ async def render_exercise_view(
         prev_text = prev_text or t("NOT_FIXED")
         plan_text = format_plan_value(baseline, group, with_weight=with_weight)
         summary = build_strength_summary_from_sets(sets)
+        summary["kind"] = kind
         done_text = format_strength_done_value(
             summary, with_weight=with_weight
         )
@@ -5353,6 +5496,12 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await show_measure_edit_menu(q, context, user_id)
             return
 
+        if data == "measure:edit:customrm":
+            context.user_data.pop(MEASUREMENT_INPUT_KEY, None)
+            context.user_data.pop(MEASUREMENT_CUSTOM_KEY, None)
+            await show_custom_measurements_delete_menu(q, context, user_id)
+            return
+
         if data.startswith("measure:edit:cat:"):
             context.user_data.pop(MEASUREMENT_INPUT_KEY, None)
             parts = data.split(":")
@@ -5479,6 +5628,43 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await load_custom_measurements(user_id, context)
                 context.user_data.pop(MEASUREMENT_INPUT_KEY, None)
                 await show_measure_edit_menu(q, context, user_id)
+                return
+
+        if data.startswith("measure:edit:customrm:"):
+            parts = data.split(":")
+            if len(parts) >= 4 and parts[-1] != "ok":
+                code = parts[3]
+                item = get_measurement_item(code)
+                if not item or item.get("category") != MEASUREMENT_CUSTOM_CATEGORY[0]:
+                    await q.answer()
+                    return
+                kb = InlineKeyboardMarkup(
+                    [
+                        [
+                            InlineKeyboardButton(
+                                "✅ Удалить",
+                                callback_data=f"measure:edit:customrm:{code}:ok",
+                            )
+                        ],
+                        [InlineKeyboardButton(BACK_BTN, callback_data="measure:edit:customrm")],
+                    ]
+                )
+                await show_screen(
+                    q,
+                    context,
+                    f"Удалить замер «{item['name']}»? Все сохранённые значения будут стерты.",
+                    kb,
+                    user_id,
+                )
+                return
+            if len(parts) >= 5 and parts[-1] == "ok":
+                code = parts[3]
+                removed = await delete_custom_measurement(user_id, code)
+                if not removed:
+                    await q.answer("Не удалось удалить замер.", show_alert=True)
+                    return
+                await load_custom_measurements(user_id, context)
+                await show_custom_measurements_delete_menu(q, context, user_id)
                 return
 
         if data == "measure:delete":
