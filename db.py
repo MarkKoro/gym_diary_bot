@@ -161,97 +161,32 @@ async def _ensure_sessions_unique_by_day(db) -> None:
     desired = ("user_id", "date", "day_index")
     if await _has_unique_index(db, "sessions", desired):
         return
-
     await db.execute("PRAGMA foreign_keys=OFF")
+    await db.execute("BEGIN")
     try:
-        await db.execute("DROP TABLE IF EXISTS temp.session_dups")
+        await db.execute("ALTER TABLE sessions RENAME TO sessions_old")
         await db.execute(
             """
-            CREATE TEMP TABLE session_dups(
-                old_id INTEGER PRIMARY KEY,
-                keep_id INTEGER
+            CREATE TABLE sessions(
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER,
+                date TEXT,
+                day_index INTEGER,
+                UNIQUE(user_id, date, day_index)
             )
             """
         )
         await db.execute(
             """
-            INSERT INTO session_dups(old_id, keep_id)
-            SELECT s.id AS old_id, keeper.keep_id
-            FROM sessions AS s
-            JOIN (
-                SELECT user_id, date, day_index, MIN(id) AS keep_id
-                FROM sessions
-                GROUP BY user_id, date, day_index
-                HAVING COUNT(*) > 1
-            ) AS keeper
-            ON keeper.user_id = s.user_id
-            AND keeper.date = s.date
-            AND keeper.day_index = s.day_index
-            WHERE s.id != keeper.keep_id
+            INSERT INTO sessions(id, user_id, date, day_index)
+            SELECT id, user_id, date, day_index FROM sessions_old
             """
         )
-
-        cur = await db.execute("SELECT COUNT(*) FROM session_dups")
-        dup_count_row = await cur.fetchone()
-        dup_count = dup_count_row[0] if dup_count_row else 0
-
-        if dup_count:
-            await db.execute(
-                """
-                INSERT INTO session_exercises(
-                    session_id, user_exercise_id, is_done, is_microcycle, done_at, last_reps, last_weight
-                )
-                SELECT
-                    mapper.keep_id,
-                    se.user_exercise_id,
-                    se.is_done,
-                    se.is_microcycle,
-                    se.done_at,
-                    se.last_reps,
-                    se.last_weight
-                FROM session_exercises AS se
-                JOIN session_dups AS mapper ON mapper.old_id = se.session_id
-                ON CONFLICT(session_id, user_exercise_id) DO UPDATE SET
-                    is_done = MAX(session_exercises.is_done, excluded.is_done),
-                    is_microcycle = MAX(session_exercises.is_microcycle, excluded.is_microcycle),
-                    done_at = CASE
-                        WHEN session_exercises.done_at IS NOT NULL THEN session_exercises.done_at
-                        ELSE excluded.done_at
-                    END,
-                    last_reps = COALESCE(session_exercises.last_reps, excluded.last_reps),
-                    last_weight = COALESCE(session_exercises.last_weight, excluded.last_weight)
-                """
-            )
-
-            await db.execute(
-                "DELETE FROM session_exercises WHERE session_id IN (SELECT old_id FROM session_dups)"
-            )
-
-            for table_name in ("sets", "running_entries"):
-                await db.execute(
-                    f"""
-                    UPDATE {table_name}
-                    SET session_id = (
-                        SELECT keep_id FROM session_dups WHERE old_id = {table_name}.session_id
-                    )
-                    WHERE session_id IN (SELECT old_id FROM session_dups)
-                    """
-                )
-
-            await db.execute(
-                "DELETE FROM sessions WHERE id IN (SELECT old_id FROM session_dups)"
-            )
-
-        await db.execute("DROP TABLE session_dups")
-
-        await db.execute(
-            """
-            CREATE UNIQUE INDEX IF NOT EXISTS idx_sessions_user_date_day
-            ON sessions(user_id, date, day_index)
-            """
-        )
-
+        await db.execute("DROP TABLE sessions_old")
         await db.commit()
+    except Exception:
+        await db.rollback()
+        raise
     finally:
         await db.execute("PRAGMA foreign_keys=ON")
 
