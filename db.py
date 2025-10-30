@@ -140,6 +140,57 @@ async def _column_exists(db, table: str, column: str) -> bool:
     rows = await cur.fetchall()
     return any(row[1] == column for row in rows)
 
+
+async def _has_unique_index(
+    db, table: str, columns: tuple[str, ...]
+) -> bool:
+    cur = await db.execute(f"PRAGMA index_list({table})")
+    indexes = await cur.fetchall()
+    for _seq, name, unique, *_ in indexes:
+        if not unique:
+            continue
+        cur_info = await db.execute(f"PRAGMA index_info({name})")
+        info_rows = await cur_info.fetchall()
+        index_columns = tuple(row[2] for row in info_rows)
+        if index_columns == columns:
+            return True
+    return False
+
+
+async def _ensure_sessions_unique_by_day(db) -> None:
+    desired = ("user_id", "date", "day_index")
+    if await _has_unique_index(db, "sessions", desired):
+        return
+    await db.execute("PRAGMA foreign_keys=OFF")
+    await db.execute("BEGIN")
+    try:
+        await db.execute("ALTER TABLE sessions RENAME TO sessions_old")
+        await db.execute(
+            """
+            CREATE TABLE sessions(
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER,
+                date TEXT,
+                day_index INTEGER,
+                UNIQUE(user_id, date, day_index)
+            )
+            """
+        )
+        await db.execute(
+            """
+            INSERT INTO sessions(id, user_id, date, day_index)
+            SELECT id, user_id, date, day_index FROM sessions_old
+            """
+        )
+        await db.execute("DROP TABLE sessions_old")
+        await db.commit()
+    except Exception:
+        await db.rollback()
+        raise
+    finally:
+        await db.execute("PRAGMA foreign_keys=ON")
+
+
 async def init_db():
     async with connect_db() as db:
         await db.executescript("""
@@ -186,7 +237,7 @@ async def init_db():
             user_id INTEGER,
             date TEXT,                    -- 'YYYY-MM-DD' (локально для юзера)
             day_index INTEGER,
-            UNIQUE(user_id, date)
+            UNIQUE(user_id, date, day_index)
         );
 
         CREATE TABLE IF NOT EXISTS sets(
@@ -385,6 +436,7 @@ async def init_db():
                     (position, row_id),
                 )
             await db.commit()
+        await _ensure_sessions_unique_by_day(db)
         await db.commit()
 
         await _seed_exercises(db, DEFAULT_EXERCISES)
@@ -435,12 +487,21 @@ async def ensure_default_plan(user_id: int):
                 pass
         await db.commit()
 
-async def get_or_create_today_session(user_id: int, date_str: str, day_index: int = 1):
+async def get_or_create_today_session(
+    user_id: int, date_str: str, day_index: int = 1
+):
     async with connect_db() as db:
-        cur = await db.execute("SELECT id FROM sessions WHERE user_id=? AND date=?", (user_id, date_str))
+        cur = await db.execute(
+            "SELECT id FROM sessions WHERE user_id=? AND date=? AND day_index=?",
+            (user_id, date_str, day_index),
+        )
         row = await cur.fetchone()
-        if row: return row[0]
-        await db.execute("INSERT INTO sessions(user_id, date, day_index) VALUES(?,?,?)", (user_id, date_str, day_index))
+        if row:
+            return row[0]
+        await db.execute(
+            "INSERT INTO sessions(user_id, date, day_index) VALUES(?,?,?)",
+            (user_id, date_str, day_index),
+        )
         await db.commit()
         cur = await db.execute("SELECT last_insert_rowid()")
         return (await cur.fetchone())[0]
