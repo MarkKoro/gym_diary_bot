@@ -267,6 +267,7 @@ async def init_db():
             done_at TEXT,
             last_reps INTEGER,
             last_weight REAL,
+            note TEXT,
             UNIQUE(session_id, user_exercise_id)
         );
 
@@ -420,6 +421,10 @@ async def init_db():
             pass
         try:
             await db.execute("ALTER TABLE session_exercises ADD COLUMN last_weight REAL")
+        except Exception:
+            pass
+        try:
+            await db.execute("ALTER TABLE session_exercises ADD COLUMN note TEXT")
         except Exception:
             pass
         if not await _column_exists(db, "user_reminders", "day_no"):
@@ -1743,6 +1748,67 @@ async def mark_exercise_done(session_id: int, ue_id: int):
             ),
         )
         await db.commit()
+
+
+async def set_exercise_note(session_id: int, ue_id: int, note: str | None):
+    async with connect_db() as db:
+        await db.execute(
+            """
+            INSERT INTO session_exercises(
+                session_id,
+                user_exercise_id,
+                is_done,
+                is_microcycle,
+                done_at,
+                last_reps,
+                last_weight,
+                note
+            ) VALUES(?,?,0,0,NULL,NULL,NULL,?)
+            ON CONFLICT(session_id, user_exercise_id)
+            DO UPDATE SET note=excluded.note
+            """,
+            (session_id, ue_id, note),
+        )
+        await db.commit()
+
+
+async def get_exercise_note(session_id: int, ue_id: int) -> str | None:
+    async with connect_db() as db:
+        cur = await db.execute(
+            "SELECT note FROM session_exercises WHERE session_id=? AND user_exercise_id=?",
+            (session_id, ue_id),
+        )
+        row = await cur.fetchone()
+        if not row:
+            return None
+        return row[0]
+
+
+async def get_latest_completed_note(
+    user_id: int, exercise_id: int, exclude_session_id: int | None = None
+) -> tuple[int | None, str | None]:
+    async with connect_db() as db:
+        query = [
+            "SELECT se.session_id, se.note",
+            "FROM session_exercises se",
+            "JOIN user_exercises ue ON ue.id = se.user_exercise_id",
+            "JOIN sessions s ON s.id = se.session_id",
+            "WHERE ue.exercise_id=? AND s.user_id=? AND se.is_done=1",
+        ]
+        params: list[object] = [exercise_id, user_id]
+        if exclude_session_id is not None:
+            query.append("AND se.session_id<>?")
+            params.append(exclude_session_id)
+        query.append(
+            "ORDER BY s.date DESC, COALESCE(se.done_at, s.date || 'T00:00:00') DESC, se.session_id DESC LIMIT 1"
+        )
+        sql = "\n".join(query)
+        cur = await db.execute(sql, tuple(params))
+        row = await cur.fetchone()
+        if not row:
+            return None, None
+        return int(row[0]), row[1]
+
 
 async def list_recent_progress(user_id: int, day_index: int, ue_id: int, limit: int = 4, offset: int = 0):
     async with connect_db() as db:

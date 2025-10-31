@@ -1032,7 +1032,7 @@ def _format_step_label(step: float) -> str:
 
 def _rep_control_labels(kind: str) -> tuple[tuple[str, str], tuple[str, str]]:
     if kind == "duration":
-        return ("＋ сек", "Добавить 1 секунду"), ("− сек", "Убрать 1 секунду")
+        return ("＋1 сек", "Добавить 1 секунду"), ("−1 сек", "Убрать 1 секунду")
     return ("＋ повтор", "Добавить 1 повтор"), ("− повтор", "Убрать 1 повтор")
 
 
@@ -1177,7 +1177,7 @@ def exercise_actions_kb(
     if prefs.mode == "detailed":
         if kind == "duration":
             major_row: list[InlineKeyboardButton] = []
-            for step in (5,):
+            for step in (5, 25):
                 compact, detailed = _format_major_rep_label(kind, step, True)
                 major_row.append(
                     InlineKeyboardButton(
@@ -1214,6 +1214,38 @@ def exercise_actions_kb(
                     )
                 )
             rows.append(rep_major_row)
+    if kind == "duration":
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    dual("＋1 повтор", "Добавить 1 повтор"),
+                    callback_data=f"{inc_base}:reps:1",
+                ),
+                InlineKeyboardButton(
+                    dual("−1 повтор", "Убрать 1 повтор"),
+                    callback_data=f"{inc_base}:reps:-1",
+                ),
+            ]
+        )
+        if prefs.mode == "detailed":
+            rep_major_row: list[InlineKeyboardButton] = []
+            for step in (5,):
+                compact, detailed = _format_major_rep_label("reps", step, True)
+                rep_major_row.append(
+                    InlineKeyboardButton(
+                        dual(compact, detailed),
+                        callback_data=f"{inc_base}:reps:{_format_signed_delta(step)}",
+                    )
+                )
+                compact, detailed = _format_major_rep_label("reps", step, False)
+                rep_major_row.append(
+                    InlineKeyboardButton(
+                        dual(compact, detailed),
+                        callback_data=f"{inc_base}:reps:{_format_signed_delta(-step)}",
+                    )
+                )
+            if rep_major_row:
+                rows.append(rep_major_row)
     if with_weight:
         positive_row: list[InlineKeyboardButton] = []
         negative_row: list[InlineKeyboardButton] = []
@@ -1236,6 +1268,13 @@ def exercise_actions_kb(
         rows.append(negative_row)
     if has_history:
         rows.append([InlineKeyboardButton(HISTORY_BTN, callback_data=progress_cb)])
+    rows.append(
+        [
+            InlineKeyboardButton(
+                t("ADD_NOTE"), callback_data=f"ex:note:{day}:{ue_id}"
+            )
+        ]
+    )
     rows.append(
         [
             InlineKeyboardButton(DONE_BTN, callback_data=done_cb),

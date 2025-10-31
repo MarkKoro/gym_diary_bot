@@ -128,6 +128,9 @@ from db import (
     get_session_last_values,
     remove_last_set,
     mark_exercise_done,
+    set_exercise_note,
+    get_exercise_note,
+    get_latest_completed_note,
     list_recent_progress,
     count_exercise_progress_entries,
     list_last_done_dates,
@@ -192,6 +195,7 @@ DAY_SHEET_PAGE_SIZE = 6
 SHEET_VIEWS_KEY = "day_sheet_views"
 BROADCAST_STATE_KEY = "broadcast_state"
 SUBSCRIPTION_PAYMENT_KEY = "subscription_payment"
+EXERCISE_NOTE_INPUT_KEY = "awaiting_exercise_note"
 YK_PROVIDER = "yookassa"
 
 SUBSCRIPTION_PLANS = {
@@ -710,7 +714,7 @@ def get_display_flags(group: str, name: str) -> tuple[bool, str]:
     if group == RUNNING_GROUP:
         return False, "running"
     with_weight = group not in {"workout", "core"}
-    kind = "duration" if not with_weight and _is_duration_name(name) else "reps"
+    kind = "duration" if _is_duration_name(name) else "reps"
     return with_weight, kind
 
 
@@ -2625,15 +2629,24 @@ def build_last_done_dict(rows: list[tuple[int, str]]) -> dict[int, str]:
 
 
 def compose_exercise_line(mark: str, name: str, summary: str | None, last_done: str | None) -> str:
-    details = []
+    details: list[str] = []
+    extra_lines: list[str] = []
     if last_done:
         details.append(last_done)
     if summary:
-        details.append(summary)
+        summary_lines = str(summary).splitlines()
+        if summary_lines:
+            details.append(summary_lines[0])
+            if len(summary_lines) > 1:
+                extra_lines.extend(summary_lines[1:])
     prefix = f"{mark} " if mark else ""
+    base = f"{prefix}{name}".strip()
     if details:
-        return f"{prefix}{name} — {' — '.join(details)}".strip()
-    return f"{prefix}{name}".strip()
+        base = f"{base} — {' — '.join(details)}"
+    lines = [base.strip()]
+    for line in extra_lines:
+        lines.append(f"   {line}")
+    return "\n".join(lines)
 
 
 def build_prev_label(prev_summary: str | None, prev_date: str | None) -> str:
@@ -2646,6 +2659,16 @@ def build_prev_label(prev_summary: str | None, prev_date: str | None) -> str:
     if date:
         return date
     return t("NOT_FIXED")
+
+
+def build_note_lines(
+    current_note: str | None, previous_note: str | None
+) -> list[str]:
+    if current_note:
+        return [f"{t('NOTE')}: {current_note}"]
+    if previous_note:
+        return [f"{t('LAST_NOTE')}: {previous_note}"]
+    return []
 
 
 def format_plan_value(
@@ -2721,10 +2744,16 @@ async def fetch_day_sheet_data(
     for ue_id, name, group, done_flag, ex_id in ex_rows:
         resolved_group = resolve_group(name, group)
         with_weight, kind = get_display_flags(resolved_group, name)
+        weight_enabled = with_weight or resolved_group in {"workout", "core"}
         baseline = await get_baseline(user_id, day_index, ex_id)
         today_sets_full = []
         if session_id:
             today_sets_full = await fetch_exercise_sets(session_id, ue_id)
+        current_note = await get_exercise_note(session_id, ue_id) if session_id else None
+        _, prev_note_val = await get_latest_completed_note(
+            user_id, ex_id, exclude_session_id=session_id
+        )
+        previous_note = prev_note_val if prev_note_val else None
         last_sets = await fetch_last_session_sets(user_id, day_index, ue_id, date_str)
         entry: dict[str, object] = {
             "ue_id": ue_id,
@@ -2738,8 +2767,10 @@ async def fetch_day_sheet_data(
             "today_summary": None,
             "amrap_summary": None,
             "fortime_summary": None,
-            "with_weight": with_weight,
+            "with_weight": weight_enabled,
             "kind": kind,
+            "note": current_note,
+            "last_note": previous_note,
         }
         if resolved_group == "metcon" and name == AMRAP_EXERCISE_NAME:
             rounds, extra = parse_amrap_sets(today_sets_full)
@@ -2805,7 +2836,7 @@ async def fetch_day_sheet_data(
                 entry["prev_summary"] = format_kb_previous(last_sets)
             else:
                 entry["prev_summary"] = summarize_previous_sets(
-                    last_sets, with_weight=with_weight, kind=kind
+                    last_sets, with_weight=weight_enabled, kind=kind
                 )
         data.append(entry)
     return data
@@ -2899,6 +2930,9 @@ async def build_day_sheet_message(
             item.get("prev_summary"),
             item.get("prev_date"),
         )
+        note_lines = build_note_lines(
+            item.get("note"), item.get("last_note")
+        )
         if group_key == "metcon" and name == AMRAP_EXERCISE_NAME:
             summary = item.get("amrap_summary") or {"rounds": 0, "extra": 0}
             rounds = int(summary.get("rounds") or 0)
@@ -2907,7 +2941,8 @@ async def build_day_sheet_message(
             current_text = t("AMRAP_LINE", rounds=rounds, extra=extra)
             lines.append(f"{prefix}{t('METCON_TITLE')} — {t('AMRAP_TITLE')}")
             lines.append(f"• Прошлый раз: {prev_text}")
-            lines.append(f"• План: {t('NOT_SET')}")
+            for note_line in note_lines:
+                lines.append(f"• {note_line}")
             lines.append(f"• Сегодня: {current_text}")
             kb_rows.append(
                 [
@@ -2929,7 +2964,8 @@ async def build_day_sheet_message(
             result_line = t("FTIME_LINE", time=result)
             lines.append(f"{prefix}{t('METCON_TITLE')} — {t('FOR_TIME_TITLE')}")
             lines.append(f"• Прошлый раз: {result_line}")
-            lines.append(f"• План: {t('NOT_SET')}")
+            for note_line in note_lines:
+                lines.append(f"• {note_line}")
             lines.append(f"• Сегодня: {result_line}")
             kb_rows.append(
                 [
@@ -2947,6 +2983,8 @@ async def build_day_sheet_message(
             lines.append(f"{prefix}{name}")
             lines.append(f"• Сегодня: {current_text}")
             lines.append(f"• Прошлый раз: {prev_text}")
+            for note_line in note_lines:
+                lines.append(f"• {note_line}")
             action_row: list[InlineKeyboardButton] = [
                 InlineKeyboardButton("Открыть", callback_data=f"ex:view:{day_index}:{ue_id}"),
                 InlineKeyboardButton(t("DONE"), callback_data=f"run:done:{day_index}:{ue_id}"),
@@ -2958,19 +2996,23 @@ async def build_day_sheet_message(
             )
             kb_rows.append(action_row)
         else:
-            plan_text = format_plan_value(
-                item.get("baseline"), group_key, with_weight=with_weight
-            )
             done_text = format_strength_done_value(
                 item.get("today_summary"), with_weight=with_weight
             )
             last_text = prev_label
-            if not last_text and plan_text and plan_text != t("NOT_SET"):
-                last_text = plan_text
+            if not last_text:
+                baseline = item.get("baseline")
+                baseline_summary = summarize_baseline(
+                    baseline, with_weight=with_weight, kind=kind
+                ) if baseline else ""
+                if baseline_summary:
+                    last_text = baseline_summary
             if not last_text:
                 last_text = t("NOT_FIXED")
             lines.append(f"{prefix}{name}")
             lines.append(f"• Прошлый раз: {last_text}")
+            for note_line in note_lines:
+                lines.append(f"• {note_line}")
             lines.append(f"• Сегодня: {done_text}")
             base_cb = f"ex:inc:{day_index}:{ue_id}"
             add_label = t("ADD_REP") if kind != "duration" else f"{t('ADD_REP')} сек"
@@ -3007,6 +3049,7 @@ async def build_day_sheet_message(
                         [
                             InlineKeyboardButton("＋1 сек", callback_data=f"{base_cb}:reps:1"),
                             InlineKeyboardButton("＋5 сек", callback_data=f"{base_cb}:reps:5"),
+                            InlineKeyboardButton("＋25 сек", callback_data=f"{base_cb}:reps:25"),
                             InlineKeyboardButton("＋30 сек", callback_data=f"{base_cb}:reps:30"),
                         ]
                     )
@@ -3014,6 +3057,7 @@ async def build_day_sheet_message(
                         [
                             InlineKeyboardButton("−1 сек", callback_data=f"{base_cb}:reps:-1"),
                             InlineKeyboardButton("−5 сек", callback_data=f"{base_cb}:reps:-5"),
+                            InlineKeyboardButton("−25 сек", callback_data=f"{base_cb}:reps:-25"),
                             InlineKeyboardButton("−30 сек", callback_data=f"{base_cb}:reps:-30"),
                         ]
                     )
@@ -3048,6 +3092,18 @@ async def build_day_sheet_message(
                             InlineKeyboardButton("−1 мин", callback_data=f"{base_cb}:reps:-60"),
                         ]
                     )
+                kb_rows.append(
+                    [
+                        InlineKeyboardButton("＋1 повтор", callback_data=f"{base_cb}:reps:1"),
+                        InlineKeyboardButton("−1 повтор", callback_data=f"{base_cb}:reps:-1"),
+                    ]
+                )
+                kb_rows.append(
+                    [
+                        InlineKeyboardButton("＋5 повторов", callback_data=f"{base_cb}:reps:5"),
+                        InlineKeyboardButton("−5 повторов", callback_data=f"{base_cb}:reps:-5"),
+                    ]
+                )
                 kb_rows.append(
                     [InlineKeyboardButton(t("DONE"), callback_data=f"ex:done:{day_index}:{ue_id}")]
                 )
@@ -3324,9 +3380,15 @@ async def build_summary_map(
     for ue_id, name, group, _, ex_id in ex_rows:
         resolved = resolve_group(name, group)
         with_weight, kind = get_display_flags(resolved, name)
+        weight_enabled = with_weight or resolved in {"workout", "core"}
         current_sets_full: list[tuple[int, int, float, int]] = []
         if session_id:
             current_sets_full = await fetch_exercise_sets(session_id, ue_id)
+        current_note = await get_exercise_note(session_id, ue_id) if session_id else None
+        _, prev_note_val = await get_latest_completed_note(
+            user_id, ex_id, exclude_session_id=session_id
+        )
+        previous_note = prev_note_val if prev_note_val else None
         baseline = await get_baseline(user_id, day, ex_id)
         last_label = ""
         if resolved == "kb":
@@ -3385,22 +3447,26 @@ async def build_summary_map(
             work_sets = filter_work_sets(current_sets_full)
             if work_sets:
                 last_label = summarize_previous_sets(
-                    work_sets, with_weight=with_weight, kind=kind
+                    work_sets, with_weight=weight_enabled, kind=kind
                 )
             if not last_label:
                 last_sets = await fetch_last_session_sets(
                     user_id, day, ue_id, today
                 )
                 last_label = summarize_previous_sets(
-                    last_sets, with_weight=with_weight, kind=kind
+                    last_sets, with_weight=weight_enabled, kind=kind
                 )
             if not last_label and baseline:
                 last_label = summarize_baseline(
-                    baseline, with_weight=with_weight, kind=kind
+                    baseline, with_weight=weight_enabled, kind=kind
                 )
         if not last_label:
             last_label = t("NOT_FIXED")
-        summary[ue_id] = f"{t('LAST_TIME')}: {last_label}"
+        note_lines = build_note_lines(current_note, previous_note)
+        summary_text = f"{t('LAST_TIME')}: {last_label}"
+        if note_lines:
+            summary_text = summary_text + "\n" + "\n".join(note_lines)
+        summary[ue_id] = summary_text
     return summary
 
 
@@ -3474,15 +3540,15 @@ async def render_library_group_text(
         prefs,
         (
             "Открой упражнение, чтобы посмотреть детали.",
-            "Открой упражнение, чтобы посмотреть детали. Там можно уточнить план, изучить историю и через кнопки сразу записать новые подходы или скорректировать их.",
+            "Открой упражнение, чтобы посмотреть детали. Там можно изучить историю и через кнопки сразу записать новые подходы или скорректировать их.",
         ),
     )
     lines.append("")
     first_entry = True
+    session_id = await get_session_for_day(user_id, today, 0)
     for ue_id, name in items:
         ex_id, _, ex_group = await get_exercise_info(ue_id)
         resolved_group = resolve_group(name, ex_group)
-        plan_text = t("NOT_SET")
         if resolved_group == "metcon" and name == FOR_TIME_EXERCISE_NAME:
             rows = await fetch_measurement_history(user_id, FOR_TIME_METRIC, limit=1)
             seconds = None
@@ -3496,16 +3562,14 @@ async def render_library_group_text(
         else:
             last_sets = await fetch_last_session_sets(user_id, 0, ue_id, today)
             with_weight, kind = get_display_flags(resolved_group, name)
+            weight_enabled = with_weight or resolved_group in {"workout", "core"}
             summary = summarize_previous_sets(
-                last_sets, with_weight=with_weight, kind=kind
+                last_sets, with_weight=weight_enabled, kind=kind
             )
             base = await get_baseline(user_id, 0, ex_id)
-            plan_text = format_plan_value(
-                base, resolved_group, with_weight=with_weight
-            )
-            if not summary:
+            if not summary and base:
                 summary = summarize_baseline(
-                    base, with_weight=with_weight, kind=kind
+                    base, with_weight=weight_enabled, kind=kind
                 )
         last = last_done_map.get(ex_id)
         if not first_entry:
@@ -3513,12 +3577,17 @@ async def render_library_group_text(
         first_entry = False
         prefix = ""
         result_text = summary
-        if not result_text and plan_text and plan_text != t("NOT_SET"):
-            result_text = plan_text
         if not result_text:
             result_text = t("NOT_FIXED")
+        current_note = await get_exercise_note(session_id, ue_id) if session_id else None
+        _, prev_note_val = await get_latest_completed_note(
+            user_id, ex_id, exclude_session_id=session_id
+        )
+        note_lines = build_note_lines(current_note, prev_note_val)
         lines.append(f"{prefix}{name}")
         lines.append(f"• Последний результат: {result_text}")
+        for note_line in note_lines:
+            lines.append(f"• {note_line}")
         if last:
             lines.append(f"• Тренировка: {last}")
     lines.append("")
@@ -3589,6 +3658,12 @@ async def render_exercise_view(
     last_sets = await fetch_last_session_sets(user_id, day, ue_id, today)
     prefs = prefs or await load_ui_preferences(user_id)
     with_weight, kind = get_display_flags(group, name)
+    weight_enabled = with_weight or group in {"workout", "core"}
+    current_note = await get_exercise_note(session_id, ue_id)
+    prev_session_id, prev_note_value = await get_latest_completed_note(
+        user_id, ex_id, exclude_session_id=session_id
+    )
+    previous_note = prev_note_value if prev_note_value else None
     is_amrap = group == "metcon" and name == AMRAP_EXERCISE_NAME
     is_for_time = group == "metcon" and name == FOR_TIME_EXERCISE_NAME
 
@@ -3612,10 +3687,9 @@ async def render_exercise_view(
         prev_text = format_kb_previous(last_sets) or t("NOT_FIXED")
         if prev_text == "—":
             prev_text = t("NOT_FIXED")
-        plan_text = format_plan_value(baseline, "kb")
         summary = build_strength_summary_from_sets(sets)
         summary["kind"] = kind
-        done_text = format_strength_done_value(summary)
+        done_text = format_strength_done_value(summary, with_weight=weight_enabled)
     elif group == RUNNING_GROUP:
         running_entry = await get_running_entry(
             user_id,
@@ -3653,6 +3727,10 @@ async def render_exercise_view(
             lines.append("")
             lines.append("Прошлый раз:")
             lines.append(f"• {prev_text}")
+        note_lines = build_note_lines(current_note, previous_note)
+        if note_lines:
+            lines.append("")
+            lines.extend(note_lines)
         lines.append("")
         maybe_hint(
             lines,
@@ -3694,7 +3772,6 @@ async def render_exercise_view(
             if last_rounds or last_extra
             else t("NOT_FIXED")
         )
-        plan_text = t("NOT_SET")
         done_text = t("AMRAP_RESULT", rounds=rounds, extra=extra)
     elif is_for_time:
         rows = await fetch_measurement_history(user_id, FOR_TIME_METRIC, limit=1)
@@ -3708,34 +3785,33 @@ async def render_exercise_view(
         else:
             value_text = t("NOT_FIXED")
         prev_text = value_text
-        plan_text = t("NOT_SET")
         done_text = value_text
     else:
         prev_text = summarize_previous_sets(
-            last_sets, with_weight=with_weight, kind=kind
+            last_sets, with_weight=weight_enabled, kind=kind
         )
         if not prev_text:
             prev_text = summarize_baseline(
-                baseline, with_weight=with_weight, kind=kind
+                baseline, with_weight=weight_enabled, kind=kind
             )
         prev_text = prev_text or t("NOT_FIXED")
-        plan_text = format_plan_value(baseline, group, with_weight=with_weight)
         summary = build_strength_summary_from_sets(sets)
         summary["kind"] = kind
         done_text = format_strength_done_value(
-            summary, with_weight=with_weight
+            summary, with_weight=weight_enabled
         )
 
     lines = [
         title,
         f"{t('LAST_TIME')}: {prev_text}",
-        f"{t('PLAN')}: {plan_text}",
-        f"{t('MADE')}: {done_text}",
     ]
+    note_lines = build_note_lines(current_note, previous_note)
+    lines.extend(note_lines)
+    lines.append(f"{t('MADE')}: {done_text}")
     extra_lines = format_current_training(
         sets,
         selected_set,
-        with_weight=with_weight,
+        with_weight=weight_enabled,
         kind=kind,
     )
     if extra_lines:
@@ -3751,7 +3827,7 @@ async def render_exercise_view(
         group=group,
         sets=sets,
         selected_set=selected_set,
-        with_weight=with_weight,
+        with_weight=weight_enabled,
         kind=kind,
         is_amrap=is_amrap,
         is_for_time=is_for_time,
@@ -3949,6 +4025,13 @@ def build_running_actions_markup(
             InlineKeyboardButton(
                 "✏️ Калории", callback_data=f"run:input:{day}:{ue_id}:calories"
             ),
+        ]
+    )
+    rows.append(
+        [
+            InlineKeyboardButton(
+                t("ADD_NOTE"), callback_data=f"ex:note:{day}:{ue_id}"
+            )
         ]
     )
     primary_actions: list[tuple[str, str]] = [
@@ -5686,6 +5769,49 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 chat_id=chat_id,
                 message_id=msg_id,
                 reply_markup=kb,
+            )
+            remember_message(chat_id, msg_id)
+        return
+    note_state = context.user_data.get(EXERCISE_NOTE_INPUT_KEY)
+    if note_state:
+        if not update.message or update.message.text is None:
+            return
+        note_text = normalize_whitespace(update.message.text)
+        if not note_text:
+            await update.message.reply_text(t("NOTE_EMPTY"))
+            return
+        await try_delete(update.message)
+        context.user_data.pop(EXERCISE_NOTE_INPUT_KEY, None)
+        u = update.effective_user
+        user_id = await get_or_create_user(u.id, u.username)
+        day = int(note_state.get("day", 0))
+        ue_id = int(note_state.get("ue_id", 0))
+        today = await get_user_local_date(user_id)
+        session_id = await get_or_create_today_session(user_id, today, day)
+        await set_exercise_note(session_id, ue_id, note_text)
+        chat_id = note_state.get("chat_id")
+        msg_id = note_state.get("message_id")
+        if chat_id and msg_id:
+            prefs = await load_ui_preferences(user_id)
+            selected = get_flex_selected(context, day, ue_id)
+            view = await render_exercise_view(
+                user_id, day, ue_id, selected, prefs=prefs
+            )
+            set_flex_selected(context, day, ue_id, view.selected_set)
+            kb = build_exercise_actions_markup(
+                view,
+                day=day,
+                ue_id=ue_id,
+                group=view.group,
+                prefs=prefs,
+                is_library=bool(note_state.get("is_library")),
+            )
+            text_out, kb_out = prepare_ui_output(view.text, kb, prefs)
+            await context.bot.edit_message_text(
+                text_out,
+                chat_id=chat_id,
+                message_id=msg_id,
+                reply_markup=kb_out,
             )
             remember_message(chat_id, msg_id)
         return
@@ -7789,6 +7915,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             prefs = await load_ui_preferences(user_id)
             if action in {"view", "select", "progress"}:
                 context.user_data.pop(FOR_TIME_INPUT_KEY, None)
+                context.user_data.pop(EXERCISE_NOTE_INPUT_KEY, None)
             if action == "amrapscheme":
                 ex_id, name, raw_group = await get_exercise_info(ue_id)
                 if resolve_group(name, raw_group) != "metcon" or name != AMRAP_EXERCISE_NAME:
@@ -7835,6 +7962,39 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     is_library=is_library,
                 )
                 await show_screen(q, context, view.text, kb, user_id)
+                return
+            if action == "note":
+                state = {
+                    "day": day,
+                    "ue_id": ue_id,
+                    "chat_id": q.message.chat_id,
+                    "message_id": q.message.message_id,
+                    "is_library": is_library,
+                }
+                if sheet_context and not is_library:
+                    state["sheet"] = {
+                        "day": sheet_day if sheet_day is not None else day,
+                        "page": sheet_page,
+                    }
+                    clear_sheet_context(
+                        context, q.message.chat_id, q.message.message_id
+                    )
+                context.user_data[EXERCISE_NOTE_INPUT_KEY] = state
+                prompt_lines = [
+                    t("NOTE_PROMPT"),
+                    t("NOTE_EXAMPLE"),
+                    t("NOTE_HINT"),
+                ]
+                kb = InlineKeyboardMarkup(
+                    [[InlineKeyboardButton(t("BACK"), callback_data=f"ex:view:{day}:{ue_id}")]]
+                )
+                await show_screen(
+                    q,
+                    context,
+                    "\n".join(prompt_lines),
+                    kb,
+                    user_id,
+                )
                 return
             today_str = await get_user_local_date(user_id)
             async with user_locks[user_id]:
