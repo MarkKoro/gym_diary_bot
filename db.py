@@ -1394,9 +1394,11 @@ async def get_latest_pending_payment(user_id: int, provider: str = "yookassa") -
         }
 
 
-async def list_broadcast_targets(exclude_tg_ids: Sequence[int] | set[int]) -> list[tuple[int, int]]:
+async def list_broadcast_targets(
+    exclude_tg_ids: Sequence[int] | set[int],
+    only_without_subscription: bool = False,
+) -> list[tuple[int, int]]:
     await cleanup_expired_subscriptions()
-    now_iso = datetime.now(UTC).isoformat()
     async with connect_db() as db:
         query = [
             "SELECT u.tg_id, u.id",
@@ -1408,9 +1410,12 @@ async def list_broadcast_targets(exclude_tg_ids: Sequence[int] | set[int]) -> li
             "    GROUP BY user_id",
             ") s ON s.user_id = u.id",
             "WHERE u.tg_id IS NOT NULL",
-            "  AND (s.expires_at IS NULL OR s.expires_at <= ?)",
         ]
-        params: list[object] = [now_iso]
+        params: list[object] = []
+        if only_without_subscription:
+            now_iso = datetime.now(UTC).isoformat()
+            query.append("  AND (s.expires_at IS NULL OR s.expires_at <= ?)")
+            params.append(now_iso)
         exclude = list(exclude_tg_ids)
         if exclude:
             placeholders = ",".join("?" for _ in exclude)

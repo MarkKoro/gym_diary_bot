@@ -331,18 +331,44 @@ def _parse_completion_rows(
     return parsed, latest
 
 
+def _training_week_start(local_dt: datetime, first_dow: int):
+    offset = (local_dt.weekday() - first_dow) % 7
+    return local_dt.date() - timedelta(days=offset)
+
+
+async def _get_primary_training_weekday(user_id: int) -> int | None:
+    reminders = await list_user_reminders(user_id)
+    first_configured: int | None = None
+    for day_no, dow, _, _ in reminders:
+        if dow is None:
+            continue
+        dow_value = int(dow)
+        if day_no == 1:
+            return dow_value
+        if first_configured is None:
+            first_configured = dow_value
+    return first_configured
+
+
 async def _should_clear_day_completions(
     user_id: int, latest: datetime | None
 ) -> bool:
     if latest is None:
         return False
     now = datetime.now(UTC)
-    if now - latest >= DAY_COMPLETION_TTL:
-        return True
     tz_name = await get_user_timezone(user_id)
     zone = resolve_user_zone(tz_name)
     latest_local = latest.astimezone(zone)
     now_local = now.astimezone(zone)
+    first_dow = await _get_primary_training_weekday(user_id)
+    if first_dow is not None:
+        latest_week_start = _training_week_start(latest_local, first_dow)
+        current_week_start = _training_week_start(now_local, first_dow)
+        if current_week_start > latest_week_start:
+            return True
+        return False
+    if now - latest >= DAY_COMPLETION_TTL:
+        return True
     return now_local.date() != latest_local.date()
 
 
@@ -672,13 +698,18 @@ def resolve_group(name: str, group: str) -> str:
 
 def _is_duration_name(name: str) -> bool:
     lower = name.lower()
-    return "(сек" in lower or "удержание" in lower or "стойка" in lower
+    return (
+        "(сек" in lower
+        or "удержание" in lower
+        or "стойка" in lower
+        or "планк" in lower
+    )
 
 
 def get_display_flags(group: str, name: str) -> tuple[bool, str]:
     if group == RUNNING_GROUP:
         return False, "running"
-    with_weight = group != "workout"
+    with_weight = group not in {"workout", "core"}
     kind = "duration" if not with_weight and _is_duration_name(name) else "reps"
     return with_weight, kind
 
@@ -2971,30 +3002,52 @@ async def build_day_sheet_message(
                     ]
                 )
             if kind == "duration":
-                kb_rows.append(
-                    [
-                        InlineKeyboardButton("＋5 сек", callback_data=f"{base_cb}:reps:5"),
-                        InlineKeyboardButton("＋15 сек", callback_data=f"{base_cb}:reps:15"),
-                    ]
-                )
-                kb_rows.append(
-                    [
-                        InlineKeyboardButton("＋30 сек", callback_data=f"{base_cb}:reps:30"),
-                        InlineKeyboardButton("＋1 мин", callback_data=f"{base_cb}:reps:60"),
-                    ]
-                )
-                kb_rows.append(
-                    [
-                        InlineKeyboardButton("−5 сек", callback_data=f"{base_cb}:reps:-5"),
-                        InlineKeyboardButton("−15 сек", callback_data=f"{base_cb}:reps:-15"),
-                    ]
-                )
-                kb_rows.append(
-                    [
-                        InlineKeyboardButton("−30 сек", callback_data=f"{base_cb}:reps:-30"),
-                        InlineKeyboardButton("−1 мин", callback_data=f"{base_cb}:reps:-60"),
-                    ]
-                )
+                if group_key in {"workout", "core"}:
+                    kb_rows.append(
+                        [
+                            InlineKeyboardButton("＋1 сек", callback_data=f"{base_cb}:reps:1"),
+                            InlineKeyboardButton("＋5 сек", callback_data=f"{base_cb}:reps:5"),
+                            InlineKeyboardButton("＋30 сек", callback_data=f"{base_cb}:reps:30"),
+                        ]
+                    )
+                    kb_rows.append(
+                        [
+                            InlineKeyboardButton("−1 сек", callback_data=f"{base_cb}:reps:-1"),
+                            InlineKeyboardButton("−5 сек", callback_data=f"{base_cb}:reps:-5"),
+                            InlineKeyboardButton("−30 сек", callback_data=f"{base_cb}:reps:-30"),
+                        ]
+                    )
+                    kb_rows.append(
+                        [
+                            InlineKeyboardButton("＋1 мин", callback_data=f"{base_cb}:reps:60"),
+                            InlineKeyboardButton("−1 мин", callback_data=f"{base_cb}:reps:-60"),
+                        ]
+                    )
+                else:
+                    kb_rows.append(
+                        [
+                            InlineKeyboardButton("＋5 сек", callback_data=f"{base_cb}:reps:5"),
+                            InlineKeyboardButton("＋15 сек", callback_data=f"{base_cb}:reps:15"),
+                        ]
+                    )
+                    kb_rows.append(
+                        [
+                            InlineKeyboardButton("＋30 сек", callback_data=f"{base_cb}:reps:30"),
+                            InlineKeyboardButton("＋1 мин", callback_data=f"{base_cb}:reps:60"),
+                        ]
+                    )
+                    kb_rows.append(
+                        [
+                            InlineKeyboardButton("−5 сек", callback_data=f"{base_cb}:reps:-5"),
+                            InlineKeyboardButton("−15 сек", callback_data=f"{base_cb}:reps:-15"),
+                        ]
+                    )
+                    kb_rows.append(
+                        [
+                            InlineKeyboardButton("−30 сек", callback_data=f"{base_cb}:reps:-30"),
+                            InlineKeyboardButton("−1 мин", callback_data=f"{base_cb}:reps:-60"),
+                        ]
+                    )
                 kb_rows.append(
                     [InlineKeyboardButton(t("DONE"), callback_data=f"ex:done:{day_index}:{ue_id}")]
                 )
@@ -4289,6 +4342,9 @@ async def execute_broadcast(q, context: ContextTypes.DEFAULT_TYPE, state: dict) 
         await q.answer("Добавь текст для рассылки.", show_alert=True)
         return
     try:
+        unsubscribed_targets = await list_broadcast_targets(
+            ADMIN_IDS, only_without_subscription=True
+        )
         targets = await list_broadcast_targets(ADMIN_IDS)
     except Exception:
         logger.exception("Failed to prepare broadcast targets")
@@ -4303,9 +4359,10 @@ async def execute_broadcast(q, context: ContextTypes.DEFAULT_TYPE, state: dict) 
         reset_broadcast_state(context)
         await context.bot.send_message(
             q.message.chat_id,
-            "Нет пользователей без активной подписки для рассылки.",
+            "Нет пользователей для рассылки.",
         )
         return
+    unsubscribed_ids = {user_id for _, user_id in unsubscribed_targets}
     delivered = 0
     skipped = 0
     for tg_id, _ in targets:
@@ -4335,9 +4392,11 @@ async def execute_broadcast(q, context: ContextTypes.DEFAULT_TYPE, state: dict) 
             skipped += 1
             logger.warning("Broadcast failed for %s: %s", tg_id, err)
     reset_broadcast_state(context)
+    unsubscribed_count = sum(1 for _, user_id in targets if user_id in unsubscribed_ids)
     summary = (
-        f"Рассылка завершена. Получатели без подписки: {total}. "
-        f"Доставлено: {delivered}. Недоступно: {skipped}."
+        f"Рассылка завершена. Получатели: {total}. "
+        f"Доставлено: {delivered}. Недоступно: {skipped}. "
+        f"Без активной подписки: {unsubscribed_count}."
     )
     await context.bot.send_message(q.message.chat_id, summary)
 
@@ -4457,6 +4516,15 @@ async def on_subscription_choose(update: Update, context: ContextTypes.DEFAULT_T
         external_id=payload,
     )
 
+    try:
+        await query.message.delete()
+    except BadRequest:
+        logger.debug("Failed to delete subscription menu message")
+
+    back_markup = InlineKeyboardMarkup(
+        [[InlineKeyboardButton("⬅️ Назад", callback_data="back:main")]]
+    )
+
     await query.message.reply_invoice(
         title=title,
         description="Оплата подписки в gym_diary_bot",
@@ -4469,6 +4537,7 @@ async def on_subscription_choose(update: Update, context: ContextTypes.DEFAULT_T
         need_email=False,
         need_shipping_address=False,
         is_flexible=False,
+        reply_markup=back_markup,
     )
 
 
