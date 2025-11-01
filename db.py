@@ -107,6 +107,18 @@ METCON_SHARED_NAMES = METCON_EXERCISE_NAMES & DEFAULT_EXERCISE_NAMES
 
 SCHEME_SENTINEL = -1
 
+DURATION_NAME_PATTERNS: tuple[str, ...] = (
+    "(сек",
+    "удержание",
+    "стойка",
+    "планк",
+)
+DURATION_NAME_SQL = " OR ".join("LOWER(e.name) LIKE ?" for _ in DURATION_NAME_PATTERNS)
+
+
+def _duration_name_params() -> tuple[str, ...]:
+    return tuple(f"%{pattern}%" for pattern in DURATION_NAME_PATTERNS)
+
 
 async def _seed_exercises(db, exercises: Sequence[tuple[str, str]], update_group: bool = True):
     for name, mg in exercises:
@@ -192,6 +204,54 @@ async def _ensure_sessions_unique_by_day(db) -> None:
         await db.execute("PRAGMA foreign_keys=ON")
 
 
+async def _migrate_duration_metrics(db) -> None:
+    params = _duration_name_params()
+    await db.execute(
+        f"""
+        UPDATE sets
+        SET seconds = reps, reps = 0
+        WHERE seconds = 0
+          AND COALESCE(reps, 0) != 0
+          AND user_exercise_id IN (
+              SELECT ue.id
+              FROM user_exercises ue
+              JOIN exercises e ON e.id = ue.exercise_id
+              WHERE {DURATION_NAME_SQL}
+          )
+        """,
+        params,
+    )
+    await db.execute(
+        f"""
+        UPDATE session_exercises
+        SET last_seconds = last_reps, last_reps = 0
+        WHERE COALESCE(last_seconds, 0) = 0
+          AND COALESCE(last_reps, 0) != 0
+          AND user_exercise_id IN (
+              SELECT ue.id
+              FROM user_exercises ue
+              JOIN exercises e ON e.id = ue.exercise_id
+              WHERE {DURATION_NAME_SQL}
+          )
+        """,
+        params,
+    )
+    await db.execute(
+        f"""
+        UPDATE exercise_baseline
+        SET seconds = reps, reps = 0
+        WHERE COALESCE(seconds, 0) = 0
+          AND COALESCE(reps, 0) != 0
+          AND exercise_id IN (
+              SELECT e.id
+              FROM exercises e
+              WHERE {DURATION_NAME_SQL}
+          )
+        """,
+        params,
+    )
+
+
 async def init_db():
     async with connect_db() as db:
         await db.executescript("""
@@ -247,6 +307,7 @@ async def init_db():
             user_exercise_id INTEGER,
             set_no INTEGER,
             reps INTEGER DEFAULT 0,
+            seconds INTEGER DEFAULT 0,
             weight_kg REAL DEFAULT 0,
             is_warmup INTEGER DEFAULT 0
         );
@@ -266,6 +327,7 @@ async def init_db():
             is_microcycle INTEGER DEFAULT 0,
             done_at TEXT,
             last_reps INTEGER,
+            last_seconds INTEGER,
             last_weight REAL,
             note TEXT,
             UNIQUE(session_id, user_exercise_id)
@@ -278,6 +340,7 @@ async def init_db():
             exercise_id INTEGER,
             sets INTEGER,
             reps INTEGER,
+            seconds INTEGER,
             weight_kg REAL,
             UNIQUE(user_id, day_index, exercise_id)
         );
@@ -381,6 +444,10 @@ async def init_db():
         except Exception:
             pass
         try:
+            await db.execute("ALTER TABLE sets ADD COLUMN seconds INTEGER DEFAULT 0")
+        except Exception:
+            pass
+        try:
             await db.execute("ALTER TABLE user_prefs ADD COLUMN recording_mode TEXT")
         except Exception:
             pass
@@ -427,6 +494,14 @@ async def init_db():
             await db.execute("ALTER TABLE session_exercises ADD COLUMN note TEXT")
         except Exception:
             pass
+        try:
+            await db.execute("ALTER TABLE session_exercises ADD COLUMN last_seconds INTEGER")
+        except Exception:
+            pass
+        try:
+            await db.execute("ALTER TABLE exercise_baseline ADD COLUMN seconds INTEGER")
+        except Exception:
+            pass
         if not await _column_exists(db, "user_reminders", "day_no"):
             await db.execute("ALTER TABLE user_reminders ADD COLUMN day_no INTEGER")
             cur = await db.execute(
@@ -447,6 +522,7 @@ async def init_db():
             await db.commit()
         await db.commit()
         await _ensure_sessions_unique_by_day(db)
+        await _migrate_duration_metrics(db)
         await db.commit()
 
         await _seed_exercises(db, DEFAULT_EXERCISES)
@@ -545,7 +621,7 @@ async def fetch_day_exercises(user_id: int, day_index: int = 1, date_str: str | 
 async def fetch_sets_table(session_id: int):
     async with connect_db() as db:
         cur = await db.execute("""
-        SELECT sets.id, sets.user_exercise_id, sets.set_no, sets.reps, sets.weight_kg, e.name
+        SELECT sets.id, sets.user_exercise_id, sets.set_no, sets.reps, sets.seconds, sets.weight_kg, e.name
         FROM sets
         JOIN user_exercises ue ON ue.id = sets.user_exercise_id
         JOIN exercises e ON e.id = ue.exercise_id
@@ -556,22 +632,29 @@ async def fetch_sets_table(session_id: int):
         return rows
 
 
-async def _upsert_session_defaults(db, session_id: int, user_ex_id: int, reps: int | float, weight: float):
+async def _upsert_session_defaults(
+    db, session_id: int, user_ex_id: int, reps: int | float, seconds: int | float, weight: float
+):
     await db.execute(
         """
-        INSERT INTO session_exercises(session_id, user_exercise_id, is_done, is_microcycle, done_at, last_reps, last_weight)
-        VALUES(?,?,0,0,NULL,?,?)
+        INSERT INTO session_exercises(
+            session_id, user_exercise_id, is_done, is_microcycle, done_at, last_reps, last_seconds, last_weight
+        )
+        VALUES(?,?,0,0,NULL,?,?,?)
         ON CONFLICT(session_id, user_exercise_id)
-        DO UPDATE SET last_reps=excluded.last_reps, last_weight=excluded.last_weight
+        DO UPDATE SET
+            last_reps=excluded.last_reps,
+            last_seconds=excluded.last_seconds,
+            last_weight=excluded.last_weight
         """,
-        (session_id, user_ex_id, int(reps), float(weight)),
+        (session_id, user_ex_id, int(reps), int(seconds), float(weight)),
     )
 
 
 async def _refresh_session_defaults(db, session_id: int, user_ex_id: int):
     cur = await db.execute(
         """
-        SELECT reps, weight_kg
+        SELECT reps, seconds, weight_kg
         FROM sets
         WHERE session_id=? AND user_exercise_id=? AND is_warmup=0
         ORDER BY set_no DESC
@@ -583,7 +666,7 @@ async def _refresh_session_defaults(db, session_id: int, user_ex_id: int):
     if not row:
         cur = await db.execute(
             """
-            SELECT reps, weight_kg
+            SELECT reps, seconds, weight_kg
             FROM sets
             WHERE session_id=? AND user_exercise_id=?
             ORDER BY set_no DESC
@@ -593,26 +676,37 @@ async def _refresh_session_defaults(db, session_id: int, user_ex_id: int):
         )
         row = await cur.fetchone()
     if row:
-        await _upsert_session_defaults(db, session_id, user_ex_id, row[0], row[1])
+        await _upsert_session_defaults(db, session_id, user_ex_id, row[0], row[1], row[2])
 
 
-async def get_session_last_values(session_id: int, user_ex_id: int) -> tuple[int, float] | None:
-    async with connect_db() as db:
-        cur = await db.execute(
-            "SELECT last_reps, last_weight FROM session_exercises WHERE session_id=? AND user_exercise_id=?",
-            (session_id, user_ex_id),
-        )
-        row = await cur.fetchone()
-        if not row or row[0] is None or row[1] is None:
-            return None
-        return int(row[0]), float(row[1])
-
-async def inc_last_set(user_ex_id: int, session_id: int, field: str, delta: float):
-    assert field in ("reps", "weight_kg")
+async def get_session_last_values(
+    session_id: int, user_ex_id: int
+) -> tuple[int, int, float] | None:
     async with connect_db() as db:
         cur = await db.execute(
             """
-            SELECT id, reps, weight_kg
+            SELECT last_reps, last_seconds, last_weight
+            FROM session_exercises
+            WHERE session_id=? AND user_exercise_id=?
+            """,
+            (session_id, user_ex_id),
+        )
+        row = await cur.fetchone()
+        if not row:
+            return None
+        reps_val = int(row[0]) if row[0] is not None else 0
+        seconds_val = int(row[1]) if row[1] is not None else 0
+        weight_val = float(row[2]) if row[2] is not None else 0.0
+        if row[0] is None and row[1] is None and row[2] is None:
+            return None
+        return reps_val, seconds_val, weight_val
+
+async def inc_last_set(user_ex_id: int, session_id: int, field: str, delta: float):
+    assert field in ("reps", "seconds", "weight_kg")
+    async with connect_db() as db:
+        cur = await db.execute(
+            """
+            SELECT id, reps, seconds, weight_kg
             FROM sets
             WHERE session_id=? AND user_exercise_id=?
             ORDER BY set_no DESC
@@ -622,29 +716,37 @@ async def inc_last_set(user_ex_id: int, session_id: int, field: str, delta: floa
         rows = await cur.fetchall()
         if not rows:
             await db.execute(
-                "INSERT INTO sets(session_id, user_exercise_id, set_no, reps, weight_kg) VALUES(?,?,?,?,?)",
-                (session_id, user_ex_id, 1, 0, 0.0),
+                """
+                INSERT INTO sets(session_id, user_exercise_id, set_no, reps, seconds, weight_kg, is_warmup)
+                VALUES(?,?,?,?,?,?,0)
+                """,
+                (session_id, user_ex_id, 1, 0, 0, 0.0),
             )
             await db.commit()
             return await inc_last_set(user_ex_id, session_id, field, delta)
-        current = rows[0][1] if field == "reps" else rows[0][2]
         if field == "reps":
+            current = rows[0][1]
+            new_val = max(int(current + delta), 0)
+        elif field == "seconds":
+            current = rows[0][2]
             new_val = max(int(current + delta), 0)
         else:
+            current = rows[0][3]
             new_val = max(float(current + delta), 0.0)
         await db.executemany(
             f"UPDATE sets SET {field}=? WHERE id=?",
             [(new_val, r[0]) for r in rows],
         )
         reps_val = new_val if field == "reps" else rows[0][1]
-        weight_val = new_val if field == "weight_kg" else rows[0][2]
-        await _upsert_session_defaults(db, session_id, user_ex_id, reps_val, weight_val)
+        seconds_val = new_val if field == "seconds" else rows[0][2]
+        weight_val = new_val if field == "weight_kg" else rows[0][3]
+        await _upsert_session_defaults(db, session_id, user_ex_id, reps_val, seconds_val, weight_val)
         await db.commit()
 
 async def apply_sets_template(
     session_id: int,
     user_ex_id: int,
-    template: Sequence[tuple[int | float | None, int | float | None]],
+    template: Sequence[tuple[int | float | None, int | float | None, int | float | None]],
 ):
     async with connect_db() as db:
         await db.execute(
@@ -652,8 +754,9 @@ async def apply_sets_template(
             (session_id, user_ex_id),
         )
         rows = []
-        for idx, (reps, weight) in enumerate(template, start=1):
+        for idx, (reps, seconds, weight) in enumerate(template, start=1):
             reps_val = int(reps) if reps is not None else 0
+            seconds_val = int(seconds) if seconds is not None else 0
             weight_val = float(weight) if weight is not None else 0.0
             rows.append(
                 (
@@ -661,26 +764,30 @@ async def apply_sets_template(
                     user_ex_id,
                     idx,
                     max(reps_val, 0),
+                    max(seconds_val, 0),
                     max(weight_val, 0.0),
                 )
             )
         if rows:
             await db.executemany(
-                "INSERT INTO sets(session_id, user_exercise_id, set_no, reps, weight_kg, is_warmup) VALUES(?,?,?,?,?,0)",
+                """
+                INSERT INTO sets(session_id, user_exercise_id, set_no, reps, seconds, weight_kg, is_warmup)
+                VALUES(?,?,?,?,?,?,0)
+                """,
                 rows,
             )
             last = rows[-1]
-            await _upsert_session_defaults(db, session_id, user_ex_id, last[3], last[4])
+            await _upsert_session_defaults(db, session_id, user_ex_id, last[3], last[4], last[5])
         else:
             await _refresh_session_defaults(db, session_id, user_ex_id)
         await db.commit()
 
 async def inc_specific_set(user_ex_id: int, session_id: int, set_no: int, field: str, delta: float):
-    assert field in ("reps", "weight_kg")
+    assert field in ("reps", "seconds", "weight_kg")
     async with connect_db() as db:
         cur = await db.execute(
             """
-            SELECT id, reps, weight_kg
+            SELECT id, reps, seconds, weight_kg
             FROM sets
             WHERE session_id=? AND user_exercise_id=? AND set_no=?
             LIMIT 1
@@ -690,10 +797,13 @@ async def inc_specific_set(user_ex_id: int, session_id: int, set_no: int, field:
         row = await cur.fetchone()
         if not row:
             return
-        set_id, reps, weight = row
+        set_id, reps, seconds, weight = row
         if field == "reps":
             new_val = max(int(reps + delta), 0)
             await db.execute("UPDATE sets SET reps=? WHERE id=?", (new_val, set_id))
+        elif field == "seconds":
+            new_val = max(int(seconds + delta), 0)
+            await db.execute("UPDATE sets SET seconds=? WHERE id=?", (new_val, set_id))
         else:
             new_val = max(float(weight + delta), 0.0)
             await db.execute("UPDATE sets SET weight_kg=? WHERE id=?", (new_val, set_id))
@@ -905,22 +1015,30 @@ async def copy_day_plan_to_other_days(user_id: int, src_day: int, days: int):
                     (user_id, ex_id, d),
                 )
         cur = await db.execute(
-            "SELECT exercise_id, sets, reps, weight_kg FROM exercise_baseline WHERE user_id=? AND day_index=?",
+            """
+            SELECT exercise_id, sets, reps, seconds, weight_kg
+            FROM exercise_baseline
+            WHERE user_id=? AND day_index=?
+            """,
             (user_id, src_day),
         )
         rows = await cur.fetchall()
         for d in range(1, days + 1):
             if d == src_day:
                 continue
-            for ex_id, sets, reps, weight in rows:
+            for ex_id, sets, reps, seconds, weight in rows:
                 await db.execute(
                     """
-                    INSERT INTO exercise_baseline(user_id, day_index, exercise_id, sets, reps, weight_kg)
-                    VALUES(?,?,?,?,?,?)
+                    INSERT INTO exercise_baseline(user_id, day_index, exercise_id, sets, reps, seconds, weight_kg)
+                    VALUES(?,?,?,?,?,?,?)
                     ON CONFLICT(user_id, day_index, exercise_id)
-                    DO UPDATE SET sets=excluded.sets, reps=excluded.reps, weight_kg=excluded.weight_kg
+                    DO UPDATE SET
+                        sets=excluded.sets,
+                        reps=excluded.reps,
+                        seconds=excluded.seconds,
+                        weight_kg=excluded.weight_kg
                     """,
-                    (user_id, d, ex_id, sets, reps, weight),
+                    (user_id, d, ex_id, sets, reps, seconds, weight),
                 )
         await db.commit()
 
@@ -1111,16 +1229,22 @@ async def detach_user_exercise(user_id: int, day_index: int, exercise_id: int):
         )
         await db.commit()
 
-async def set_baseline(user_id: int, day_index: int, exercise_id: int, sets: int, reps: int, weight: float):
+async def set_baseline(
+    user_id: int, day_index: int, exercise_id: int, sets: int, reps: int, seconds: int, weight: float
+):
     async with connect_db() as db:
         await db.execute(
             """
-            INSERT INTO exercise_baseline(user_id, day_index, exercise_id, sets, reps, weight_kg)
-            VALUES(?,?,?,?,?,?)
+            INSERT INTO exercise_baseline(user_id, day_index, exercise_id, sets, reps, seconds, weight_kg)
+            VALUES(?,?,?,?,?,?,?)
             ON CONFLICT(user_id, day_index, exercise_id)
-            DO UPDATE SET sets=excluded.sets, reps=excluded.reps, weight_kg=excluded.weight_kg
+            DO UPDATE SET
+                sets=excluded.sets,
+                reps=excluded.reps,
+                seconds=excluded.seconds,
+                weight_kg=excluded.weight_kg
             """,
-            (user_id, day_index, exercise_id, sets, reps, weight),
+            (user_id, day_index, exercise_id, sets, reps, seconds, weight),
         )
         await db.commit()
 
@@ -1545,16 +1669,24 @@ async def get_exercise_info(ue_id: int):
 async def get_baseline(user_id: int, day_index: int, exercise_id: int):
     async with connect_db() as db:
         cur = await db.execute(
-            "SELECT sets, reps, weight_kg FROM exercise_baseline "
-            "WHERE user_id=? AND day_index=? AND exercise_id=? AND sets>=0",
+            """
+            SELECT sets, reps, seconds, weight_kg
+            FROM exercise_baseline
+            WHERE user_id=? AND day_index=? AND exercise_id=? AND sets>=0
+            """,
             (user_id, day_index, exercise_id),
         )
         row = await cur.fetchone()
         if row:
             return row
         cur = await db.execute(
-            "SELECT sets, reps, weight_kg FROM exercise_baseline "
-            "WHERE user_id=? AND exercise_id=? AND sets>=0 ORDER BY day_index LIMIT 1",
+            """
+            SELECT sets, reps, seconds, weight_kg
+            FROM exercise_baseline
+            WHERE user_id=? AND exercise_id=? AND sets>=0
+            ORDER BY day_index
+            LIMIT 1
+            """,
             (user_id, exercise_id),
         )
         return await cur.fetchone()
@@ -1585,12 +1717,16 @@ async def set_exercise_scheme(user_id: int, day_index: int, exercise_id: int, te
         if cleaned:
             await db.execute(
                 """
-                INSERT INTO exercise_baseline(user_id, day_index, exercise_id, sets, reps, weight_kg)
-                VALUES(?,?,?,?,?,?)
+                INSERT INTO exercise_baseline(user_id, day_index, exercise_id, sets, reps, seconds, weight_kg)
+                VALUES(?,?,?,?,?,?,?)
                 ON CONFLICT(user_id, day_index, exercise_id)
-                DO UPDATE SET sets=excluded.sets, reps=excluded.reps, weight_kg=excluded.weight_kg
+                DO UPDATE SET
+                    sets=excluded.sets,
+                    reps=excluded.reps,
+                    seconds=excluded.seconds,
+                    weight_kg=excluded.weight_kg
                 """,
-                (user_id, day_index, exercise_id, SCHEME_SENTINEL, 0, cleaned),
+                (user_id, day_index, exercise_id, SCHEME_SENTINEL, 0, 0, cleaned),
             )
         else:
             await db.execute(
@@ -1610,19 +1746,25 @@ async def get_last_session_summary(user_id: int, day_index: int, ue_id: int, tod
             return None
         session_id = row[0]
         cur = await db.execute(
-            "SELECT reps, weight_kg FROM sets WHERE session_id=? AND user_exercise_id=? AND is_warmup=0 ORDER BY set_no DESC LIMIT 1",
+            """
+            SELECT reps, seconds, weight_kg
+            FROM sets
+            WHERE session_id=? AND user_exercise_id=? AND is_warmup=0
+            ORDER BY set_no DESC
+            LIMIT 1
+            """,
             (session_id, ue_id),
         )
         last = await cur.fetchone()
         if not last:
             return None
-        reps, weight = last
+        reps, seconds, weight = last
         cur = await db.execute(
             "SELECT COUNT(*) FROM sets WHERE session_id=? AND user_exercise_id=? AND is_warmup=0",
             (session_id, ue_id),
         )
         count = (await cur.fetchone())[0]
-        return count, reps, weight
+        return count, reps, seconds, weight
 
 async def fetch_last_session_sets(user_id: int, day_index: int, ue_id: int, today: str):
     async with connect_db() as db:
@@ -1652,7 +1794,7 @@ async def fetch_last_session_sets(user_id: int, day_index: int, ue_id: int, toda
         session_id, prev_ue_id = row
         cur = await db.execute(
             """
-            SELECT set_no, reps, weight_kg
+            SELECT set_no, reps, seconds, weight_kg
             FROM sets
             WHERE session_id=? AND user_exercise_id=? AND is_warmup=0
             ORDER BY set_no
@@ -1664,12 +1806,19 @@ async def fetch_last_session_sets(user_id: int, day_index: int, ue_id: int, toda
 async def fetch_exercise_sets(session_id: int, ue_id: int):
     async with connect_db() as db:
         cur = await db.execute(
-            "SELECT set_no, reps, weight_kg, is_warmup FROM sets WHERE session_id=? AND user_exercise_id=? ORDER BY set_no",
+            """
+            SELECT set_no, reps, seconds, weight_kg, is_warmup
+            FROM sets
+            WHERE session_id=? AND user_exercise_id=?
+            ORDER BY set_no
+            """,
             (session_id, ue_id),
         )
         return await cur.fetchall()
 
-async def add_set(session_id: int, user_ex_id: int, reps: int = 0, weight: float = 0.0):
+async def add_set(
+    session_id: int, user_ex_id: int, reps: int = 0, seconds: int = 0, weight: float = 0.0
+):
     async with connect_db() as db:
         cur = await db.execute(
             "SELECT COALESCE(MAX(set_no),0)+1 FROM sets WHERE session_id=? AND user_exercise_id=?",
@@ -1677,21 +1826,30 @@ async def add_set(session_id: int, user_ex_id: int, reps: int = 0, weight: float
         )
         next_no = (await cur.fetchone())[0]
         await db.execute(
-            "INSERT INTO sets(session_id, user_exercise_id, set_no, reps, weight_kg, is_warmup) VALUES(?,?,?,?,?,0)",
-            (session_id, user_ex_id, next_no, reps, weight),
+            """
+            INSERT INTO sets(session_id, user_exercise_id, set_no, reps, seconds, weight_kg, is_warmup)
+            VALUES(?,?,?,?,?,?,0)
+            """,
+            (session_id, user_ex_id, next_no, reps, seconds, weight),
         )
-        await _upsert_session_defaults(db, session_id, user_ex_id, reps, weight)
+        await _upsert_session_defaults(db, session_id, user_ex_id, reps, seconds, weight)
         await db.commit()
 
 async def remove_last_set(user_ex_id: int, session_id: int):
     async with connect_db() as db:
         cur = await db.execute(
-            "SELECT id, reps, weight_kg FROM sets WHERE session_id=? AND user_exercise_id=? ORDER BY set_no DESC LIMIT 1",
+            """
+            SELECT id, reps, seconds, weight_kg
+            FROM sets
+            WHERE session_id=? AND user_exercise_id=?
+            ORDER BY set_no DESC
+            LIMIT 1
+            """,
             (session_id, user_ex_id),
         )
         row = await cur.fetchone()
         if row:
-            set_id, reps, weight = row
+            set_id, reps, seconds, weight = row
             await db.execute("DELETE FROM sets WHERE id=?", (set_id,))
             await _refresh_session_defaults(db, session_id, user_ex_id)
             cur = await db.execute(
@@ -1700,7 +1858,7 @@ async def remove_last_set(user_ex_id: int, session_id: int):
             )
             remaining = (await cur.fetchone())[0]
             if remaining == 0:
-                await _upsert_session_defaults(db, session_id, user_ex_id, reps, weight)
+                await _upsert_session_defaults(db, session_id, user_ex_id, reps, seconds, weight)
             await db.commit()
 
 async def toggle_last_set_warmup(user_ex_id: int, session_id: int):
@@ -1722,21 +1880,29 @@ async def mark_exercise_done(session_id: int, ue_id: int):
     async with connect_db() as db:
         await _refresh_session_defaults(db, session_id, ue_id)
         cur = await db.execute(
-            "SELECT last_reps, last_weight FROM session_exercises WHERE session_id=? AND user_exercise_id=?",
+            """
+            SELECT last_reps, last_seconds, last_weight
+            FROM session_exercises
+            WHERE session_id=? AND user_exercise_id=?
+            """,
             (session_id, ue_id),
         )
         row = await cur.fetchone()
         last_reps = row[0] if row and row[0] is not None else None
-        last_weight = row[1] if row and row[1] is not None else None
+        last_seconds = row[1] if row and row[1] is not None else None
+        last_weight = row[2] if row and row[2] is not None else None
         await db.execute(
             """
-            INSERT INTO session_exercises(session_id, user_exercise_id, is_done, is_microcycle, done_at, last_reps, last_weight)
-            VALUES(?,?,1,0,?,?,?)
+            INSERT INTO session_exercises(
+                session_id, user_exercise_id, is_done, is_microcycle, done_at, last_reps, last_seconds, last_weight
+            )
+            VALUES(?,?,1,0,?,?,?,?)
             ON CONFLICT(session_id, user_exercise_id)
             DO UPDATE SET
                 is_done=1,
                 done_at=excluded.done_at,
                 last_reps=COALESCE(excluded.last_reps, session_exercises.last_reps),
+                last_seconds=COALESCE(excluded.last_seconds, session_exercises.last_seconds),
                 last_weight=COALESCE(excluded.last_weight, session_exercises.last_weight)
             """,
             (
@@ -1744,6 +1910,7 @@ async def mark_exercise_done(session_id: int, ue_id: int):
                 ue_id,
                 datetime.now(UTC).isoformat(),
                 last_reps,
+                last_seconds,
                 last_weight,
             ),
         )
@@ -1761,9 +1928,10 @@ async def set_exercise_note(session_id: int, ue_id: int, note: str | None):
                 is_microcycle,
                 done_at,
                 last_reps,
+                last_seconds,
                 last_weight,
                 note
-            ) VALUES(?,?,0,0,NULL,NULL,NULL,?)
+            ) VALUES(?,?,0,0,NULL,NULL,NULL,NULL,?)
             ON CONFLICT(session_id, user_exercise_id)
             DO UPDATE SET note=excluded.note
             """,
@@ -1810,7 +1978,9 @@ async def get_latest_completed_note(
         return int(row[0]), row[1]
 
 
-async def list_recent_progress(user_id: int, day_index: int, ue_id: int, limit: int = 4, offset: int = 0):
+async def list_recent_progress(
+    user_id: int, day_index: int, ue_id: int, limit: int = 4, offset: int = 0
+):
     async with connect_db() as db:
         cur = await db.execute(
             "SELECT exercise_id FROM user_exercises WHERE id=?",
@@ -1833,11 +2003,11 @@ async def list_recent_progress(user_id: int, day_index: int, ue_id: int, limit: 
             (user_id, exercise_id, limit, offset),
         )
         sessions = await cur.fetchall()
-        results: list[tuple[str, int, int, float, list[tuple[int, float]]]] = []
+        results: list[tuple[str, int, int, int, float, list[tuple[int, int, float]]]] = []
         for session_id, date_value in sessions:
             cur_sets = await db.execute(
                 """
-                SELECT reps, weight_kg
+                SELECT reps, seconds, weight_kg
                 FROM sets
                 WHERE session_id=? AND user_exercise_id=? AND is_warmup=0
                 ORDER BY set_no, id
@@ -1845,13 +2015,15 @@ async def list_recent_progress(user_id: int, day_index: int, ue_id: int, limit: 
                 (session_id, ue_id),
             )
             set_rows = await cur_sets.fetchall()
-            details: list[tuple[int, float]] = [
-                (int(row[0] or 0), float(row[1] or 0.0)) for row in set_rows
+            details: list[tuple[int, int, float]] = [
+                (int(row[0] or 0), int(row[1] or 0), float(row[2] or 0.0))
+                for row in set_rows
             ]
             sets_cnt = len(details)
             max_reps = max((row[0] or 0 for row in set_rows), default=0)
-            max_weight = max((row[1] or 0.0 for row in set_rows), default=0.0)
-            results.append((date_value, sets_cnt, max_reps, max_weight, details))
+            max_seconds = max((row[1] or 0 for row in set_rows), default=0)
+            max_weight = max((row[2] or 0.0 for row in set_rows), default=0.0)
+            results.append((date_value, sets_cnt, max_reps, max_seconds, max_weight, details))
         return results
 
 async def count_exercise_progress_entries(user_id: int, day_index: int, ue_id: int) -> int:
