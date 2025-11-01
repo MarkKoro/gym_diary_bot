@@ -1221,6 +1221,21 @@ def remember_message(chat_id: int | None, message_id: int | None):
     last_messages[chat_id] = message_id
 
 
+def clear_linear_state(
+    user_data: dict,
+    preserve_keys: set[str] | None = None,
+) -> None:
+    preserved = preserve_keys or set()
+    for key in list(user_data.keys()):
+        if key.startswith("awaiting_") and key not in preserved:
+            user_data.pop(key, None)
+    linear_keys = {"add_group", BROADCAST_STATE_KEY}
+    for key in linear_keys:
+        if key in preserved:
+            continue
+        user_data.pop(key, None)
+
+
 async def send_main_message(
     bot,
     chat_id: int | None,
@@ -4543,7 +4558,7 @@ async def send_broadcast_preview(
 ) -> None:
     text = build_broadcast_preview_text(state)
     markup = build_broadcast_preview_markup(state)
-    await context.bot.send_message(chat_id, text, reply_markup=markup)
+    await send_main_message(context.bot, chat_id, text, reply_markup=markup)
 
 
 async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -4560,8 +4575,11 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     }
     context.user_data[BROADCAST_STATE_KEY] = state
     if update.message:
-        await update.message.reply_text(
-            "Пришли текст сообщения для рассылки. После текста можно добавить фотографию. Отправь /cancel, чтобы отменить рассылку."
+        await try_delete(update.message)
+        await send_main_message(
+            context.bot,
+            update.message.chat_id,
+            "Пришли текст сообщения для рассылки. После текста можно добавить фотографию. Отправь /cancel, чтобы отменить рассылку.",
         )
 
 
@@ -4643,57 +4661,87 @@ async def handle_broadcast_text(
     chat_id = message.chat_id
     if step == "await_text":
         if not text:
-            await message.reply_text("Текст не должен быть пустым.")
+            await send_main_message(
+                context.bot,
+                chat_id,
+                "Текст не должен быть пустым.",
+            )
+            await try_delete(message)
             return True
         state["text"] = text
         skip_prompt = bool(state.pop("skip_photo_prompt", False))
         if skip_prompt:
             state["step"] = "await_confirm"
-            await message.reply_text("Текст обновлён.")
+            await send_main_message(context.bot, chat_id, "Текст обновлён.")
             await send_broadcast_preview(chat_id, context, state)
         else:
             state["step"] = "await_photo_choice"
-            await message.reply_text(
+            await send_main_message(
+                context.bot,
+                chat_id,
                 "Хочешь добавить фотографию к рассылке? Ответь «да» или «нет».",
                 reply_markup=broadcast_photo_choice_markup(),
             )
+        await try_delete(message)
         return True
     if step == "await_photo_choice":
         lowered = text.lower()
         if lowered in {"да", "yes", "y"}:
             state["step"] = "await_photo"
-            await message.reply_text(
+            await send_main_message(
+                context.bot,
+                chat_id,
                 "Пришли фотографию для рассылки.",
                 reply_markup=broadcast_photo_manage_markup(bool(state.get("photo"))),
             )
+            await try_delete(message)
             return True
         if lowered in {"нет", "no", "n"}:
             state["step"] = "await_confirm"
             await send_broadcast_preview(chat_id, context, state)
+            await try_delete(message)
             return True
-        await message.reply_text("Ответь «да» или «нет», чтобы продолжить.")
+        await send_main_message(
+            context.bot,
+            chat_id,
+            "Ответь «да» или «нет», чтобы продолжить.",
+        )
+        await try_delete(message)
         return True
     if step == "await_photo":
         lowered = text.lower()
         if lowered in {"назад", "отмена", "back"}:
             state["step"] = "await_confirm"
             await send_broadcast_preview(chat_id, context, state)
+            await try_delete(message)
             return True
         if lowered in {"удалить", "remove"}:
             state["photo"] = None
             state["step"] = "await_confirm"
-            await message.reply_text("Фото удалено.")
+            await send_main_message(context.bot, chat_id, "Фото удалено.")
             await send_broadcast_preview(chat_id, context, state)
+            await try_delete(message)
             return True
-        await message.reply_text("Пришли фотографию или напиши «назад», чтобы вернуться.")
+        await send_main_message(
+            context.bot,
+            chat_id,
+            "Пришли фотографию или напиши «назад», чтобы вернуться.",
+        )
+        await try_delete(message)
         return True
     if step == "await_confirm":
         if not text:
-            await message.reply_text("Текст не должен быть пустым.")
+            await send_main_message(
+                context.bot,
+                chat_id,
+                "Текст не должен быть пустым.",
+            )
+            await try_delete(message)
             return True
         state["text"] = text
-        await message.reply_text("Текст обновлён.")
+        await send_main_message(context.bot, chat_id, "Текст обновлён.")
         await send_broadcast_preview(chat_id, context, state)
+        await try_delete(message)
         return True
     return False
 
@@ -4709,8 +4757,9 @@ async def handle_broadcast_photo(
     photo = message.photo[-1]
     state["photo"] = photo.file_id
     state["step"] = "await_confirm"
-    await message.reply_text("Фото добавлено.")
+    await send_main_message(context.bot, message.chat_id, "Фото добавлено.")
     await send_broadcast_preview(message.chat_id, context, state)
+    await try_delete(message)
     return True
 
 
@@ -4726,7 +4775,8 @@ async def execute_broadcast(q, context: ContextTypes.DEFAULT_TYPE, state: dict) 
         targets = await list_broadcast_targets(ADMIN_IDS)
     except Exception:
         logger.exception("Failed to prepare broadcast targets")
-        await context.bot.send_message(
+        await send_main_message(
+            context.bot,
             q.message.chat_id,
             "Не удалось подготовить рассылку. Попробуй позже.",
         )
@@ -4735,7 +4785,8 @@ async def execute_broadcast(q, context: ContextTypes.DEFAULT_TYPE, state: dict) 
     total = len(targets)
     if total == 0:
         reset_broadcast_state(context)
-        await context.bot.send_message(
+        await send_main_message(
+            context.bot,
             q.message.chat_id,
             "Нет пользователей для рассылки.",
         )
@@ -4776,7 +4827,7 @@ async def execute_broadcast(q, context: ContextTypes.DEFAULT_TYPE, state: dict) 
         f"Доставлено: {delivered}. Недоступно: {skipped}. "
         f"Без активной подписки: {unsubscribed_count}."
     )
-    await context.bot.send_message(q.message.chat_id, summary)
+    await send_main_message(context.bot, q.message.chat_id, summary)
 
 
 async def handle_broadcast_callback(q, context: ContextTypes.DEFAULT_TYPE):
@@ -4786,10 +4837,12 @@ async def handle_broadcast_callback(q, context: ContextTypes.DEFAULT_TYPE):
         return
     data = q.data or ""
     chat_id = q.message.chat_id
+    await q.answer()
     if data == "broadcast:photo:yes":
         state["step"] = "await_photo"
-        await context.bot.send_message(
-            chat_id,
+        await safe_update_screen(
+            q,
+            context,
             "Пришли фотографию для рассылки.",
             reply_markup=broadcast_photo_manage_markup(bool(state.get("photo"))),
         )
@@ -4801,7 +4854,7 @@ async def handle_broadcast_callback(q, context: ContextTypes.DEFAULT_TYPE):
     if data == "broadcast:edit:text":
         state["step"] = "await_text"
         state["skip_photo_prompt"] = True
-        await context.bot.send_message(chat_id, "Пришли новый текст для рассылки.")
+        await safe_update_screen(q, context, "Пришли новый текст для рассылки.")
         return
     if data == "broadcast:edit:photo":
         state["step"] = "await_photo"
@@ -4811,8 +4864,9 @@ async def handle_broadcast_callback(q, context: ContextTypes.DEFAULT_TYPE):
             if has_photo
             else "Пришли фотографию для рассылки."
         )
-        await context.bot.send_message(
-            chat_id,
+        await safe_update_screen(
+            q,
+            context,
             prompt,
             reply_markup=broadcast_photo_manage_markup(has_photo),
         )
@@ -4820,7 +4874,7 @@ async def handle_broadcast_callback(q, context: ContextTypes.DEFAULT_TYPE):
     if data == "broadcast:photo:remove":
         state["photo"] = None
         state["step"] = "await_confirm"
-        await context.bot.send_message(chat_id, "Фото удалено.")
+        await safe_update_screen(q, context, "Фото удалено.")
         await send_broadcast_preview(chat_id, context, state)
         return
     if data == "broadcast:preview":
@@ -4829,7 +4883,7 @@ async def handle_broadcast_callback(q, context: ContextTypes.DEFAULT_TYPE):
         return
     if data == "broadcast:cancel":
         reset_broadcast_state(context)
-        await context.bot.send_message(chat_id, "Рассылка отменена.")
+        await safe_update_screen(q, context, "Рассылка отменена.")
         return
     if data == "broadcast:send":
         await execute_broadcast(q, context, state)
@@ -6503,8 +6557,12 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_id = await get_or_create_user(u.id, u.username)
         await rename_day(user_id, day, label)
         await try_delete(update.message)
-        await context.bot.edit_message_text("Настройки:", chat_id=chat_id, message_id=msg_id, reply_markup=settings_kb())
-        remember_message(chat_id, msg_id)
+        await send_main_message(
+            context.bot,
+            chat_id,
+            "Настройки:",
+            reply_markup=settings_kb(),
+        )
         return
     if context.user_data.get("awaiting_custom"):
         day, group, chat_id, msg_id = context.user_data.pop("awaiting_custom")
@@ -6577,6 +6635,10 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         q = update.callback_query
         await q.answer()
         data = q.data or ""
+        preserve_keys: set[str] | None = None
+        if data.startswith("broadcast:"):
+            preserve_keys = {BROADCAST_STATE_KEY}
+        clear_linear_state(context.user_data, preserve_keys)
         if data.startswith("broadcast:"):
             user = update.effective_user
             if user and user.id in ADMIN_IDS:
@@ -7493,8 +7555,15 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     await show_screen(q, context, 'Выбери день:', rename_day_kb(days), user_id)
                 else:
                     day = int(parts[2])
-                    context.user_data["awaiting_rename"] = (day, q.message.chat.id, q.message.message_id)
-                    await show_screen(q, context, f'Новое название для Дня {day}:', None, user_id)
+                    message = await show_screen(
+                        q, context, f'Новое название для Дня {day}:', None, user_id
+                    )
+                    target_message = message or q.message
+                    context.user_data["awaiting_rename"] = (
+                        day,
+                        getattr(target_message, "chat_id", q.message.chat_id),
+                        getattr(target_message, "message_id", q.message.message_id),
+                    )
                 return
             if action == "edit_day":
                 prefs = await load_ui_preferences(user_id)
