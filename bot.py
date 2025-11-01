@@ -752,8 +752,8 @@ def format_weight_value(value: float) -> str:
 
 
 def format_metric_value(reps: int, seconds: int, kind: str) -> str:
-    reps = max(int(reps or 0), 0)
-    seconds = max(int(seconds or 0), 0)
+    reps = max(_safe_int(reps), 0)
+    seconds = max(_safe_int(seconds), 0)
     if kind != "duration":
         return f"{reps} повт."
     parts: list[str] = []
@@ -769,12 +769,13 @@ def format_metric_value(reps: int, seconds: int, kind: str) -> str:
 def format_sets_value(
     sets: int, reps: int, seconds: int, weight: float, with_weight: bool, kind: str = "reps"
 ) -> str:
-    safe_sets = max(int(sets or 0), 0)
+    safe_sets = max(_safe_int(sets), 0)
     metric_text = format_metric_value(reps, seconds, kind)
     base = f"{safe_sets}×{metric_text}"
     if not with_weight:
         return base
-    return f"{base} при {format_weight_value(weight)} кг"
+    weight_value = _safe_float(weight)
+    return f"{base} при {format_weight_value(weight_value)} кг"
 
 
 def format_progress_sets_details(
@@ -784,7 +785,7 @@ def format_progress_sets_details(
     for reps, seconds, weight in details:
         entry = format_metric_value(reps, seconds, kind)
         if with_weight:
-            weight_val = float(weight or 0.0)
+            weight_val = _safe_float(weight)
             if weight_val > 0:
                 entry = f"{entry} при {format_weight_value(weight_val)} кг"
         parts.append(entry)
@@ -794,9 +795,9 @@ def format_progress_sets_details(
 def format_compact_sets_value(
     sets: int, reps: int, seconds: int, weight: float, with_weight: bool, kind: str = "reps"
 ) -> str:
-    safe_sets = max(int(sets or 0), 0)
-    safe_reps = max(int(reps or 0), 0)
-    safe_seconds = max(int(seconds or 0), 0)
+    safe_sets = max(_safe_int(sets), 0)
+    safe_reps = max(_safe_int(reps), 0)
+    safe_seconds = max(_safe_int(seconds), 0)
     if kind == "duration":
         metrics: list[str] = []
         if safe_reps > 0:
@@ -808,7 +809,7 @@ def format_compact_sets_value(
     else:
         base = f"{safe_sets}×{safe_reps}"
     if with_weight:
-        safe_weight = max(float(weight or 0.0), 0.0)
+        safe_weight = max(_safe_float(weight), 0.0)
         if safe_weight > 0:
             connector = "×" if kind != "duration" else " · "
             return f"{base}{connector}{format_weight_value(safe_weight)} кг"
@@ -947,10 +948,10 @@ def format_kb_previous(
                 weight = entry[2]
             normalized.append(
                 (
-                    int(no),
-                    max(int(reps or 0), 0),
-                    max(int(seconds or 0), 0),
-                    float(weight or 0.0),
+                    _safe_int(no),
+                    max(_safe_int(reps), 0),
+                    max(_safe_int(seconds), 0),
+                    _safe_float(weight),
                 )
             )
         summary = summarize_previous_sets(normalized, with_weight=True, kind=kind)
@@ -965,8 +966,8 @@ def format_kb_previous(
         else:
             reps = entry[1]
             weight = entry[2]
-        safe_reps = max(int(reps or 0), 0)
-        safe_weight = max(float(weight or 0.0), 0.0)
+        safe_reps = max(_safe_int(reps), 0)
+        safe_weight = max(_safe_float(weight), 0.0)
         total_reps += safe_reps
         if safe_weight > best_weight or (
             math.isclose(safe_weight, best_weight, abs_tol=1e-6) and safe_reps > best_reps
@@ -1307,6 +1308,38 @@ async def safe_update_screen(q, context, text, reply_markup=None):
         error_text = (e.message or "").lower()
         if "not modified" in error_text:
             remember_message(chat_id, message_id)
+            return
+        if "message can't be edited" in error_text or "message can't be modified" in error_text:
+            if chat_id is None or message_id is None:
+                raise
+            try:
+                await context.bot.delete_message(chat_id, message_id)
+            except BadRequest as delete_error:
+                delete_text = (delete_error.message or "").lower()
+                if "message to delete not found" in delete_text:
+                    last_messages.pop(chat_id, None)
+                elif "can't be deleted" in delete_text:
+                    logger.debug(
+                        "Message %s in chat %s cannot be deleted during update",
+                        message_id,
+                        chat_id,
+                    )
+                    last_messages.pop(chat_id, None)
+                else:
+                    remember_message(chat_id, message_id)
+                    raise
+            except Forbidden:
+                remember_message(chat_id, message_id)
+                raise
+            else:
+                last_messages.pop(chat_id, None)
+            new_message = await send_main_message(
+                context.bot,
+                chat_id,
+                text,
+                reply_markup=reply_markup,
+            )
+            q.message = new_message
             return
         if "message to edit not found" in error_text:
             if chat_id is None:
@@ -3178,9 +3211,10 @@ async def build_day_sheet_message(
             continue
         elif group_key == "metcon" and name == FOR_TIME_EXERCISE_NAME:
             fortime = item.get("fortime_summary") or {}
-            seconds = fortime.get("last_time_sec")
-            if seconds is not None:
-                result = format_duration_value(int(seconds))
+            seconds_raw = fortime.get("last_time_sec")
+            if seconds_raw is not None:
+                seconds_value = _safe_int(seconds_raw)
+                result = format_duration_value(seconds_value)
             else:
                 result = t("NOT_FIXED")
             result_line = t("FTIME_LINE", time=result)
@@ -4833,6 +4867,8 @@ async def on_subscription_choose(update: Update, context: ContextTypes.DEFAULT_T
         await query.message.delete()
     except BadRequest:
         logger.debug("Failed to delete subscription menu message")
+    else:
+        last_messages.pop(query.message.chat_id, None)
 
     pay_button = InlineKeyboardButton("💳 Оплатить", pay=True)
     back_button = InlineKeyboardButton("⬅️ Назад", callback_data="back:main")
