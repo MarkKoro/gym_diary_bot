@@ -101,6 +101,26 @@ def subscription_kb(join_url: str):
         [InlineKeyboardButton(DONE_BTN, callback_data="wiz:sub:verify")],
     ])
 
+
+def subscribe_channel_prompt_kb(join_url: str):
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton(
+                    dual("📢 Подписаться на канал", "Подписаться на канал"),
+                    url=join_url,
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    dual("Нет, спасибо", "Нет, спасибо"),
+                    callback_data="promo:channel:no",
+                )
+            ],
+        ]
+    )
+
+
 def settings_kb():
     return InlineKeyboardMarkup([
         [

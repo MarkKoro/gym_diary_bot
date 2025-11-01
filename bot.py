@@ -36,7 +36,6 @@ from telegram.ext import (
 )
 from keyboards import (
     main_menu_kb,
-    subscription_kb,
     system_kb,
     days_kb,
     muscle_groups_kb,
@@ -84,15 +83,16 @@ from keyboards import (
     measurements_existing_kb,
     ui_footer_rows,
     HISTORY_BTN,
+    subscribe_channel_prompt_kb,
 )
 from settings import (
     TG_TOKEN,
     SUPPORT_DEEPLINK,
     TG_POOL_SIZE,
-    SUBSCRIPTION_CHAT,
     JOIN_URL,
     ADMIN_IDS,
     YK_TOKEN,
+    SUBSCRIPTION_CHAT,
 )
 from db import (
     init_db,
@@ -183,6 +183,10 @@ from db import (
     list_broadcast_targets,
     find_user_by_tg_id,
     find_user_by_id,
+    increment_day_finish_total,
+    get_subscription_prompt_total,
+    set_subscription_prompt_total,
+    get_latest_subscription,
 )
 from text_utils import normalize_whitespace
 from ui_texts import t, e
@@ -385,17 +389,108 @@ async def get_active_day_completions(user_id: int) -> set[int]:
     return {day for day, _ in parsed}
 
 
-async def record_day_completion(user_id: int, day_index: int) -> set[int]:
+async def record_day_completion(user_id: int, day_index: int) -> tuple[set[int], bool]:
     rows = await list_day_completions(user_id)
     parsed, latest = _parse_completion_rows(rows)
     now = datetime.now(UTC)
     if await _should_clear_day_completions(user_id, latest):
         await clear_day_completions(user_id)
         parsed = []
+        already_tracked = False
+    else:
+        already_tracked = any(day == day_index for day, _ in parsed)
     await mark_day_completed(user_id, day_index, now.isoformat())
     current = {day for day, _ in parsed}
     current.add(day_index)
-    return current
+    return current, not already_tracked
+
+
+def _resolve_subscription_chat() -> str | int | None:
+    raw = (SUBSCRIPTION_CHAT or "").strip()
+    if not raw:
+        return None
+    if raw.startswith("https://t.me/"):
+        slug = raw.split("/")[-1].split("?", 1)[0]
+        if slug:
+            return slug if slug.startswith("@") else f"@{slug}"
+    if raw.startswith("@"):
+        return raw
+    try:
+        return int(raw)
+    except ValueError:
+        return raw
+
+
+def _is_active_channel_status(status) -> bool:
+    if status is None:
+        return False
+    name = getattr(status, "value", status)
+    return str(name) in {
+        "administrator",
+        "member",
+        "creator",
+        "owner",
+        "restricted",
+    }
+
+
+async def _is_user_subscribed_to_channel(
+    context: ContextTypes.DEFAULT_TYPE, tg_user_id: int
+) -> bool:
+    chat_id = _resolve_subscription_chat()
+    if not chat_id:
+        return False
+    try:
+        member = await context.bot.get_chat_member(chat_id, tg_user_id)
+    except (BadRequest, Forbidden):
+        return False
+    except TelegramError:
+        logger.exception("Failed to fetch chat member for subscription check")
+        return False
+    return _is_active_channel_status(getattr(member, "status", None))
+
+
+async def maybe_prompt_channel_support(
+    q, context: ContextTypes.DEFAULT_TYPE, user_id: int
+) -> None:
+    total = await increment_day_finish_total(user_id)
+    prompt_total = await get_subscription_prompt_total(user_id)
+    if total - prompt_total < 5:
+        return
+    active = await get_active_subscription(user_id)
+    if active:
+        await set_subscription_prompt_total(user_id, total)
+        return
+    tg_user = getattr(q, "from_user", None)
+    tg_user_id = getattr(tg_user, "id", None)
+    if tg_user_id is not None and await _is_user_subscribed_to_channel(context, tg_user_id):
+        await set_subscription_prompt_total(user_id, total)
+        return
+    if not JOIN_URL:
+        await set_subscription_prompt_total(user_id, total)
+        return
+    message = getattr(q, "message", None)
+    chat_id = getattr(message, "chat_id", None)
+    if chat_id is None:
+        await set_subscription_prompt_total(user_id, total)
+        return
+    text = (
+        "Мы видим, что дневник помогает — вы завершили уже {total} тренировочных дней!\n"
+        "Пожалуйста, поддержите авторов: подпишитесь на наш канал. Там мы делимся новостями и другими нашими ботами — будем рады вашей поддержке!"
+    ).format(total=total)
+    markup = subscribe_channel_prompt_kb(JOIN_URL)
+    try:
+        sent = await context.bot.send_message(
+            chat_id,
+            text,
+            reply_markup=markup,
+            disable_web_page_preview=True,
+        )
+    except TelegramError:
+        await set_subscription_prompt_total(user_id, total)
+        return
+    remember_message(sent.chat_id, sent.message_id)
+    await set_subscription_prompt_total(user_id, total)
 
 
 def format_reminder_cheer(done_count: int) -> str:
@@ -481,6 +576,27 @@ def build_main_menu_text(prefs: UiPreferences) -> str:
     return "\n".join(lines)
 
 
+async def build_subscription_notice(user_id: int) -> list[str]:
+    tz_code = await get_user_timezone(user_id)
+    zone = resolve_user_zone(tz_code)
+    now_local = datetime.now(UTC).astimezone(zone)
+    active = await get_active_subscription(user_id)
+    if active and active.get("expires_at"):
+        expires_local = active["expires_at"].astimezone(zone)
+        days_left = (expires_local.date() - now_local.date()).days
+        if days_left == 0:
+            return ["⚠️ Подписка заканчивается сегодня."]
+        if days_left == 1:
+            return ["⚠️ Через 1 день подписка закончится."]
+        return [f"⭐ Подписка активна до {expires_local.strftime('%d.%m.%Y')}."]
+    latest = await get_latest_subscription(user_id)
+    if latest and latest.get("status") == "expired" and latest.get("expires_at"):
+        expires_local = latest["expires_at"].astimezone(zone)
+        if now_local.date() == expires_local.date():
+            return ["⚠️ Ваша подписка закончилась."]
+    return []
+
+
 def _format_day_label(day_index: int, raw_label: str | None, weekday_label: str | None) -> str:
     base = (raw_label or "").strip() or f"{t('DAY')} {day_index}"
     if weekday_label:
@@ -535,6 +651,9 @@ async def compose_main_menu(
     ]
     completions = await get_active_day_completions(user_id)
     text = build_main_menu_text(prefs)
+    notice_lines = await build_subscription_notice(user_id)
+    if notice_lines:
+        text = "\n".join([text, "", *notice_lines])
     kb = main_menu_kb(days, SUPPORT_DEEPLINK, completions)
     return text, kb, prefs
 
@@ -1489,47 +1608,9 @@ async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE):
     except (TimedOut, NetworkError, BadRequest):
         pass
 
-async def check_subscription(tg_id: int, bot) -> bool:
-    try:
-        member = await bot.get_chat_member(SUBSCRIPTION_CHAT, tg_id)
-        return member.status not in ("left", "kicked")
-    except Exception:
-        return False
 
 async def require_subscription(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
-    now = datetime.now(UTC)
-    exp = context.user_data.get("sub_expiry")
-    if exp and exp > now:
-        return True
-    u = update.effective_user
-    if await check_subscription(u.id, context.bot):
-        context.user_data["sub_expiry"] = now + timedelta(days=1)
-        return True
-    kb = subscription_kb(JOIN_URL)
-    if update.callback_query:
-        await show_screen(
-            update.callback_query,
-            context,
-            "Прежде чем получить помощника, подпишись на наш канал, чтобы поддержать нас и быть в курсе новостей.",
-            kb,
-            u.id,
-        )
-    else:
-        chat = update.effective_chat
-        if chat is not None:
-            await send_main_message(
-                context.bot,
-                chat.id,
-                "Прежде чем получить помощника, подпишись на наш канал, чтобы поддержать нас и быть в курсе новостей.",
-                reply_markup=kb,
-            )
-        elif update.message:
-            msg = await update.message.reply_text(
-                "Прежде чем получить помощника, подпишись на наш канал, чтобы поддержать нас и быть в курсе новостей.",
-                reply_markup=kb,
-            )
-            remember_message(msg.chat_id, msg.message_id)
-    return False
+    return True
 
 async def get_custom_groups(user_id: int, context) -> dict[str, str]:
     groups = context.user_data.get("custom_groups")
@@ -5455,26 +5536,16 @@ async def prompt_day_mode(q, context, user_id: int, day: int):
 async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAULT_TYPE):
     try:
         if data == "wiz:sub:verify":
-            if await check_subscription(q.from_user.id, context.bot):
-                context.user_data["sub_expiry"] = datetime.now(UTC) + timedelta(days=1)
-                text = (
-                    "В этом боте ты ведёшь дневник тренировок: сохраняешь упражнения, "
-                    "отслеживаешь прогресс и получаешь напоминания. "
-                    "Всё в одном удобном месте — больше не нужно записывать данные где попало.\n\n"
-                    "Нажми кнопку ниже, чтобы продолжить."
-                )
-                kb = InlineKeyboardMarkup(
-                    [[InlineKeyboardButton("Ясно, спасибо", callback_data="wiz:intro:ok")]]
-                )
-                await show_screen(q, context, text, kb, user_id)
-            else:
-                await show_screen(
-                    q,
-                    context,
-                    "Прежде чем получить помощника, подпишись на наш канал, чтобы поддержать нас и быть в курсе новостей.",
-                    subscription_kb(JOIN_URL),
-                    user_id,
-                )
+            text = (
+                "В этом боте ты ведёшь дневник тренировок: сохраняешь упражнения, "
+                "отслеживаешь прогресс и получаешь напоминания. "
+                "Всё в одном удобном месте — больше не нужно записывать данные где попало.\n\n"
+                "Нажми кнопку ниже, чтобы продолжить."
+            )
+            kb = InlineKeyboardMarkup(
+                [[InlineKeyboardButton("Ясно, спасибо", callback_data="wiz:intro:ok")]]
+            )
+            await show_screen(q, context, text, kb, user_id)
             return
         if data == "wiz:intro:ok":
             text = (
@@ -6701,6 +6772,10 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await wizard_router(q, data, user_id, context)
             return
 
+        if data == "promo:channel:no":
+            await q.answer("Спасибо! Напомним позже.")
+            return
+
         if data == "menu:root":
             prefs = await load_ui_preferences(user_id)
             text, kb, prefs = await compose_main_menu(user_id, prefs)
@@ -6757,8 +6832,17 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "",
                 f"⏰ Уведомления — {tz_label}, {rem_text}. Настрой время напоминаний.",
                 "",
-                "⭐ Подписка донат — отключи рекламные рассылки и поддержи разработчиков.",
             ]
+            active_sub = await get_active_subscription(user_id)
+            if active_sub and active_sub.get("expires_at"):
+                zone = resolve_user_zone(tz)
+                expires_local = active_sub["expires_at"].astimezone(zone)
+                support_line = (
+                    f"Спасибо за поддержку! Рекламных рассылок нет до {expires_local.strftime('%d.%m.%Y')}."
+                )
+            else:
+                support_line = "⭐ Подписка донат — отключи рекламные рассылки и поддержи разработчиков."
+            text_lines.append(support_line)
             text = "\n".join(text_lines)
             kb = settings_kb()
             await show_screen(q, context, text, kb, user_id)
@@ -7975,13 +8059,15 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 return
             if action == "complete":
                 day = int(parts[2])
-                await record_day_completion(user_id, day)
+                _, added_new = await record_day_completion(user_id, day)
                 prefs = await load_ui_preferences(user_id)
                 text, kb, prefs = await compose_main_menu(user_id, prefs)
                 label = await get_day_label(user_id, day)
                 title = label or f"{t('DAY')} {day}"
                 await q.answer(f"{title} завершён. Отличная работа!")
                 await show_screen(q, context, text, kb, user_id)
+                if added_new:
+                    await maybe_prompt_channel_support(q, context, user_id)
                 return
             if action == "sheet":
                 day = int(parts[2])
@@ -7997,9 +8083,12 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     session_id = await get_or_create_today_session(user_id, today_local, day)
                     for ue_id, *_ in ex_rows:
                         await mark_exercise_done(session_id, ue_id)
+                _, added_new = await record_day_completion(user_id, day)
                 await q.answer(f"{t('DAY')} отмечен выполненным.")
                 prefs = await load_ui_preferences(user_id)
                 await send_day_cards_view(q, user_id, day, context, prefs)
+                if added_new:
+                    await maybe_prompt_channel_support(q, context, user_id)
                 return
             if action == "group":
                 day = int(parts[2])
