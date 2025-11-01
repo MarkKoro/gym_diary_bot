@@ -266,7 +266,9 @@ async def init_db():
             trial_until TEXT,
             plan TEXT DEFAULT 'trial',
             system TEXT,
-            workouts_per_week INTEGER
+            workouts_per_week INTEGER,
+            day_finish_total INTEGER DEFAULT 0,
+            subscription_prompt_total INTEGER DEFAULT 0
         );
 
         CREATE TABLE IF NOT EXISTS exercises(
@@ -437,6 +439,14 @@ async def init_db():
             pass
         try:
             await db.execute("ALTER TABLE users ADD COLUMN workouts_per_week INTEGER")
+        except Exception:
+            pass
+        try:
+            await db.execute("ALTER TABLE users ADD COLUMN day_finish_total INTEGER DEFAULT 0")
+        except Exception:
+            pass
+        try:
+            await db.execute("ALTER TABLE users ADD COLUMN subscription_prompt_total INTEGER DEFAULT 0")
         except Exception:
             pass
         try:
@@ -1408,6 +1418,33 @@ async def get_active_subscription(user_id: int) -> dict | None:
         }
 
 
+async def get_latest_subscription(user_id: int) -> dict | None:
+    await cleanup_expired_subscriptions(user_id)
+    async with connect_db() as db:
+        cur = await db.execute(
+            """
+            SELECT plan, started_at, expires_at, status
+            FROM subscriptions
+            WHERE user_id=?
+            ORDER BY expires_at DESC
+            LIMIT 1
+            """,
+            (user_id,),
+        )
+        row = await cur.fetchone()
+        if not row:
+            return None
+        plan, started_at, expires_at, status = row
+        started = datetime.fromisoformat(started_at) if started_at else None
+        expires = datetime.fromisoformat(expires_at) if expires_at else None
+        return {
+            "plan": plan,
+            "started_at": started,
+            "expires_at": expires,
+            "status": status,
+        }
+
+
 async def grant_subscription_days(
     user_id: int,
     days: int,
@@ -1594,6 +1631,40 @@ async def list_broadcast_targets(
         cur = await db.execute(sql, tuple(params))
         rows = await cur.fetchall()
         return [(int(row[0]), int(row[1])) for row in rows if row[0] is not None]
+
+
+async def increment_day_finish_total(user_id: int) -> int:
+    async with connect_db() as db:
+        await db.execute(
+            "UPDATE users SET day_finish_total = COALESCE(day_finish_total, 0) + 1 WHERE id=?",
+            (user_id,),
+        )
+        await db.commit()
+        cur = await db.execute(
+            "SELECT COALESCE(day_finish_total, 0) FROM users WHERE id=?",
+            (user_id,),
+        )
+        row = await cur.fetchone()
+        return int(row[0]) if row and row[0] is not None else 0
+
+
+async def get_subscription_prompt_total(user_id: int) -> int:
+    async with connect_db() as db:
+        cur = await db.execute(
+            "SELECT COALESCE(subscription_prompt_total, 0) FROM users WHERE id=?",
+            (user_id,),
+        )
+        row = await cur.fetchone()
+        return int(row[0]) if row and row[0] is not None else 0
+
+
+async def set_subscription_prompt_total(user_id: int, total: int) -> None:
+    async with connect_db() as db:
+        await db.execute(
+            "UPDATE users SET subscription_prompt_total=? WHERE id=?",
+            (int(total), user_id),
+        )
+        await db.commit()
 
 
 async def find_user_by_tg_id(tg_id: int) -> tuple[int, str | None] | None:
