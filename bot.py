@@ -713,7 +713,7 @@ def _is_duration_name(name: str) -> bool:
 def get_display_flags(group: str, name: str) -> tuple[bool, str]:
     if group == RUNNING_GROUP:
         return False, "running"
-    if group in {"workout", "core"}:
+    if group in {"workout", "core", "kb", "metcon"}:
         return True, "duration"
     with_weight = True
     kind = "duration" if _is_duration_name(name) else "reps"
@@ -1339,8 +1339,7 @@ async def safe_update_screen(q, context, text, reply_markup=None):
                 text,
                 reply_markup=reply_markup,
             )
-            q.message = new_message
-            return
+            return new_message
         if "message to edit not found" in error_text:
             if chat_id is None:
                 raise
@@ -1350,10 +1349,10 @@ async def safe_update_screen(q, context, text, reply_markup=None):
                 text,
                 reply_markup=reply_markup,
             )
-            q.message = new_message
-            return
+            return new_message
         raise
     remember_message(chat_id, message_id)
+    return getattr(q, "message", None)
 
 
 async def show_screen(
@@ -1365,7 +1364,7 @@ async def show_screen(
 ) -> None:
     prefs = await load_ui_preferences(user_id)
     prepared_text, prepared_markup = prepare_ui_output(text, reply_markup, prefs)
-    await safe_update_screen(q, context, prepared_text, prepared_markup)
+    return await safe_update_screen(q, context, prepared_text, prepared_markup)
 
 
 def wizard_day_mode_text(day: int, prefs: UiPreferences) -> str:
@@ -3298,7 +3297,7 @@ async def build_day_sheet_message(
                     ]
                 )
             if kind == "duration":
-                if group_key in {"workout", "core"}:
+                if group_key in {"workout", "core", "kb", "metcon"}:
                     kb_rows.append(
                         [
                             InlineKeyboardButton("＋1 сек", callback_data=f"{base_cb}:sec:1"),
