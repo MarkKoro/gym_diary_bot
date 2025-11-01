@@ -445,28 +445,38 @@ def build_main_menu_text(prefs: UiPreferences) -> str:
         )
     else:
         lines.append("Ниже — краткое напоминание о назначении каждого раздела.")
+    lines.append("")
     lines.append("────────")
+    lines.append("")
     if prefs.verbose_level:
         lines.append(
             "Дни тренировок — открой нужный день, чтобы отмечать подходы, настраивать упражнения и тут же видеть актуальный результат. Добавлять и убирать упражнения можно прямо из карточек."
         )
+        lines.append("")
         lines.append(
             "Мои упражнения — личная библиотека с описаниями и историей. Здесь удобно уточнять технику, обновлять план и возвращаться к сохранённым схемам."
         )
+        lines.append("")
         lines.append(
             "Мои замеры — сохраняй динамику тела и контрольных показателей. Последние записи отображаются списком, чтобы видеть прогресс без лишних переходов."
         )
+        lines.append("")
         lines.append(
             "Настройки — измени расписание, управление напоминаниями и выбери уровень пояснений. Все подсказки в интерфейсе синхронизируются с выбранным режимом."
         )
+        lines.append("")
         lines.append(
             "Техподдержка — напиши, если что-то не работает или есть вопросы. Мы ответим прямо в чате и поможем настроить дневник."
         )
     else:
         lines.append("Дни тренировок — открой нужный, чтобы отметить подходы и увидеть прогресс.")
+        lines.append("")
         lines.append("Мои упражнения — личная библиотека с описаниями и историей.")
+        lines.append("")
         lines.append("Мои замеры — записывай изменения тела и контрольных показателей.")
+        lines.append("")
         lines.append("Настройки — меняй расписание, напоминания и оформление.")
+        lines.append("")
         lines.append("Техподдержка — быстро связаться с нами, если нужна помощь.")
     return "\n".join(lines)
 
@@ -4403,17 +4413,28 @@ async def reminder_job(context: ContextTypes.DEFAULT_TYPE):
 
 
 async def schedule_all_reminders(app: Application):
-    for user_id, tg_id, dow, hour, minute in await list_users_with_reminders():
+    for user_id, tg_id, day_no, dow, hour, minute in await list_users_with_reminders():
+        if tg_id is None:
+            continue
+        try:
+            dow_int = int(dow)
+        except (TypeError, ValueError):
+            continue
+        if dow_int < 0 or dow_int > 6:
+            continue
         tz_code = await get_user_timezone(user_id)
         zone = resolve_user_zone(tz_code)
         tm = time(hour=hour, minute=minute, tzinfo=zone)
+        job_name = f"rem_{user_id}_{int(day_no)}"
+        for job in app.job_queue.get_jobs_by_name(job_name):
+            job.schedule_removal()
         app.job_queue.run_daily(
             reminder_job,
             tm,
-            days=(dow,),
+            days=(dow_int,),
             chat_id=tg_id,
-            name=f"rem_{user_id}_{dow}",
-            data={"user_id": user_id},
+            name=job_name,
+            data={"user_id": user_id, "day_no": int(day_no)},
         )
 
 
@@ -6014,14 +6035,24 @@ async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAUL
                 return
             _, _, hh, mm = parts[:4]
             hour, minute = int(hh), int(mm)
-            dow = context.user_data.get("selected_dow")
+            dow_raw = context.user_data.get("selected_dow")
+            if dow_raw is None:
+                await q.answer("Сначала выбери день недели.", show_alert=True)
+                return
+            dow = int(dow_raw)
+            if dow < 0 or dow > 6:
+                await q.answer("Некорректный день недели.", show_alert=True)
+                return
             day_no = context.user_data.get("reminder_day", 1)
             await add_user_reminder(user_id, dow, hour, minute, day_no=day_no)
             tz = context.user_data.get("tz", "UTC")
             zone = resolve_user_zone(tz)
             reminder_time = time(hour, minute, tzinfo=zone)
-            job_name = f"rem_{user_id}_{dow}"
+            job_name = f"rem_{user_id}_{day_no}"
             for job in context.job_queue.get_jobs_by_name(job_name):
+                job.schedule_removal()
+            legacy_job_name = f"rem_{user_id}_{dow}"
+            for job in context.job_queue.get_jobs_by_name(legacy_job_name):
                 job.schedule_removal()
             context.job_queue.run_daily(
                 reminder_job,
@@ -6029,7 +6060,7 @@ async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAUL
                 days=(dow,),
                 chat_id=q.message.chat_id,
                 name=job_name,
-                data={"user_id": user_id},
+                data={"user_id": user_id, "day_no": day_no},
             )
             day_no = context.user_data.get("reminder_day", 1)
             total = context.user_data.get("workouts_per_week", 0)
@@ -6647,17 +6678,26 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             else:
                 rem_text = t("NOT_SET")
             prefs = await load_ui_preferences(user_id)
-            text = (
-                "Настройки:\n"
-                "Выбирай пункт ниже, чтобы обновить дневник под себя.\n"
-                "────────\n"
-                "✏️ Переименовать дни — поменять названия тренировочных дней.\n"
-                "🔁 Изменить день — переключи тип тренировки (силовая, гири, кроссфит, воркаут) и открой подходящие упражнения. После переключения можно добавлять упражнения из любых групп.\n"
-                f"📅 Количество тренировок — сейчас {n}. Укажи, сколько раз планируешь тренироваться.\n"
-                "🗑 Удаление моих групп мышц — удаляй созданные группы мышц. Все упражнения из удалённых групп исчезнут из расписания и библиотеки.\n"
-                f"⏰ Уведомления — {tz_label}, {rem_text}. Настрой время напоминаний.\n"
-                "⭐ Подписка донат — отключи рекламные рассылки и поддержи разработчиков."
-            )
+            text_lines = [
+                "Настройки:",
+                "",
+                "Выбирай пункт ниже, чтобы обновить дневник под себя.",
+                "",
+                "────────",
+                "",
+                "✏️ Переименовать дни — поменять названия тренировочных дней.",
+                "",
+                "🔁 Изменить день — переключи тип тренировки (силовая, гири, кроссфит, воркаут) и открой подходящие упражнения. После переключения можно добавлять упражнения из любых групп.",
+                "",
+                f"📅 Количество тренировок — сейчас {n}. Укажи, сколько раз планируешь тренироваться.",
+                "",
+                "🗑 Удаление моих групп мышц — удаляй созданные группы мышц. Все упражнения из удалённых групп исчезнут из расписания и библиотеки.",
+                "",
+                f"⏰ Уведомления — {tz_label}, {rem_text}. Настрой время напоминаний.",
+                "",
+                "⭐ Подписка донат — отключи рекламные рассылки и поддержи разработчиков.",
+            ]
+            text = "\n".join(text_lines)
             kb = settings_kb()
             await show_screen(q, context, text, kb, user_id)
             return
@@ -7526,7 +7566,16 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     await show_screen(q, context, 'Сколько тренировок планируешь в неделю?', days_count_kb(), user_id)
                 else:
                     n = int(parts[2])
-                    await set_workouts_per_week(user_id, n)
+                    removed = await set_workouts_per_week(user_id, n)
+                    if removed:
+                        for day_no, dow, _hour, _minute in removed:
+                            job_name = f"rem_{user_id}_{day_no}"
+                            for job in context.job_queue.get_jobs_by_name(job_name):
+                                job.schedule_removal()
+                            if dow >= 0:
+                                legacy_name = f"rem_{user_id}_{dow}"
+                                for job in context.job_queue.get_jobs_by_name(legacy_name):
+                                    job.schedule_removal()
                     rems = await list_user_reminders(user_id)
                     if len(rems) < n:
                         context.user_data["from_settings"] = True
@@ -7810,18 +7859,18 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 reminders = await list_user_reminders(user_id)
                 reminder_map = {day_no: (d, h, m) for day_no, d, h, m in reminders}
                 previous = reminder_map.get(day_index)
-                prev_dow = previous[0] if previous else None
                 await add_user_reminder(
                     user_id, dow, hour, minute, day_no=day_index
                 )
-                if prev_dow is not None:
-                    for job in context.job_queue.get_jobs_by_name(
-                        f"rem_{user_id}_{prev_dow}"
-                    ):
+                job_name = f"rem_{user_id}_{day_index}"
+                for job in context.job_queue.get_jobs_by_name(job_name):
+                    job.schedule_removal()
+                if previous:
+                    legacy_prev = f"rem_{user_id}_{previous[0]}"
+                    for job in context.job_queue.get_jobs_by_name(legacy_prev):
                         job.schedule_removal()
-                for job in context.job_queue.get_jobs_by_name(
-                    f"rem_{user_id}_{dow}"
-                ):
+                legacy_current = f"rem_{user_id}_{dow}"
+                for job in context.job_queue.get_jobs_by_name(legacy_current):
                     job.schedule_removal()
                 tz_code = await get_user_timezone(user_id)
                 zone = resolve_user_zone(tz_code)
@@ -7837,8 +7886,8 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         reminder_time,
                         days=(dow,),
                         chat_id=chat_id,
-                        name=f"rem_{user_id}_{dow}",
-                        data={"user_id": user_id},
+                        name=job_name,
+                        data={"user_id": user_id, "day_no": day_index},
                     )
                 context.user_data[REMINDER_SELECTED_DOW_KEY] = dow
                 confirmation = format_reminder_status(label, (dow, hour, minute))
