@@ -820,7 +820,14 @@ async def update_user_system(user_id: int, system: str):
         await db.execute("UPDATE users SET system=? WHERE id=?", (system, user_id))
         await db.commit()
 
-async def set_workouts_per_week(user_id: int, n: int):
+async def set_workouts_per_week(user_id: int, n: int) -> list[tuple[int, int, int, int]]:
+    """Update workouts per week and deactivate surplus days.
+
+    Returns:
+        A list of reminders that were removed because their day number is now
+        inactive. Each entry contains ``(day_no, dow, hour, minute)``.
+    """
+
     async with connect_db() as db:
         await db.execute("UPDATE users SET workouts_per_week=? WHERE id=?", (n, user_id))
         for i in range(1, 8):
@@ -834,6 +841,33 @@ async def set_workouts_per_week(user_id: int, n: int):
                 (user_id, i, label, is_active),
             )
         await db.commit()
+
+        removed: list[tuple[int, int, int, int]] = []
+        cur = await db.execute(
+            """
+            SELECT id, day_no, dow, hour, minute
+            FROM user_reminders
+            WHERE user_id=?
+            ORDER BY COALESCE(day_no, id)
+            """,
+            (user_id,),
+        )
+        rows = await cur.fetchall()
+        next_fallback = 1
+        to_delete: list[int] = []
+        for row_id, day_no, dow, hour, minute in rows:
+            actual_day = int(day_no) if day_no is not None else next_fallback
+            if actual_day > n:
+                to_delete.append(int(row_id))
+                removed.append((actual_day, int(dow) if dow is not None else -1, int(hour), int(minute)))
+            next_fallback = max(next_fallback, actual_day + 1)
+        if to_delete:
+            await db.executemany(
+                "DELETE FROM user_reminders WHERE id=?",
+                ((row_id,) for row_id in to_delete),
+            )
+            await db.commit()
+        return removed
 
 async def list_exercises_by_group(group: str):
     async with connect_db() as db:
@@ -1263,6 +1297,11 @@ async def get_user_timezone(user_id: int):
 async def add_user_reminder(
     user_id: int, dow: int, hour: int, minute: int, day_no: int | None = None
 ):
+    if dow is None:
+        raise ValueError("dow must be provided for reminder")
+    if not 0 <= int(dow) <= 6:
+        raise ValueError("dow must be between 0 and 6")
+
     async with connect_db() as db:
         if day_no is None:
             cur = await db.execute(
@@ -1312,7 +1351,8 @@ async def clear_user_reminders(user_id: int):
 async def list_users_with_reminders():
     async with connect_db() as db:
         cur = await db.execute(
-            "SELECT r.user_id, u.tg_id, r.dow, r.hour, r.minute FROM user_reminders r "
+            "SELECT r.user_id, u.tg_id, COALESCE(r.day_no, r.id) AS day_no, r.dow, r.hour, r.minute "
+            "FROM user_reminders r "
             "JOIN users u ON u.id = r.user_id "
             "ORDER BY r.user_id, COALESCE(r.day_no, r.id)"
         )
