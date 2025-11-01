@@ -194,6 +194,7 @@ from ui_texts import t, e
 user_locks = defaultdict(asyncio.Lock)
 logger = logging.getLogger(__name__)
 last_messages: dict[int, int] = {}
+MAIL_RETURN_CALLBACK = "promo:return_menu"
 PROGRESS_PAGE_SIZE = 5
 DAY_SHEET_PAGE_SIZE = 6
 SHEET_VIEWS_KEY = "day_sheet_views"
@@ -1451,6 +1452,59 @@ async def send_main_message(
     )
     remember_message(msg.chat_id, msg.message_id)
     return msg
+
+
+async def reset_main_message(bot, chat_id: int | None) -> None:
+    if chat_id is None:
+        return
+    previous_id = last_messages.get(chat_id)
+    if previous_id is None:
+        return
+    try:
+        await bot.delete_message(chat_id, previous_id)
+    except BadRequest as delete_error:
+        error_text = (delete_error.message or "").lower()
+        if "message to delete not found" in error_text:
+            last_messages.pop(chat_id, None)
+            return
+        if "can't be deleted" in error_text:
+            logger.debug(
+                "Previous message %s in chat %s cannot be deleted during reset",
+                previous_id,
+                chat_id,
+            )
+        else:
+            logger.warning("Failed to delete main message", exc_info=True)
+        last_messages.pop(chat_id, None)
+        return
+    except Forbidden:
+        logger.debug(
+            "Bot is not allowed to delete message %s in chat %s during reset",
+            previous_id,
+            chat_id,
+        )
+    except TelegramError:
+        logger.warning("Unexpected error when deleting main message", exc_info=True)
+    last_messages.pop(chat_id, None)
+
+
+async def send_main_message_fresh(
+    bot,
+    chat_id: int | None,
+    text: str,
+    reply_markup: InlineKeyboardMarkup | None = None,
+    **kwargs,
+):
+    if chat_id is None:
+        raise ValueError("chat_id is required to send a message")
+    await reset_main_message(bot, chat_id)
+    return await send_main_message(
+        bot,
+        chat_id,
+        text,
+        reply_markup=reply_markup,
+        **kwargs,
+    )
 
 async def safe_update_screen(q, context, text, reply_markup=None):
     message = getattr(q, "message", None)
@@ -4493,7 +4547,7 @@ async def reminder_job(context: ContextTypes.DEFAULT_TYPE):
         )
         if cheer:
             text = f"{text}\n{cheer}"
-        await send_main_message(
+        await send_main_message_fresh(
             context.bot,
             chat_id,
             text,
@@ -4601,6 +4655,12 @@ def broadcast_photo_manage_markup(has_photo: bool) -> InlineKeyboardMarkup:
             ]
         )
     return InlineKeyboardMarkup([[InlineKeyboardButton(BACK_BTN, callback_data="broadcast:preview")]])
+
+
+def broadcast_return_markup() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [[InlineKeyboardButton("Ясно, вернуть меню", callback_data=MAIL_RETURN_CALLBACK)]]
+    )
 
 
 def build_broadcast_preview_text(state: dict) -> str:
@@ -4878,9 +4938,18 @@ async def execute_broadcast(q, context: ContextTypes.DEFAULT_TYPE, state: dict) 
     for tg_id, _ in targets:
         try:
             if photo_id:
-                await context.bot.send_photo(tg_id, photo=photo_id, caption=text)
+                await context.bot.send_photo(
+                    tg_id,
+                    photo=photo_id,
+                    caption=text,
+                    reply_markup=broadcast_return_markup(),
+                )
             else:
-                await context.bot.send_message(tg_id, text)
+                await context.bot.send_message(
+                    tg_id,
+                    text,
+                    reply_markup=broadcast_return_markup(),
+                )
             delivered += 1
             await asyncio.sleep(0.05)
         except Forbidden:
@@ -4889,9 +4958,18 @@ async def execute_broadcast(q, context: ContextTypes.DEFAULT_TYPE, state: dict) 
             await asyncio.sleep(int(getattr(exc, "retry_after", 1)))
             try:
                 if photo_id:
-                    await context.bot.send_photo(tg_id, photo=photo_id, caption=text)
+                    await context.bot.send_photo(
+                        tg_id,
+                        photo=photo_id,
+                        caption=text,
+                        reply_markup=broadcast_return_markup(),
+                    )
                 else:
-                    await context.bot.send_message(tg_id, text)
+                    await context.bot.send_message(
+                        tg_id,
+                        text,
+                        reply_markup=broadcast_return_markup(),
+                    )
                 delivered += 1
             except Forbidden:
                 skipped += 1
@@ -6710,6 +6788,21 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if data.startswith("broadcast:"):
             preserve_keys = {BROADCAST_STATE_KEY}
         clear_linear_state(context.user_data, preserve_keys)
+        if data == MAIL_RETURN_CALLBACK:
+            chat = getattr(q, "message", None)
+            chat_id = getattr(chat, "chat_id", None)
+            user = update.effective_user
+            if chat_id is None or user is None:
+                return
+            user_id = await get_or_create_user(user.id, user.username)
+            text, kb, _ = await compose_main_menu(user_id)
+            await send_main_message_fresh(
+                context.bot,
+                chat_id,
+                text,
+                reply_markup=kb,
+            )
+            return
         if data.startswith("broadcast:"):
             user = update.effective_user
             if user and user.id in ADMIN_IDS:
