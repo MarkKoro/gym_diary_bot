@@ -1992,7 +1992,7 @@ async def list_recent_progress(
         exercise_id = row[0]
         cur = await db.execute(
             """
-            SELECT s.id, s.date
+            SELECT s.id, s.date, se.user_exercise_id
             FROM sessions s
             JOIN session_exercises se ON se.session_id=s.id
             JOIN user_exercises ue ON ue.id=se.user_exercise_id
@@ -2003,26 +2003,28 @@ async def list_recent_progress(
             (user_id, exercise_id, limit, offset),
         )
         sessions = await cur.fetchall()
-        results: list[tuple[str, int, int, int, float, list[tuple[int, int, float]]]] = []
-        for session_id, date_value in sessions:
+        results: list[
+            tuple[str, int, int, int, float, list[tuple[int, int, float]]]
+        ] = []
+        for session_id, date_value, session_ue_id in sessions:
             cur_sets = await db.execute(
                 """
-                SELECT reps, seconds, weight_kg
+                SELECT set_no, reps, seconds, weight_kg
                 FROM sets
                 WHERE session_id=? AND user_exercise_id=? AND is_warmup=0
                 ORDER BY set_no, id
                 """,
-                (session_id, ue_id),
+                (session_id, session_ue_id),
             )
             set_rows = await cur_sets.fetchall()
             details: list[tuple[int, int, float]] = [
-                (int(row[0] or 0), int(row[1] or 0), float(row[2] or 0.0))
+                (int(row[1] or 0), int(row[2] or 0), float(row[3] or 0.0))
                 for row in set_rows
             ]
             sets_cnt = len(details)
-            max_reps = max((row[0] or 0 for row in set_rows), default=0)
-            max_seconds = max((row[1] or 0 for row in set_rows), default=0)
-            max_weight = max((row[2] or 0.0 for row in set_rows), default=0.0)
+            max_reps = max((row[1] or 0 for row in set_rows), default=0)
+            max_seconds = max((row[2] or 0 for row in set_rows), default=0)
+            max_weight = max((row[3] or 0.0 for row in set_rows), default=0.0)
             results.append((date_value, sets_cnt, max_reps, max_seconds, max_weight, details))
         return results
 

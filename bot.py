@@ -781,14 +781,25 @@ def format_sets_value(
 def format_progress_sets_details(
     details: list[tuple[int, int, float]], with_weight: bool, kind: str
 ) -> str:
+    if not details:
+        return "—"
+    enumerated = [
+        (index + 1, reps, seconds, weight)
+        for index, (reps, seconds, weight) in enumerate(details)
+    ]
+    grouped = _compress_flex_triplets(enumerated, with_weight=with_weight, kind=kind)
     parts: list[str] = []
-    for reps, seconds, weight in details:
-        entry = format_metric_value(reps, seconds, kind)
-        if with_weight:
-            weight_val = _safe_float(weight)
-            if weight_val > 0:
-                entry = f"{entry} при {format_weight_value(weight_val)} кг"
-        parts.append(entry)
+    for entry in grouped:
+        reps_value = int(entry["reps"])
+        seconds_value = int(entry.get("seconds", 0))
+        weight_value = float(entry["weight"])
+        text = format_metric_value(reps_value, seconds_value, kind)
+        if with_weight and weight_value > 0:
+            text = f"{text} при {format_weight_value(weight_value)} кг"
+        count = int(entry["count"])
+        if count > 1:
+            text = f"{count}× {text}"
+        parts.append(text)
     return "; ".join(parts) if parts else "—"
 
 
