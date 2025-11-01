@@ -474,11 +474,13 @@ def baseline_kb(
     day_index: int,
     sets: int,
     reps: int,
+    seconds: int,
     weight: float,
     prefix: str = "wiz:base",
     include_skip_all: bool = True,
     *,
     with_weight: bool = True,
+    kind: str = "reps",
 ):
     def btn(label: str, cb: str):
         return InlineKeyboardButton(label, callback_data=cb)
@@ -500,6 +502,21 @@ def baseline_kb(
             btn(dual("−1 повт", "Убрать 1 повтор"), cb("inc", "reps", "-1")),
         ],
     ]
+    if kind == "duration":
+        rows.extend(
+            [
+                [
+                    btn(dual("＋30 сек", "Добавить 30 секунд"), cb("inc", "sec", "30")),
+                    btn(dual("＋5 сек", "Добавить 5 секунд"), cb("inc", "sec", "5")),
+                    btn(dual("＋1 сек", "Добавить 1 секунду"), cb("inc", "sec", "1")),
+                ],
+                [
+                    btn(dual("−30 сек", "Убрать 30 секунд"), cb("inc", "sec", "-30")),
+                    btn(dual("−5 сек", "Убрать 5 секунд"), cb("inc", "sec", "-5")),
+                    btn(dual("−1 сек", "Убрать 1 секунду"), cb("inc", "sec", "-1")),
+                ],
+            ]
+        )
     if with_weight:
         rows.extend(
             [

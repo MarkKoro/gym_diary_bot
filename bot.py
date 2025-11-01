@@ -724,49 +724,82 @@ def format_weight_value(value: float) -> str:
     return f"{value:.1f}"
 
 
-def format_sets_value(sets: int, reps: int, weight: float, with_weight: bool) -> str:
-    base = f"{sets}×{reps} повт."
+def format_metric_value(reps: int, seconds: int, kind: str) -> str:
+    reps = max(int(reps or 0), 0)
+    seconds = max(int(seconds or 0), 0)
+    if kind != "duration":
+        return f"{reps} повт."
+    parts: list[str] = []
+    if reps > 0:
+        parts.append(f"{reps} повт.")
+    if seconds > 0:
+        parts.append(f"{seconds} сек")
+    if not parts:
+        parts.append("0 сек")
+    return " · ".join(parts)
+
+
+def format_sets_value(
+    sets: int, reps: int, seconds: int, weight: float, with_weight: bool, kind: str = "reps"
+) -> str:
+    safe_sets = max(int(sets or 0), 0)
+    metric_text = format_metric_value(reps, seconds, kind)
+    base = f"{safe_sets}×{metric_text}"
     if not with_weight:
         return base
     return f"{base} при {format_weight_value(weight)} кг"
 
 
 def format_progress_sets_details(
-    details: list[tuple[int, float]], with_weight: bool, kind: str
+    details: list[tuple[int, int, float]], with_weight: bool, kind: str
 ) -> str:
     parts: list[str] = []
-    for reps, weight in details:
-        reps_val = max(int(reps or 0), 0)
-        if kind == "duration":
-            parts.append(f"{reps_val} сек")
-            continue
-        entry = f"{reps_val} повт."
+    for reps, seconds, weight in details:
+        entry = format_metric_value(reps, seconds, kind)
         if with_weight:
             weight_val = float(weight or 0.0)
-            entry = f"{entry} при {format_weight_value(weight_val)} кг"
+            if weight_val > 0:
+                entry = f"{entry} при {format_weight_value(weight_val)} кг"
         parts.append(entry)
     return "; ".join(parts) if parts else "—"
 
 
 def format_compact_sets_value(
-    sets: int, reps: int, weight: float, with_weight: bool
+    sets: int, reps: int, seconds: int, weight: float, with_weight: bool, kind: str = "reps"
 ) -> str:
     safe_sets = max(int(sets or 0), 0)
     safe_reps = max(int(reps or 0), 0)
-    base = f"{safe_sets}×{safe_reps}"
+    safe_seconds = max(int(seconds or 0), 0)
+    if kind == "duration":
+        metrics: list[str] = []
+        if safe_reps > 0:
+            metrics.append(f"{safe_reps} повт.")
+        if safe_seconds > 0:
+            metrics.append(f"{safe_seconds} сек")
+        metric_text = " · ".join(metrics) if metrics else "0 сек"
+        base = f"{safe_sets}×{metric_text}"
+    else:
+        base = f"{safe_sets}×{safe_reps}"
     if with_weight:
         safe_weight = max(float(weight or 0.0), 0.0)
         if safe_weight > 0:
-            return f"{base}×{format_weight_value(safe_weight)} кг"
+            connector = "×" if kind != "duration" else " · "
+            return f"{base}{connector}{format_weight_value(safe_weight)} кг"
     return base
 
 
 def format_flex_value(
-    reps: int, weight: float, with_weight: bool, kind: str = "reps"
+    reps: int, seconds: int, weight: float, with_weight: bool, kind: str = "reps"
 ) -> str:
     reps = max(int(reps), 0)
+    seconds = max(int(seconds), 0)
     if kind == "duration":
-        return f"{reps} сек"
+        entry = format_metric_value(reps, seconds, kind)
+        if with_weight:
+            weight_val = max(weight, 0.0)
+            if weight_val > 0:
+                entry = f"{entry} · {format_weight_value(weight_val)} кг"
+        return entry
     if with_weight:
         formatted = format_weight_value(max(weight, 0.0))
         return f"{reps}×{formatted} кг"
@@ -774,26 +807,28 @@ def format_flex_value(
 
 
 def _compress_flex_entries(
-    entries: list[tuple[int, int, float, int]],
+    entries: list[tuple[int, int, int, float, int]],
     *,
     with_weight: bool,
     kind: str,
 ) -> list[dict[str, int | float]]:
     runs: list[dict[str, int | float]] = []
-    for no, reps, weight, warm in entries:
+    for no, reps, seconds, weight, warm in entries:
         reps_value = int(reps)
+        seconds_value = int(seconds)
         weight_value = float(weight or 0.0)
         warm_flag = int(warm or 0)
         if runs:
             prev = runs[-1]
             same_reps = int(prev["reps"]) == reps_value
+            same_seconds = int(prev.get("seconds", 0)) == seconds_value
             same_warm = int(prev["warm"]) == warm_flag
             same_weight = (
                 kind == "duration"
                 or not with_weight
                 or math.isclose(float(prev["weight"]), weight_value, abs_tol=1e-6)
             )
-            if same_reps and same_warm and same_weight:
+            if same_reps and same_seconds and same_warm and same_weight:
                 prev["end"] = no
                 prev["count"] = int(prev["count"]) + 1
                 continue
@@ -803,6 +838,7 @@ def _compress_flex_entries(
                 "end": no,
                 "count": 1,
                 "reps": reps_value,
+                "seconds": seconds_value,
                 "weight": weight_value,
                 "warm": warm_flag,
             }
@@ -811,12 +847,12 @@ def _compress_flex_entries(
 
 
 def _compress_flex_triplets(
-    entries: list[tuple[int, int, float]],
+    entries: list[tuple[int, int, int, float]],
     *,
     with_weight: bool,
     kind: str,
 ) -> list[dict[str, int | float]]:
-    extended = [(no, reps, weight, 0) for no, reps, weight in entries]
+    extended = [(no, reps, seconds, weight, 0) for no, reps, seconds, weight in entries]
     return _compress_flex_entries(extended, with_weight=with_weight, kind=kind)
 
 
@@ -826,27 +862,32 @@ def _format_flex_span(start: int, end: int) -> str:
     return f"{start}–{end}"
 
 
-def filter_work_sets(sets: list[tuple[int, int, float, int]]) -> list[tuple[int, int, float]]:
-    return [(no, reps, weight) for no, reps, weight, warm in sets if not warm]
+def filter_work_sets(
+    sets: list[tuple[int, int, int, float, int]]
+) -> list[tuple[int, int, int, float]]:
+    return [(no, reps, seconds, weight) for no, reps, seconds, weight, warm in sets if not warm]
 
 
 def build_strength_summary_from_sets(
-    sets: list[tuple[int, int, float, int]]
-) -> dict[str, int | float]:
+    sets: list[tuple[int, int, int, float, int]]
+) -> dict[str, int | float | list]:
     work_sets = filter_work_sets(sets)
     if not work_sets:
         return {
             "sets": [],
             "sets_count": 0,
             "last_reps": 0,
+            "last_seconds": 0,
             "last_weight": 0.0,
         }
     last_reps = int(work_sets[-1][1] or 0)
-    last_weight = float(work_sets[-1][2] or 0.0)
+    last_seconds = int(work_sets[-1][2] or 0)
+    last_weight = float(work_sets[-1][3] or 0.0)
     return {
         "sets": work_sets,
         "sets_count": len(work_sets),
         "last_reps": last_reps,
+        "last_seconds": last_seconds,
         "last_weight": last_weight,
     }
 
@@ -859,46 +900,96 @@ def pluralize_sets(count: int) -> str:
     return "сетов"
 
 
-def format_kb_previous(last_sets: list[tuple[int, int, float]]) -> str:
+def format_kb_previous(
+    last_sets: list[tuple], *, kind: str = "reps"
+) -> str:
     if not last_sets:
         return "—"
-    total_reps = sum(max(reps, 0) for _, reps, _ in last_sets)
-    best = max(last_sets, key=lambda item: (item[2], item[1]))
-    best_text = f"{best[1]} повт. при {format_weight_value(best[2])} кг"
+    if kind == "duration":
+        normalized: list[tuple[int, int, int, float]] = []
+        for entry in last_sets:
+            if len(entry) >= 4:
+                no = entry[0]
+                reps = entry[1]
+                seconds = entry[2]
+                weight = entry[3]
+            else:
+                no = entry[0]
+                reps = entry[1]
+                seconds = 0
+                weight = entry[2]
+            normalized.append(
+                (
+                    int(no),
+                    max(int(reps or 0), 0),
+                    max(int(seconds or 0), 0),
+                    float(weight or 0.0),
+                )
+            )
+        summary = summarize_previous_sets(normalized, with_weight=True, kind=kind)
+        return summary or "—"
+    total_reps = 0
+    best_weight = -1.0
+    best_reps = 0
+    for entry in last_sets:
+        if len(entry) >= 4:
+            reps = entry[1]
+            weight = entry[3]
+        else:
+            reps = entry[1]
+            weight = entry[2]
+        safe_reps = max(int(reps or 0), 0)
+        safe_weight = max(float(weight or 0.0), 0.0)
+        total_reps += safe_reps
+        if safe_weight > best_weight or (
+            math.isclose(safe_weight, best_weight, abs_tol=1e-6) and safe_reps > best_reps
+        ):
+            best_weight = safe_weight
+            best_reps = safe_reps
+    best_text = f"{best_reps} повт. при {format_weight_value(best_weight)} кг"
     if total_reps:
         return f"Всего {total_reps} повт., лучший {best_text}"
     return f"Лучший {best_text}"
 
 
-def format_kb_plan(baseline: tuple[int, int, float] | None) -> str:
+def format_kb_plan(
+    baseline: tuple[int, int, int, float] | None, *, kind: str = "reps"
+) -> str:
     if not baseline:
         return "—"
-    sets, reps, weight = baseline
-    return format_compact_sets_value(sets, reps, weight, True)
+    sets, reps, seconds, weight = baseline
+    return format_compact_sets_value(sets, reps, seconds, weight, True, kind)
 
 
-def format_kb_done(sets: list[tuple[int, int, float]]) -> str:
+def format_kb_done(
+    sets: list[tuple[int, int, int, float]], *, kind: str = "reps"
+) -> str:
     if not sets:
         return "0 сетов"
     count = len(sets)
-    reps = sets[-1][1]
-    weight = sets[-1][2]
-    return (
-        f"{count} {pluralize_sets(count)} (последний {reps} повт. при {format_weight_value(weight)} кг)"
-    )
+    _, reps, seconds, weight = sets[-1]
+    metric = format_metric_value(reps, seconds, kind)
+    last_weight = float(weight or 0.0)
+    if last_weight > 0:
+        metric = f"{metric} при {format_weight_value(last_weight)} кг"
+    return f"{count} {pluralize_sets(count)} (последний {metric})"
 
 
 def format_kb_summary(
-    current_sets: list[tuple[int, int, float]],
-    last_sets: list[tuple[int, int, float]],
+    current_sets: list[tuple[int, int, int, float]],
+    last_sets: list[tuple[int, int, int, float]],
+    *,
+    kind: str = "reps",
 ) -> str:
     if current_sets:
-        detailed = summarize_previous_sets(current_sets, with_weight=True)
+        detailed = summarize_previous_sets(
+            current_sets, with_weight=True, kind=kind
+        )
         if detailed:
             return f"{t('MADE')} {detailed}"
-        return f"{t('MADE')} {format_kb_done(current_sets)}"
+        return f"{t('MADE')} {format_kb_done(current_sets, kind=kind)}"
     if last_sets:
-        return f"{t('LAST_TIME')}: {format_kb_previous(last_sets)}"
+        return f"{t('LAST_TIME')}: {format_kb_previous(last_sets, kind=kind)}"
     return f"{t('MADE')} 0 сетов"
 
 
@@ -1430,24 +1521,44 @@ def render_day_text(
     return "\n".join(lines)
 
 def baseline_text(
-    name: str, sets: int, reps: int, weight: float, *, with_weight: bool = True
+    name: str,
+    sets: int,
+    reps: int,
+    seconds: int,
+    weight: float,
+    *,
+    with_weight: bool = True,
+    kind: str = "reps",
 ) -> str:
-    return f"{name} — {format_sets_value(sets, reps, weight, with_weight)}"
+    return f"{name} — {format_sets_value(sets, reps, seconds, weight, with_weight, kind)}"
+
 
 def render_baseline_progress(
     done: list[str],
     name: str,
     sets: int,
     reps: int,
+    seconds: int,
     weight: float,
     *,
     with_weight: bool = True,
+    kind: str = "reps",
 ) -> str:
     lines = list(done)
     if name:
         if lines:
             lines.append("────────")
-        lines.append(baseline_text(name, sets, reps, weight, with_weight=with_weight))
+        lines.append(
+            baseline_text(
+                name,
+                sets,
+                reps,
+                seconds,
+                weight,
+                with_weight=with_weight,
+                kind=kind,
+            )
+        )
     return "\n".join(lines)
 
 INSTANT_BASE_KEY = "instant_baseline"
@@ -1470,6 +1581,7 @@ class FillEditorState:
     sets: list[dict[str, float]] = field(default_factory=list)
     pointer: int = 0
     default_reps: int = 0
+    default_seconds: int = 0
     default_weight: float = 0.0
 
 
@@ -1477,6 +1589,7 @@ def render_instant_baseline(
     name: str,
     sets: int,
     reps: int,
+    seconds: int,
     weight: float,
     *,
     with_weight: bool = True,
@@ -1505,25 +1618,29 @@ def render_instant_baseline(
             ]
         )
     lines.append("")
-    lines.append(f"Сейчас: {format_sets_value(sets, reps, weight, with_weight)}")
+    lines.append(
+        f"Сейчас: {format_sets_value(sets, reps, seconds, weight, with_weight, kind)}"
+    )
     return "\n".join(lines)
 
 
 def instant_baseline_view(info: dict) -> tuple[str, InlineKeyboardMarkup]:
-    sets, reps, weight = info["values"]
+    sets, reps, seconds, weight = info["values"]
     with_weight = info.get("with_weight", True)
     kind = info.get("kind", "reps")
     text = render_instant_baseline(
-        info["name"], sets, reps, weight, with_weight=with_weight, kind=kind
+        info["name"], sets, reps, seconds, weight, with_weight=with_weight, kind=kind
     )
     kb = baseline_kb(
         info["day"],
         sets,
         reps,
+        seconds,
         weight,
         prefix=f"ib:{info['source']}",
         include_skip_all=False,
         with_weight=with_weight,
+        kind=kind,
     )
     return text, kb
 
@@ -1545,10 +1662,15 @@ async def start_instant_baseline(
         group = default_group
     resolved_group = resolve_group(name, group)
     existing = await get_baseline(user_id, day, exercise_id)
-    values = list(existing) if existing else [0, 0, 0.0]
+    if existing:
+        values = list(existing)
+    else:
+        values = [0, 0, 0, 0.0]
+    while len(values) < 4:
+        values.append(0 if len(values) < 3 else 0.0)
     with_weight, kind = get_display_flags(resolved_group, name)
     if not with_weight:
-        values[2] = 0.0
+        values[3] = 0.0
     info = {
         "source": source,
         "day": day,
@@ -1655,7 +1777,8 @@ def render_fill_editor(state: FillEditorState, prefs: UiPreferences) -> str:
             for idx, item in enumerate(state.sets, start=1):
                 prefix = "▶︎ " if idx - 1 == state.pointer else ""
                 reps = int(max(item.get("reps", 0), 0))
-                value = format_flex_value(reps, 0.0, False, "duration")
+                seconds = int(max(item.get("seconds", 0), 0))
+                value = format_flex_value(reps, seconds, 0.0, False, "duration")
                 lines.append(f"{prefix}{idx}. {value}")
         return "\n".join(lines)
 
@@ -1682,18 +1805,19 @@ def render_fill_editor(state: FillEditorState, prefs: UiPreferences) -> str:
     for idx, item in enumerate(state.sets, start=1):
         prefix = "▶︎ " if idx - 1 == state.pointer else ""
         reps = int(max(item.get("reps", 0), 0))
+        seconds = int(max(item.get("seconds", 0), 0))
         weight = float(max(item.get("weight", 0.0), 0.0)) if state.with_weight else 0.0
-        value = format_flex_value(reps, weight, state.with_weight, state.kind)
+        value = format_flex_value(reps, seconds, weight, state.with_weight, state.kind)
         lines.append(f"{prefix}{idx}. {value}")
     return "\n".join(lines)
 
 
 def _rep_unit(kind: str) -> str:
-    return "сек" if kind == "duration" else "повт"
+    return "повт."
 
 
 def _major_rep_step(kind: str) -> int:
-    return 10 if kind == "duration" else 5
+    return 5
 
 
 
@@ -1738,6 +1862,33 @@ def _build_flex_fill_keyboard(state: FillEditorState) -> InlineKeyboardMarkup:
             ),
         ]
     )
+    if state.kind == "duration":
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    "＋30 сек", callback_data="fill:flex:inc:sec:30"
+                ),
+                InlineKeyboardButton(
+                    "＋5 сек", callback_data="fill:flex:inc:sec:5"
+                ),
+                InlineKeyboardButton(
+                    "＋1 сек", callback_data="fill:flex:inc:sec:1"
+                ),
+            ]
+        )
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    "−30 сек", callback_data="fill:flex:inc:sec:-30"
+                ),
+                InlineKeyboardButton(
+                    "−5 сек", callback_data="fill:flex:inc:sec:-5"
+                ),
+                InlineKeyboardButton(
+                    "−1 сек", callback_data="fill:flex:inc:sec:-1"
+                ),
+            ]
+        )
     if state.with_weight:
         rows.append(
             [
@@ -1816,6 +1967,7 @@ async def apply_fill_changes(
     template = [
         (
             int(max(item.get("reps", 0), 0)),
+            int(max(item.get("seconds", 0), 0)),
             float(max(item.get("weight", 0.0), 0.0)) if state.with_weight else 0.0,
         )
         for item in state.sets
@@ -1853,29 +2005,34 @@ async def open_fill_editor(
     sets_rows = await fetch_exercise_sets(session_id, ue_id)
     work_sets = filter_work_sets(sets_rows)
     default_reps = 0
+    default_seconds = 0
     default_weight = 0.0
     if baseline:
         default_reps = max(baseline[1], 0)
+        default_seconds = max(baseline[2], 0)
         if with_weight:
-            default_weight = max(baseline[2], 0.0)
+            default_weight = max(baseline[3], 0.0)
     elif last_values:
         default_reps = max(last_values[0], 0)
+        default_seconds = max(last_values[1], 0)
         if with_weight:
-            default_weight = max(last_values[1], 0.0)
+            default_weight = max(last_values[2], 0.0)
 
     sets_payload: list[dict[str, float]] = [
         {
             "reps": int(max(reps, 0)),
+            "seconds": int(max(seconds, 0)),
             "weight": float(max(weight, 0.0)) if with_weight else 0.0,
         }
-        for _, reps, weight in work_sets
+        for _, reps, seconds, weight in work_sets
     ]
     if not sets_payload:
         if baseline and baseline[0] > 0:
             sets_payload = [
                 {
                     "reps": max(baseline[1], 0),
-                    "weight": baseline[2] if with_weight else 0.0,
+                    "seconds": max(baseline[2], 0),
+                    "weight": baseline[3] if with_weight else 0.0,
                 }
                 for _ in range(baseline[0])
             ]
@@ -1883,6 +2040,7 @@ async def open_fill_editor(
             sets_payload = [
                 {
                     "reps": default_reps,
+                    "seconds": default_seconds,
                     "weight": default_weight if with_weight else 0.0,
                 }
             ]
@@ -1903,6 +2061,7 @@ async def open_fill_editor(
         sets=sets_payload,
         pointer=pointer,
         default_reps=default_reps,
+        default_seconds=default_seconds,
         default_weight=default_weight if with_weight else 0.0,
     )
     clear_fill_state(context, q.message.chat_id, q.message.message_id)
@@ -1933,6 +2092,11 @@ async def handle_fill_callback(
         state.pointer = max(0, min(state.pointer + delta, len(state.sets) - 1))
     elif action == "add":
         base_reps = state.sets[state.pointer]["reps"] if state.sets else state.default_reps
+        base_seconds = (
+            state.sets[state.pointer].get("seconds", state.default_seconds)
+            if state.sets
+            else state.default_seconds
+        )
         base_weight = (
             state.sets[state.pointer]["weight"] if state.sets else state.default_weight
         )
@@ -1941,6 +2105,7 @@ async def handle_fill_callback(
             insert_at,
             {
                 "reps": int(max(base_reps, 0)),
+                "seconds": int(max(base_seconds, 0)),
                 "weight": float(max(base_weight, 0.0)) if state.with_weight else 0.0,
             },
         )
@@ -1956,6 +2121,7 @@ async def handle_fill_callback(
             state.sets.append(
                 {
                     "reps": int(max(state.default_reps, 0)),
+                    "seconds": int(max(state.default_seconds, 0)),
                     "weight": float(max(state.default_weight, 0.0)) if state.with_weight else 0.0,
                 }
             )
@@ -1963,6 +2129,8 @@ async def handle_fill_callback(
         current = state.sets[state.pointer]
         if target == "reps":
             current["reps"] = max(0, int(current.get("reps", 0) + delta))
+        elif target == "sec":
+            current["seconds"] = max(0, int(current.get("seconds", 0) + delta))
         elif target == "kg" and state.with_weight:
             current["weight"] = max(0.0, float(current.get("weight", 0.0) + delta))
     elif action == "apply":
@@ -2572,7 +2740,7 @@ async def build_measurements_history_view(
 
 
 def summarize_previous_sets(
-    sets: list[tuple[int, int, float]],
+    sets: list[tuple[int, int, int, float]],
     *,
     with_weight: bool = True,
     kind: str = "reps",
@@ -2583,7 +2751,7 @@ def summarize_previous_sets(
     parts: list[str] = []
     for entry in grouped:
         value = format_flex_value(
-            int(entry["reps"]), float(entry["weight"]), with_weight, kind
+            int(entry["reps"]), int(entry.get("seconds", 0)), float(entry["weight"]), with_weight, kind
         )
         count = int(entry["count"])
         if count > 1:
@@ -2594,15 +2762,15 @@ def summarize_previous_sets(
 
 
 def summarize_baseline(
-    values: tuple[int, int, float] | None,
+    values: tuple[int, int, int, float] | None,
     *,
     with_weight: bool = True,
     kind: str = "reps",
 ) -> str:
     if not values:
         return ""
-    sets, reps, weight = values
-    formatted = format_flex_value(reps, weight, with_weight, kind)
+    sets, reps, seconds, weight = values
+    formatted = format_flex_value(reps, seconds, weight, with_weight, kind)
     return f"{sets}× {formatted}"
 
 
@@ -2672,18 +2840,19 @@ def build_note_lines(
 
 
 def format_plan_value(
-    baseline: tuple[int, int, float] | None,
+    baseline: tuple[int, int, int, float] | None,
     group_key: str,
     *,
     with_weight: bool = True,
+    kind: str = "reps",
 ) -> str:
     if not baseline:
         return t("NOT_SET")
     if group_key == "kb":
-        value = format_kb_plan(baseline)
+        value = format_kb_plan(baseline, kind=kind)
         return value if value != "—" else t("NOT_SET")
-    sets, reps, weight = baseline
-    return format_compact_sets_value(sets, reps, weight, with_weight)
+    sets, reps, seconds, weight = baseline
+    return format_compact_sets_value(sets, reps, seconds, weight, with_weight, kind)
 
 
 def format_strength_done_value(
@@ -2693,7 +2862,7 @@ def format_strength_done_value(
         return "0 сетов"
     sets = summary.get("sets") if isinstance(summary, dict) else None
     if isinstance(sets, list):
-        work_sets: list[tuple[int, int, float]] = list(sets)
+        work_sets: list[tuple[int, int, int, float]] = list(sets)
         count = len(work_sets)
         if count == 0:
             return "0 сетов"
@@ -2705,13 +2874,20 @@ def format_strength_done_value(
         return f"{label} — {details}" if details else label
     count = int(summary.get("sets_count") or 0)
     reps = int(summary.get("last_reps") or 0)
+    seconds = int(summary.get("last_seconds") or 0)
     weight = float(summary.get("last_weight") or 0.0)
     if count <= 0:
         return "0 сетов"
-    if with_weight:
-        detail = f"{reps} повт. при {format_weight_value(weight)} кг"
+    kind = str(summary.get("kind", "reps"))
+    if kind == "duration":
+        detail = format_metric_value(reps, seconds, kind)
+        if with_weight and weight > 0:
+            detail = f"{detail} при {format_weight_value(weight)} кг"
     else:
-        detail = f"{reps} повт."
+        if with_weight:
+            detail = f"{reps} повт. при {format_weight_value(weight)} кг"
+        else:
+            detail = f"{reps} повт."
     return f"{count} (последний {detail})"
 
 
@@ -2833,7 +3009,7 @@ async def fetch_day_sheet_data(
             summary["kind"] = kind
             entry["today_summary"] = summary
             if resolved_group == "kb":
-                entry["prev_summary"] = format_kb_previous(last_sets)
+                entry["prev_summary"] = format_kb_previous(last_sets, kind=kind)
             else:
                 entry["prev_summary"] = summarize_previous_sets(
                     last_sets, with_weight=weight_enabled, kind=kind
@@ -3015,17 +3191,15 @@ async def build_day_sheet_message(
                 lines.append(f"• {note_line}")
             lines.append(f"• Сегодня: {done_text}")
             base_cb = f"ex:inc:{day_index}:{ue_id}"
-            add_label = t("ADD_REP") if kind != "duration" else f"{t('ADD_REP')} сек"
-            sub_label = "−1" if kind != "duration" else "−1 сек"
             controls_row: list[InlineKeyboardButton] = [
                 InlineKeyboardButton(t("ADD_SET"), callback_data=f"ex:addset:{day_index}:{ue_id}"),
                 InlineKeyboardButton("− сет", callback_data=f"ex:delset:{day_index}:{ue_id}"),
                 InlineKeyboardButton(
-                    add_label,
+                    t("ADD_REP"),
                     callback_data=f"{base_cb}:reps:1",
                 ),
                 InlineKeyboardButton(
-                    sub_label,
+                    "−1",
                     callback_data=f"{base_cb}:reps:-1",
                 ),
             ]
@@ -3047,49 +3221,49 @@ async def build_day_sheet_message(
                 if group_key in {"workout", "core"}:
                     kb_rows.append(
                         [
-                            InlineKeyboardButton("＋1 сек", callback_data=f"{base_cb}:reps:1"),
-                            InlineKeyboardButton("＋5 сек", callback_data=f"{base_cb}:reps:5"),
-                            InlineKeyboardButton("＋25 сек", callback_data=f"{base_cb}:reps:25"),
-                            InlineKeyboardButton("＋30 сек", callback_data=f"{base_cb}:reps:30"),
+                            InlineKeyboardButton("＋1 сек", callback_data=f"{base_cb}:sec:1"),
+                            InlineKeyboardButton("＋5 сек", callback_data=f"{base_cb}:sec:5"),
+                            InlineKeyboardButton("＋25 сек", callback_data=f"{base_cb}:sec:25"),
+                            InlineKeyboardButton("＋30 сек", callback_data=f"{base_cb}:sec:30"),
                         ]
                     )
                     kb_rows.append(
                         [
-                            InlineKeyboardButton("−1 сек", callback_data=f"{base_cb}:reps:-1"),
-                            InlineKeyboardButton("−5 сек", callback_data=f"{base_cb}:reps:-5"),
-                            InlineKeyboardButton("−25 сек", callback_data=f"{base_cb}:reps:-25"),
-                            InlineKeyboardButton("−30 сек", callback_data=f"{base_cb}:reps:-30"),
+                            InlineKeyboardButton("−1 сек", callback_data=f"{base_cb}:sec:-1"),
+                            InlineKeyboardButton("−5 сек", callback_data=f"{base_cb}:sec:-5"),
+                            InlineKeyboardButton("−25 сек", callback_data=f"{base_cb}:sec:-25"),
+                            InlineKeyboardButton("−30 сек", callback_data=f"{base_cb}:sec:-30"),
                         ]
                     )
                     kb_rows.append(
                         [
-                            InlineKeyboardButton("＋1 мин", callback_data=f"{base_cb}:reps:60"),
-                            InlineKeyboardButton("−1 мин", callback_data=f"{base_cb}:reps:-60"),
+                            InlineKeyboardButton("＋1 мин", callback_data=f"{base_cb}:sec:60"),
+                            InlineKeyboardButton("−1 мин", callback_data=f"{base_cb}:sec:-60"),
                         ]
                     )
                 else:
                     kb_rows.append(
                         [
-                            InlineKeyboardButton("＋5 сек", callback_data=f"{base_cb}:reps:5"),
-                            InlineKeyboardButton("＋15 сек", callback_data=f"{base_cb}:reps:15"),
+                            InlineKeyboardButton("＋5 сек", callback_data=f"{base_cb}:sec:5"),
+                            InlineKeyboardButton("＋15 сек", callback_data=f"{base_cb}:sec:15"),
                         ]
                     )
                     kb_rows.append(
                         [
-                            InlineKeyboardButton("＋30 сек", callback_data=f"{base_cb}:reps:30"),
-                            InlineKeyboardButton("＋1 мин", callback_data=f"{base_cb}:reps:60"),
+                            InlineKeyboardButton("＋30 сек", callback_data=f"{base_cb}:sec:30"),
+                            InlineKeyboardButton("＋1 мин", callback_data=f"{base_cb}:sec:60"),
                         ]
                     )
                     kb_rows.append(
                         [
-                            InlineKeyboardButton("−5 сек", callback_data=f"{base_cb}:reps:-5"),
-                            InlineKeyboardButton("−15 сек", callback_data=f"{base_cb}:reps:-15"),
+                            InlineKeyboardButton("−5 сек", callback_data=f"{base_cb}:sec:-5"),
+                            InlineKeyboardButton("−15 сек", callback_data=f"{base_cb}:sec:-15"),
                         ]
                     )
                     kb_rows.append(
                         [
-                            InlineKeyboardButton("−30 сек", callback_data=f"{base_cb}:reps:-30"),
-                            InlineKeyboardButton("−1 мин", callback_data=f"{base_cb}:reps:-60"),
+                            InlineKeyboardButton("−30 сек", callback_data=f"{base_cb}:sec:-30"),
+                            InlineKeyboardButton("−1 мин", callback_data=f"{base_cb}:sec:-60"),
                         ]
                     )
                 kb_rows.append(
@@ -3291,14 +3465,14 @@ async def send_day_cards_view(
 
 
 def format_current_training(
-    sets: list[tuple[int, int, float, int]],
+    sets: list[tuple[int, int, int, float, int]],
     selected: int | None,
     *,
     with_weight: bool = True,
     kind: str = "reps",
 ) -> list[str]:
     if not sets:
-        empty = format_sets_value(0, 0, 0.0, with_weight)
+        empty = format_sets_value(0, 0, 0, 0.0, with_weight, kind)
         return [f"Текущая тренировка: {empty}"]
     lines = ["Текущая тренировка:"]
     grouped = _compress_flex_entries(sets, with_weight=with_weight, kind=kind)
@@ -3313,7 +3487,11 @@ def format_current_training(
             elif start <= selected <= end:
                 marker = "▶︎ "
         value = format_flex_value(
-            int(entry["reps"]), float(entry["weight"]), with_weight, kind
+            int(entry["reps"]),
+            int(entry.get("seconds", 0)),
+            float(entry["weight"]),
+            with_weight,
+            kind,
         )
         if count > 1:
             label = _format_flex_span(start, end)
@@ -3324,13 +3502,15 @@ def format_current_training(
 
 
 def build_flex_session_lines(
-    sets: list[tuple[int, int, float, int]],
+    sets: list[tuple[int, int, int, float, int]],
     selected: int | None,
     *,
     with_weight: bool = True,
     kind: str = "reps",
 ) -> list[str]:
-    work_sets = [(no, reps, weight) for no, reps, weight, warm in sets if not warm]
+    work_sets = [
+        (no, reps, seconds, weight) for no, reps, seconds, weight, warm in sets if not warm
+    ]
     lines: list[str] = []
     if not work_sets:
         lines.append("Сегодня пока нет рабочих сетов.")
@@ -3353,7 +3533,11 @@ def build_flex_session_lines(
             elif start <= selected <= end:
                 marker = "▶︎ "
         value = format_flex_value(
-            int(entry["reps"]), float(entry["weight"]), with_weight, kind
+            int(entry["reps"]),
+            int(entry.get("seconds", 0)),
+            float(entry["weight"]),
+            with_weight,
+            kind,
         )
         if count > 1:
             label = _format_flex_span(start, end)
@@ -3381,7 +3565,7 @@ async def build_summary_map(
         resolved = resolve_group(name, group)
         with_weight, kind = get_display_flags(resolved, name)
         weight_enabled = with_weight or resolved in {"workout", "core"}
-        current_sets_full: list[tuple[int, int, float, int]] = []
+        current_sets_full: list[tuple[int, int, int, float, int]] = []
         if session_id:
             current_sets_full = await fetch_exercise_sets(session_id, ue_id)
         current_note = await get_exercise_note(session_id, ue_id) if session_id else None
@@ -3394,13 +3578,13 @@ async def build_summary_map(
         if resolved == "kb":
             work_sets = filter_work_sets(current_sets_full)
             if work_sets:
-                last_label = format_kb_previous(work_sets)
+                last_label = format_kb_previous(work_sets, kind=kind)
             else:
                 last_sets = await fetch_last_session_sets(user_id, day, ue_id, today)
                 if last_sets:
-                    last_label = format_kb_previous(last_sets)
+                    last_label = format_kb_previous(last_sets, kind=kind)
             if (not last_label or last_label == "—") and baseline:
-                plan_value = format_kb_plan(baseline)
+                plan_value = format_kb_plan(baseline, kind=kind)
                 if plan_value and plan_value != "—":
                     last_label = plan_value
         elif resolved == "metcon" and name == AMRAP_EXERCISE_NAME:
@@ -3684,7 +3868,7 @@ async def render_exercise_view(
     title = f"{name} · {type_label}"
 
     if group == "kb":
-        prev_text = format_kb_previous(last_sets) or t("NOT_FIXED")
+        prev_text = format_kb_previous(last_sets, kind=kind) or t("NOT_FIXED")
         if prev_text == "—":
             prev_text = t("NOT_FIXED")
         summary = build_strength_summary_from_sets(sets)
@@ -5217,11 +5401,19 @@ async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAUL
             vals_map = context.user_data.setdefault("baseline_values", {})
             if ex_id not in vals_map:
                 existing = await get_baseline(user_id, day, ex_id)
-                vals_map[ex_id] = list(existing) if existing else [0, 0, 0.0]
+                if existing:
+                    vals_map[ex_id] = list(existing)
+                else:
+                    vals_map[ex_id] = [0, 0, 0, 0.0]
+                while len(vals_map[ex_id]) < 4:
+                    if len(vals_map[ex_id]) == 3:
+                        vals_map[ex_id].append(0.0)
+                    else:
+                        vals_map[ex_id].append(0)
             values = vals_map[ex_id]
-            with_weight, _ = get_display_flags(ex_group, name)
+            with_weight, kind = get_display_flags(ex_group, name)
             if not with_weight:
-                values[2] = 0.0
+                values[3] = 0.0
             done = context.user_data.setdefault("baseline_done", [])
             if action == "inc":
                 field = parts[3]
@@ -5230,15 +5422,17 @@ async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAUL
                     values[0] = max(0, values[0] + int(delta))
                 elif field == "reps":
                     values[1] = max(0, values[1] + int(delta))
+                elif field == "sec":
+                    values[2] = max(0, values[2] + int(delta))
                 elif field == "kg" and with_weight:
-                    values[2] = max(0.0, values[2] + delta)
+                    values[3] = max(0.0, values[3] + delta)
                 await show_screen(
                     q,
                     context,
                     render_baseline_progress(
-                        done, name, *values, with_weight=with_weight
+                        done, name, *values, with_weight=with_weight, kind=kind
                     ),
-                    baseline_kb(day, *values, with_weight=with_weight),
+                    baseline_kb(day, *values, with_weight=with_weight, kind=kind),
                     user_id,
                 )
                 return
@@ -5249,27 +5443,47 @@ async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAUL
                     ex_id,
                     values[0],
                     values[1],
-                    values[2] if with_weight else 0.0,
+                    values[2],
+                    values[3] if with_weight else 0.0,
                 )
-                done.append(f"{baseline_text(name, *values, with_weight=with_weight)} ✅")
+                done.append(
+                    f"{baseline_text(name, *values, with_weight=with_weight, kind=kind)} ✅"
+                )
                 idx += 1
                 if idx < len(baseline_list):
                     context.user_data["baseline_idx"] = idx
                     ex_id, name, ex_group = baseline_list[idx]
                     if ex_id not in vals_map:
                         existing = await get_baseline(user_id, day, ex_id)
-                        vals_map[ex_id] = list(existing) if existing else [0, 0, 0.0]
+                        if existing:
+                            vals_map[ex_id] = list(existing)
+                        else:
+                            vals_map[ex_id] = [0, 0, 0, 0.0]
+                        while len(vals_map[ex_id]) < 4:
+                            if len(vals_map[ex_id]) == 3:
+                                vals_map[ex_id].append(0.0)
+                            else:
+                                vals_map[ex_id].append(0)
                     values = vals_map[ex_id]
-                    next_with_weight, _ = get_display_flags(ex_group, name)
+                    next_with_weight, next_kind = get_display_flags(ex_group, name)
                     if not next_with_weight:
-                        values[2] = 0.0
+                        values[3] = 0.0
                     await show_screen(
                         q,
                         context,
                         render_baseline_progress(
-                            done, name, *values, with_weight=next_with_weight
+                            done,
+                            name,
+                            *values,
+                            with_weight=next_with_weight,
+                            kind=next_kind,
                         ),
-                        baseline_kb(day, *values, with_weight=next_with_weight),
+                        baseline_kb(
+                            day,
+                            *values,
+                            with_weight=next_with_weight,
+                            kind=next_kind,
+                        ),
                         user_id,
                     )
                 else:
@@ -5288,18 +5502,35 @@ async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAUL
                     ex_id, name, ex_group = baseline_list[idx]
                     if ex_id not in vals_map:
                         existing = await get_baseline(user_id, day, ex_id)
-                        vals_map[ex_id] = list(existing) if existing else [0, 0, 0.0]
+                        if existing:
+                            vals_map[ex_id] = list(existing)
+                        else:
+                            vals_map[ex_id] = [0, 0, 0, 0.0]
+                        while len(vals_map[ex_id]) < 4:
+                            if len(vals_map[ex_id]) == 3:
+                                vals_map[ex_id].append(0.0)
+                            else:
+                                vals_map[ex_id].append(0)
                     values = vals_map[ex_id]
-                    next_with_weight, _ = get_display_flags(ex_group, name)
+                    next_with_weight, next_kind = get_display_flags(ex_group, name)
                     if not next_with_weight:
-                        values[2] = 0.0
+                        values[3] = 0.0
                     await show_screen(
                         q,
                         context,
                         render_baseline_progress(
-                            done, name, *values, with_weight=next_with_weight
+                            done,
+                            name,
+                            *values,
+                            with_weight=next_with_weight,
+                            kind=next_kind,
                         ),
-                        baseline_kb(day, *values, with_weight=next_with_weight),
+                        baseline_kb(
+                            day,
+                            *values,
+                            with_weight=next_with_weight,
+                            kind=next_kind,
+                        ),
                         user_id,
                     )
                 else:
@@ -5319,16 +5550,25 @@ async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAUL
                         done.pop()
                     ex_id, name, ex_group = baseline_list[idx]
                     values = vals_map[ex_id]
-                    prev_with_weight, _ = get_display_flags(ex_group, name)
+                    prev_with_weight, prev_kind = get_display_flags(ex_group, name)
                     if not prev_with_weight:
-                        values[2] = 0.0
+                        values[3] = 0.0
                     await show_screen(
                         q,
                         context,
                         render_baseline_progress(
-                            done, name, *values, with_weight=prev_with_weight
+                            done,
+                            name,
+                            *values,
+                            with_weight=prev_with_weight,
+                            kind=prev_kind,
                         ),
-                        baseline_kb(day, *values, with_weight=prev_with_weight),
+                        baseline_kb(
+                            day,
+                            *values,
+                            with_weight=prev_with_weight,
+                            kind=prev_kind,
+                        ),
                         user_id,
                     )
                 else:
@@ -5458,12 +5698,37 @@ async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAUL
                             ex_id, name, ex_group = exs[0]
                             vals_map = context.user_data["baseline_values"]
                             existing = await get_baseline(user_id, day, ex_id)
-                            vals_map[ex_id] = list(existing) if existing else [0, 0, 0.0]
+                            if existing:
+                                vals_map[ex_id] = list(existing)
+                            else:
+                                vals_map[ex_id] = [0, 0, 0, 0.0]
+                            while len(vals_map[ex_id]) < 4:
+                                if len(vals_map[ex_id]) == 3:
+                                    vals_map[ex_id].append(0.0)
+                                else:
+                                    vals_map[ex_id].append(0)
                             vals = vals_map[ex_id]
-                            first_with_weight, _ = get_display_flags(ex_group, name)
+                            first_with_weight, first_kind = get_display_flags(ex_group, name)
                             if not first_with_weight:
-                                vals[2] = 0.0
-                            await show_screen(q, context, render_baseline_progress([], name, *vals, with_weight=first_with_weight), baseline_kb(day, *vals, with_weight=first_with_weight), user_id)
+                                vals[3] = 0.0
+                            await show_screen(
+                                q,
+                                context,
+                                render_baseline_progress(
+                                    [],
+                                    name,
+                                    *vals,
+                                    with_weight=first_with_weight,
+                                    kind=first_kind,
+                                ),
+                                baseline_kb(
+                                    day,
+                                    *vals,
+                                    with_weight=first_with_weight,
+                                    kind=first_kind,
+                                ),
+                                user_id,
+                            )
                         else:
                             await finish_day(q, context, user_id, day)
                     return
@@ -6223,8 +6488,10 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     values[0] = max(0, values[0] + int(delta))
                 elif field == "reps":
                     values[1] = max(0, values[1] + int(delta))
+                elif field == "sec":
+                    values[2] = max(0, values[2] + int(delta))
                 elif field == "kg" and with_weight:
-                    values[2] = max(0.0, values[2] + delta)
+                    values[3] = max(0.0, values[3] + delta)
                 text, kb = instant_baseline_view(info)
                 await show_screen(q, context, text, kb, user_id)
                 return
@@ -6235,7 +6502,8 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     info["exercise_id"],
                     values[0],
                     values[1],
-                    values[2] if with_weight else 0.0,
+                    values[2],
+                    values[3] if with_weight else 0.0,
                 )
                 await finish_instant_baseline(q, context, user_id, info)
                 return
@@ -8031,31 +8299,38 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     else:
                         if sets:
                             reps = max(int(sets[-1][1] or 0), 0)
-                            weight = float(max(sets[-1][2] or 0.0, 0.0))
+                            seconds = max(int(sets[-1][2] or 0), 0)
+                            weight = float(max(sets[-1][3] or 0.0, 0.0))
                         else:
                             with_weight, _ = get_display_flags(resolved_group, ex_name)
                             reps = 0
+                            seconds = 0
                             weight = 0.0
                             last_session_sets = await fetch_last_session_sets(user_id, day, ue_id, today_str)
                             if last_session_sets:
-                                rep_values = [max(int(r or 0), 0) for _, r, _ in last_session_sets]
+                                rep_values = [max(int(r or 0), 0) for _, r, _seconds, _weight in last_session_sets]
                                 if rep_values:
                                     reps = int(round(sum(rep_values) / len(rep_values)))
+                                sec_values = [max(int(s or 0), 0) for _, _r, s, _w in last_session_sets]
+                                if sec_values:
+                                    seconds = int(round(sum(sec_values) / len(sec_values)))
                                 if with_weight:
-                                    weight_values = [float(w or 0.0) for _, _, w in last_session_sets]
+                                    weight_values = [float(w or 0.0) for _, _r, _s, w in last_session_sets]
                                     if weight_values:
                                         weight = max(sum(weight_values) / len(weight_values), 0.0)
                             base = await get_baseline(user_id, day, ex_id)
                             if reps == 0 and base:
                                 reps = max(int(base[1] or 0), 0)
+                            if seconds == 0 and base:
+                                seconds = max(int(base[2] or 0), 0)
                             if with_weight:
                                 if weight <= 0.0 and base:
-                                    weight = float(max(base[2] or 0.0, 0.0))
+                                    weight = float(max(base[3] or 0.0, 0.0))
                                 if weight > 0.0:
                                     weight = round(weight / WEIGHT_ROUND_STEP) * WEIGHT_ROUND_STEP
                             else:
                                 weight = 0.0
-                        await add_set(session_id, ue_id, reps, weight)
+                        await add_set(session_id, ue_id, reps, seconds, weight)
                         sets = await fetch_exercise_sets(session_id, ue_id)
                         if sets:
                             set_flex_selected(context, day, ue_id, sets[-1][0])
@@ -8135,24 +8410,37 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     if field == "kg" and delta_value is None and not explicit_delta:
                         delta_value = WEIGHT_ROUND_STEP
                     target = None
-                    if field in ("reps", "sec"):
+                    if field == "reps":
                         target = "reps"
+                    elif field == "sec":
+                        target = "seconds"
                     elif field == "kg":
                         target = "weight_kg"
                     if target and delta_value is not None:
+                        if target in {"reps", "seconds"}:
+                            delta_value = int(round(delta_value))
                         sets = await fetch_exercise_sets(session_id, ue_id)
                         ex_id, ex_name, ex_group = await get_exercise_info(ue_id)
                         resolved_group = resolve_group(ex_name, ex_group)
                         with_weight, _ = get_display_flags(resolved_group, ex_name)
                         if not sets:
                             stored = await get_session_last_values(session_id, ue_id)
+                            reps = 0
+                            seconds = 0
+                            weight = 0.0
                             if stored and resolved_group != "kb":
-                                reps, weight = stored
+                                reps = max(int(stored[0] or 0), 0)
+                                seconds = max(int(stored[1] or 0), 0)
+                                weight = float(stored[2] or 0.0)
                             else:
                                 base = await get_baseline(user_id, day, ex_id)
-                                reps = base[1] if base else 0
-                                weight = base[2] if base else 0.0
-                            await add_set(session_id, ue_id, reps, weight)
+                                if base:
+                                    reps = max(int(base[1] or 0), 0)
+                                    seconds = max(int(base[2] or 0), 0)
+                                    weight = float(base[3] or 0.0)
+                            if not with_weight:
+                                weight = 0.0
+                            await add_set(session_id, ue_id, reps, seconds, weight)
                             sets = await fetch_exercise_sets(session_id, ue_id)
                         if target == "weight_kg" and not with_weight:
                             await q.answer()
@@ -8261,11 +8549,12 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     prog_lines = []
                     if base:
                         prog_lines.append(
-                            f"Базовое: {format_sets_value(base[0], base[1], base[2], view.with_weight)}"
+                            f"Базовое: {format_sets_value(base[0], base[1], base[2], base[3], view.with_weight, view.kind)}"
                         )
-                    for date_text, s, r, w, details in rows:
+                    for date_text, s, r, sec, w, details in rows:
                         sets_cnt = s or 0
                         reps_cnt = r or 0
+                        seconds_cnt = sec or 0
                         weight_val = w or 0.0
                         label = format_progress_date(date_text)
                         if details:
@@ -8274,7 +8563,12 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             )
                         else:
                             detail_text = format_sets_value(
-                                sets_cnt, reps_cnt, weight_val, view.with_weight
+                                sets_cnt,
+                                reps_cnt,
+                                seconds_cnt,
+                                weight_val,
+                                view.with_weight,
+                                view.kind,
                             )
                         prog_lines.append(f"{label}: {detail_text}")
                     if prog_lines:
