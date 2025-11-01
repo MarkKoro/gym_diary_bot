@@ -713,9 +713,36 @@ def _is_duration_name(name: str) -> bool:
 def get_display_flags(group: str, name: str) -> tuple[bool, str]:
     if group == RUNNING_GROUP:
         return False, "running"
-    with_weight = group not in {"workout", "core"}
+    if group in {"workout", "core"}:
+        return True, "duration"
+    with_weight = True
     kind = "duration" if _is_duration_name(name) else "reps"
     return with_weight, kind
+
+
+def _safe_int(value: object) -> int:
+    if value is None:
+        return 0
+    if isinstance(value, bool):
+        return int(value)
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        try:
+            return int(float(value))
+        except (TypeError, ValueError):
+            return 0
+
+
+def _safe_float(value: object) -> float:
+    if value is None:
+        return 0.0
+    if isinstance(value, bool):
+        return float(int(value))
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
 
 
 def format_weight_value(value: float) -> str:
@@ -791,17 +818,17 @@ def format_compact_sets_value(
 def format_flex_value(
     reps: int, seconds: int, weight: float, with_weight: bool, kind: str = "reps"
 ) -> str:
-    reps = max(int(reps), 0)
-    seconds = max(int(seconds), 0)
+    reps = max(_safe_int(reps), 0)
+    seconds = max(_safe_int(seconds), 0)
+    weight_value = max(_safe_float(weight), 0.0)
     if kind == "duration":
         entry = format_metric_value(reps, seconds, kind)
         if with_weight:
-            weight_val = max(weight, 0.0)
-            if weight_val > 0:
-                entry = f"{entry} · {format_weight_value(weight_val)} кг"
+            if weight_value > 0:
+                entry = f"{entry} · {format_weight_value(weight_value)} кг"
         return entry
     if with_weight:
-        formatted = format_weight_value(max(weight, 0.0))
+        formatted = format_weight_value(weight_value)
         return f"{reps}×{formatted} кг"
     return f"{reps} повт."
 
@@ -814,10 +841,10 @@ def _compress_flex_entries(
 ) -> list[dict[str, int | float]]:
     runs: list[dict[str, int | float]] = []
     for no, reps, seconds, weight, warm in entries:
-        reps_value = int(reps)
-        seconds_value = int(seconds)
-        weight_value = float(weight or 0.0)
-        warm_flag = int(warm or 0)
+        reps_value = _safe_int(reps)
+        seconds_value = _safe_int(seconds)
+        weight_value = _safe_float(weight)
+        warm_flag = _safe_int(warm)
         if runs:
             prev = runs[-1]
             same_reps = int(prev["reps"]) == reps_value
@@ -1776,9 +1803,12 @@ def render_fill_editor(state: FillEditorState, prefs: UiPreferences) -> str:
         else:
             for idx, item in enumerate(state.sets, start=1):
                 prefix = "▶︎ " if idx - 1 == state.pointer else ""
-                reps = int(max(item.get("reps", 0), 0))
-                seconds = int(max(item.get("seconds", 0), 0))
-                value = format_flex_value(reps, seconds, 0.0, False, "duration")
+                reps = max(_safe_int(item.get("reps")), 0)
+                seconds = max(_safe_int(item.get("seconds")), 0)
+                weight = _safe_float(item.get("weight")) if state.with_weight else 0.0
+                value = format_flex_value(
+                    reps, seconds, weight, state.with_weight, "duration"
+                )
                 lines.append(f"{prefix}{idx}. {value}")
         return "\n".join(lines)
 
@@ -1804,9 +1834,9 @@ def render_fill_editor(state: FillEditorState, prefs: UiPreferences) -> str:
     lines.append("")
     for idx, item in enumerate(state.sets, start=1):
         prefix = "▶︎ " if idx - 1 == state.pointer else ""
-        reps = int(max(item.get("reps", 0), 0))
-        seconds = int(max(item.get("seconds", 0), 0))
-        weight = float(max(item.get("weight", 0.0), 0.0)) if state.with_weight else 0.0
+        reps = max(_safe_int(item.get("reps")), 0)
+        seconds = max(_safe_int(item.get("seconds")), 0)
+        weight = max(_safe_float(item.get("weight")), 0.0) if state.with_weight else 0.0
         value = format_flex_value(reps, seconds, weight, state.with_weight, state.kind)
         lines.append(f"{prefix}{idx}. {value}")
     return "\n".join(lines)
@@ -1966,9 +1996,9 @@ async def apply_fill_changes(
     session_id = await get_or_create_today_session(user_id, today_str, state.day)
     template = [
         (
-            int(max(item.get("reps", 0), 0)),
-            int(max(item.get("seconds", 0), 0)),
-            float(max(item.get("weight", 0.0), 0.0)) if state.with_weight else 0.0,
+            max(_safe_int(item.get("reps")), 0),
+            max(_safe_int(item.get("seconds")), 0),
+            max(_safe_float(item.get("weight")), 0.0) if state.with_weight else 0.0,
         )
         for item in state.sets
     ]
@@ -1999,7 +2029,8 @@ async def open_fill_editor(
 ):
     ex_id, name, raw_group = await get_exercise_info(ue_id)
     group = resolve_group(name, raw_group)
-    with_weight, kind = get_display_flags(group, name)
+    base_with_weight, kind = get_display_flags(group, name)
+    weight_enabled = base_with_weight or group in {"workout", "core"}
     baseline = await get_baseline(user_id, day, ex_id)
     last_values = await get_session_last_values(session_id, ue_id)
     sets_rows = await fetch_exercise_sets(session_id, ue_id)
@@ -2008,21 +2039,21 @@ async def open_fill_editor(
     default_seconds = 0
     default_weight = 0.0
     if baseline:
-        default_reps = max(baseline[1], 0)
-        default_seconds = max(baseline[2], 0)
-        if with_weight:
-            default_weight = max(baseline[3], 0.0)
+        default_reps = max(_safe_int(baseline[1]), 0)
+        default_seconds = max(_safe_int(baseline[2]), 0)
+        if weight_enabled:
+            default_weight = max(_safe_float(baseline[3]), 0.0)
     elif last_values:
-        default_reps = max(last_values[0], 0)
-        default_seconds = max(last_values[1], 0)
-        if with_weight:
-            default_weight = max(last_values[2], 0.0)
+        default_reps = max(_safe_int(last_values[0]), 0)
+        default_seconds = max(_safe_int(last_values[1]), 0)
+        if weight_enabled:
+            default_weight = max(_safe_float(last_values[2]), 0.0)
 
     sets_payload: list[dict[str, float]] = [
         {
-            "reps": int(max(reps, 0)),
-            "seconds": int(max(seconds, 0)),
-            "weight": float(max(weight, 0.0)) if with_weight else 0.0,
+            "reps": max(_safe_int(reps), 0),
+            "seconds": max(_safe_int(seconds), 0),
+            "weight": max(_safe_float(weight), 0.0) if weight_enabled else 0.0,
         }
         for _, reps, seconds, weight in work_sets
     ]
@@ -2030,9 +2061,11 @@ async def open_fill_editor(
         if baseline and baseline[0] > 0:
             sets_payload = [
                 {
-                    "reps": max(baseline[1], 0),
-                    "seconds": max(baseline[2], 0),
-                    "weight": baseline[3] if with_weight else 0.0,
+                    "reps": max(_safe_int(baseline[1]), 0),
+                    "seconds": max(_safe_int(baseline[2]), 0),
+                    "weight": max(_safe_float(baseline[3]), 0.0)
+                    if weight_enabled
+                    else 0.0,
                 }
                 for _ in range(baseline[0])
             ]
@@ -2041,7 +2074,7 @@ async def open_fill_editor(
                 {
                     "reps": default_reps,
                     "seconds": default_seconds,
-                    "weight": default_weight if with_weight else 0.0,
+                    "weight": default_weight if weight_enabled else 0.0,
                 }
             ]
     pointer = 0
@@ -2051,7 +2084,7 @@ async def open_fill_editor(
         day=day,
         ue_id=ue_id,
         is_library=is_library,
-        with_weight=with_weight,
+        with_weight=weight_enabled,
         kind=kind,
         name=name,
         group=group,
@@ -2062,7 +2095,7 @@ async def open_fill_editor(
         pointer=pointer,
         default_reps=default_reps,
         default_seconds=default_seconds,
-        default_weight=default_weight if with_weight else 0.0,
+        default_weight=default_weight if weight_enabled else 0.0,
     )
     clear_fill_state(context, q.message.chat_id, q.message.message_id)
     set_fill_state(context, q.message.chat_id, q.message.message_id, state)
@@ -2091,22 +2124,30 @@ async def handle_fill_callback(
         delta = int(parts[3])
         state.pointer = max(0, min(state.pointer + delta, len(state.sets) - 1))
     elif action == "add":
-        base_reps = state.sets[state.pointer]["reps"] if state.sets else state.default_reps
+        base_reps = (
+            _safe_int(state.sets[state.pointer]["reps"])
+            if state.sets
+            else state.default_reps
+        )
         base_seconds = (
-            state.sets[state.pointer].get("seconds", state.default_seconds)
+            _safe_int(state.sets[state.pointer].get("seconds", state.default_seconds))
             if state.sets
             else state.default_seconds
         )
         base_weight = (
-            state.sets[state.pointer]["weight"] if state.sets else state.default_weight
+            _safe_float(state.sets[state.pointer]["weight"])
+            if state.sets
+            else state.default_weight
         )
         insert_at = state.pointer + 1 if state.sets else 0
         state.sets.insert(
             insert_at,
             {
-                "reps": int(max(base_reps, 0)),
-                "seconds": int(max(base_seconds, 0)),
-                "weight": float(max(base_weight, 0.0)) if state.with_weight else 0.0,
+                "reps": max(_safe_int(base_reps), 0),
+                "seconds": max(_safe_int(base_seconds), 0),
+                "weight": max(_safe_float(base_weight), 0.0)
+                if state.with_weight
+                else 0.0,
             },
         )
         state.pointer = insert_at
@@ -2120,19 +2161,24 @@ async def handle_fill_callback(
         if not state.sets:
             state.sets.append(
                 {
-                    "reps": int(max(state.default_reps, 0)),
-                    "seconds": int(max(state.default_seconds, 0)),
-                    "weight": float(max(state.default_weight, 0.0)) if state.with_weight else 0.0,
+                    "reps": max(_safe_int(state.default_reps), 0),
+                    "seconds": max(_safe_int(state.default_seconds), 0),
+                    "weight": max(_safe_float(state.default_weight), 0.0)
+                    if state.with_weight
+                    else 0.0,
                 }
             )
             state.pointer = 0
         current = state.sets[state.pointer]
         if target == "reps":
-            current["reps"] = max(0, int(current.get("reps", 0) + delta))
+            current_reps = _safe_int(current.get("reps"))
+            current["reps"] = max(0, current_reps + int(delta))
         elif target == "sec":
-            current["seconds"] = max(0, int(current.get("seconds", 0) + delta))
+            current_seconds = _safe_int(current.get("seconds"))
+            current["seconds"] = max(0, current_seconds + int(delta))
         elif target == "kg" and state.with_weight:
-            current["weight"] = max(0.0, float(current.get("weight", 0.0) + delta))
+            current_weight = _safe_float(current.get("weight"))
+            current["weight"] = max(0.0, current_weight + delta)
     elif action == "apply":
         await apply_fill_changes(q, context, user_id, state, prefs)
         return
@@ -4788,9 +4834,9 @@ async def on_subscription_choose(update: Update, context: ContextTypes.DEFAULT_T
     except BadRequest:
         logger.debug("Failed to delete subscription menu message")
 
-    back_markup = InlineKeyboardMarkup(
-        [[InlineKeyboardButton("⬅️ Назад", callback_data="back:main")]]
-    )
+    pay_button = InlineKeyboardButton("💳 Оплатить", pay=True)
+    back_button = InlineKeyboardButton("⬅️ Назад", callback_data="back:main")
+    back_markup = InlineKeyboardMarkup([[pay_button], [back_button]])
 
     await query.message.reply_invoice(
         title=title,
