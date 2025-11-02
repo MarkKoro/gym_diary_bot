@@ -1376,7 +1376,7 @@ async def list_user_reminders(user_id: int):
     async with connect_db() as db:
         cur = await db.execute(
             """
-            SELECT day_no, dow, hour, minute
+            SELECT id, day_no, dow, hour, minute
             FROM user_reminders
             WHERE user_id=?
             ORDER BY COALESCE(day_no, id)
@@ -1384,12 +1384,31 @@ async def list_user_reminders(user_id: int):
             (user_id,),
         )
         rows = await cur.fetchall()
-    result: list[tuple[int, int, int, int]] = []
-    next_fallback = 1
-    for day_no, dow, hour, minute in rows:
-        day_idx = int(day_no) if day_no is not None else next_fallback
-        result.append((day_idx, dow, hour, minute))
-        next_fallback = max(next_fallback, day_idx + 1)
+        cur = await db.execute(
+            "SELECT day_index FROM user_days WHERE user_id=? AND is_active=1",
+            (user_id,),
+        )
+        active_rows = await cur.fetchall()
+        active_days = {int(row[0]) for row in active_rows}
+        result: list[tuple[int, int, int, int]] = []
+        next_fallback = 1
+        to_delete: list[int] = []
+        for row_id, day_no, dow, hour, minute in rows:
+            day_idx = int(day_no) if day_no is not None else next_fallback
+            next_fallback = max(next_fallback, day_idx + 1)
+            if active_days and day_idx not in active_days:
+                to_delete.append(int(row_id))
+                continue
+            dow_int = int(dow) if dow is not None else -1
+            hour_int = int(hour) if hour is not None else 0
+            minute_int = int(minute) if minute is not None else 0
+            result.append((day_idx, dow_int, hour_int, minute_int))
+        if to_delete:
+            await db.executemany(
+                "DELETE FROM user_reminders WHERE id=?",
+                ((row_id,) for row_id in to_delete),
+            )
+        await db.commit()
     return result
 
 

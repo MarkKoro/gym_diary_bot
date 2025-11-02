@@ -78,7 +78,7 @@ from keyboards import (
     library_delete_kb,
     confirm_library_group_delete_kb,
     measurements_main_kb,
-    measurements_manage_kb,
+    measurements_manage_overview_kb,
     measurements_category_kb,
     measurements_metric_kb,
     measurements_existing_kb,
@@ -2762,6 +2762,31 @@ async def delete_measurement_category_with_contents(
     return removed
 
 
+async def show_measurements_manage_overview(
+    q,
+    context: ContextTypes.DEFAULT_TYPE,
+    user_id: int,
+    *,
+    category_back_target: str,
+    back_callback: str = "measure:back",
+    prompt: str = "Выбери категорию:",
+):
+    custom_items = await load_custom_measurements(user_id, context)
+    user_categories = await load_measurement_categories(user_id, context)
+    categories = measurement_categories_list(
+        user_categories,
+        include_custom_fallback=True,
+        custom_items=custom_items,
+    )
+    kb = measurements_manage_overview_kb(
+        categories,
+        include_delete=bool(custom_items or user_categories),
+        back_callback=back_callback,
+    )
+    context.user_data[MEASUREMENT_CATEGORY_BACK_KEY] = category_back_target
+    await show_screen(q, context, prompt, kb, user_id)
+
+
 async def show_measure_edit_menu(q, context: ContextTypes.DEFAULT_TYPE, user_id: int) -> bool:
     custom_items = await load_custom_measurements(user_id, context)
     user_categories = await load_measurement_categories(user_id, context)
@@ -4688,29 +4713,68 @@ async def reminder_job(context: ContextTypes.DEFAULT_TYPE):
 
 
 async def schedule_all_reminders(app: Application):
-    for user_id, tg_id, day_no, dow, hour, minute in await list_users_with_reminders():
-        if tg_id is None:
-            continue
-        try:
-            dow_int = int(dow)
-        except (TypeError, ValueError):
-            continue
-        if dow_int < 0 or dow_int > 6:
+    raw_rows = await list_users_with_reminders()
+    users: dict[int, dict[str, int | None]] = {}
+    for user_id, tg_id, _day_no, _dow, _hour, _minute in raw_rows:
+        info = users.setdefault(int(user_id), {"tg_id": None})
+        if tg_id is not None:
+            try:
+                info["tg_id"] = int(tg_id)
+            except (TypeError, ValueError):
+                info["tg_id"] = None
+    desired_jobs: set[str] = set()
+    for user_id, info in users.items():
+        reminders = await list_user_reminders(user_id)
+        if not reminders:
             continue
         tz_code = await get_user_timezone(user_id)
         zone = resolve_user_zone(tz_code)
-        tm = time(hour=hour, minute=minute, tzinfo=zone)
-        job_name = f"rem_{user_id}_{int(day_no)}"
-        for job in app.job_queue.get_jobs_by_name(job_name):
-            job.schedule_removal()
-        app.job_queue.run_daily(
-            reminder_job,
-            tm,
-            days=(dow_int,),
-            chat_id=tg_id,
-            name=job_name,
-            data={"user_id": user_id, "day_no": int(day_no)},
-        )
+        tg_id = info.get("tg_id")
+        for day_no, dow, hour, minute in reminders:
+            try:
+                day_int = int(day_no)
+                dow_int = int(dow)
+                hour_int = int(hour)
+                minute_int = int(minute)
+            except (TypeError, ValueError):
+                continue
+            if dow_int < 0 or dow_int > 6:
+                continue
+            job_name = f"rem_{user_id}_{day_int}"
+            if tg_id is not None:
+                desired_jobs.add(job_name)
+                for job in app.job_queue.get_jobs_by_name(job_name):
+                    job.schedule_removal()
+                legacy_job_name = f"rem_{user_id}_{dow_int}"
+                for job in app.job_queue.get_jobs_by_name(legacy_job_name):
+                    job.schedule_removal()
+                tm = time(hour=hour_int, minute=minute_int, tzinfo=zone)
+                app.job_queue.run_daily(
+                    reminder_job,
+                    tm,
+                    days=(dow_int,),
+                    chat_id=tg_id,
+                    name=job_name,
+                    data={"user_id": user_id, "day_no": day_int},
+                )
+            else:
+                legacy_job_name = f"rem_{user_id}_{dow_int}"
+                for job in app.job_queue.get_jobs_by_name(legacy_job_name):
+                    job.schedule_removal()
+    # remove orphaned reminder jobs that are no longer present in the database
+    try:
+        jobs = app.job_queue.jobs()
+    except AttributeError:
+        jobs = []
+    for job in jobs:
+        name = getattr(job, "name", None)
+        if not name:
+            continue
+        if name.startswith("rem_") and name not in desired_jobs:
+            try:
+                job.schedule_removal()
+            except Exception:
+                continue
 
 
 async def post_init(app: Application):
@@ -6669,8 +6733,10 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
         else:
             prompt = 'Выбери категорию:'
-            kb = measurements_category_kb(
-                'add', categories, back_callback=back_callback
+            kb = measurements_manage_overview_kb(
+                categories,
+                include_delete=bool(custom_items or user_categories),
+                back_callback=back_callback,
             )
         context.user_data[MEASUREMENT_CATEGORY_BACK_KEY] = back_callback
         text, kb = prepare_ui_output(prompt, kb, prefs)
@@ -7165,17 +7231,11 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context.user_data.pop(MEASUREMENT_CUSTOM_KEY, None)
             context.user_data.pop(MEASUREMENT_CATEGORY_INPUT_KEY, None)
             context.user_data.pop(MEASUREMENT_CATEGORY_BACK_KEY, None)
-            custom_items = await load_custom_measurements(user_id, context)
-            user_categories = await load_measurement_categories(user_id, context)
-            kb = measurements_manage_kb(
-                bool(custom_items), bool(user_categories)
-            )
-            await show_screen(
+            await show_measurements_manage_overview(
                 q,
                 context,
-                "Что сделать?",
-                kb,
                 user_id,
+                category_back_target="measure:manage",
             )
             return
 
@@ -7184,22 +7244,11 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context.user_data.pop(MEASUREMENT_EXISTING_KEY, None)
             context.user_data.pop(MEASUREMENT_CUSTOM_KEY, None)
             context.user_data.pop(MEASUREMENT_CATEGORY_INPUT_KEY, None)
-            custom_items = await load_custom_measurements(user_id, context)
-            user_categories = await load_measurement_categories(user_id, context)
-            categories = measurement_categories_list(
-                user_categories,
-                include_custom_fallback=True,
-                custom_items=custom_items,
-            )
-            context.user_data[MEASUREMENT_CATEGORY_BACK_KEY] = "measure:manage"
-            await show_screen(
+            await show_measurements_manage_overview(
                 q,
                 context,
-                'Выбери категорию:',
-                measurements_category_kb(
-                    'add', categories, back_callback="measure:manage"
-                ),
                 user_id,
+                category_back_target="measure:add",
             )
             return
 
@@ -7309,13 +7358,11 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     user_id,
                 )
             else:
-                kb = measurements_manage_kb(False, False)
-                await show_screen(
+                await show_measurements_manage_overview(
                     q,
                     context,
-                    "Что сделать?",
-                    kb,
                     user_id,
+                    category_back_target="measure:manage",
                 )
             return
 
@@ -7380,13 +7427,11 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     user_id,
                 )
             else:
-                kb = measurements_manage_kb(False, False)
-                await show_screen(
+                await show_measurements_manage_overview(
                     q,
                     context,
-                    "Что сделать?",
-                    kb,
                     user_id,
+                    category_back_target="measure:manage",
                 )
             return
 

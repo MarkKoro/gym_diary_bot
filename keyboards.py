@@ -1662,22 +1662,30 @@ def measurements_main_kb(show_all: bool):
     ])
 
 
-def measurements_manage_kb(has_custom: bool, has_categories: bool):
-    rows: list[list[InlineKeyboardButton]] = [
+def measurements_manage_overview_kb(
+    categories: list[tuple[str, str]],
+    include_delete: bool,
+    back_callback: str = "measure:back",
+):
+    rows: list[list[InlineKeyboardButton]] = []
+    for code, title in categories:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    dual(title, f"Открыть категорию «{title}»"),
+                    callback_data=f"measure:add:cat:{code}",
+                )
+            ]
+        )
+    rows.append(
         [
             InlineKeyboardButton(
                 dual("＋ Добавить категорию", "Добавить новую категорию"),
                 callback_data="measure:manage:addcat",
             )
-        ],
-        [
-            InlineKeyboardButton(
-                dual("＋ Добавить замер", "Добавить новый замер"),
-                callback_data="measure:add",
-            )
-        ],
-    ]
-    if has_custom or has_categories:
+        ]
+    )
+    if include_delete:
         rows.append(
             [
                 InlineKeyboardButton(
@@ -1689,7 +1697,7 @@ def measurements_manage_kb(has_custom: bool, has_categories: bool):
                 )
             ]
         )
-    rows.append([InlineKeyboardButton(BACK_BTN, callback_data="measure:back")])
+    rows.append([InlineKeyboardButton(BACK_BTN, callback_data=back_callback)])
     return InlineKeyboardMarkup(rows)
 
 
