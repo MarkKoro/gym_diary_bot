@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import math
+import secrets
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, time, timedelta, UTC
@@ -98,6 +99,7 @@ from settings import (
 )
 from db import (
     init_db,
+    connect_db,
     get_or_create_user,
     get_or_create_today_session,
     get_session_for_day,
@@ -188,6 +190,9 @@ from db import (
     list_broadcast_targets,
     find_user_by_tg_id,
     find_user_by_id,
+    find_user_by_trainer_code,
+    get_trainer_link,
+    create_trainer_request,
     increment_day_finish_total,
     get_subscription_prompt_total,
     set_subscription_prompt_total,
@@ -258,6 +263,8 @@ FOR_TIME_EXERCISE_NAME = "Меткон — For Time (кастом)"
 FOR_TIME_METRIC = "wod_time_sec"
 AMRAP_SCHEME_KEY = "awaiting_amrap_scheme"
 FOR_TIME_INPUT_KEY = "awaiting_for_time_result"
+TRAINER_CODE_INPUT_KEY = "awaiting_trainer_code"
+TRAINER_CODE_PROMPT_KEY = "trainer_code_prompt"
 RUNNING_GROUP = "run"
 RUNNING_INPUT_KEY = "running_input"
 RUNNING_HISTORY_PAGE_SIZE = 1
@@ -1344,6 +1351,106 @@ def remember_message(chat_id: int | None, message_id: int | None):
     if chat_id is None or message_id is None:
         return
     last_messages[chat_id] = message_id
+
+
+async def _generate_trainer_code():
+    return "TR-" + secrets.token_hex(3).upper()
+
+
+async def _generate_unique_trainer_code() -> str:
+    while True:
+        candidate = await _generate_trainer_code()
+        existing = await find_user_by_trainer_code(candidate)
+        if not existing:
+            return candidate
+
+
+async def _fetch_trainer_profile(user_id: int) -> tuple[int, str | None] | None:
+    async with connect_db() as db:
+        cur = await db.execute(
+            "SELECT is_trainer, trainer_code FROM users WHERE id=?",
+            (user_id,),
+        )
+        row = await cur.fetchone()
+    if not row:
+        return None
+    is_trainer = int(row[0] or 0)
+    return is_trainer, row[1]
+
+
+async def _ensure_trainer_mode(
+    user_id: int,
+    profile: tuple[int, str | None] | None = None,
+) -> str:
+    if profile is None:
+        profile = await _fetch_trainer_profile(user_id)
+    if profile and profile[0] and profile[1]:
+        return profile[1]
+    existing_code = profile[1] if profile else None
+    if existing_code:
+        owner = await find_user_by_trainer_code(existing_code)
+        if owner and int(owner[0]) != user_id:
+            existing_code = None
+    if not existing_code:
+        existing_code = await _generate_unique_trainer_code()
+    async with connect_db() as db:
+        await db.execute(
+            "UPDATE users SET is_trainer = 1, trainer_code = ? WHERE id=?",
+            (existing_code, user_id),
+        )
+        await db.commit()
+    return existing_code
+
+
+async def _render_trainer_link_message(
+    context: ContextTypes.DEFAULT_TYPE,
+    user_id: int,
+    target: tuple[int, int] | None,
+    text: str,
+    *,
+    chat_id: int | None = None,
+) -> tuple[int, int] | None:
+    kb = InlineKeyboardMarkup(
+        [[InlineKeyboardButton(BACK_BTN, callback_data="menu:settings")]]
+    )
+    prefs = await load_ui_preferences(user_id)
+    prepared_text, prepared_markup = prepare_ui_output(text, kb, prefs)
+    message_chat_id: int | None
+    message_id: int | None
+    if target:
+        message_chat_id, message_id = target
+        try:
+            await context.bot.edit_message_text(
+                prepared_text,
+                chat_id=message_chat_id,
+                message_id=message_id,
+                reply_markup=prepared_markup,
+            )
+        except TelegramError:
+            new_message = await send_main_message(
+                context.bot,
+                message_chat_id,
+                prepared_text,
+                reply_markup=prepared_markup,
+            )
+            message_chat_id = new_message.chat_id
+            message_id = new_message.message_id
+    else:
+        message_chat_id = chat_id
+        if message_chat_id is None:
+            return None
+        new_message = await send_main_message(
+            context.bot,
+            message_chat_id,
+            prepared_text,
+            reply_markup=prepared_markup,
+        )
+        message_id = new_message.message_id
+    if message_chat_id is None or message_id is None:
+        return None
+    remember_message(message_chat_id, message_id)
+    context.user_data[TRAINER_CODE_PROMPT_KEY] = (message_chat_id, message_id)
+    return message_chat_id, message_id
 
 
 def clear_linear_state(
@@ -6522,6 +6629,64 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
     if not await require_subscription(update, context):
         return
+    if context.user_data.get(TRAINER_CODE_INPUT_KEY):
+        if not update.message or update.message.text is None:
+            return
+        context.user_data.pop(TRAINER_CODE_INPUT_KEY, None)
+        code_input = (update.message.text or "").strip()
+        u = update.effective_user
+        if not u:
+            return
+        user_id = await get_or_create_user(u.id, u.username)
+        target = context.user_data.get(TRAINER_CODE_PROMPT_KEY)
+        if not code_input:
+            await try_delete(update.message)
+            await _render_trainer_link_message(
+                context,
+                user_id,
+                target if isinstance(target, tuple) else None,
+                "Код тренера не найден.",
+                chat_id=update.effective_chat.id if update.effective_chat else None,
+            )
+            context.user_data[TRAINER_CODE_INPUT_KEY] = True
+            return
+        trainer = await find_user_by_trainer_code(code_input)
+        if not trainer:
+            await try_delete(update.message)
+            await _render_trainer_link_message(
+                context,
+                user_id,
+                target if isinstance(target, tuple) else None,
+                "Код тренера не найден.",
+                chat_id=update.effective_chat.id if update.effective_chat else None,
+            )
+            context.user_data[TRAINER_CODE_INPUT_KEY] = True
+            return
+        trainer_id = int(trainer[0])
+        link1 = await get_trainer_link(trainer_id, user_id)
+        link2 = await get_trainer_link(user_id, trainer_id)
+        if link1 or link2 or trainer_id == user_id:
+            await try_delete(update.message)
+            await _render_trainer_link_message(
+                context,
+                user_id,
+                target if isinstance(target, tuple) else None,
+                "Этот пользователь уже связан с вами.",
+                chat_id=update.effective_chat.id if update.effective_chat else None,
+            )
+            context.user_data[TRAINER_CODE_INPUT_KEY] = True
+            return
+        await create_trainer_request(trainer_id, user_id)
+        await try_delete(update.message)
+        await _render_trainer_link_message(
+            context,
+            user_id,
+            target if isinstance(target, tuple) else None,
+            "Заявка отправлена тренеру.",
+            chat_id=update.effective_chat.id if update.effective_chat else None,
+        )
+        context.user_data.pop(TRAINER_CODE_PROMPT_KEY, None)
+        return
     for_time_state = context.user_data.get(FOR_TIME_INPUT_KEY)
     if for_time_state:
         if not update.message or not update.message.text:
@@ -8290,6 +8455,32 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         if parts[0] == "set":
             action = parts[1]
+            if action == "trainer_mode":
+                profile = await _fetch_trainer_profile(user_id)
+                code = await _ensure_trainer_mode(user_id, profile)
+                text = f"Режим тренера включён.\n\nКод: {code}"
+                kb = InlineKeyboardMarkup(
+                    [[InlineKeyboardButton(BACK_BTN, callback_data="menu:settings")]]
+                )
+                await show_screen(q, context, text, kb, user_id)
+                return
+            if action == "trainer_link":
+                message = await show_screen(
+                    q,
+                    context,
+                    "Введи код тренера (формат TR-XXXXX).",
+                    InlineKeyboardMarkup(
+                        [[InlineKeyboardButton(BACK_BTN, callback_data="menu:settings")]]
+                    ),
+                    user_id,
+                )
+                target_message = message or q.message
+                context.user_data[TRAINER_CODE_INPUT_KEY] = True
+                context.user_data[TRAINER_CODE_PROMPT_KEY] = (
+                    getattr(target_message, "chat_id", q.message.chat_id),
+                    getattr(target_message, "message_id", q.message.message_id),
+                )
+                return
             if action == "rename_day":
                 if len(parts) == 2:
                     days = await list_active_days(user_id)

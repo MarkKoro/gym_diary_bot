@@ -155,6 +155,18 @@ def settings_kb():
         ],
         [
             InlineKeyboardButton(
+                dual("🧑‍🏫 Режим тренера", "Включить режим тренера и получить код"),
+                callback_data="set:trainer_mode",
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                dual("🤝 Тренер / подопечный", "Связать тренера и подопечного"),
+                callback_data="set:trainer_link",
+            )
+        ],
+        [
+            InlineKeyboardButton(
                 dual("💳 Подписка", "Управление подпиской"),
                 callback_data="menu:subscription",
             )
