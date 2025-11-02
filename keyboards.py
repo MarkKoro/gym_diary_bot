@@ -1662,27 +1662,30 @@ def measurements_main_kb(show_all: bool):
     ])
 
 
-def measurements_manage_kb(has_custom: bool):
+def measurements_manage_kb(has_custom: bool, has_categories: bool):
     rows: list[list[InlineKeyboardButton]] = [
         [
             InlineKeyboardButton(
-                dual("＋ Добавить показатель", "Добавить новый замер"),
-                callback_data="measure:add",
+                dual("＋ Добавить категорию", "Добавить новую категорию"),
+                callback_data="measure:manage:addcat",
             )
         ],
         [
             InlineKeyboardButton(
-                dual("✏️ Изменить показатели", "Изменить сохранённые замеры"),
-                callback_data="measure:edit",
+                dual("＋ Добавить замер", "Добавить новый замер"),
+                callback_data="measure:add",
             )
         ],
     ]
-    if has_custom:
+    if has_custom or has_categories:
         rows.append(
             [
                 InlineKeyboardButton(
-                    dual("🗑 Удалить свои замеры", "Удалить пользовательские замеры"),
-                    callback_data="measure:edit:customrm",
+                    dual(
+                        "🗑 Удалить категорию или замер",
+                        "Удалить пользовательскую категорию или замер",
+                    ),
+                    callback_data="measure:manage:delete",
                 )
             ]
         )
@@ -1783,6 +1786,38 @@ def measurements_existing_kb(
                     callback_data=f"measure:{action}:metric:{code}",
                 )
             ]
-        )
+    )
     rows.append([InlineKeyboardButton(BACK_BTN, callback_data=back_callback)])
+    return InlineKeyboardMarkup(rows)
+
+
+def measurements_remove_kb(
+    categories: list[tuple[str, str]], metrics: list[tuple[str, str]]
+):
+    rows: list[list[InlineKeyboardButton]] = []
+    for code, title in categories:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    dual(
+                        f"📁 {title}",
+                        f"Удалить категорию «{title}»",  # pragma: no cover - format only
+                    ),
+                    callback_data=f"measure:manage:delete:cat:{code}",
+                )
+            ]
+        )
+    for code, title in metrics:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    dual(
+                        f"📝 {title}",
+                        f"Удалить замер «{title}»",  # pragma: no cover - format only
+                    ),
+                    callback_data=f"measure:manage:delete:item:{code}",
+                )
+            ]
+        )
+    rows.append([InlineKeyboardButton(BACK_BTN, callback_data="measure:manage")])
     return InlineKeyboardMarkup(rows)
