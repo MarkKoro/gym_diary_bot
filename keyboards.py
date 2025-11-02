@@ -37,7 +37,11 @@ def ui_footer_rows(
     return rows
 
 def main_menu_kb(
-    days: list[tuple[int, str]], support_url: str, completed_days: set[int] | None = None
+    days: list[tuple[int, str]],
+    support_url: str,
+    completed_days: set[int] | None = None,
+    *,
+    show_trainer: bool = False,
 ):
     completed_days = completed_days or set()
     rows = []
@@ -74,6 +78,15 @@ def main_menu_kb(
             )
         ]
     )
+    if show_trainer:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    dual("👥 Мои подопечные", "Открыть список подопечных"),
+                    callback_data="trainer:list",
+                )
+            ]
+        )
     rows.append(
         [
             InlineKeyboardButton(
