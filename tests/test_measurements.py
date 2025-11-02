@@ -25,6 +25,32 @@ import bot  # noqa: E402
 importlib.reload(bot)
 
 
+class _FakeMessage:
+    def __init__(self, text: str):
+        self.text = text
+        self.deleted = False
+
+    async def delete(self):
+        self.deleted = True
+
+
+class _FakeBot:
+    def __init__(self):
+        self.edits: list[dict] = []
+
+    async def edit_message_text(
+        self, text, chat_id, message_id, reply_markup=None, **kwargs
+    ):
+        self.edits.append(
+            {
+                "text": text,
+                "chat_id": chat_id,
+                "message_id": message_id,
+                "reply_markup": reply_markup,
+            }
+        )
+
+
 class MeasurementDbTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         await db.init_db()
@@ -133,6 +159,50 @@ class MeasurementDbTests(unittest.IsolatedAsyncioTestCase):
         text, _ = await bot.build_measurements_view(user_id, context)
 
         self.assertIn("Гибкость — нет данных", text)
+
+    async def test_custom_measurement_uses_origin_category(self):
+        tg_id = 5050
+        user_id = await db.get_or_create_user(tg_id, "category-flow")
+        category_code = await db.add_measurement_category(user_id, "K", "Категория")
+        bot.last_messages.clear()
+        fake_bot = _FakeBot()
+        chat_id = 4321
+        message_id = 9876
+        custom_state = {
+            "chat_id": chat_id,
+            "message_id": message_id,
+            "back": f"measure:add:cat:{category_code}",
+            "origin": category_code,
+            "step": "name",
+        }
+        context = SimpleNamespace(user_data={bot.MEASUREMENT_CUSTOM_KEY: custom_state}, bot=fake_bot)
+        update = SimpleNamespace(
+            message=_FakeMessage("Новый показатель"),
+            effective_user=SimpleNamespace(id=tg_id, username="category-flow"),
+        )
+
+        await bot.text_router(update, context)
+
+        self.assertTrue(update.message.deleted)
+        self.assertIsNone(context.user_data.get(bot.MEASUREMENT_CUSTOM_KEY))
+        input_state = context.user_data.get(bot.MEASUREMENT_INPUT_KEY)
+        self.assertIsNotNone(input_state)
+        self.assertEqual(input_state["category"], category_code)
+        custom_rows = await db.list_custom_measurements(user_id)
+        self.assertEqual(len(custom_rows), 1)
+        stored_code, stored_name, stored_category = custom_rows[0]
+        self.assertEqual(stored_category, category_code)
+        self.assertEqual(stored_code, input_state["metric"])
+        self.assertEqual(stored_name, "Новый показатель")
+        self.assertTrue(fake_bot.edits)
+        edit = fake_bot.edits[-1]
+        self.assertEqual(edit["chat_id"], chat_id)
+        self.assertEqual(edit["message_id"], message_id)
+        self.assertIn("Введи значение", edit["text"])
+        markup = edit["reply_markup"]
+        self.assertIsNotNone(markup)
+        back_button = markup.inline_keyboard[-1][0]
+        self.assertEqual(back_button.callback_data, f"measure:add:cat:{category_code}")
 
 
 class ProgressFormattingTests(unittest.TestCase):
