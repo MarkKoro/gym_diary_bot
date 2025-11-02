@@ -2661,3 +2661,13 @@ async def list_measurement_categories(user_id: int) -> list[tuple[str, str, str]
             for row in rows
             if row[0] and row[1]
         ]
+
+
+async def delete_measurement_category(user_id: int, code: str) -> bool:
+    async with connect_db() as db:
+        cur = await db.execute(
+            "DELETE FROM user_measurement_categories WHERE user_id=? AND code=?",
+            (user_id, code),
+        )
+        await db.commit()
+        return cur.rowcount > 0

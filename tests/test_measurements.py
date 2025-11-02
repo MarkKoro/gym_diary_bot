@@ -4,6 +4,7 @@ import sys
 import tempfile
 import importlib
 import unittest
+from types import SimpleNamespace
 
 
 tmp_db = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
@@ -20,6 +21,8 @@ import settings  # noqa: E402
 importlib.reload(settings)
 import db  # noqa: E402
 importlib.reload(db)
+import bot  # noqa: E402
+importlib.reload(bot)
 
 
 class MeasurementDbTests(unittest.IsolatedAsyncioTestCase):
@@ -112,6 +115,24 @@ class MeasurementDbTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(custom, [])
         history = await db.fetch_measurement_history(user_id, code)
         self.assertEqual(history, [])
+
+    async def test_delete_measurement_category_removes_record(self):
+        user_id = await db.get_or_create_user(303, "category-user")
+        code = await db.add_measurement_category(user_id, "K", "Категория")
+
+        removed = await db.delete_measurement_category(user_id, code)
+        self.assertTrue(removed)
+        categories = await db.list_measurement_categories(user_id)
+        self.assertEqual(categories, [])
+
+    async def test_custom_measurement_shown_without_values(self):
+        user_id = await db.get_or_create_user(404, "viewer")
+        await db.add_custom_measurement(user_id, "Гибкость")
+        context = SimpleNamespace(user_data={})
+
+        text, _ = await bot.build_measurements_view(user_id, context)
+
+        self.assertIn("Гибкость — нет данных", text)
 
 
 class ProgressFormattingTests(unittest.TestCase):
