@@ -2762,6 +2762,44 @@ async def delete_measurement_category_with_contents(
     return removed
 
 
+async def prompt_custom_measurement_value(
+    context: ContextTypes.DEFAULT_TYPE,
+    user_id: int,
+    chat_id: int | None,
+    message_id: int | None,
+    back_callback: str,
+    name: str,
+    category_code: str,
+) -> str | None:
+    if chat_id is None or message_id is None:
+        context.user_data.pop(MEASUREMENT_CUSTOM_KEY, None)
+        return None
+    code = await add_custom_measurement(user_id, name, category_code)
+    await load_custom_measurements(user_id, context)
+    context.user_data.pop(MEASUREMENT_CUSTOM_KEY, None)
+    context.user_data[MEASUREMENT_INPUT_KEY] = {
+        "action": "add",
+        "metric": code,
+        "chat_id": chat_id,
+        "message_id": message_id,
+        "category": category_code,
+    }
+    prompt = f"Введи значение для «{name}» (например: 10)."
+    kb = InlineKeyboardMarkup(
+        [[InlineKeyboardButton(BACK_BTN, callback_data=back_callback)]]
+    )
+    prefs = await load_ui_preferences(user_id)
+    text, kb = prepare_ui_output(prompt, kb, prefs)
+    await context.bot.edit_message_text(
+        text,
+        chat_id=chat_id,
+        message_id=message_id,
+        reply_markup=kb,
+    )
+    remember_message(chat_id, message_id)
+    return code
+
+
 async def show_measurements_manage_overview(
     q,
     context: ContextTypes.DEFAULT_TYPE,
@@ -6765,10 +6803,6 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if not chat_id or not msg_id:
                 context.user_data.pop(MEASUREMENT_CUSTOM_KEY, None)
                 return
-            updated_state = dict(custom_state)
-            updated_state["pending_name"] = name
-            updated_state["step"] = "category"
-            context.user_data[MEASUREMENT_CUSTOM_KEY] = updated_state
             custom_items = await load_custom_measurements(user_id, context)
             user_categories = await load_measurement_categories(user_id, context)
             categories = measurement_categories_list(
@@ -6776,6 +6810,22 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 include_custom_fallback=True,
                 custom_items=custom_items,
             )
+            origin = (custom_state.get("origin") or "").strip()
+            if origin and any(code == origin for code, _ in categories):
+                await prompt_custom_measurement_value(
+                    context,
+                    user_id,
+                    chat_id,
+                    msg_id,
+                    back_callback,
+                    name,
+                    origin,
+                )
+                return
+            updated_state = dict(custom_state)
+            updated_state["pending_name"] = name
+            updated_state["step"] = "category"
+            context.user_data[MEASUREMENT_CUSTOM_KEY] = updated_state
             prompt = f"В какую категорию добавить «{name}»?"
             kb = measurements_category_kb(
                 'customplace',
@@ -7576,29 +7626,15 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 return
             u = q.from_user
             user_id = await get_or_create_user(u.id, u.username)
-            code = await add_custom_measurement(user_id, name, category_code)
-            await load_custom_measurements(user_id, context)
-            context.user_data.pop(MEASUREMENT_CUSTOM_KEY, None)
-            context.user_data[MEASUREMENT_INPUT_KEY] = {
-                "action": "add",
-                "metric": code,
-                "chat_id": chat_id,
-                "message_id": msg_id,
-                "category": category_code,
-            }
-            prompt = f"Введи значение для «{name}» (например: 10)."
-            kb = InlineKeyboardMarkup(
-                [[InlineKeyboardButton(BACK_BTN, callback_data=back_callback)]]
+            await prompt_custom_measurement_value(
+                context,
+                user_id,
+                chat_id,
+                msg_id,
+                back_callback,
+                name,
+                category_code,
             )
-            prefs = await load_ui_preferences(user_id)
-            text, kb = prepare_ui_output(prompt, kb, prefs)
-            await context.bot.edit_message_text(
-                text,
-                chat_id=chat_id,
-                message_id=msg_id,
-                reply_markup=kb,
-            )
-            remember_message(chat_id, msg_id)
             return
 
         if data == "measure:edit":
