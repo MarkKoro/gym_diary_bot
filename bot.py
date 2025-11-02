@@ -193,6 +193,9 @@ from db import (
     find_user_by_trainer_code,
     get_trainer_link,
     create_trainer_request,
+    list_trainer_requests,
+    list_trainer_trainees,
+    update_trainer_link_status,
     increment_day_finish_total,
     get_subscription_prompt_total,
     set_subscription_prompt_total,
@@ -265,6 +268,10 @@ AMRAP_SCHEME_KEY = "awaiting_amrap_scheme"
 FOR_TIME_INPUT_KEY = "awaiting_for_time_result"
 TRAINER_CODE_INPUT_KEY = "awaiting_trainer_code"
 TRAINER_CODE_PROMPT_KEY = "trainer_code_prompt"
+TRAINER_PENDING_OFFSET_KEY = "trainer_pending_offset"
+TRAINER_ACCEPTED_OFFSET_KEY = "trainer_accepted_offset"
+TRAINER_LIST_LIMIT = 8
+TRAINER_MAX_TRAINEES = 10
 RUNNING_GROUP = "run"
 RUNNING_INPUT_KEY = "running_input"
 RUNNING_HISTORY_PAGE_SIZE = 1
@@ -667,7 +674,14 @@ async def compose_main_menu(
     notice_lines = await build_subscription_notice(user_id)
     if notice_lines:
         text = "\n".join([text, "", *notice_lines])
-    kb = main_menu_kb(days, SUPPORT_DEEPLINK, completions)
+    profile = await _fetch_trainer_profile(user_id)
+    is_trainer = bool(profile and profile[0])
+    kb = main_menu_kb(
+        days,
+        SUPPORT_DEEPLINK,
+        completions,
+        show_trainer=is_trainer,
+    )
     return text, kb, prefs
 
 
@@ -1451,6 +1465,190 @@ async def _render_trainer_link_message(
     remember_message(message_chat_id, message_id)
     context.user_data[TRAINER_CODE_PROMPT_KEY] = (message_chat_id, message_id)
     return message_chat_id, message_id
+
+
+async def _get_trainer_link_by_id(link_id: int):
+    async with connect_db() as db:
+        cur = await db.execute(
+            """
+            SELECT id, trainer_user_id, trainee_user_id, status
+            FROM trainer_links
+            WHERE id = ?
+            """,
+            (link_id,),
+        )
+        return await cur.fetchone()
+
+
+async def _format_trainer_user_display(user_id: int) -> str:
+    info = await find_user_by_id(user_id)
+    if info:
+        _, tg_id, username = info
+        if username:
+            return f"@{username}"
+        if tg_id:
+            return f"ID {tg_id}"
+    return f"ID {user_id}"
+
+
+async def _load_trainer_lists(
+    user_id: int, pending_offset: int, accepted_offset: int
+) -> tuple[int, list, int, list]:
+    safe_pending = max(0, pending_offset)
+    safe_accepted = max(0, accepted_offset)
+    requests: list
+    while True:
+        requests = await list_trainer_requests(
+            user_id, limit=TRAINER_LIST_LIMIT, offset=safe_pending
+        )
+        if requests or safe_pending == 0:
+            break
+        safe_pending = max(0, safe_pending - TRAINER_LIST_LIMIT)
+    trainees: list
+    while True:
+        trainees = await list_trainer_trainees(
+            user_id, limit=TRAINER_LIST_LIMIT, offset=safe_accepted
+        )
+        if trainees or safe_accepted == 0:
+            break
+        safe_accepted = max(0, safe_accepted - TRAINER_LIST_LIMIT)
+    return safe_pending, requests, safe_accepted, trainees
+
+
+async def _render_trainer_overview(
+    q,
+    context: ContextTypes.DEFAULT_TYPE,
+    user_id: int,
+    *,
+    message: str | None = None,
+    pending_offset: int | None = None,
+    accepted_offset: int | None = None,
+) -> None:
+    current_pending = (
+        pending_offset
+        if pending_offset is not None
+        else context.user_data.get(TRAINER_PENDING_OFFSET_KEY, 0)
+    )
+    current_accepted = (
+        accepted_offset
+        if accepted_offset is not None
+        else context.user_data.get(TRAINER_ACCEPTED_OFFSET_KEY, 0)
+    )
+    pending_offset, requests, accepted_offset, trainees = await _load_trainer_lists(
+        user_id, current_pending, current_accepted
+    )
+    context.user_data[TRAINER_PENDING_OFFSET_KEY] = pending_offset
+    context.user_data[TRAINER_ACCEPTED_OFFSET_KEY] = accepted_offset
+    pending_has_prev = pending_offset > 0
+    accepted_has_prev = accepted_offset > 0
+    pending_has_next = False
+    accepted_has_next = False
+    if len(requests) == TRAINER_LIST_LIMIT:
+        more = await list_trainer_requests(
+            user_id,
+            limit=1,
+            offset=pending_offset + TRAINER_LIST_LIMIT,
+        )
+        pending_has_next = bool(more)
+    if len(trainees) == TRAINER_LIST_LIMIT:
+        more = await list_trainer_trainees(
+            user_id,
+            limit=1,
+            offset=accepted_offset + TRAINER_LIST_LIMIT,
+        )
+        accepted_has_next = bool(more)
+    user_ids: set[int] = set()
+    for entry in requests:
+        user_ids.add(int(entry[1]))
+    for entry in trainees:
+        user_ids.add(int(entry[1]))
+    labels: dict[int, str] = {}
+    if user_ids:
+        ordered_ids = list(user_ids)
+        resolved = await asyncio.gather(
+            *(_format_trainer_user_display(uid) for uid in ordered_ids)
+        )
+        labels = dict(zip(ordered_ids, resolved))
+    lines: list[str] = []
+    if message:
+        lines.extend([message, ""])
+    lines.append("Заявки:")
+    if requests:
+        for entry in requests:
+            trainee_id = int(entry[1])
+            label = labels.get(trainee_id, f"ID {trainee_id}")
+            lines.append(f"• {label}")
+    else:
+        lines.append("• Нет заявок.")
+    lines.append("")
+    lines.append("Подопечные:")
+    if trainees:
+        for entry in trainees:
+            trainee_id = int(entry[1])
+            label = labels.get(trainee_id, f"ID {trainee_id}")
+            lines.append(f"• {label}")
+    else:
+        lines.append("• Пока нет подопечных.")
+    rows: list[list[InlineKeyboardButton]] = []
+    for entry in requests:
+        link_id = int(entry[0])
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    "✅ Принять", callback_data=f"trainer:req:accept:{link_id}"
+                ),
+                InlineKeyboardButton(
+                    "❌ Отклонить", callback_data=f"trainer:req:decline:{link_id}"
+                ),
+            ]
+        )
+    if pending_has_prev or pending_has_next:
+        nav_row: list[InlineKeyboardButton] = []
+        if pending_has_prev:
+            nav_row.append(
+                InlineKeyboardButton(
+                    "⬅️ Предыдущие заявки", callback_data="trainer:list:pending:prev"
+                )
+            )
+        if pending_has_next:
+            nav_row.append(
+                InlineKeyboardButton(
+                    "Следующие заявки ➡️", callback_data="trainer:list:pending:next"
+                )
+            )
+        if nav_row:
+            rows.append(nav_row)
+    for entry in trainees:
+        trainee_id = int(entry[1])
+        label = labels.get(trainee_id, f"ID {trainee_id}")
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    label, callback_data=f"trainer:view:{trainee_id}"
+                )
+            ]
+        )
+    if accepted_has_prev or accepted_has_next:
+        nav_row = []
+        if accepted_has_prev:
+            nav_row.append(
+                InlineKeyboardButton(
+                    "⬅️ Предыдущие подопечные",
+                    callback_data="trainer:list:accepted:prev",
+                )
+            )
+        if accepted_has_next:
+            nav_row.append(
+                InlineKeyboardButton(
+                    "Следующие подопечные ➡️",
+                    callback_data="trainer:list:accepted:next",
+                )
+            )
+        if nav_row:
+            rows.append(nav_row)
+    rows.append([InlineKeyboardButton(BACK_BTN, callback_data="menu:root")])
+    kb = InlineKeyboardMarkup(rows)
+    await show_screen(q, context, "\n".join(lines), kb, user_id)
 
 
 def clear_linear_state(
@@ -7292,6 +7490,119 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         u = update.effective_user
         user_id = await get_or_create_user(u.id, u.username)
         remember_message(q.message.chat_id, q.message.message_id)
+
+        if data.startswith("trainer:"):
+            profile = await _fetch_trainer_profile(user_id)
+            if not profile or not profile[0]:
+                await q.answer("Недоступно.", show_alert=True)
+                return
+            parts = data.split(":")
+            if len(parts) < 2:
+                return
+            action = parts[1]
+            if action == "list":
+                if len(parts) == 2:
+                    await _render_trainer_overview(q, context, user_id)
+                    return
+                if len(parts) >= 4:
+                    section = parts[2]
+                    direction = parts[3]
+                    pending_offset = context.user_data.get(
+                        TRAINER_PENDING_OFFSET_KEY, 0
+                    )
+                    accepted_offset = context.user_data.get(
+                        TRAINER_ACCEPTED_OFFSET_KEY, 0
+                    )
+                    if section == "pending":
+                        if direction == "next":
+                            pending_offset += TRAINER_LIST_LIMIT
+                        elif direction == "prev":
+                            pending_offset = max(0, pending_offset - TRAINER_LIST_LIMIT)
+                        await _render_trainer_overview(
+                            q,
+                            context,
+                            user_id,
+                            pending_offset=pending_offset,
+                            accepted_offset=accepted_offset,
+                        )
+                        return
+                    if section == "accepted":
+                        if direction == "next":
+                            accepted_offset += TRAINER_LIST_LIMIT
+                        elif direction == "prev":
+                            accepted_offset = max(
+                                0, accepted_offset - TRAINER_LIST_LIMIT
+                            )
+                        await _render_trainer_overview(
+                            q,
+                            context,
+                            user_id,
+                            pending_offset=pending_offset,
+                            accepted_offset=accepted_offset,
+                        )
+                        return
+                return
+            if action == "req" and len(parts) >= 4:
+                req_action = parts[2]
+                try:
+                    link_id = int(parts[3])
+                except ValueError:
+                    return
+                link = await _get_trainer_link_by_id(link_id)
+                if not link or int(link[1]) != user_id:
+                    await _render_trainer_overview(
+                        q, context, user_id, message="Заявка не найдена."
+                    )
+                    return
+                status = str(link[3]) if link[3] is not None else ""
+                if status != "pending":
+                    await _render_trainer_overview(
+                        q, context, user_id, message="Заявка уже обработана."
+                    )
+                    return
+                trainee_user_id = int(link[2])
+                if req_action == "accept":
+                    accepted = await list_trainer_trainees(
+                        user_id, limit=1000, offset=0
+                    )
+                    if len(accepted) >= TRAINER_MAX_TRAINEES:
+                        await _render_trainer_overview(
+                            q,
+                            context,
+                            user_id,
+                            message="Лимит подопечных достигнут (10)",
+                        )
+                        return
+                    reverse = await get_trainer_link(trainee_user_id, user_id)
+                    if reverse and str(reverse[1]) in {"accepted", "pending"}:
+                        await _render_trainer_overview(
+                            q,
+                            context,
+                            user_id,
+                            message="Нельзя: пользователь уже с вами в обратной связи",
+                        )
+                        return
+                    await update_trainer_link_status(link_id, "accepted")
+                    await _render_trainer_overview(
+                        q, context, user_id, message="Заявка принята"
+                    )
+                    return
+                if req_action == "decline":
+                    await update_trainer_link_status(link_id, "rejected")
+                    await _render_trainer_overview(
+                        q, context, user_id, message="Заявка отклонена"
+                    )
+                    return
+                return
+            if action == "view" and len(parts) >= 3:
+                try:
+                    int(parts[2])
+                except ValueError:
+                    return
+                await q.answer(
+                    "Информация о подопечном скоро появится.", show_alert=True
+                )
+                return
 
         if data.startswith("ib:"):
             parts = data.split(":")
