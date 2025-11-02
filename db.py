@@ -453,6 +453,17 @@ async def init_db():
             payload_json TEXT,
             external_id TEXT
         );
+
+        CREATE TABLE IF NOT EXISTS trainer_links(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            trainer_user_id INTEGER NOT NULL,
+            trainee_user_id INTEGER NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending',
+            can_edit_plan INTEGER NOT NULL DEFAULT 0,
+            trainer_label TEXT,
+            trainee_label TEXT,
+            created_at TEXT NOT NULL
+        );
         """)
         try:
             await db.execute("ALTER TABLE users ADD COLUMN system TEXT")
@@ -500,6 +511,14 @@ async def init_db():
             )
         if not await _column_exists(db, "payments", "external_id"):
             await db.execute("ALTER TABLE payments ADD COLUMN external_id TEXT")
+        try:
+            await db.execute("ALTER TABLE users ADD COLUMN is_trainer INTEGER NOT NULL DEFAULT 0")
+        except Exception:
+            pass
+        try:
+            await db.execute("ALTER TABLE users ADD COLUMN trainer_code TEXT")
+        except Exception:
+            pass
         await db.execute(
             "UPDATE user_prefs SET ui_mode = CASE WHEN ui_mode IN ('compact','detailed') THEN ui_mode ELSE COALESCE(day_view_mode, 'detailed') END"
         )
@@ -2690,3 +2709,87 @@ async def delete_measurement_category(user_id: int, code: str) -> bool:
         )
         await db.commit()
         return cur.rowcount > 0
+
+
+async def find_user_by_trainer_code(code: str):
+    async with connect_db() as db:
+        cur = await db.execute(
+            "SELECT id, username FROM users WHERE trainer_code = ?",
+            (code,),
+        )
+        return await cur.fetchone()
+
+
+async def get_trainer_link(trainer_user_id: int, trainee_user_id: int):
+    async with connect_db() as db:
+        cur = await db.execute(
+            """
+            SELECT id, status, can_edit_plan, trainer_label, trainee_label
+            FROM trainer_links
+            WHERE trainer_user_id = ? AND trainee_user_id = ?
+            """,
+            (trainer_user_id, trainee_user_id),
+        )
+        return await cur.fetchone()
+
+
+async def create_trainer_request(trainer_user_id: int, trainee_user_id: int):
+    async with connect_db() as db:
+        created_at = _now_iso()
+        cur = await db.execute(
+            """
+            INSERT INTO trainer_links(trainer_user_id, trainee_user_id, status, created_at)
+            VALUES(?, ?, 'pending', ?)
+            """,
+            (trainer_user_id, trainee_user_id, created_at),
+        )
+        await db.commit()
+        return cur.lastrowid
+
+
+async def list_trainer_requests(trainer_user_id: int, limit: int = 20, offset: int = 0):
+    async with connect_db() as db:
+        cur = await db.execute(
+            """
+            SELECT id, trainee_user_id, status, created_at
+            FROM trainer_links
+            WHERE trainer_user_id = ? AND status = 'pending'
+            ORDER BY created_at DESC
+            LIMIT ? OFFSET ?
+            """,
+            (trainer_user_id, limit, offset),
+        )
+        return await cur.fetchall()
+
+
+async def list_trainer_trainees(trainer_user_id: int, limit: int = 20, offset: int = 0):
+    async with connect_db() as db:
+        cur = await db.execute(
+            """
+            SELECT id, trainee_user_id, trainer_label, can_edit_plan, created_at
+            FROM trainer_links
+            WHERE trainer_user_id = ? AND status = 'accepted'
+            ORDER BY created_at DESC
+            LIMIT ? OFFSET ?
+            """,
+            (trainer_user_id, limit, offset),
+        )
+        return await cur.fetchall()
+
+
+async def update_trainer_link_status(link_id: int, status: str):
+    async with connect_db() as db:
+        await db.execute(
+            "UPDATE trainer_links SET status = ? WHERE id = ?",
+            (status, link_id),
+        )
+        await db.commit()
+
+
+async def update_trainer_link_permissions(link_id: int, can_edit_plan: int):
+    async with connect_db() as db:
+        await db.execute(
+            "UPDATE trainer_links SET can_edit_plan = ? WHERE id = ?",
+            (can_edit_plan, link_id),
+        )
+        await db.commit()
