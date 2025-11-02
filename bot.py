@@ -123,6 +123,7 @@ from db import (
     clear_user_reminders,
     list_active_days,
     list_day_completions,
+    get_last_completion_for_user,
     get_day_label,
     remove_user_exercise,
     clear_day_plan,
@@ -1569,6 +1570,33 @@ async def _render_trainer_overview(
             *(_format_trainer_user_display(uid) for uid in ordered_ids)
         )
         labels = dict(zip(ordered_ids, resolved))
+    last_completion_map: dict[int, tuple] = {}
+    if trainees:
+        trainee_ids = [int(entry[1]) for entry in trainees]
+        completion_rows = await asyncio.gather(
+            *(get_last_completion_for_user(uid) for uid in trainee_ids)
+        )
+        last_completion_map = dict(zip(trainee_ids, completion_rows))
+
+    def _format_last_completion(entry) -> str:
+        if not entry:
+            return "нет данных"
+        completed_at = None
+        try:
+            completed_at = entry[1]
+        except (IndexError, TypeError):
+            try:
+                completed_at = entry["completed_at"]  # type: ignore[index]
+            except (KeyError, TypeError):
+                completed_at = None
+        if not completed_at:
+            return "нет данных"
+        try:
+            completed_dt = datetime.fromisoformat(str(completed_at))
+        except ValueError:
+            return str(completed_at).split("T")[0] or "нет данных"
+        return completed_dt.date().strftime("%d.%m.%Y")
+
     lines: list[str] = []
     if message:
         lines.extend([message, ""])
@@ -1587,6 +1615,9 @@ async def _render_trainer_overview(
             trainee_id = int(entry[1])
             label = labels.get(trainee_id, f"ID {trainee_id}")
             lines.append(f"• {label}")
+            last_completion = last_completion_map.get(trainee_id)
+            last_label = _format_last_completion(last_completion)
+            lines.append(f"  последняя тренировка: {last_label}")
     else:
         lines.append("• Пока нет подопечных.")
     rows: list[list[InlineKeyboardButton]] = []
@@ -9218,6 +9249,22 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 return
             if action == "complete":
                 day = int(parts[2])
+                if context.user_data.get("acting_user_id") and not context.user_data.get(
+                    "acting_can_edit"
+                ):
+                    message = getattr(q, "message", None)
+                    markup = getattr(message, "reply_markup", None)
+                    await q.answer(
+                        "Подопечный не дал доступ на изменение плана.", show_alert=True
+                    )
+                    await show_screen(
+                        q,
+                        context,
+                        "Подопечный не дал доступ на изменение плана.",
+                        markup,
+                        user_id,
+                    )
+                    return
                 _, added_new = await record_day_completion(user_id, day)
                 prefs = await load_ui_preferences(user_id)
                 text, kb, prefs = await compose_main_menu(user_id, prefs)
@@ -9236,6 +9283,22 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 return
             if action == "sheetdone":
                 day = int(parts[2])
+                if context.user_data.get("acting_user_id") and not context.user_data.get(
+                    "acting_can_edit"
+                ):
+                    message = getattr(q, "message", None)
+                    markup = getattr(message, "reply_markup", None)
+                    await q.answer(
+                        "Подопечный не дал доступ на изменение плана.", show_alert=True
+                    )
+                    await show_screen(
+                        q,
+                        context,
+                        "Подопечный не дал доступ на изменение плана.",
+                        markup,
+                        user_id,
+                    )
+                    return
                 today_local = await get_user_local_date(user_id)
                 ex_rows = await fetch_day_exercises(user_id, day, today_local)
                 if ex_rows:

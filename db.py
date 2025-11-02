@@ -1789,6 +1789,21 @@ async def list_day_completions(user_id: int):
         return await cur.fetchall()
 
 
+async def get_last_completion_for_user(user_id: int):
+    async with connect_db() as db:
+        cur = await db.execute(
+            """
+            SELECT day_index, completed_at
+            FROM day_completions
+            WHERE user_id = ?
+            ORDER BY completed_at DESC
+            LIMIT 1
+            """,
+            (user_id,),
+        )
+        return await cur.fetchone()
+
+
 async def mark_day_completed(user_id: int, day_index: int, completed_at: str):
     async with connect_db() as db:
         await db.execute(
