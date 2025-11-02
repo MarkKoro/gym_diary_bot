@@ -31,6 +31,7 @@ class MeasurementDbTests(unittest.IsolatedAsyncioTestCase):
             for table in (
                 "user_measurements",
                 "user_measurement_custom",
+                "user_measurement_categories",
                 "sets",
                 "session_exercises",
                 "sessions",

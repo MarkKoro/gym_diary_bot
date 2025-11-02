@@ -1634,37 +1634,65 @@ def confirm_library_group_delete_kb(group: str):
         ]
     )
 def measurements_main_kb(show_all: bool):
-    toggle = "Скрыть редкие" if show_all else "Показать ещё"
+    toggle = "Скрыть пустые" if show_all else "Показ скрытых"
     return InlineKeyboardMarkup([
         [
             InlineKeyboardButton(
-                dual("＋ Добавить", "Добавить замер"), callback_data="measure:add"
+                dual(
+                    "＋ Добавить и редактировать",
+                    "Добавить или отредактировать замеры",
+                ),
+                callback_data="measure:manage",
             ),
-            InlineKeyboardButton(
-                dual("🛠 Редактировать список", "Редактировать список замеров"),
-                callback_data="measure:edit",
-            ),
-        ],
-        [
             InlineKeyboardButton(
                 dual("− Удалить", "Удалить замер"), callback_data="measure:delete"
             ),
+        ],
+        [
             InlineKeyboardButton(
                 dual(toggle, "Переключить отображение замеров"),
                 callback_data="measure:toggle",
             ),
-        ],
-        [
             InlineKeyboardButton(
                 dual("🗂 История", "Показать историю замеров"),
                 callback_data="measure:history",
             ),
-            InlineKeyboardButton(BACK_BTN, callback_data="menu:root"),
         ],
+        [InlineKeyboardButton(BACK_BTN, callback_data="menu:root")],
     ])
 
 
-def measurements_category_kb(action: str, categories: list[tuple[str, str]]):
+def measurements_manage_kb(has_custom: bool):
+    rows: list[list[InlineKeyboardButton]] = [
+        [
+            InlineKeyboardButton(
+                dual("＋ Добавить показатель", "Добавить новый замер"),
+                callback_data="measure:add",
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                dual("✏️ Изменить показатели", "Изменить сохранённые замеры"),
+                callback_data="measure:edit",
+            )
+        ],
+    ]
+    if has_custom:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    dual("🗑 Удалить свои замеры", "Удалить пользовательские замеры"),
+                    callback_data="measure:edit:customrm",
+                )
+            ]
+        )
+    rows.append([InlineKeyboardButton(BACK_BTN, callback_data="measure:back")])
+    return InlineKeyboardMarkup(rows)
+
+
+def measurements_category_kb(
+    action: str, categories: list[tuple[str, str]], back_callback: str = "measure:back"
+):
     rows = []
     for code, title in categories:
         rows.append(
@@ -1675,7 +1703,16 @@ def measurements_category_kb(action: str, categories: list[tuple[str, str]]):
                 )
             ]
         )
-    rows.append([InlineKeyboardButton(BACK_BTN, callback_data="measure:back")])
+    if action in {"add", "customplace"}:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    dual("＋ Добавить категорию", "Создать новую категорию"),
+                    callback_data="measure:add:category",
+                )
+            ]
+        )
+    rows.append([InlineKeyboardButton(BACK_BTN, callback_data=back_callback)])
     return InlineKeyboardMarkup(rows)
 
 
@@ -1705,7 +1742,12 @@ def confirm_day_reset_kb(day_index: int, mode: str):
     )
 
 
-def measurements_metric_kb(action: str, category: str, metrics: list[tuple[str, str]]):
+def measurements_metric_kb(
+    action: str,
+    category: str,
+    metrics: list[tuple[str, str]],
+    include_custom_button: bool = False,
+):
     rows = []
     for code, title in metrics:
         rows.append(
@@ -1713,6 +1755,15 @@ def measurements_metric_kb(action: str, category: str, metrics: list[tuple[str, 
                 InlineKeyboardButton(
                     dual(title, f"Выбрать метрику «{title}»"),
                     callback_data=f"measure:{action}:item:{category}:{code}",
+                )
+            ]
+        )
+    if include_custom_button and action == "add":
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    dual("＋ Свой замер", "Добавить собственный замер"),
+                    callback_data=f"measure:add:custom:new:{category}",
                 )
             ]
         )

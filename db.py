@@ -154,6 +154,15 @@ async def _column_exists(db, table: str, column: str) -> bool:
     return any(row[1] == column for row in rows)
 
 
+async def _table_exists(db, table: str) -> bool:
+    cur = await db.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
+        (table,),
+    )
+    row = await cur.fetchone()
+    return bool(row)
+
+
 async def _has_unique_index(
     db, table: str, columns: tuple[str, ...]
 ) -> bool:
@@ -392,6 +401,16 @@ async def init_db():
             user_id INTEGER,
             code TEXT UNIQUE,
             name TEXT,
+            category_code TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS user_measurement_categories(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            code TEXT UNIQUE,
+            letter TEXT,
+            name TEXT,
             created_at TEXT DEFAULT CURRENT_TIMESTAMP
         );
 
@@ -403,6 +422,8 @@ async def init_db():
             ON running_entries(user_id, user_exercise_id, created_at DESC);
         CREATE INDEX IF NOT EXISTS idx_user_measurement_custom_user
             ON user_measurement_custom(user_id, created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_user_measurement_categories_user
+            ON user_measurement_categories(user_id, created_at DESC);
 
         CREATE TABLE IF NOT EXISTS user_muscle_groups(
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -512,6 +533,26 @@ async def init_db():
             await db.execute("ALTER TABLE exercise_baseline ADD COLUMN seconds INTEGER")
         except Exception:
             pass
+        if not await _column_exists(db, "user_measurement_custom", "category_code"):
+            await db.execute(
+                "ALTER TABLE user_measurement_custom ADD COLUMN category_code TEXT"
+            )
+        if not await _table_exists(db, "user_measurement_categories"):
+            await db.execute(
+                """
+                CREATE TABLE user_measurement_categories(
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER,
+                    code TEXT UNIQUE,
+                    letter TEXT,
+                    name TEXT,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+            await db.execute(
+                "CREATE INDEX idx_user_measurement_categories_user ON user_measurement_categories(user_id, created_at DESC)"
+            )
         if not await _column_exists(db, "user_reminders", "day_no"):
             await db.execute("ALTER TABLE user_reminders ADD COLUMN day_no INTEGER")
             cur = await db.execute(
@@ -2511,12 +2552,17 @@ async def get_running_entry_by_id(entry_id: int) -> tuple | None:
         return await cur.fetchone()
 
 
-async def add_custom_measurement(user_id: int, name: str) -> str:
+async def add_custom_measurement(
+    user_id: int, name: str, category_code: str | None = None
+) -> str:
     async with connect_db() as db:
         created_at = _now_iso()
         await db.execute(
-            "INSERT INTO user_measurement_custom(user_id, code, name, created_at) VALUES(?,?,?,?)",
-            (user_id, "", name, created_at),
+            """
+            INSERT INTO user_measurement_custom(user_id, code, name, category_code, created_at)
+            VALUES(?,?,?,?,?)
+            """,
+            (user_id, "", name, category_code or "", created_at),
         )
         cur = await db.execute("SELECT last_insert_rowid()")
         row = await cur.fetchone()
@@ -2530,11 +2576,11 @@ async def add_custom_measurement(user_id: int, name: str) -> str:
         return code
 
 
-async def list_custom_measurements(user_id: int) -> list[tuple[str, str]]:
+async def list_custom_measurements(user_id: int) -> list[tuple[str, str, str]]:
     async with connect_db() as db:
         cur = await db.execute(
             """
-            SELECT code, name
+            SELECT code, name, COALESCE(category_code, '')
             FROM user_measurement_custom
             WHERE user_id=?
             ORDER BY created_at DESC
@@ -2542,7 +2588,7 @@ async def list_custom_measurements(user_id: int) -> list[tuple[str, str]]:
             (user_id,),
         )
         rows = await cur.fetchall()
-        return [(row[0], row[1]) for row in rows if row[0]]
+        return [(row[0], row[1], row[2]) for row in rows if row[0]]
 
 
 async def get_custom_measurement(user_id: int, code: str) -> tuple[str, str] | None:
@@ -2574,3 +2620,44 @@ async def delete_custom_measurement(user_id: int, code: str) -> bool:
         )
         await db.commit()
         return cur.rowcount > 0
+
+
+async def add_measurement_category(user_id: int, letter: str, name: str) -> str:
+    async with connect_db() as db:
+        created_at = _now_iso()
+        await db.execute(
+            """
+            INSERT INTO user_measurement_categories(user_id, code, letter, name, created_at)
+            VALUES(?,?,?,?,?)
+            """,
+            (user_id, "", letter, name, created_at),
+        )
+        cur = await db.execute("SELECT last_insert_rowid()")
+        row = await cur.fetchone()
+        raw_id = row[0]
+        code = f"ucg{user_id}_{raw_id}"
+        await db.execute(
+            "UPDATE user_measurement_categories SET code=? WHERE id=?",
+            (code, raw_id),
+        )
+        await db.commit()
+        return code
+
+
+async def list_measurement_categories(user_id: int) -> list[tuple[str, str, str]]:
+    async with connect_db() as db:
+        cur = await db.execute(
+            """
+            SELECT code, letter, name
+            FROM user_measurement_categories
+            WHERE user_id=?
+            ORDER BY letter ASC, created_at DESC
+            """,
+            (user_id,),
+        )
+        rows = await cur.fetchall()
+        return [
+            (row[0], row[1], row[2])
+            for row in rows
+            if row[0] and row[1]
+        ]
