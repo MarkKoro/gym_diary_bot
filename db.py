@@ -105,6 +105,15 @@ METCON_EXERCISE_NAMES = {name for name, _ in METCON_EXERCISES}
 DEFAULT_EXERCISE_NAMES = {name for name, _ in DEFAULT_EXERCISES}
 METCON_SHARED_NAMES = METCON_EXERCISE_NAMES & DEFAULT_EXERCISE_NAMES
 
+
+def normalize_dow(dow: int | str) -> int:
+    """Normalize a day-of-week value to the range 0..6."""
+
+    d = int(dow)
+    if 1 <= d <= 7:
+        d = (d - 1) % 7
+    return d % 7
+
 SCHEME_SENTINEL = -1
 
 DURATION_NAME_PATTERNS: tuple[str, ...] = (
@@ -929,7 +938,10 @@ async def set_workouts_per_week(user_id: int, n: int) -> list[tuple[int, int, in
             actual_day = int(day_no) if day_no is not None else next_fallback
             if actual_day > n:
                 to_delete.append(int(row_id))
-                removed.append((actual_day, int(dow) if dow is not None else -1, int(hour), int(minute)))
+                norm_dow = int(dow) if dow is not None else -1
+                if dow is not None and not 0 <= norm_dow <= 6:
+                    norm_dow = normalize_dow(dow)
+                removed.append((actual_day, norm_dow, int(hour), int(minute)))
             next_fallback = max(next_fallback, actual_day + 1)
         if to_delete:
             await db.executemany(
@@ -1369,7 +1381,8 @@ async def add_user_reminder(
 ):
     if dow is None:
         raise ValueError("dow must be provided for reminder")
-    if not 0 <= int(dow) <= 6:
+    dow = normalize_dow(dow)
+    if not 0 <= dow <= 6:
         raise ValueError("dow must be between 0 and 6")
 
     async with connect_db() as db:
@@ -1419,6 +1432,8 @@ async def list_user_reminders(user_id: int):
                 to_delete.append(int(row_id))
                 continue
             dow_int = int(dow) if dow is not None else -1
+            if dow is not None and not 0 <= dow_int <= 6:
+                dow_int = normalize_dow(dow)
             hour_int = int(hour) if hour is not None else 0
             minute_int = int(minute) if minute is not None else 0
             result.append((day_idx, dow_int, hour_int, minute_int))

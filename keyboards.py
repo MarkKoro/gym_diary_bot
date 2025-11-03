@@ -795,7 +795,7 @@ def reminder_day_kb(prefix: str = "wiz:rday", selected: int | None = None):
             [
                 InlineKeyboardButton(
                     dual(display, f"Добавить день {label}"),
-                    callback_data=f"{prefix}:{dow}",
+                    callback_data=f"{prefix}:{dow + 1}",
                 )
             ]
         )

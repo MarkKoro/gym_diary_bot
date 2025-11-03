@@ -37,7 +37,13 @@ class DayCompletionTests(unittest.IsolatedAsyncioTestCase):
         now = datetime.now(UTC)
         local_now = now.astimezone(ZoneInfo("Europe/Moscow"))
         dow = local_now.weekday()
-        await db.add_user_reminder(user_id, dow=dow, hour=local_now.hour, minute=local_now.minute, day_no=1)
+        await db.add_user_reminder(
+            user_id,
+            dow=dow + 1,
+            hour=local_now.hour,
+            minute=local_now.minute,
+            day_no=1,
+        )
         past = now - timedelta(hours=7)
         await db.mark_day_completed(user_id, 1, past.isoformat())
         completions = await bot.get_active_day_completions(user_id)
@@ -48,7 +54,13 @@ class DayCompletionTests(unittest.IsolatedAsyncioTestCase):
         await db.set_user_timezone(user_id, "UTC")
         now = datetime.now(UTC)
         dow = now.weekday()
-        await db.add_user_reminder(user_id, dow=dow, hour=9, minute=0, day_no=1)
+        await db.add_user_reminder(
+            user_id,
+            dow=dow + 1,
+            hour=9,
+            minute=0,
+            day_no=1,
+        )
         past = now - timedelta(days=7, hours=1)
         await db.mark_day_completed(user_id, 1, past.isoformat())
         completions = await bot.get_active_day_completions(user_id)

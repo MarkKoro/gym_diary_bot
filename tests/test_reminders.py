@@ -77,7 +77,7 @@ class ReminderTests(unittest.IsolatedAsyncioTestCase):
         for day_no, dow in enumerate((0, 1, 2, 3), start=1):
             await db.add_user_reminder(
                 user_id,
-                dow=dow,
+                dow=dow + 1,
                 hour=9 + day_no,
                 minute=15,
                 day_no=day_no,
@@ -94,14 +94,14 @@ class ReminderTests(unittest.IsolatedAsyncioTestCase):
         await db.set_user_timezone(user_id, "Asia/Irkutsk")
         await db.add_user_reminder(
             user_id,
-            dow=4,
+            dow=5,
             hour=7,
             minute=45,
             day_no=2,
         )
 
         queue = FakeJobQueue()
-        job_name = f"rem_{user_id}_2"
+        job_name = f"rem_{user_id}_2_4"
         queue.jobs_by_name[job_name] = [FakeJob(job_name)]
         app = SimpleNamespace(job_queue=queue)
 
@@ -118,12 +118,12 @@ class ReminderTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(new_job.time.minute, 45)
         self.assertIsInstance(new_job.time.tzinfo, ZoneInfo)
         self.assertEqual(new_job.time.tzinfo.key, "Asia/Irkutsk")
-        self.assertEqual(new_job.data, {"user_id": user_id, "day_no": 2})
+        self.assertEqual(new_job.data, {"user_id": user_id, "day_no": 2, "dow": 4})
 
     async def test_schedule_all_reminders_removes_orphan_jobs(self):
         user_id = await db.get_or_create_user(9400, "cleanup-user")
         queue = FakeJobQueue()
-        orphan_job_name = f"rem_{user_id}_3"
+        orphan_job_name = f"rem_{user_id}_3_1"
         queue.jobs_by_name[orphan_job_name] = [FakeJob(orphan_job_name)]
         app = SimpleNamespace(job_queue=queue)
 
