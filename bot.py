@@ -118,6 +118,7 @@ from db import (
     set_baseline,
     set_user_timezone,
     add_user_reminder,
+    normalize_dow,
     get_user_timezone,
     list_user_reminders,
     clear_user_reminders,
@@ -631,7 +632,14 @@ def _build_day_weekday_map(
     days: list[tuple[int, str]], reminders: list[tuple[int, int, int, int]]
 ) -> dict[int, str]:
     mapping: dict[int, str] = {}
-    reminder_map = {day_no: (dow, hour, minute) for day_no, dow, hour, minute in reminders}
+    reminder_map = {
+        day_no: (
+            int(dow) if dow is not None else None,
+            int(hour),
+            int(minute),
+        )
+        for day_no, dow, hour, minute in reminders
+    }
     has_any_reminders = bool(reminder_map)
     for day_index, _label in days:
         info = reminder_map.get(day_index)
@@ -699,10 +707,19 @@ async def start_reminder_day_edit(
     context.user_data[REMINDER_EDIT_LABEL_KEY] = display_label
     context.user_data[REMINDER_EDIT_DAY_INDEX_KEY] = day_index
     reminders = await list_user_reminders(user_id)
-    reminder_map = {day_no: (dow, hour, minute) for day_no, dow, hour, minute in reminders}
+    reminder_map = {
+        day_no: (
+            int(dow) if dow is not None else None,
+            int(hour),
+            int(minute),
+        )
+        for day_no, dow, hour, minute in reminders
+    }
     selected = reminder_map.get(day_index)
-    selected_dow = selected[0] if selected else None
-    context.user_data[REMINDER_SELECTED_DOW_KEY] = selected_dow
+    selected_dow = selected[0] if selected and selected[0] is not None else None
+    context.user_data[REMINDER_SELECTED_DOW_KEY] = (
+        str(selected_dow + 1) if selected_dow is not None else None
+    )
     text = f"{display_label}. В какой день недели тренировка?"
     kb = reminder_day_kb(prefix=f"remedit:dow:{position}", selected=selected_dow)
     await show_screen(q, context, text, kb, user_id)
@@ -713,7 +730,14 @@ async def show_reminders_overview(q, context, user_id: int):
     reminders = await list_user_reminders(user_id)
     tz_code = await get_user_timezone(user_id)
     tz_label = get_timezone_label(tz_code)
-    reminder_map = {day_no: (dow, hour, minute) for day_no, dow, hour, minute in reminders}
+    reminder_map = {
+        day_no: (
+            int(dow) if dow is not None else None,
+            int(hour),
+            int(minute),
+        )
+        for day_no, dow, hour, minute in reminders
+    }
     lines: list[str] = [f"Напоминания (время по {tz_label}):", ""]
     entries: list[tuple[int, str]] = []
     if days:
@@ -5086,6 +5110,34 @@ async def reminder_job(context: ContextTypes.DEFAULT_TYPE):
         logger.exception("Reminder job failed")
 
 
+def _remove_reminder_jobs(job_queue, user_id: int, day_no: int, dow: int | None = None) -> None:
+    def _safe_remove(job) -> None:
+        try:
+            job.schedule_removal()
+        except Exception:
+            pass
+
+    job_prefix = f"rem_{user_id}_{day_no}_"
+    try:
+        jobs = job_queue.jobs()
+    except AttributeError:
+        jobs = []
+    for job in jobs:
+        name = getattr(job, "name", None)
+        if name and name.startswith(job_prefix):
+            _safe_remove(job)
+    if dow is not None:
+        job_name = f"rem_{user_id}_{day_no}_{dow}"
+        for job in job_queue.get_jobs_by_name(job_name):
+            _safe_remove(job)
+    legacy_names = [f"rem_{user_id}_{day_no}"]
+    if dow is not None:
+        legacy_names.append(f"rem_{user_id}_{dow}")
+    for legacy_name in legacy_names:
+        for job in job_queue.get_jobs_by_name(legacy_name):
+            _safe_remove(job)
+
+
 async def schedule_all_reminders(app: Application):
     raw_rows = await list_users_with_reminders()
     users: dict[int, dict[str, int | None]] = {}
@@ -5097,14 +5149,19 @@ async def schedule_all_reminders(app: Application):
             except (TypeError, ValueError):
                 info["tg_id"] = None
     desired_jobs: set[str] = set()
+    total_scheduled = 0
     for user_id, info in users.items():
         reminders = await list_user_reminders(user_id)
         if not reminders:
+            logger.info("Scheduled 0 reminders for user %d", user_id)
             continue
         tz_code = await get_user_timezone(user_id)
         zone = resolve_user_zone(tz_code)
         tg_id = info.get("tg_id")
+        user_scheduled = 0
         for day_no, dow, hour, minute in reminders:
+            if dow is None:
+                continue
             try:
                 day_int = int(day_no)
                 dow_int = int(dow)
@@ -5112,29 +5169,26 @@ async def schedule_all_reminders(app: Application):
                 minute_int = int(minute)
             except (TypeError, ValueError):
                 continue
-            if dow_int < 0 or dow_int > 6:
+            if not 0 <= dow_int <= 6:
+                dow_int = normalize_dow(dow)
+            job_name = f"rem_{user_id}_{day_int}_{dow_int}"
+            _remove_reminder_jobs(app.job_queue, user_id, day_int, dow_int)
+            if tg_id is None:
                 continue
-            job_name = f"rem_{user_id}_{day_int}"
-            if tg_id is not None:
-                desired_jobs.add(job_name)
-                for job in app.job_queue.get_jobs_by_name(job_name):
-                    job.schedule_removal()
-                legacy_job_name = f"rem_{user_id}_{dow_int}"
-                for job in app.job_queue.get_jobs_by_name(legacy_job_name):
-                    job.schedule_removal()
-                tm = time(hour=hour_int, minute=minute_int, tzinfo=zone)
-                app.job_queue.run_daily(
-                    reminder_job,
-                    tm,
-                    days=(dow_int,),
-                    chat_id=tg_id,
-                    name=job_name,
-                    data={"user_id": user_id, "day_no": day_int},
-                )
-            else:
-                legacy_job_name = f"rem_{user_id}_{dow_int}"
-                for job in app.job_queue.get_jobs_by_name(legacy_job_name):
-                    job.schedule_removal()
+            desired_jobs.add(job_name)
+            tm = time(hour=hour_int, minute=minute_int, tzinfo=zone)
+            app.job_queue.run_daily(
+                reminder_job,
+                tm,
+                days=(dow_int,),
+                chat_id=tg_id,
+                name=job_name,
+                data={"user_id": user_id, "day_no": day_int, "dow": dow_int},
+            )
+            user_scheduled += 1
+            total_scheduled += 1
+        logger.info("Scheduled %d reminders for user %d", user_scheduled, user_id)
+    logger.info("Scheduled %d reminder jobs in total", total_scheduled)
     # remove orphaned reminder jobs that are no longer present in the database
     try:
         jobs = app.job_queue.jobs()
@@ -6756,7 +6810,7 @@ async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAUL
                 page = context.user_data.get("tz_page", 0)
                 await show_screen(q, context, 'Выбери свой часовой пояс:', tz_select_kb(page), user_id)
             else:
-                context.user_data["selected_dow"] = int(action)
+                context.user_data["selected_dow"] = action
                 context.user_data[REMINDER_TIME_PAGE_KEY] = 0
                 tz_code = context.user_data.get("tz")
                 if not tz_code:
@@ -6801,33 +6855,32 @@ async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAUL
                 return
             _, _, hh, mm = parts[:4]
             hour, minute = int(hh), int(mm)
-            dow_raw = context.user_data.get("selected_dow")
-            if dow_raw is None:
+            dow_iso = context.user_data.get("selected_dow")
+            if dow_iso is None:
                 await q.answer("Сначала выбери день недели.", show_alert=True)
                 return
-            dow = int(dow_raw)
-            if dow < 0 or dow > 6:
-                await q.answer("Некорректный день недели.", show_alert=True)
-                return
+            dow = normalize_dow(dow_iso)
             day_no = context.user_data.get("reminder_day", 1)
-            await add_user_reminder(user_id, dow, hour, minute, day_no=day_no)
+            await add_user_reminder(user_id, dow_iso, hour, minute, day_no=day_no)
             tz = context.user_data.get("tz", "UTC")
             zone = resolve_user_zone(tz)
             reminder_time = time(hour, minute, tzinfo=zone)
-            job_name = f"rem_{user_id}_{day_no}"
-            for job in context.job_queue.get_jobs_by_name(job_name):
-                job.schedule_removal()
-            legacy_job_name = f"rem_{user_id}_{dow}"
-            for job in context.job_queue.get_jobs_by_name(legacy_job_name):
-                job.schedule_removal()
-            context.job_queue.run_daily(
-                reminder_job,
-                reminder_time,
-                days=(dow,),
-                chat_id=q.message.chat_id,
-                name=job_name,
-                data={"user_id": user_id, "day_no": day_no},
-            )
+            job_name = f"rem_{user_id}_{day_no}_{dow}"
+            _remove_reminder_jobs(context.job_queue, user_id, day_no, dow)
+            message = getattr(q, "message", None)
+            chat_id = getattr(message, "chat_id", None)
+            if chat_id is None and message is not None:
+                chat = getattr(message, "chat", None)
+                chat_id = getattr(chat, "id", None)
+            if chat_id is not None:
+                context.job_queue.run_daily(
+                    reminder_job,
+                    reminder_time,
+                    days=(dow,),
+                    chat_id=chat_id,
+                    name=job_name,
+                    data={"user_id": user_id, "day_no": day_no, "dow": dow},
+                )
             day_no = context.user_data.get("reminder_day", 1)
             total = context.user_data.get("workouts_per_week", 0)
             context.user_data.pop(REMINDER_TIME_PAGE_KEY, None)
@@ -8912,13 +8965,13 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     removed = await set_workouts_per_week(user_id, n)
                     if removed:
                         for day_no, dow, _hour, _minute in removed:
-                            job_name = f"rem_{user_id}_{day_no}"
-                            for job in context.job_queue.get_jobs_by_name(job_name):
-                                job.schedule_removal()
-                            if dow >= 0:
-                                legacy_name = f"rem_{user_id}_{dow}"
-                                for job in context.job_queue.get_jobs_by_name(legacy_name):
-                                    job.schedule_removal()
+                            normalized = dow if dow >= 0 else None
+                            _remove_reminder_jobs(
+                                context.job_queue,
+                                user_id,
+                                day_no,
+                                normalized,
+                            )
                     rems = await list_user_reminders(user_id)
                     if len(rems) < n:
                         context.user_data["from_settings"] = True
@@ -9082,13 +9135,13 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     return
                 try:
                     position = int(parts[2])
-                    dow = int(parts[3])
+                    dow_iso = parts[3]
                 except ValueError:
                     await show_reminders_overview(q, context, user_id)
                     return
                 day_index = context.user_data.get(REMINDER_EDIT_DAY_INDEX_KEY, position)
                 context.user_data[REMINDER_EDIT_POSITION_KEY] = position
-                context.user_data[REMINDER_SELECTED_DOW_KEY] = dow
+                context.user_data[REMINDER_SELECTED_DOW_KEY] = dow_iso
                 label = context.user_data.get(REMINDER_EDIT_LABEL_KEY)
                 if not label:
                     days = await list_active_days(user_id)
@@ -9099,7 +9152,14 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     else:
                         label = f"{t('DAY')} {day_index}"
                 reminders = await list_user_reminders(user_id)
-                reminder_map = {day_no: (d, h, m) for day_no, d, h, m in reminders}
+                reminder_map = {
+                    day_no: (
+                        int(d) if d is not None else None,
+                        int(h),
+                        int(m),
+                    )
+                    for day_no, d, h, m in reminders
+                }
                 current = reminder_map.get(day_index)
                 selected_time = (current[1], current[2]) if current else None
                 tz_code = await get_user_timezone(user_id)
@@ -9109,7 +9169,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
                 context.user_data[REMINDER_TIME_PAGE_KEY] = 0
                 kb = reminder_time_kb(
-                    prefix=f"remedit:time:{position}:{dow}",
+                    prefix=f"remedit:time:{position}:{dow_iso}",
                     selected=selected_time,
                     page=0,
                 )
@@ -9126,10 +9186,10 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     return
                 if len(parts) >= 5 and parts[-1] == "back":
                     try:
-                        dow = int(parts[3])
+                        dow_iso = parts[3]
                     except ValueError:
-                        dow = context.user_data.get(REMINDER_SELECTED_DOW_KEY)
-                    context.user_data[REMINDER_SELECTED_DOW_KEY] = dow
+                        dow_iso = context.user_data.get(REMINDER_SELECTED_DOW_KEY)
+                    context.user_data[REMINDER_SELECTED_DOW_KEY] = dow_iso
                     context.user_data.pop(REMINDER_TIME_PAGE_KEY, None)
                     label = context.user_data.get(
                         REMINDER_EDIT_LABEL_KEY,
@@ -9138,7 +9198,12 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     tz_code = await get_user_timezone(user_id)
                     tz_label = get_timezone_label(tz_code)
                     kb = reminder_day_kb(
-                        prefix=f"remedit:dow:{position}", selected=dow
+                        prefix=f"remedit:dow:{position}",
+                        selected=(
+                            normalize_dow(dow_iso)
+                            if dow_iso is not None
+                            else None
+                        ),
                     )
                     await show_screen(
                         q,
@@ -9154,17 +9219,24 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     except ValueError:
                         page = 0
                     try:
-                        dow = int(parts[3])
+                        dow_iso = parts[3]
                     except ValueError:
-                        dow = context.user_data.get(REMINDER_SELECTED_DOW_KEY)
-                    context.user_data[REMINDER_SELECTED_DOW_KEY] = dow
+                        dow_iso = context.user_data.get(REMINDER_SELECTED_DOW_KEY)
+                    context.user_data[REMINDER_SELECTED_DOW_KEY] = dow_iso
                     position = context.user_data.get(REMINDER_EDIT_POSITION_KEY, position)
                     label = context.user_data.get(
                         REMINDER_EDIT_LABEL_KEY,
                         f"{t('DAY')} {position}",
                     )
                     reminders = await list_user_reminders(user_id)
-                    reminder_map = {day_no: (d, h, m) for day_no, d, h, m in reminders}
+                    reminder_map = {
+                        day_no: (
+                            int(d) if d is not None else None,
+                            int(h),
+                            int(m),
+                        )
+                        for day_no, d, h, m in reminders
+                    }
                     day_index = context.user_data.get(REMINDER_EDIT_DAY_INDEX_KEY, position)
                     current = reminder_map.get(day_index)
                     selected_time = (current[1], current[2]) if current else None
@@ -9172,7 +9244,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     tz_label = get_timezone_label(tz_code)
                     context.user_data[REMINDER_TIME_PAGE_KEY] = page
                     kb = reminder_time_kb(
-                        prefix=f"remedit:time:{position}:{dow}",
+                        prefix=f"remedit:time:{position}:{dow_iso}",
                         selected=selected_time,
                         page=page,
                     )
@@ -9188,33 +9260,36 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     await show_reminders_overview(q, context, user_id)
                     return
                 try:
-                    dow = int(parts[3])
+                    dow_iso = parts[3]
                     hour = int(parts[4])
                     minute = int(parts[5])
                 except ValueError:
                     await show_reminders_overview(q, context, user_id)
                     return
+                dow = normalize_dow(dow_iso)
                 day_index = context.user_data.get(REMINDER_EDIT_DAY_INDEX_KEY, position)
                 label = context.user_data.get(
                     REMINDER_EDIT_LABEL_KEY,
                     f"{t('DAY')} {day_index}",
                 )
                 reminders = await list_user_reminders(user_id)
-                reminder_map = {day_no: (d, h, m) for day_no, d, h, m in reminders}
+                reminder_map = {
+                    day_no: (
+                        int(d) if d is not None else None,
+                        int(h),
+                        int(m),
+                    )
+                    for day_no, d, h, m in reminders
+                }
                 previous = reminder_map.get(day_index)
                 await add_user_reminder(
-                    user_id, dow, hour, minute, day_no=day_index
+                    user_id, dow_iso, hour, minute, day_no=day_index
                 )
-                job_name = f"rem_{user_id}_{day_index}"
-                for job in context.job_queue.get_jobs_by_name(job_name):
-                    job.schedule_removal()
-                if previous:
-                    legacy_prev = f"rem_{user_id}_{previous[0]}"
-                    for job in context.job_queue.get_jobs_by_name(legacy_prev):
-                        job.schedule_removal()
-                legacy_current = f"rem_{user_id}_{dow}"
-                for job in context.job_queue.get_jobs_by_name(legacy_current):
-                    job.schedule_removal()
+                if previous and previous[0] is not None and previous[0] >= 0:
+                    _remove_reminder_jobs(
+                        context.job_queue, user_id, day_index, int(previous[0])
+                    )
+                _remove_reminder_jobs(context.job_queue, user_id, day_index, dow)
                 tz_code = await get_user_timezone(user_id)
                 zone = resolve_user_zone(tz_code)
                 reminder_time = time(hour, minute, tzinfo=zone)
@@ -9229,10 +9304,14 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         reminder_time,
                         days=(dow,),
                         chat_id=chat_id,
-                        name=job_name,
-                        data={"user_id": user_id, "day_no": day_index},
+                        name=f"rem_{user_id}_{day_index}_{dow}",
+                        data={
+                            "user_id": user_id,
+                            "day_no": day_index,
+                            "dow": dow,
+                        },
                     )
-                context.user_data[REMINDER_SELECTED_DOW_KEY] = dow
+                context.user_data[REMINDER_SELECTED_DOW_KEY] = dow_iso
                 confirmation = format_reminder_status(label, (dow, hour, minute))
                 await q.answer(confirmation)
                 context.user_data.pop(REMINDER_TIME_PAGE_KEY, None)
