@@ -2763,6 +2763,21 @@ async def get_trainer_link(trainer_user_id: int, trainee_user_id: int):
         return await cur.fetchone()
 
 
+async def get_active_trainer_link_for_trainee(trainee_user_id: int):
+    async with connect_db() as db:
+        cur = await db.execute(
+            """
+            SELECT id, trainer_user_id, status, can_edit_plan, trainer_label, trainee_label
+            FROM trainer_links
+            WHERE trainee_user_id = ? AND status IN ('pending', 'accepted')
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            (trainee_user_id,),
+        )
+        return await cur.fetchone()
+
+
 async def create_trainer_request(trainer_user_id: int, trainee_user_id: int):
     async with connect_db() as db:
         created_at = _now_iso()
@@ -2821,5 +2836,14 @@ async def update_trainer_link_permissions(link_id: int, can_edit_plan: int):
         await db.execute(
             "UPDATE trainer_links SET can_edit_plan = ? WHERE id = ?",
             (can_edit_plan, link_id),
+        )
+        await db.commit()
+
+
+async def update_trainer_label(link_id: int, trainer_label: str | None):
+    async with connect_db() as db:
+        await db.execute(
+            "UPDATE trainer_links SET trainer_label = ? WHERE id = ?",
+            (trainer_label, link_id),
         )
         await db.commit()

@@ -42,6 +42,8 @@ def main_menu_kb(
     completed_days: set[int] | None = None,
     *,
     show_trainer: bool = False,
+    show_support: bool = True,
+    extra_rows: list[list[InlineKeyboardButton]] | None = None,
 ):
     completed_days = completed_days or set()
     rows = []
@@ -98,14 +100,17 @@ def main_menu_kb(
             )
         ]
     )
-    rows.append(
-        [
-            InlineKeyboardButton(
-                dual("📩 Техподдержка", "Связаться с техподдержкой"),
-                url=support_url,
-            )
-        ]
-    )
+    if extra_rows:
+        rows.extend(extra_rows)
+    if show_support:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    dual("📩 Техподдержка", "Связаться с техподдержкой"),
+                    url=support_url,
+                )
+            ]
+        )
     return InlineKeyboardMarkup(rows)
 
 def subscription_kb(join_url: str):
@@ -134,8 +139,13 @@ def subscribe_channel_prompt_kb(join_url: str):
     )
 
 
-def settings_kb():
-    return InlineKeyboardMarkup([
+def settings_kb(
+    *,
+    include_notifications: bool = True,
+    include_subscription: bool = True,
+    trainer_link_active: bool = False,
+):
+    rows: list[list[InlineKeyboardButton]] = [
         [
             InlineKeyboardButton(
                 dual("✏️ Переименовать дни", "Переименовать дни и задать названия"),
@@ -160,32 +170,86 @@ def settings_kb():
                 callback_data="set:groups",
             )
         ],
-        [
-            InlineKeyboardButton(
-                dual("⏰ Уведомления", "Настроить напоминания"),
-                callback_data="set:reminders",
-            )
-        ],
+    ]
+    if include_notifications:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    dual("⏰ Уведомления", "Настроить напоминания"),
+                    callback_data="set:reminders",
+                )
+            ]
+        )
+    rows.append(
         [
             InlineKeyboardButton(
                 dual("🧑‍🏫 Режим тренера", "Включить режим тренера и получить код"),
                 callback_data="set:trainer_mode",
             )
-        ],
+        ]
+    )
+    trainer_link_label = dual(
+        "🤝 Мой тренер" if trainer_link_active else "🤝 Тренер / подопечный",
+        "Открыть настройки связи с тренером"
+        if trainer_link_active
+        else "Связать тренера и подопечного",
+    )
+    rows.append(
         [
             InlineKeyboardButton(
-                dual("🤝 Тренер / подопечный", "Связать тренера и подопечного"),
+                trainer_link_label,
                 callback_data="set:trainer_link",
             )
+        ]
+    )
+    if include_subscription:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    dual("💳 Подписка", "Управление подпиской"),
+                    callback_data="menu:subscription",
+                )
+            ]
+        )
+    rows.append([InlineKeyboardButton(BACK_BTN, callback_data="menu:root")])
+    return InlineKeyboardMarkup(rows)
+
+
+def trainee_trainer_settings_kb(can_edit: bool):
+    toggle_state = "off" if can_edit else "on"
+    toggle_label = dual(
+        f"Разрешить тренеру менять план: {'Вкл' if can_edit else 'Выкл'}",
+        "Отключить право тренеру менять план"
+        if can_edit
+        else "Включить право тренеру менять план",
+    )
+    rows = [
+        [
+            InlineKeyboardButton(
+                toggle_label,
+                callback_data=f"trainer:allow:{toggle_state}",
+            )
         ],
         [
             InlineKeyboardButton(
-                dual("💳 Подписка", "Управление подпиской"),
-                callback_data="menu:subscription",
+                dual("Переименовать тренера", "Изменить отображаемое имя тренера"),
+                callback_data="trainer:label:set",
             )
         ],
-        [InlineKeyboardButton(BACK_BTN, callback_data="menu:root")],
-    ])
+        [
+            InlineKeyboardButton(
+                dual("Отвязаться от тренера", "Отключить связь с тренером"),
+                callback_data="trainer:detach",
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                dual("⬅️ Назад в настройки", "Вернуться в настройки"),
+                callback_data="menu:settings",
+            )
+        ],
+    ]
+    return InlineKeyboardMarkup(rows)
 
 def rename_day_kb(days: list[tuple[int, str]]):
     rows = []
