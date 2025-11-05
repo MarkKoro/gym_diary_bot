@@ -5350,8 +5350,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         kb = InlineKeyboardMarkup([[InlineKeyboardButton("Ясно, спасибо", callback_data="wiz:intro:ok")]])
         text, kb = prepare_ui_output(text, kb, prefs)
         chat = update.effective_chat
-        if chat is not None:
-            await send_main_message(context.bot, chat.id, text, reply_markup=kb)
+    if chat is not None:
+            await send_main_message_fresh(context.bot, chat.id, text, reply_markup=kb)
         elif update.message:
             msg = await update.message.reply_text(text, reply_markup=kb)
             remember_message(msg.chat_id, msg.message_id)
