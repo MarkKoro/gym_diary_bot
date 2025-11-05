@@ -1642,6 +1642,7 @@ async def build_settings_keyboard_for_user(
         include_notifications=not acting_mode,
         include_subscription=not acting_mode,
         trainer_link_active=link_active,
+        context=context,
     )
 
 
@@ -3333,6 +3334,7 @@ async def show_measurements_manage_overview(
         categories,
         include_delete=bool(custom_items or user_categories),
         back_callback=back_callback,
+        context=context,
     )
     context.user_data[MEASUREMENT_CATEGORY_BACK_KEY] = category_back_target
     await show_screen(q, context, prompt, kb, user_id)
@@ -3622,7 +3624,7 @@ async def build_measurements_view(
     if not lines:
         lines.append("Пока нет замеров. Добавь показатели, чтобы отслеживать прогресс.")
     text = header + "\n\n" + "\n".join(lines)
-    return text, measurements_main_kb(show_all)
+    return text, measurements_main_kb(show_all, context=context)
 
 
 def _format_measurement_history_entries(
@@ -4363,7 +4365,7 @@ async def send_day_cards_view(
         last_done_map,
         prefs,
     )
-    base_markup = day_kb(day, ex_rows)
+    base_markup = day_kb(day, ex_rows, context=context)
     back_cb = "menu:root"
     content_rows: list[list[InlineKeyboardButton]] = []
     primary_actions: list[tuple[str, str]] = []
@@ -4648,7 +4650,7 @@ async def show_day_group_view(
     else:
         lines.append("Пока нет упражнений. Добавь упражнения, чтобы заполнить этот раздел.")
     text = "\n".join(lines)
-    kb = day_group_kb(day, group, items, group_name=gname)
+    kb = day_group_kb(day, group, items, group_name=gname, context=context)
     await show_screen(q, context, text, kb, user_id)
 
 async def render_library_group_text(
@@ -5005,6 +5007,7 @@ def build_exercise_actions_markup(
         is_amrap=view.is_amrap,
         is_for_time=view.is_for_time,
         back_callback=callback_back,
+        context=context,
     )
     content_rows: list[list[InlineKeyboardButton]] = []
     primary_actions: list[tuple[str, str]] = []
@@ -6277,7 +6280,7 @@ async def show_day_add_exercises_view(
     custom = context.user_data.get("custom_groups", {})
     requested_page = page if page is not None else get_kb_page(context, "day", group, day)
     kb, actual_page, _ = day_add_exercises_kb(
-        day, group, ex_rows, selected_ids, page=requested_page
+        day, group, ex_rows, selected_ids, page=requested_page, context=context
     )
     set_kb_page(context, "day", group, actual_page, day)
     await show_screen(q, context, day_exercises_text(day, group, custom), kb, user_id)
@@ -6328,7 +6331,7 @@ async def show_library_add_exercises_view(
     selected = set(await list_user_exercise_ids(user_id, 0, group))
     requested_page = page if page is not None else get_kb_page(context, "lib", group)
     kb, actual_page, _ = library_add_exercises_kb(
-        group, ex_rows, selected, page=requested_page
+        group, ex_rows, selected, page=requested_page, context=context
     )
     set_kb_page(context, "lib", group, actual_page)
     custom = await get_custom_groups(user_id, context)
@@ -7401,6 +7404,7 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 'customplace',
                 categories,
                 back_callback=back_callback,
+                context=context,
             )
         else:
             prompt = 'Выбери категорию:'
@@ -7408,6 +7412,7 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 categories,
                 include_delete=bool(custom_items or user_categories),
                 back_callback=back_callback,
+                context=context,
             )
         context.user_data[MEASUREMENT_CATEGORY_BACK_KEY] = back_callback
         text, kb = prepare_ui_output(prompt, kb, prefs)
@@ -7466,6 +7471,7 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 'customplace',
                 categories,
                 back_callback=back_callback,
+                context=context,
             )
             prefs = await load_ui_preferences(user_id)
             text, kb = prepare_ui_output(prompt, kb, prefs)
@@ -7582,7 +7588,7 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         selected = set(await list_user_exercise_ids(user_id, 0, group))
         requested_page = get_kb_page(context, "lib", group)
         kb, page_value, _ = library_add_exercises_kb(
-            group, ex_rows, selected, page=requested_page
+            group, ex_rows, selected, page=requested_page, context=context
         )
         set_kb_page(context, "lib", group, page_value)
         custom = await get_custom_groups(user_id, context)
@@ -7625,7 +7631,7 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             selected_ids = set(await list_user_exercise_ids(user_id, 0, code))
             requested_page = get_kb_page(context, "lib", code)
             kb, page_value, _ = library_add_exercises_kb(
-                code, ex_rows, selected_ids, page=requested_page
+                code, ex_rows, selected_ids, page=requested_page, context=context
             )
             set_kb_page(context, "lib", code, page_value)
             await context.bot.edit_message_text(
@@ -7641,7 +7647,7 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             selected_ids = set(await list_user_exercise_ids(user_id, day, code))
             requested_page = get_kb_page(context, "day", code, day)
             kb, page_value, _ = day_add_exercises_kb(
-                day, code, ex_rows, selected_ids, page=requested_page
+                day, code, ex_rows, selected_ids, page=requested_page, context=context
             )
             set_kb_page(context, "day", code, page_value, day)
             await context.bot.edit_message_text(
@@ -7710,7 +7716,7 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if source == "day":
             requested_page = get_kb_page(context, "day", group, day)
             kb, page_value, _ = day_add_exercises_kb(
-                day, group, ex_rows, selected_ids, page=requested_page
+                day, group, ex_rows, selected_ids, page=requested_page, context=context
             )
             set_kb_page(context, "day", group, page_value, day)
         else:
@@ -8057,7 +8063,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             custom = await get_custom_groups(target_user_id, context)
             prefs = await load_ui_preferences(target_user_id)
             text = "Мои упражнения:"
-            kb = library_menu_kb(groups, custom)
+            kb = library_menu_kb(groups, custom, context=context)
             await show_screen(q, context, text, kb, target_user_id)
             return
 
@@ -8212,7 +8218,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if not categories and not metrics:
                 await q.answer("Пока нечего удалять.", show_alert=True)
                 return
-            kb = measurements_remove_kb(categories, metrics)
+            kb = measurements_remove_kb(categories, metrics, context=context)
             await show_screen(
                 q,
                 context,
@@ -8272,7 +8278,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ]
             metrics = [(item["code"], item["name"]) for item in custom_items]
             if categories or metrics:
-                kb = measurements_remove_kb(categories, metrics)
+                kb = measurements_remove_kb(categories, metrics, context=context)
                 await show_screen(
                     q,
                     context,
@@ -8341,7 +8347,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ]
             metrics = [(item["code"], item["name"]) for item in custom_items]
             if categories or metrics:
-                kb = measurements_remove_kb(categories, metrics)
+                kb = measurements_remove_kb(categories, metrics, context=context)
                 await show_screen(
                     q,
                     context,
@@ -8382,6 +8388,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     category,
                     [],
                     include_custom_button=True,
+                    context=context,
                 )
                 await show_screen(
                     q,
@@ -8395,7 +8402,9 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 q,
                 context,
                 'Выбери показатель:',
-                measurements_metric_kb('add', category, metrics, include_custom_button=True),
+                measurements_metric_kb(
+                    'add', category, metrics, include_custom_button=True, context=context
+                ),
                 target_user_id,
             )
             return
@@ -8567,7 +8576,9 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 q,
                 context,
                 f"{title} — что изменить?",
-                measurements_existing_kb('edit', metrics, back_callback="measure:edit"),
+        measurements_existing_kb(
+            'edit', metrics, back_callback="measure:edit", context=context
+        ),
                 target_user_id,
             )
             return
@@ -8705,7 +8716,13 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if not metrics:
                 await q.answer("Пока нечего удалять.", show_alert=True)
                 return
-            await show_screen(q, context, 'Что удалить? Удалим только последнее значение.', measurements_existing_kb('delete', metrics), target_user_id)
+            await show_screen(
+                q,
+                context,
+                'Что удалить? Удалим только последнее значение.',
+                measurements_existing_kb('delete', metrics, context=context),
+                target_user_id,
+            )
             return
 
         if data.startswith("measure:delete:metric:"):
@@ -8741,7 +8758,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 text = await render_library_group_text(
                     target_user_id, group, items, context, prefs=prefs
                 )
-                kb = library_group_kb(group, items, group_name=gname)
+                kb = library_group_kb(group, items, group_name=gname, context=context)
                 await show_screen(q, context, text, kb, target_user_id)
                 return
             if action == "groupdel":
@@ -8756,7 +8773,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         f"Удалить группу «{gname}»?\n"
                         "Все упражнения из неё исчезнут из библиотеки и расписания."
                     )
-                    kb = confirm_library_group_delete_kb(group)
+                    kb = confirm_library_group_delete_kb(group, context=context)
                     await show_screen(q, context, text, kb, target_user_id)
                     return
                 if len(parts) >= 4 and parts[3] == "ok":
@@ -8767,12 +8784,12 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         text = await render_library_group_text(
                             target_user_id, group, items, context, prefs=prefs
                         )
-                        kb = library_group_kb(group, items, group_name=gname)
+                        kb = library_group_kb(group, items, group_name=gname, context=context)
                         await show_screen(q, context, text, kb, target_user_id)
                         return
                     custom.pop(group, None)
                     groups = await list_library_groups(target_user_id)
-                    menu = library_menu_kb(groups, custom)
+                    menu = library_menu_kb(groups, custom, context=context)
                     text = "Мои упражнения:"
                     await q.answer("Группа удалена.")
                     await show_screen(q, context, text, menu, target_user_id)
@@ -8800,6 +8817,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         back_callback=f"lib:group:{group}",
                         add_callback=f"lib:manage:{group}:add",
                         group_name=gname if can_delete_group else None,
+                        context=context,
                     )
                     await show_screen(q, context, text, kb, target_user_id)
                     return
@@ -8817,6 +8835,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         back_callback=f"lib:group:{group}",
                         can_delete_group=can_delete_group,
                         group_name=gname if can_delete_group else None,
+                        context=context,
                     )
                     await show_screen(q, context, text, kb, target_user_id)
                     return
@@ -8898,7 +8917,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         target = ("group", parts[3])
                     context.user_data["lib_return"] = target
                     custom = await get_custom_groups(target_user_id, context)
-                    kb = library_add_group_kb(custom)
+                    kb = library_add_group_kb(custom, context=context)
                     await show_screen(q, context, "Выбери группу:", kb, target_user_id)
                     return
                 if sub == "mg":
@@ -8910,7 +8929,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     if pending and pending[3] == "library":
                         context.user_data.pop("awaiting_group_name", None)
                     custom = await get_custom_groups(target_user_id, context)
-                    kb = library_add_group_kb(custom)
+                    kb = library_add_group_kb(custom, context=context)
                     await show_screen(q, context, "Выбери группу:", kb, target_user_id)
                     return
                 if sub == "custom_group":
@@ -8972,10 +8991,10 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             target_user_id, group, items, context, prefs=prefs
                         )
                         gname = MG_NAMES.get(group, custom.get(group, group))
-                        kb = library_group_kb(group, items, group_name=gname)
+                        kb = library_group_kb(group, items, group_name=gname, context=context)
                         await show_screen(q, context, text, kb, target_user_id)
                     else:
-                        kb = library_add_group_kb(custom)
+                        kb = library_add_group_kb(custom, context=context)
                         await show_screen(q, context, "Выбери группу:", kb, target_user_id)
                     return
                 if sub == "done":
@@ -8989,12 +9008,12 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         )
                         custom = await get_custom_groups(target_user_id, context)
                         gname = MG_NAMES.get(group, custom.get(group, group))
-                        kb = library_group_kb(group, items, group_name=gname)
+                        kb = library_group_kb(group, items, group_name=gname, context=context)
                         await show_screen(q, context, text, kb, target_user_id)
                     else:
                         groups = await list_library_groups(target_user_id)
                         custom = await get_custom_groups(target_user_id, context)
-                        kb = library_menu_kb(groups, custom)
+                        kb = library_menu_kb(groups, custom, context=context)
                         await show_screen(q, context, "Мои упражнения:", kb, target_user_id)
                     return
 
@@ -9215,7 +9234,13 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if action == "rename_day":
                 if len(parts) == 2:
                     days = await list_active_days(target_user_id)
-                    await show_screen(q, context, 'Выбери день:', rename_day_kb(days), target_user_id)
+                    await show_screen(
+                        q,
+                        context,
+                        'Выбери день:',
+                        rename_day_kb(days, context=context),
+                        target_user_id,
+                    )
                 else:
                     day = int(parts[2])
                     message = await show_screen(
@@ -9233,7 +9258,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 if len(parts) == 2:
                     days = await list_active_days(target_user_id)
                     text = "Какой день изменить?"
-                    kb = edit_day_select_kb(days)
+                    kb = edit_day_select_kb(days, context=context)
                     await show_screen(q, context, text, kb, target_user_id)
                 else:
                     day = int(parts[2])
@@ -9243,7 +9268,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             f"{t('DAY')} {day} — {label}.\n"
                             "Выбери основной тип тренировки. Силовая откроет группы мышц, остальные режимы сразу ведут в свой каталог. После выбора можно добавлять упражнения из любых групп через меню дня."
                         )
-                        kb = edit_day_mode_kb(day)
+                        kb = edit_day_mode_kb(day, context=context)
                     else:
                         mode = parts[3]
                         followup = parts[4] if len(parts) > 4 else None
@@ -9256,7 +9281,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                     f"{t('DAY')} {day} — {label}.\n"
                                     "Начать настройку с нуля? Удалим все упражнения и планы этого дня, чтобы собрать его заново."
                                 )
-                                kb = confirm_day_reset_kb(day, mode)
+                                kb = confirm_day_reset_kb(day, mode, context=context)
                                 await show_screen(q, context, confirm_text, kb, target_user_id)
                                 return
                             if followup == "reset" and has_exercises:
@@ -9272,7 +9297,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                 f"{t('DAY')} {day} — {label}.\n"
                                 "Открой список групп мышц, выбери нужные и добавь упражнения. В любой момент можешь расширить тренировку другими направлениями через кнопки «Добавить» и «Удалить»."
                             )
-                            kb = edit_day_strength_kb(day)
+                            kb = edit_day_strength_kb(day, context=context)
                         elif mode in {"kb", "metcon", "workout"}:
                             labels = {
                                 "kb": "Каталог гиревых упражнений",
@@ -9295,7 +9320,13 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 return
             if action == "days_count":
                 if len(parts) == 2:
-                    await show_screen(q, context, 'Сколько тренировок планируешь в неделю?', days_count_kb(), target_user_id)
+                    await show_screen(
+                        q,
+                        context,
+                        'Сколько тренировок планируешь в неделю?',
+                        days_count_kb(context=context),
+                        target_user_id,
+                    )
                 else:
                     n = int(parts[2])
                     removed = await set_workouts_per_week(target_user_id, n)
@@ -9343,7 +9374,13 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             "Выбери группу, которую хочешь удалить.\n"
                             "Все упражнения из неё исчезнут из расписания и библиотеки."
                         )
-                    await show_screen(q, context, text, settings_groups_kb(rows), target_user_id)
+                    await show_screen(
+                        q,
+                        context,
+                        text,
+                        settings_groups_kb(rows, context=context),
+                        target_user_id,
+                    )
                     return
                 if len(parts) >= 4 and parts[2] == "del":
                     code = parts[3]
@@ -9357,7 +9394,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             f"Удалить группу «{name}»?\n"
                             "Все упражнения из неё исчезнут из расписания и библиотеки."
                         )
-                        kb = confirm_settings_group_delete_kb(code)
+                        kb = confirm_settings_group_delete_kb(code, context=context)
                         await show_screen(q, context, text, kb, target_user_id)
                         return
                     if len(parts) >= 5 and parts[4] == "ok":
@@ -9370,7 +9407,13 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                 if not rows
                                 else "Выбери группу, которую хочешь удалить.\nВсе упражнения из неё исчезнут из расписания и библиотеки."
                             )
-                            await show_screen(q, context, message, settings_groups_kb(rows), target_user_id)
+                            await show_screen(
+                                q,
+                                context,
+                                message,
+                                settings_groups_kb(rows, context=context),
+                                target_user_id,
+                            )
                             return
                         custom.pop(code, None)
                         rows = await list_user_muscle_groups(target_user_id)
@@ -9385,7 +9428,13 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                 "\nСобственных групп больше нет."
                             )
                         await q.answer("Группа удалена.")
-                        await show_screen(q, context, text, settings_groups_kb(rows), target_user_id)
+                        await show_screen(
+                            q,
+                            context,
+                            text,
+                            settings_groups_kb(rows, context=context),
+                            target_user_id,
+                        )
                         return
                 return
             if action == "reminders":
@@ -9835,7 +9884,9 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 if sub == "add":
                     if target_group is None:
                         existing_groups = {g for _, _, g, _, _ in ex_rows}
-                        kb = day_add_group_kb(day, custom, existing_groups)
+                        kb = day_add_group_kb(
+                            day, custom, existing_groups, context=context
+                        )
                         await show_screen(q, context, "Выбери группу:", kb, target_user_id)
                         return
                     context.user_data["add_group"] = (day, target_group)
@@ -9858,7 +9909,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         for code in order:
                             name = MG_NAMES.get(code, custom.get(code, code))
                             groups_for_kb.append((code, name))
-                        kb = day_remove_group_kb(day, groups_for_kb)
+                        kb = day_remove_group_kb(day, groups_for_kb, context=context)
                         context.user_data.pop(DAY_DELETE_SCOPE_KEY, None)
                         await show_screen(
                             q, context, "Удалить группу мышц:", kb, target_user_id
@@ -9894,6 +9945,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             else None
                         ),
                         group_delete_label=gname if target_group.startswith("u") else None,
+                        context=context,
                     )
                     await show_screen(q, context, text, kb, target_user_id)
                     return
@@ -9924,7 +9976,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     for code in order:
                         name = MG_NAMES.get(code, custom.get(code, code))
                         groups_for_kb.append((code, name))
-                    kb = day_remove_group_kb(day, groups_for_kb)
+                    kb = day_remove_group_kb(day, groups_for_kb, context=context)
                     await show_screen(q, context, "Удалить группу мышц:", kb, target_user_id)
                 else:
                     prefs = await load_ui_preferences(target_user_id)
@@ -9937,7 +9989,13 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 ex_rows = await fetch_day_exercises(target_user_id, day, today_str)
                 existing_groups = {g for _, _, g, _, _ in ex_rows}
                 custom = await get_custom_groups(target_user_id, context)
-                await show_screen(q, context, 'Выбери группу:', day_add_group_kb(day, custom, existing_groups), target_user_id)
+                await show_screen(
+                    q,
+                    context,
+                    'Выбери группу:',
+                    day_add_group_kb(day, custom, existing_groups, context=context),
+                    target_user_id,
+                )
                 return
             if action == "del_ex":
                 day = int(parts[2])
@@ -9949,7 +10007,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     q,
                     context,
                     'Удалить упражнение:',
-                    del_exercises_kb(day, ex_rows),
+                    del_exercises_kb(day, ex_rows, context=context),
                     target_user_id,
                 )
                 return
@@ -9988,7 +10046,9 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     ex_rows = await fetch_day_exercises(target_user_id, day, today_str)
                     existing_groups = {g for _, _, g, _, _ in ex_rows}
                     custom = await get_custom_groups(target_user_id, context)
-                    kb = day_add_group_kb(day, custom, existing_groups)
+                    kb = day_add_group_kb(
+                        day, custom, existing_groups, context=context
+                    )
                     await show_screen(q, context, "Выбери группу:", kb, target_user_id)
                     return
                 if sub == "page":
@@ -10103,6 +10163,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                     if target_group.startswith("u")
                                     else None
                                 ),
+                                context=context,
                             )
                             await show_screen(q, context, text, kb, target_user_id)
                         else:
@@ -10120,7 +10181,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                 q,
                                 context,
                                 'Удалить упражнение:',
-                                del_exercises_kb(day, ex_rows),
+                                del_exercises_kb(day, ex_rows, context=context),
                                 target_user_id,
                             )
                         else:
@@ -10471,7 +10532,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         )
                         custom = await get_custom_groups(target_user_id, context)
                         gname = MG_NAMES.get(group, custom.get(group, group))
-                        kb = library_group_kb(group, items, group_name=gname)
+                        kb = library_group_kb(group, items, group_name=gname, context=context)
                         await show_screen(q, context, text, kb, target_user_id)
                     else:
                         await show_day_group_view(q, target_user_id, day, group, context)
