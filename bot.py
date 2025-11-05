@@ -12,6 +12,7 @@ import httpx
 import re
 from telegram import (
     Update,
+    CallbackQuery,
     InlineKeyboardMarkup,
     InlineKeyboardButton,
     Message,
@@ -1414,6 +1415,33 @@ async def _generate_unique_trainer_code() -> str:
         existing = await find_user_by_trainer_code(candidate)
         if not existing:
             return candidate
+
+
+async def ensure_can_edit_from_callback(
+    context: ContextTypes.DEFAULT_TYPE, q: CallbackQuery
+) -> bool:
+    if context.user_data.get("acting_user_id") and not context.user_data.get(
+        "acting_can_edit"
+    ):
+        await q.answer(
+            "Подопечный не дал доступ на изменение плана.", show_alert=True
+        )
+        return False
+    return True
+
+
+async def ensure_can_edit_from_message(
+    context: ContextTypes.DEFAULT_TYPE, update: Update
+) -> bool:
+    if context.user_data.get("acting_user_id") and not context.user_data.get(
+        "acting_can_edit"
+    ):
+        if update.message:
+            await update.message.reply_text(
+                "Подопечный не дал доступ на изменение плана."
+            )
+        return False
+    return True
 
 
 async def _fetch_trainer_profile(user_id: int) -> tuple[int, str | None] | None:
@@ -5350,7 +5378,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         kb = InlineKeyboardMarkup([[InlineKeyboardButton("Ясно, спасибо", callback_data="wiz:intro:ok")]])
         text, kb = prepare_ui_output(text, kb, prefs)
         chat = update.effective_chat
-    if chat is not None:
+        if chat is not None:
             await send_main_message_fresh(context.bot, chat.id, text, reply_markup=kb)
         elif update.message:
             msg = await update.message.reply_text(text, reply_markup=kb)
@@ -7125,6 +7153,8 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     for_time_state = context.user_data.get(FOR_TIME_INPUT_KEY)
     if for_time_state:
+        if not await ensure_can_edit_from_message(context, update):
+            return
         if not update.message or not update.message.text:
             return
         try:
@@ -7191,6 +7221,8 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     note_state = context.user_data.get(EXERCISE_NOTE_INPUT_KEY)
     if note_state:
+        if not await ensure_can_edit_from_message(context, update):
+            return
         if not update.message or update.message.text is None:
             return
         note_text = normalize_whitespace(update.message.text)
@@ -7232,6 +7264,8 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     running_state = context.user_data.get(RUNNING_INPUT_KEY)
     if running_state:
+        if not await ensure_can_edit_from_message(context, update):
+            return
         if not update.message or not update.message.text:
             return
         field = running_state.get("field")
@@ -7321,6 +7355,8 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     category_state = context.user_data.get(MEASUREMENT_CATEGORY_INPUT_KEY)
     if category_state:
+        if not await ensure_can_edit_from_message(context, update):
+            return
         name = normalize_whitespace(update.message.text or "")
         if not name:
             await update.message.reply_text("Название не должно быть пустым.")
@@ -7385,6 +7421,8 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     custom_state = context.user_data.get(MEASUREMENT_CUSTOM_KEY)
     if custom_state:
+        if not await ensure_can_edit_from_message(context, update):
+            return
         step = custom_state.get("step", "name")
         if step == "name":
             name = normalize_whitespace(update.message.text or "")
@@ -7442,6 +7480,8 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     input_state = context.user_data.get(MEASUREMENT_INPUT_KEY)
     if input_state:
+        if not await ensure_can_edit_from_message(context, update):
+            return
         item = get_measurement_item(input_state.get("metric"))
         if not item:
             context.user_data.pop(MEASUREMENT_INPUT_KEY, None)
@@ -7480,6 +7520,8 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     amrap_state = context.user_data.get(AMRAP_SCHEME_KEY)
     if amrap_state:
+        if not await ensure_can_edit_from_message(context, update):
+            return
         day, ue_id, chat_id, msg_id = context.user_data.pop(AMRAP_SCHEME_KEY)
         new_scheme = update.message.text.strip() if update.message and update.message.text else ""
         await try_delete(update.message)
@@ -7521,6 +7563,8 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     lib_custom = context.user_data.get(LIBRARY_CUSTOM_KEY)
     if lib_custom:
+        if not await ensure_can_edit_from_message(context, update):
+            return
         group, chat_id, msg_id = lib_custom
         name = normalize_whitespace(update.message.text or "")
         if not name:
@@ -7551,6 +7595,8 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         remember_message(chat_id, msg_id)
         return
     if context.user_data.get("awaiting_group_name"):
+        if not await ensure_can_edit_from_message(context, update):
+            return
         day, chat_id, msg_id, mode = context.user_data.pop("awaiting_group_name")
         name = normalize_whitespace(update.message.text or "")
         if not name:
@@ -7607,6 +7653,8 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             remember_message(chat_id, msg_id)
         return
     if context.user_data.get("awaiting_rename"):
+        if not await ensure_can_edit_from_message(context, update):
+            return
         day, chat_id, msg_id = context.user_data.pop("awaiting_rename")
         label = update.message.text.strip()
         await rename_day(user_id, day, label)
@@ -7620,6 +7668,8 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
     if context.user_data.get("awaiting_custom"):
+        if not await ensure_can_edit_from_message(context, update):
+            return
         day, group, chat_id, msg_id = context.user_data.pop("awaiting_custom")
         name = normalize_whitespace(update.message.text or "")
         if not name:
@@ -8066,6 +8116,14 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await show_screen(q, context, text, kb, target_user_id)
             return
 
+        if data.startswith("measure:"):
+            read_only_measure_prefixes = {"measure:back", "measure:toggle", "measure:history"}
+            if not any(
+                data == prefix or data.startswith(f"{prefix}:")
+                for prefix in read_only_measure_prefixes
+            ):
+                if not await ensure_can_edit_from_callback(context, q):
+                    return
         if data == "measure:back":
             context.user_data.pop(MEASUREMENT_INPUT_KEY, None)
             context.user_data.pop(MEASUREMENT_EXISTING_KEY, None)
@@ -8663,11 +8721,17 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         parts = data.split(":")
         if parts[0] == "fill":
+            if not await ensure_can_edit_from_callback(context, q):
+                return
             prefs = await load_ui_preferences(target_user_id)
             await handle_fill_callback(q, context, target_user_id, data, prefs)
             return
         if parts[0] == "lib":
             action = parts[1]
+            mutating_lib_actions = {"groupdel", "manage", "delmenu", "del", "add"}
+            if action in mutating_lib_actions:
+                if not await ensure_can_edit_from_callback(context, q):
+                    return
             prefs = await load_ui_preferences(target_user_id)
             if action == "group":
                 group = parts[2]
@@ -8938,6 +9002,9 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             action = parts[1] if len(parts) > 1 else ""
             day = int(parts[2]) if len(parts) > 2 else 0
             ue_id = int(parts[3]) if len(parts) > 3 else 0
+            if action != "history":
+                if not await ensure_can_edit_from_callback(context, q):
+                    return
             is_library = day == 0
             sheet_context = get_sheet_context(
                 context, q.message.chat_id, q.message.message_id
@@ -9105,6 +9172,16 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         if parts[0] == "set":
             action = parts[1]
+            mutating_set_actions = {
+                "rename_day",
+                "edit_day",
+                "days_count",
+                "groups",
+                "reminders",
+            }
+            if action in mutating_set_actions:
+                if not await ensure_can_edit_from_callback(context, q):
+                    return
             if action == "trainer_mode":
                 profile = await _fetch_trainer_profile(target_user_id)
                 code = await _ensure_trainer_mode(target_user_id, profile)
@@ -9360,6 +9437,8 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 return
 
         if parts[0] == "remedit":
+            if not await ensure_can_edit_from_callback(context, q):
+                return
             action = parts[1] if len(parts) > 1 else ""
             if action == "back":
                 context.user_data.pop(REMINDER_EDIT_POSITION_KEY, None)
@@ -9587,6 +9666,19 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         if parts[0] == "day":
             action = parts[1]
+            mutating_day_actions = {
+                "complete",
+                "sheetdone",
+                "groupdel",
+                "add_group",
+                "manage",
+                "add",
+                "del",
+                "remove_group",
+            }
+            if action in mutating_day_actions:
+                if not await ensure_can_edit_from_callback(context, q):
+                    return
             if action == "open":
                 day = int(parts[2])
                 prefs = await load_ui_preferences(target_user_id)
@@ -10041,6 +10133,20 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             action = parts[1]
             day = int(parts[2])
             ue_id = int(parts[3])
+            mutating_ex_actions = {
+                "note",
+                "fill",
+                "addset",
+                "delset",
+                "amrapextra",
+                "inc",
+                "done",
+                "timeedit",
+                "timedel",
+            }
+            if action in mutating_ex_actions:
+                if not await ensure_can_edit_from_callback(context, q):
+                    return
             selected = get_flex_selected(context, day, ue_id)
             is_library = day == 0
             sheet_context = get_sheet_context(context, q.message.chat_id, q.message.message_id)
