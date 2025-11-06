@@ -223,22 +223,11 @@ def settings_kb(
         rows.append(
             [
                 InlineKeyboardButton(
-                    dual("🧑‍🏫 Режим тренера", "Включить режим тренера и получить код"),
+                    dual(
+                        "🧑‍🏫 Тренер / подопечный",
+                        "Настройки режима тренера и связи с тренером",
+                    ),
                     callback_data="set:trainer_mode",
-                )
-            ]
-        )
-        trainer_link_label = dual(
-            "🤝 Мой тренер" if trainer_link_active else "🤝 Тренер / подопечный",
-            "Открыть настройки связи с тренером"
-            if trainer_link_active
-            else "Связать тренера и подопечного",
-        )
-        rows.append(
-            [
-                InlineKeyboardButton(
-                    trainer_link_label,
-                    callback_data="set:trainer_link",
                 )
             ]
         )

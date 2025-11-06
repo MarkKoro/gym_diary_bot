@@ -1521,6 +1521,61 @@ async def _ensure_trainer_mode(
     return existing_code
 
 
+async def show_trainer_root_settings(
+    q,
+    context: ContextTypes.DEFAULT_TYPE,
+    user_id: int,
+):
+    profile = await _fetch_trainer_profile(user_id)
+    is_trainer = int(profile[0]) if profile and profile[0] else 0
+    trainer_code = profile[1] if profile else None
+    link = await get_active_trainer_link_for_trainee(user_id)
+    if not link:
+        link_status = "нет"
+    else:
+        status_value = str(link[2]) if len(link) > 2 else ""
+        if status_value == "pending":
+            link_status = "заявка отправлена"
+        elif status_value == "accepted":
+            link_status = "есть"
+        else:
+            link_status = status_value or "нет"
+    lines = [
+        "Режим тренера / подопечного",
+        "",
+        "Включи режим тренера, чтобы вести подопечных по коду.",
+        "Если у тебя есть тренер, управляй связью в этом разделе.",
+        "",
+    ]
+    status_lines = [f"Режим тренера: {'Вкл' if is_trainer else 'Выкл'}"]
+    if is_trainer and trainer_code:
+        status_lines.append(f"Код тренера: {trainer_code}")
+    status_lines.append(f"Связь с тренером: {link_status}")
+    lines.extend(status_lines)
+    text = "\n".join(lines)
+    toggle_target = "off" if is_trainer else "on"
+    toggle_button = InlineKeyboardButton(
+        f"Режим тренера: {'Вкл' if is_trainer else 'Выкл'}",
+        callback_data=f"set:trainer_mode:toggle:{toggle_target}",
+    )
+    trainee_button = InlineKeyboardButton(
+        "🤝 Стать подопечным",
+        callback_data="set:trainer_mode:trainee",
+    )
+    back_button = InlineKeyboardButton(
+        BACK_BTN,
+        callback_data="menu:settings",
+    )
+    kb = InlineKeyboardMarkup(
+        [
+            [toggle_button],
+            [trainee_button],
+            [back_button],
+        ]
+    )
+    await show_screen(q, context, text, kb, user_id)
+
+
 async def _render_trainer_link_message(
     context: ContextTypes.DEFAULT_TYPE,
     user_id: int,
@@ -9629,35 +9684,44 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 if not await require_edit_allowed(q, context):
                     return
             if action == "trainer_mode":
-                profile = await _fetch_trainer_profile(target_user_id)
-                code = await _ensure_trainer_mode(target_user_id, profile)
-                text = f"Режим тренера включён.\n\nКод: {code}"
-                kb = InlineKeyboardMarkup(
-                    [[InlineKeyboardButton(BACK_BTN, callback_data="menu:settings")]]
-                )
-                await show_screen(q, context, text, kb, target_user_id)
-                return
-            if action == "trainer_link":
-                link = await get_active_trainer_link_for_trainee(target_user_id)
-                if link:
-                    await show_trainee_trainer_settings(q, context, target_user_id)
+                if len(parts) == 2:
+                    await show_trainer_root_settings(q, context, target_user_id)
                     return
-                message = await show_screen(
-                    q,
-                    context,
-                    "Введи код тренера (формат TR-XXXXX).",
-                    InlineKeyboardMarkup(
-                        [[InlineKeyboardButton(BACK_BTN, callback_data="menu:settings")]]
-                    ),
-                    target_user_id,
-                )
-                target_message = message or q.message
-                context.user_data[TRAINER_CODE_INPUT_KEY] = True
-                context.user_data[TRAINER_CODE_PROMPT_KEY] = (
-                    getattr(target_message, "chat_id", q.message.chat_id),
-                    getattr(target_message, "message_id", q.message.message_id),
-                )
-                return
+                if len(parts) >= 3 and parts[2] == "toggle":
+                    desired_state = parts[3] if len(parts) > 3 else None
+                    profile = await _fetch_trainer_profile(target_user_id)
+                    if desired_state == "on":
+                        await _ensure_trainer_mode(target_user_id, profile)
+                    elif desired_state == "off":
+                        async with connect_db() as db:
+                            await db.execute(
+                                "UPDATE users SET is_trainer = 0 WHERE id=?",
+                                (target_user_id,),
+                            )
+                            await db.commit()
+                    await show_trainer_root_settings(q, context, target_user_id)
+                    return
+                if len(parts) >= 3 and parts[2] == "trainee":
+                    link = await get_active_trainer_link_for_trainee(target_user_id)
+                    if link:
+                        await show_trainee_trainer_settings(q, context, target_user_id)
+                        return
+                    message = await show_screen(
+                        q,
+                        context,
+                        "Введи код тренера (формат TR-XXXXX).",
+                        InlineKeyboardMarkup(
+                            [[InlineKeyboardButton(BACK_BTN, callback_data="menu:settings")]]
+                        ),
+                        target_user_id,
+                    )
+                    target_message = message or q.message
+                    context.user_data[TRAINER_CODE_INPUT_KEY] = True
+                    context.user_data[TRAINER_CODE_PROMPT_KEY] = (
+                        getattr(target_message, "chat_id", q.message.chat_id),
+                        getattr(target_message, "message_id", q.message.message_id),
+                    )
+                    return
             if action == "rename_day":
                 if len(parts) == 2:
                     days = await list_active_days(target_user_id)
