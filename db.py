@@ -286,7 +286,8 @@ async def init_db():
             system TEXT,
             workouts_per_week INTEGER,
             day_finish_total INTEGER DEFAULT 0,
-            subscription_prompt_total INTEGER DEFAULT 0
+            subscription_prompt_total INTEGER DEFAULT 0,
+            notifications_enabled INTEGER NOT NULL DEFAULT 1
         );
 
         CREATE TABLE IF NOT EXISTS exercises(
@@ -526,6 +527,12 @@ async def init_db():
             pass
         try:
             await db.execute("ALTER TABLE users ADD COLUMN trainer_code TEXT")
+        except Exception:
+            pass
+        try:
+            await db.execute(
+                "ALTER TABLE users ADD COLUMN notifications_enabled INTEGER NOT NULL DEFAULT 1"
+            )
         except Exception:
             pass
         await db.execute(
@@ -1376,6 +1383,31 @@ async def get_user_timezone(user_id: int):
         row = await cur.fetchone()
         return row[0] if row else "UTC"
 
+
+async def get_user_notifications_enabled(user_id: int) -> bool:
+    async with connect_db() as db:
+        cur = await db.execute(
+            "SELECT COALESCE(notifications_enabled, 1) FROM users WHERE id=?",
+            (user_id,),
+        )
+        row = await cur.fetchone()
+        if not row:
+            return True
+        try:
+            return bool(int(row[0]))
+        except (TypeError, ValueError):
+            return True
+
+
+async def set_user_notifications_enabled(user_id: int, enabled: bool) -> None:
+    async with connect_db() as db:
+        await db.execute(
+            "UPDATE users SET notifications_enabled=? WHERE id=?",
+            (1 if enabled else 0, user_id),
+        )
+        await db.commit()
+
+
 async def add_user_reminder(
     user_id: int, dow: int, hour: int, minute: int, day_no: int | None = None
 ) -> bool:
@@ -1461,6 +1493,7 @@ async def list_users_with_reminders():
             "SELECT r.user_id, u.tg_id, COALESCE(r.day_no, r.id) AS day_no, r.dow, r.hour, r.minute "
             "FROM user_reminders r "
             "JOIN users u ON u.id = r.user_id "
+            "WHERE COALESCE(u.notifications_enabled, 1) = 1 "
             "ORDER BY r.user_id, COALESCE(r.day_no, r.id)"
         )
         return await cur.fetchall()

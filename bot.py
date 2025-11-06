@@ -120,6 +120,8 @@ from db import (
     list_day_exercises,
     set_baseline,
     set_user_timezone,
+    get_user_notifications_enabled,
+    set_user_notifications_enabled,
     add_user_reminder,
     normalize_dow,
     get_user_timezone,
@@ -680,6 +682,44 @@ def format_reminder_status(
         weekday = WEEKDAY_FULL_NAMES.get(dow, t("NOT_SET").capitalize())
         return f"{label} — {weekday}, {hour:02d}:{minute:02d}"
     return f"{label} — напоминание не настроено"
+
+
+def build_reminders_settings_text(
+    tz_label: str, enabled: bool, reminders: list[tuple[int, int, int, int]]
+) -> str:
+    status = "включены" if enabled else "выключены"
+    weekday_labels = dict(WEEKDAYS)
+    if reminders:
+        parts: list[str] = []
+        for _day_no, dow, hour, minute in reminders:
+            try:
+                dow_int = int(dow)
+            except (TypeError, ValueError):
+                weekday = "—"
+            else:
+                weekday = weekday_labels.get(dow_int, str(dow_int + 1))
+            try:
+                hour_int = int(hour)
+            except (TypeError, ValueError):
+                hour_int = 0
+            try:
+                minute_int = int(minute)
+            except (TypeError, ValueError):
+                minute_int = 0
+            parts.append(f"{weekday} {hour_int:02d}:{minute_int:02d}")
+        reminders_line = f"Сейчас выбраны напоминания: {', '.join(parts)}."
+    else:
+        reminders_line = "Сейчас выбраны напоминания: «напоминания пока не настроены»."
+    lines = [
+        f"Напоминания (время по {tz_label}).",
+        "",
+        f"Текущий статус: уведомления {status}.",
+        "",
+        reminders_line,
+        "",
+        "Ниже можно изменить часовой пояс, расписание или полностью включить/выключить напоминания без удаления расписания.",
+    ]
+    return "\n".join(lines)
 
 
 async def compose_main_menu(
@@ -7271,6 +7311,10 @@ async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAUL
             await show_screen(q, context, f"{t('DAY')} {day} сохранён. Перейти к {t('DAY')} {day + 1}?", day_done_kb(day), user_id)
             return
         if data == "wiz:reminders:yes":
+            await set_user_notifications_enabled(user_id, True)
+            app = context.application
+            if app is not None:
+                await schedule_all_reminders(app)
             from_settings = context.user_data.get("from_settings")
             if not from_settings and chat_id is not None:
                 menu_text, menu_kb, prefs = await compose_main_menu(user_id)
@@ -7319,6 +7363,10 @@ async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAUL
             )
             return
         if data == "wiz:reminders:no":
+            await set_user_notifications_enabled(user_id, False)
+            app = context.application
+            if app is not None:
+                await schedule_all_reminders(app)
             if context.user_data.get("from_settings"):
                 context.user_data.pop("from_settings", None)
                 context.user_data.pop("reminder_skip_tz", None)
@@ -7403,16 +7451,10 @@ async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAUL
                 if tz_only_change:
                     tz_label = get_timezone_label(tz)
                     rems = await list_user_reminders(user_id)
-                    if rems:
-                        parts = [
-                            f"{dict(WEEKDAYS)[d]} {h:02d}:{m:02d}"
-                            for _day, d, h, m in rems
-                        ]
-                        rem_text = ", ".join(parts)
-                        text = f"Часовой пояс обновлён: {tz_label}. Напоминания: {rem_text}."
-                    else:
-                        text = f"Часовой пояс обновлён: {tz_label}. Напоминания пока не настроены."
-                    await show_screen(q, context, text, reminders_edit_kb(), user_id)
+                    enabled = await get_user_notifications_enabled(user_id)
+                    overview = build_reminders_settings_text(tz_label, enabled, rems)
+                    text = f"Часовой пояс обновлён: {tz_label}.\n\n{overview}"
+                    await show_screen(q, context, text, reminders_edit_kb(enabled), user_id)
                 elif mode == "final":
                     context.user_data.pop("wizard_onboarding", None)
                     await show_screen(
@@ -10044,23 +10086,43 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if action == "reminders":
                 if len(parts) == 2:
                     context.user_data.pop("tz_only_change", None)
-                    tz = await get_user_timezone(target_user_id)
-                    rems = await list_user_reminders(target_user_id)
-                    if tz and rems:
-                        tz_label = get_timezone_label(tz)
-                        parts = [
-                            f"{dict(WEEKDAYS)[d]} {h:02d}:{m:02d}"
-                            for _day, d, h, m in rems
-                        ]
-                        rem_text = ", ".join(parts)
-                        text = f"Сейчас выбран {tz_label}, напоминания: {rem_text}."
-                        await show_screen(q, context, text, reminders_edit_kb(), target_user_id)
-                        return
                     context.user_data["from_settings"] = True
-                    context.user_data["tz_page"] = 0
-                    await show_screen(q, context, 'Выбери свой часовой пояс:', tz_select_kb(0), target_user_id)
+                    tz_code = await get_user_timezone(target_user_id)
+                    tz_label = get_timezone_label(tz_code)
+                    rems = await list_user_reminders(target_user_id)
+                    enabled = await get_user_notifications_enabled(target_user_id)
+                    text = build_reminders_settings_text(tz_label, enabled, rems)
+                    await show_screen(
+                        q,
+                        context,
+                        text,
+                        reminders_edit_kb(enabled),
+                        target_user_id,
+                    )
                     return
                 sub = parts[2]
+                if sub == "toggle" and len(parts) >= 4:
+                    desired = parts[3]
+                    enabled = desired == "on"
+                    await set_user_notifications_enabled(target_user_id, enabled)
+                    app = context.application
+                    if app is not None:
+                        await schedule_all_reminders(app)
+                    await q.answer(
+                        "Уведомления включены." if enabled else "Уведомления отключены."
+                    )
+                    tz_code = await get_user_timezone(target_user_id)
+                    tz_label = get_timezone_label(tz_code)
+                    rems = await list_user_reminders(target_user_id)
+                    text = build_reminders_settings_text(tz_label, enabled, rems)
+                    await show_screen(
+                        q,
+                        context,
+                        text,
+                        reminders_edit_kb(enabled),
+                        target_user_id,
+                    )
+                    return
                 if sub == "tz":
                     context.user_data["from_settings"] = True
                     context.user_data["tz_page"] = 0
@@ -10099,11 +10161,16 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 context.user_data.pop(REMINDER_EDIT_DAY_INDEX_KEY, None)
                 context.user_data.pop(REMINDER_SELECTED_DOW_KEY, None)
                 context.user_data.pop(REMINDER_TIME_PAGE_KEY, None)
+                tz_code = await get_user_timezone(target_user_id)
+                tz_label = get_timezone_label(tz_code)
+                reminders = await list_user_reminders(target_user_id)
+                enabled = await get_user_notifications_enabled(target_user_id)
+                text = build_reminders_settings_text(tz_label, enabled, reminders)
                 await show_screen(
                     q,
                     context,
-                    'Настройки уведомлений:',
-                    reminders_edit_kb(),
+                    text,
+                    reminders_edit_kb(enabled),
                     target_user_id,
                 )
                 return
