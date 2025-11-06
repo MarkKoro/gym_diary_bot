@@ -2747,7 +2747,7 @@ async def delete_measurement_category(user_id: int, code: str) -> bool:
 async def find_user_by_trainer_code(code: str):
     async with connect_db() as db:
         cur = await db.execute(
-            "SELECT id, username FROM users WHERE trainer_code = ?",
+            "SELECT id, username FROM users WHERE trainer_code = ? AND is_trainer = 1",
             (code,),
         )
         return await cur.fetchone()
