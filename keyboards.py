@@ -225,7 +225,7 @@ def settings_kb(
                 InlineKeyboardButton(
                     dual(
                         "🧑‍🏫 Тренер / подопечный",
-                        "Настройки режима тренера и связи с тренером",
+                        "Связать дневник с тренером или вести своих подопечных",
                     ),
                     callback_data="set:trainer_mode",
                 )
@@ -241,6 +241,40 @@ def settings_kb(
                 ]
             )
     rows.append([InlineKeyboardButton(BACK_BTN, callback_data="menu:root")])
+    return InlineKeyboardMarkup(rows)
+
+
+def trainee_become_kb(can_edit: bool) -> InlineKeyboardMarkup:
+    toggle_state = "off" if can_edit else "on"
+    rows = [
+        [
+            InlineKeyboardButton(
+                dual(
+                    "🔑 Ввести код тренера",
+                    "Ввести код, который тренер отправил тебе",
+                ),
+                callback_data="set:trainer_link",
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                dual(
+                    f"Разрешить тренеру менять план: {'Вкл' if can_edit else 'Выкл'}",
+                    "Переключить право тренера управлять твоим планом",
+                ),
+                callback_data=f"trainer:allow:{toggle_state}",
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                dual(
+                    "⬅️ Назад в режим тренера",
+                    "Вернуться к настройкам режима тренера",
+                ),
+                callback_data="set:trainer_mode",
+            )
+        ],
+    ]
     return InlineKeyboardMarkup(rows)
 
 

@@ -87,6 +87,7 @@ from keyboards import (
     HISTORY_BTN,
     subscribe_channel_prompt_kb,
     trainee_trainer_settings_kb,
+    trainee_become_kb,
     week_count_kb,
     reminder_prompt_kb,
     trainer_manage_trainee_kb,
@@ -275,6 +276,7 @@ AMRAP_SCHEME_KEY = "awaiting_amrap_scheme"
 FOR_TIME_INPUT_KEY = "awaiting_for_time_result"
 TRAINER_CODE_INPUT_KEY = "awaiting_trainer_code"
 TRAINER_CODE_PROMPT_KEY = "trainer_code_prompt"
+TRAINER_PENDING_CAN_EDIT_KEY = "pending_trainer_can_edit"
 TRAINER_LABEL_INPUT_KEY = "awaiting_trainer_label"
 TRAINER_TRAINEE_LABEL_INPUT_KEY = "awaiting_trainee_label"
 TRAINER_PENDING_OFFSET_KEY = "trainer_pending_offset"
@@ -1576,17 +1578,117 @@ async def show_trainer_root_settings(
     await show_screen(q, context, text, kb, user_id)
 
 
+async def _build_become_trainee_view(
+    context: ContextTypes.DEFAULT_TYPE,
+    user_id: int,
+    link,
+    *,
+    status_message: str | None = None,
+    prompt_for_code: bool = False,
+) -> tuple[str, InlineKeyboardMarkup]:
+    pending_can_edit = bool(
+        context.user_data.get(TRAINER_PENDING_CAN_EDIT_KEY, False)
+    )
+    status_lines: list[str] = []
+    if link and str(link[2]) == "pending":
+        trainer_user_id = int(link[1])
+        trainer_label = (link[4] or "").strip()
+        if not trainer_label:
+            trainer_label = await _format_trainer_user_display(trainer_user_id)
+        pending_can_edit = bool(link[3])
+        context.user_data[TRAINER_PENDING_CAN_EDIT_KEY] = pending_can_edit
+        status_lines.append(
+            f"Статус: заявка отправлена тренеру {trainer_label}. Ждём подтверждения."
+        )
+    else:
+        if prompt_for_code:
+            status_lines.append(
+                "Отправь код тренера одним сообщением (формат TR-XXXXX)."
+            )
+        else:
+            status_lines.append(
+                "Статус: пока нет активной связи. Попроси тренера поделиться кодом и введи его через кнопку ниже."
+            )
+        context.user_data.setdefault(
+            TRAINER_PENDING_CAN_EDIT_KEY, pending_can_edit
+        )
+    if status_message:
+        status_lines.append(status_message)
+    lines = [
+        "Стать подопечным тренера.",
+        "",
+        "Через этот режим ты можешь поделиться с тренером своим дневником: упражнения, веса и замеры.",
+        "",
+        "По умолчанию тренер видит только твой план. Если дать разрешение ниже, тренер сможет менять упражнения и завершать дни за тебя.",
+        "",
+    ]
+    lines.extend(status_lines)
+    text = "\n".join(lines)
+    kb = trainee_become_kb(pending_can_edit)
+    return text, kb
+
+
+async def show_become_trainee_screen(
+    q,
+    context: ContextTypes.DEFAULT_TYPE,
+    user_id: int,
+    *,
+    status_message: str | None = None,
+    prompt_for_code: bool | None = None,
+):
+    link = await get_active_trainer_link_for_trainee(user_id)
+    if link and str(link[2]) == "accepted":
+        await show_trainee_trainer_settings(q, context, user_id)
+        return link
+    if prompt_for_code is None:
+        prompt_flag = bool(context.user_data.get(TRAINER_CODE_INPUT_KEY))
+    else:
+        prompt_flag = prompt_for_code
+    text, kb = await _build_become_trainee_view(
+        context,
+        user_id,
+        link,
+        status_message=status_message,
+        prompt_for_code=prompt_flag,
+    )
+    message = await show_screen(q, context, text, kb, user_id)
+    target_message = message or getattr(q, "message", None)
+    if target_message:
+        context.user_data[TRAINER_CODE_PROMPT_KEY] = (
+            getattr(target_message, "chat_id", None),
+            getattr(target_message, "message_id", None),
+        )
+    if prompt_flag:
+        context.user_data[TRAINER_CODE_INPUT_KEY] = True
+    else:
+        context.user_data.pop(TRAINER_CODE_INPUT_KEY, None)
+    return link
+
+
 async def _render_trainer_link_message(
     context: ContextTypes.DEFAULT_TYPE,
     user_id: int,
     target: tuple[int, int] | None,
-    text: str,
+    status_message: str | None,
     *,
+    prompt_for_code: bool = False,
     chat_id: int | None = None,
 ) -> tuple[int, int] | None:
-    kb = InlineKeyboardMarkup(
-        [[InlineKeyboardButton(BACK_BTN, callback_data="menu:settings")]]
-    )
+    link = await get_active_trainer_link_for_trainee(user_id)
+    if link and str(link[2]) == "accepted":
+        text, kb, _ = await build_trainee_trainer_settings_view(user_id)
+        if text is None or kb is None:
+            return None
+        keep_prompt = False
+    else:
+        text, kb = await _build_become_trainee_view(
+            context,
+            user_id,
+            link,
+            status_message=status_message,
+            prompt_for_code=prompt_for_code,
+        )
+        keep_prompt = prompt_for_code
     prefs = await load_ui_preferences(user_id)
     prepared_text, prepared_markup = prepare_ui_output(text, kb, prefs)
     message_chat_id: int | None
@@ -1624,6 +1726,10 @@ async def _render_trainer_link_message(
         return None
     remember_message(message_chat_id, message_id)
     context.user_data[TRAINER_CODE_PROMPT_KEY] = (message_chat_id, message_id)
+    if keep_prompt:
+        context.user_data[TRAINER_CODE_INPUT_KEY] = True
+    else:
+        context.user_data.pop(TRAINER_CODE_INPUT_KEY, None)
     return message_chat_id, message_id
 
 
@@ -7496,10 +7602,10 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 context,
                 user_id,
                 target if isinstance(target, tuple) else None,
-                "Код тренера не найден.",
+                "Отправь код тренера в формате TR-XXXXX.",
+                prompt_for_code=True,
                 chat_id=update.effective_chat.id if update.effective_chat else None,
             )
-            context.user_data[TRAINER_CODE_INPUT_KEY] = True
             return
         trainer = await find_user_by_trainer_code(code_input)
         if not trainer:
@@ -7509,9 +7615,9 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 user_id,
                 target if isinstance(target, tuple) else None,
                 "Код тренера не найден.",
+                prompt_for_code=True,
                 chat_id=update.effective_chat.id if update.effective_chat else None,
             )
-            context.user_data[TRAINER_CODE_INPUT_KEY] = True
             return
         trainer_id = int(trainer[0])
         link1 = await get_trainer_link(trainer_id, user_id)
@@ -7523,11 +7629,17 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 user_id,
                 target if isinstance(target, tuple) else None,
                 "Этот пользователь уже связан с вами.",
+                prompt_for_code=True,
                 chat_id=update.effective_chat.id if update.effective_chat else None,
             )
-            context.user_data[TRAINER_CODE_INPUT_KEY] = True
             return
-        await create_trainer_request(trainer_id, user_id)
+        await create_trainer_request(
+            trainer_id,
+            user_id,
+            can_edit_plan=bool(
+                context.user_data.get(TRAINER_PENDING_CAN_EDIT_KEY, False)
+            ),
+        )
         await try_delete(update.message)
         await _render_trainer_link_message(
             context,
@@ -7535,7 +7647,7 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             target if isinstance(target, tuple) else None,
             "Заявка отправлена тренеру.",
             chat_id=update.effective_chat.id if update.effective_chat else None,
-            )
+        )
         context.user_data.pop(TRAINER_CODE_PROMPT_KEY, None)
         return
     awaiting_trainer_label = context.user_data.get(TRAINER_LABEL_INPUT_KEY)
@@ -8218,17 +8330,22 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 acting_id = context.user_data.get("acting_user_id")
                 if action == "settings":
                     context.user_data.pop(TRAINER_LABEL_INPUT_KEY, None)
+                    link = await get_active_trainer_link_for_trainee(target_user_id)
+                    if not link or str(link[2]) != "accepted":
+                        await show_become_trainee_screen(q, context, target_user_id)
+                        return
                     await show_trainee_trainer_settings(q, context, target_user_id)
                     return
                 if action == "allow" and len(parts) >= 3:
                     desired = parts[2]
+                    allow_on = desired == "on"
                     if acting_id:
                         link = await get_trainer_link(actor_user_id, acting_id)
                         if not link or str(link[1]) != "accepted":
                             await q.answer("Связь недоступна.", show_alert=True)
                             return
                         link_id = int(link[0])
-                        new_value = 1 if desired == "on" else 0
+                        new_value = 1 if allow_on else 0
                         await update_trainer_link_permissions(link_id, new_value)
                         context.user_data["acting_can_edit"] = bool(new_value)
                         target_key = context.user_data.get(
@@ -8242,13 +8359,20 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         )
                         return
                     link = await get_active_trainer_link_for_trainee(target_user_id)
-                    if not link:
-                        await show_trainee_trainer_settings(q, context, target_user_id)
+                    new_value = 1 if allow_on else 0
+                    if link and str(link[2]) == "accepted":
+                        link_id = int(link[0])
+                        await update_trainer_link_permissions(link_id, new_value)
+                        await show_trainee_trainer_settings(
+                            q, context, target_user_id
+                        )
                         return
-                    link_id = int(link[0])
-                    new_value = 1 if desired == "on" else 0
-                    await update_trainer_link_permissions(link_id, new_value)
-                    await show_trainee_trainer_settings(q, context, target_user_id)
+                    if link and str(link[2]) == "pending":
+                        await update_trainer_link_permissions(int(link[0]), new_value)
+                        context.user_data[TRAINER_PENDING_CAN_EDIT_KEY] = allow_on
+                    else:
+                        context.user_data[TRAINER_PENDING_CAN_EDIT_KEY] = allow_on
+                    await show_become_trainee_screen(q, context, target_user_id)
                     return
                 if action == "label" and len(parts) >= 3:
                     sub_action = parts[2]
@@ -9702,26 +9826,15 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     await show_trainer_root_settings(q, context, target_user_id)
                     return
                 if len(parts) >= 3 and parts[2] == "trainee":
-                    link = await get_active_trainer_link_for_trainee(target_user_id)
-                    if link:
-                        await show_trainee_trainer_settings(q, context, target_user_id)
-                        return
-                    message = await show_screen(
-                        q,
-                        context,
-                        "Введи код тренера (формат TR-XXXXX).",
-                        InlineKeyboardMarkup(
-                            [[InlineKeyboardButton(BACK_BTN, callback_data="menu:settings")]]
-                        ),
-                        target_user_id,
-                    )
-                    target_message = message or q.message
-                    context.user_data[TRAINER_CODE_INPUT_KEY] = True
-                    context.user_data[TRAINER_CODE_PROMPT_KEY] = (
-                        getattr(target_message, "chat_id", q.message.chat_id),
-                        getattr(target_message, "message_id", q.message.message_id),
+                    await show_become_trainee_screen(
+                        q, context, target_user_id, prompt_for_code=False
                     )
                     return
+            if action == "trainer_link":
+                await show_become_trainee_screen(
+                    q, context, target_user_id, prompt_for_code=True
+                )
+                return
             if action == "rename_day":
                 if len(parts) == 2:
                     days = await list_active_days(target_user_id)
