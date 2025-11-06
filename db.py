@@ -2781,15 +2781,28 @@ async def get_active_trainer_link_for_trainee(trainee_user_id: int):
         return await cur.fetchone()
 
 
-async def create_trainer_request(trainer_user_id: int, trainee_user_id: int):
+async def create_trainer_request(
+    trainer_user_id: int, trainee_user_id: int, *, can_edit_plan: bool = False
+):
     async with connect_db() as db:
         created_at = _now_iso()
         cur = await db.execute(
             """
-            INSERT INTO trainer_links(trainer_user_id, trainee_user_id, status, created_at)
-            VALUES(?, ?, 'pending', ?)
+            INSERT INTO trainer_links(
+                trainer_user_id,
+                trainee_user_id,
+                status,
+                can_edit_plan,
+                created_at
+            )
+            VALUES(?, ?, 'pending', ?, ?)
             """,
-            (trainer_user_id, trainee_user_id, created_at),
+            (
+                trainer_user_id,
+                trainee_user_id,
+                1 if can_edit_plan else 0,
+                created_at,
+            ),
         )
         await db.commit()
         return cur.lastrowid
