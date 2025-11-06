@@ -5391,7 +5391,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text, kb = prepare_ui_output(text, kb, prefs)
     chat = update.effective_chat
     if chat is not None:
-        await send_main_message(context.bot, chat.id, text, reply_markup=kb)
+        await send_main_message_fresh(context.bot, chat.id, text, reply_markup=kb)
     elif update.message:
         msg = await update.message.reply_text(text, reply_markup=kb)
         remember_message(msg.chat_id, msg.message_id)
@@ -7018,9 +7018,9 @@ async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAUL
             if dow_iso is None:
                 await q.answer("Сначала выбери день недели.", show_alert=True)
                 return
-            dow = normalize_dow(dow_iso)
+            dow = int(dow_iso)
             day_no = context.user_data.get("reminder_day", 1)
-            await add_user_reminder(user_id, dow_iso, hour, minute, day_no=day_no)
+            await add_user_reminder(user_id, dow, hour, minute, day_no=day_no)
             tz = context.user_data.get("tz", "UTC")
             zone = resolve_user_zone(tz)
             reminder_time = time(hour, minute, tzinfo=zone)
@@ -9660,7 +9660,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 except ValueError:
                     await show_reminders_overview(q, context, target_user_id)
                     return
-                dow = normalize_dow(dow_iso)
+                dow = int(dow_iso)
                 day_index = context.user_data.get(REMINDER_EDIT_DAY_INDEX_KEY, position)
                 label = context.user_data.get(
                     REMINDER_EDIT_LABEL_KEY,
@@ -9677,7 +9677,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 }
                 previous = reminder_map.get(day_index)
                 await add_user_reminder(
-                    target_user_id, dow_iso, hour, minute, day_no=day_index
+                    target_user_id, dow, hour, minute, day_no=day_index
                 )
                 if previous and previous[0] is not None and previous[0] >= 0:
                     _remove_reminder_jobs(
