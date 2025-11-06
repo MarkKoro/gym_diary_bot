@@ -1033,10 +1033,12 @@ def format_flex_value(
             if weight_value > 0:
                 entry = f"{entry} · {format_weight_value(weight_value)} кг"
         return entry
+    parts = [f"{reps} повт."]
+    if seconds > 0:
+        parts.append(format_duration_value(seconds))
     if with_weight:
-        formatted = format_weight_value(weight_value)
-        return f"{reps}×{formatted} кг"
-    return f"{reps} повт."
+        parts.append(f"{format_weight_value(weight_value)} кг")
+    return " · ".join(parts)
 
 
 def _compress_flex_entries(
@@ -2332,6 +2334,7 @@ class FillEditorState:
     default_reps: int = 0
     default_seconds: int = 0
     default_weight: float = 0.0
+    first_time: bool = False
 
 
 def render_instant_baseline(
@@ -2593,79 +2596,60 @@ def _build_flex_fill_keyboard(state: FillEditorState) -> InlineKeyboardMarkup:
         ]
     )
     unit = _rep_unit(state.kind)
-    major = _major_rep_step(state.kind)
+    rep_steps = [10, 5, 1] if state.first_time else [_major_rep_step(state.kind), 1]
+    seen_rep_steps: set[int] = set()
+    for step in rep_steps:
+        if step <= 0 or step in seen_rep_steps:
+            continue
+        seen_rep_steps.add(step)
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    f"＋{step} {unit}", callback_data=f"fill:flex:inc:reps:{step}"
+                ),
+                InlineKeyboardButton(
+                    f"−{step} {unit}", callback_data=f"fill:flex:inc:reps:-{step}"
+                ),
+            ]
+        )
+    sec_steps = [60, 30, 10, 5, 1] if state.first_time else [30, 5, 1]
     rows.append(
         [
             InlineKeyboardButton(
-                f"＋{major} {unit}", callback_data=f"fill:flex:inc:reps:{major}"
-            ),
-            InlineKeyboardButton(
-                f"−{major} {unit}", callback_data=f"fill:flex:inc:reps:-{major}"
-            ),
+                f"＋{step} сек", callback_data=f"fill:flex:inc:sec:{step}"
+            )
+            for step in sec_steps
         ]
     )
     rows.append(
         [
             InlineKeyboardButton(
-                f"＋1 {unit}", callback_data="fill:flex:inc:reps:1"
-            ),
-            InlineKeyboardButton(
-                f"−1 {unit}", callback_data="fill:flex:inc:reps:-1"
-            ),
+                f"−{step} сек", callback_data=f"fill:flex:inc:sec:-{step}"
+            )
+            for step in sec_steps
         ]
     )
-    if state.kind == "duration":
-        rows.append(
-            [
-                InlineKeyboardButton(
-                    "＋30 сек", callback_data="fill:flex:inc:sec:30"
-                ),
-                InlineKeyboardButton(
-                    "＋5 сек", callback_data="fill:flex:inc:sec:5"
-                ),
-                InlineKeyboardButton(
-                    "＋1 сек", callback_data="fill:flex:inc:sec:1"
-                ),
-            ]
-        )
-        rows.append(
-            [
-                InlineKeyboardButton(
-                    "−30 сек", callback_data="fill:flex:inc:sec:-30"
-                ),
-                InlineKeyboardButton(
-                    "−5 сек", callback_data="fill:flex:inc:sec:-5"
-                ),
-                InlineKeyboardButton(
-                    "−1 сек", callback_data="fill:flex:inc:sec:-1"
-                ),
-            ]
-        )
     if state.with_weight:
+        weight_steps = (
+            [0.5, 1, 3, 5, 10, 25, 50]
+            if state.first_time
+            else [0.5, 3, 10]
+        )
+        weight_labels = [format_weight_value(step) for step in weight_steps]
         rows.append(
             [
                 InlineKeyboardButton(
-                    "＋0.5 кг", callback_data="fill:flex:inc:kg:0.5"
-                ),
-                InlineKeyboardButton(
-                    "＋3 кг", callback_data="fill:flex:inc:kg:3"
-                ),
-                InlineKeyboardButton(
-                    "＋10 кг", callback_data="fill:flex:inc:kg:10"
-                ),
+                    f"＋{label} кг", callback_data=f"fill:flex:inc:kg:{label}"
+                )
+                for label in weight_labels
             ]
         )
         rows.append(
             [
                 InlineKeyboardButton(
-                    "−0.5 кг", callback_data="fill:flex:inc:kg:-0.5"
-                ),
-                InlineKeyboardButton(
-                    "−3 кг", callback_data="fill:flex:inc:kg:-3"
-                ),
-                InlineKeyboardButton(
-                    "−10 кг", callback_data="fill:flex:inc:kg:-10"
-                ),
+                    f"−{label} кг", callback_data=f"fill:flex:inc:kg:-{label}"
+                )
+                for label in weight_labels
             ]
         )
     rows.append(
@@ -2756,6 +2740,7 @@ async def open_fill_editor(
     baseline = await get_baseline(user_id, day, ex_id)
     last_values = await get_session_last_values(session_id, ue_id)
     sets_rows = await fetch_exercise_sets(session_id, ue_id)
+    first_time = len(sets_rows) == 0
     work_sets = filter_work_sets(sets_rows)
     default_reps = 0
     default_seconds = 0
@@ -2818,6 +2803,7 @@ async def open_fill_editor(
         default_reps=default_reps,
         default_seconds=default_seconds,
         default_weight=default_weight if weight_enabled else 0.0,
+        first_time=first_time,
     )
     clear_fill_state(context, q.message.chat_id, q.message.message_id)
     set_fill_state(context, q.message.chat_id, q.message.message_id, state)
