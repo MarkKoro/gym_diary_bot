@@ -52,6 +52,7 @@ def main_menu_kb(
     *,
     show_trainer: bool = False,
     show_support: bool = True,
+    include_settings: bool = True,
     extra_rows: list[list[InlineKeyboardButton]] | None = None,
 ):
     completed_days = completed_days or set()
@@ -98,17 +99,18 @@ def main_menu_kb(
                 )
             ]
         )
-    rows.append(
-        [
-            InlineKeyboardButton(
-                dual(
-                    "⚙︎ Настройки",
-                    "Открыть настройки интерфейса и расписания",
-                ),
-                callback_data="menu:settings",
-            )
-        ]
-    )
+    if include_settings:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    dual(
+                        "⚙︎ Настройки",
+                        "Открыть настройки интерфейса и расписания",
+                    ),
+                    callback_data="menu:settings",
+                )
+            ]
+        )
     if extra_rows:
         rows.extend(extra_rows)
     if show_support:
@@ -117,6 +119,20 @@ def main_menu_kb(
                 InlineKeyboardButton(
                     dual("📩 Техподдержка", "Связаться с техподдержкой"),
                     url=support_url,
+                )
+            ]
+        )
+    return InlineKeyboardMarkup(rows)
+
+
+def week_count_kb() -> InlineKeyboardMarkup:
+    rows = []
+    for i in range(1, 8):
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    dual(str(i), f"Выбрать {i} тренировок в неделю"),
+                    callback_data=f"wiz:week:set:{i}",
                 )
             ]
         )
@@ -275,6 +291,49 @@ def trainee_trainer_settings_kb(can_edit: bool):
     ]
     return InlineKeyboardMarkup(rows)
 
+
+def trainer_manage_trainee_kb(can_edit: bool) -> InlineKeyboardMarkup:
+    toggle_state = "off" if can_edit else "on"
+    rows = [
+        [
+            InlineKeyboardButton(
+                dual(
+                    f"Право менять план: {'Вкл' if can_edit else 'Выкл'}",
+                    "Переключить доступ к редактированию плана",
+                ),
+                callback_data=f"trainer:allow:{toggle_state}",
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                dual(
+                    "Изменить подпись",
+                    "Задать свою подпись для подопечного",
+                ),
+                callback_data="trainer:label:set",
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                dual(
+                    "Открепить подопечного",
+                    "Завершить совместную работу",
+                ),
+                callback_data="trainer:detach",
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                dual(
+                    "⬅️ В дневник подопечного",
+                    "Вернуться к меню подопечного",
+                ),
+                callback_data="trainer:trainee:menu",
+            )
+        ],
+    ]
+    return InlineKeyboardMarkup(rows)
+
 def rename_day_kb(days: list[tuple[int, str]], context=None):
     editing_allowed = _is_editing_allowed(context)
     rows = []
@@ -422,48 +481,6 @@ def days_count_kb(context=None):
 def _option_marker(active: bool) -> str:
     return "◉" if active else "○"
 
-
-def system_kb():
-    rows = [
-        [
-            InlineKeyboardButton(
-                dual("Фулбоди", "Фулбоди — все тело"), callback_data="wiz:sys:fullbody"
-            )
-        ],
-        [
-            InlineKeyboardButton(
-                dual("Сплит", "Сплит — распределённые тренировки"),
-                callback_data="wiz:sys:split",
-            )
-        ],
-        [
-            InlineKeyboardButton(
-                dual("Другое", "Другая система тренировок"),
-                callback_data="wiz:sys:other",
-            )
-        ],
-        [
-            InlineKeyboardButton(
-                dual("❓Не знаю", "Подобрать тренировочную систему"),
-                callback_data="wiz:sys:help",
-            )
-        ],
-    ]
-    return InlineKeyboardMarkup(rows)
-
-def days_kb():
-    rows = []
-    for i in range(1, 8):
-        rows.append(
-            [
-                InlineKeyboardButton(
-                    dual(str(i), f"Выбрать {i} тренировок в неделю"),
-                    callback_data=f"wiz:days:{i}",
-                )
-            ]
-        )
-    rows.append([InlineKeyboardButton(BACK_BTN, callback_data="wiz:days:back")])
-    return InlineKeyboardMarkup(rows)
 
 MG_NAMES = {
     "chest": "Грудь",
@@ -737,6 +754,21 @@ def reminders_kb():
         ],
         [InlineKeyboardButton(BACK_BTN, callback_data="wiz:reminders:back")],
     ])
+
+
+def reminder_prompt_kb():
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton(
+                    dual("Да", "Включить напоминания"), callback_data="wiz:reminders:yes"
+                ),
+                InlineKeyboardButton(
+                    dual("Нет", "Отключить напоминания"), callback_data="wiz:reminders:no"
+                ),
+            ]
+        ]
+    )
 
 
 def reminders_edit_kb():

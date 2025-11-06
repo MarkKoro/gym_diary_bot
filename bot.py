@@ -38,8 +38,6 @@ from telegram.ext import (
 )
 from keyboards import (
     main_menu_kb,
-    system_kb,
-    days_kb,
     muscle_groups_kb,
     exercises_kb,
     baseline_kb,
@@ -89,6 +87,9 @@ from keyboards import (
     HISTORY_BTN,
     subscribe_channel_prompt_kb,
     trainee_trainer_settings_kb,
+    week_count_kb,
+    reminder_prompt_kb,
+    trainer_manage_trainee_kb,
 )
 from settings import (
     TG_TOKEN,
@@ -109,7 +110,6 @@ from db import (
     add_set,
     inc_last_set,
     fetch_user_settings,
-    update_user_system,
     set_workouts_per_week,
     list_exercises_by_group,
     list_user_exercise_ids,
@@ -276,9 +276,11 @@ FOR_TIME_INPUT_KEY = "awaiting_for_time_result"
 TRAINER_CODE_INPUT_KEY = "awaiting_trainer_code"
 TRAINER_CODE_PROMPT_KEY = "trainer_code_prompt"
 TRAINER_LABEL_INPUT_KEY = "awaiting_trainer_label"
+TRAINER_TRAINEE_LABEL_INPUT_KEY = "awaiting_trainee_label"
 TRAINER_PENDING_OFFSET_KEY = "trainer_pending_offset"
 TRAINER_ACCEPTED_OFFSET_KEY = "trainer_accepted_offset"
 TRAINER_SETTINGS_MESSAGE_KEY = "trainer_settings_message"
+TRAINER_TRAINEE_SETTINGS_MESSAGE_KEY = "trainer_trainee_settings_message"
 TRAINER_LIST_LIMIT = 8
 TRAINER_MAX_TRAINEES = 10
 RUNNING_GROUP = "run"
@@ -445,6 +447,10 @@ def _resolve_subscription_chat() -> str | int | None:
     if raw.startswith("@"):
         return raw
     try:
+        message = getattr(q, "message", None)
+        chat = getattr(message, "chat", None) if message else None
+        chat_id = getattr(chat, "id", None) if chat else getattr(message, "chat_id", None)
+        onboarding = bool(context.user_data.get("wizard_onboarding"))
         return int(raw)
     except ValueError:
         return raw
@@ -680,6 +686,8 @@ async def compose_main_menu(
     *,
     show_support: bool = True,
     extra_rows: list[list[InlineKeyboardButton]] | None = None,
+    include_subscription_notice: bool = True,
+    include_settings: bool = True,
 ) -> tuple[str, InlineKeyboardMarkup, UiPreferences]:
     prefs = prefs or await load_ui_preferences(user_id)
     raw_days = await list_active_days(user_id)
@@ -691,9 +699,10 @@ async def compose_main_menu(
     ]
     completions = await get_active_day_completions(user_id)
     text = build_main_menu_text(prefs)
-    notice_lines = await build_subscription_notice(user_id)
-    if notice_lines:
-        text = "\n".join([text, "", *notice_lines])
+    if include_subscription_notice:
+        notice_lines = await build_subscription_notice(user_id)
+        if notice_lines:
+            text = "\n".join([text, "", *notice_lines])
     profile = await _fetch_trainer_profile(user_id)
     is_trainer = bool(profile and profile[0])
     kb = main_menu_kb(
@@ -702,6 +711,7 @@ async def compose_main_menu(
         completions,
         show_trainer=is_trainer,
         show_support=show_support,
+        include_settings=include_settings,
         extra_rows=extra_rows,
     )
     return text, kb, prefs
@@ -1631,6 +1641,117 @@ async def refresh_trainee_trainer_settings_message(
     remember_message(chat_id, message_id)
 
 
+async def build_trainer_manage_trainee_view(
+    trainer_user_id: int,
+    trainee_user_id: int,
+):
+    link = await get_trainer_link(trainer_user_id, trainee_user_id)
+    if not link or str(link[1]) != "accepted":
+        return None, None, None
+    link_id, _status, can_edit_plan, trainer_label, _trainee_label = link
+    display_name = (trainer_label or "").strip()
+    if not display_name:
+        display_name = await _format_trainer_user_display(trainee_user_id)
+    permission_text = (
+        "Разрешение: тренер может менять план тренировок."
+        if can_edit_plan
+        else "Разрешение: тренеру запрещено менять план."
+    )
+    lines = [
+        f"Подопечный: {display_name}",
+        "Статус: связь активна.",
+        "",
+        permission_text,
+        "",
+        "Используй кнопки ниже, чтобы управлять доступом и заметкой.",
+    ]
+    text = "\n".join(lines)
+    kb = trainer_manage_trainee_kb(bool(can_edit_plan))
+    return text, kb, int(link_id)
+
+
+async def show_trainer_manage_trainee(
+    q,
+    context: ContextTypes.DEFAULT_TYPE,
+    trainer_user_id: int,
+    trainee_user_id: int,
+):
+    text, kb, link_id = await build_trainer_manage_trainee_view(
+        trainer_user_id, trainee_user_id
+    )
+    if text is None or kb is None or link_id is None:
+        await q.answer("Настройки недоступны.", show_alert=True)
+        return None
+    message = await show_screen(q, context, text, kb, trainee_user_id)
+    if message:
+        context.user_data[TRAINER_TRAINEE_SETTINGS_MESSAGE_KEY] = (
+            getattr(message, "chat_id", None),
+            getattr(message, "message_id", None),
+        )
+    return link_id
+
+
+async def refresh_trainer_manage_trainee_message(
+    context: ContextTypes.DEFAULT_TYPE,
+    trainer_user_id: int,
+    trainee_user_id: int,
+    target: tuple[int | None, int | None] | None,
+):
+    if not target:
+        return
+    text, kb, _ = await build_trainer_manage_trainee_view(
+        trainer_user_id, trainee_user_id
+    )
+    if text is None or kb is None:
+        return
+    chat_id, message_id = target
+    if chat_id is None or message_id is None:
+        return
+    prefs = await load_ui_preferences(trainer_user_id)
+    prepared_text, prepared_markup = prepare_ui_output(text, kb, prefs)
+    try:
+        await context.bot.edit_message_text(
+            prepared_text,
+            chat_id=chat_id,
+            message_id=message_id,
+            reply_markup=prepared_markup,
+        )
+    except TelegramError as exc:
+        logger.debug("Failed to refresh trainer manage view: %s", exc)
+        return
+    remember_message(chat_id, message_id)
+
+
+async def show_trainer_acting_menu(
+    q,
+    context: ContextTypes.DEFAULT_TYPE,
+    trainer_user_id: int,
+    trainee_user_id: int,
+):
+    extra_rows = [
+        [
+            InlineKeyboardButton(
+                "⚙ Настройки подопечного",
+                callback_data="trainer:trainee_settings",
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                "⬅️ К подопечным",
+                callback_data="trainer:list",
+            )
+        ],
+    ]
+    text, kb, _ = await compose_main_menu(
+        trainee_user_id,
+        show_support=False,
+        extra_rows=extra_rows,
+        include_subscription_notice=False,
+        include_settings=False,
+    )
+    await show_screen(q, context, text, kb, trainee_user_id)
+
+
 async def build_settings_keyboard_for_user(
     context: ContextTypes.DEFAULT_TYPE,
     user_id: int,
@@ -2027,7 +2148,14 @@ async def send_main_message_fresh(
         **kwargs,
     )
 
-async def safe_update_screen(q, context, text, reply_markup=None):
+async def safe_update_screen(
+    q,
+    context,
+    text,
+    reply_markup=None,
+    *,
+    remember: bool = True,
+):
     message = getattr(q, "message", None)
     chat = getattr(message, "chat", None) if message else None
     chat_id = getattr(chat, "id", None) if chat else getattr(message, "chat_id", None)
@@ -2037,51 +2165,67 @@ async def safe_update_screen(q, context, text, reply_markup=None):
     except BadRequest as e:
         error_text = (e.message or "").lower()
         if "not modified" in error_text:
-            remember_message(chat_id, message_id)
+            if remember:
+                remember_message(chat_id, message_id)
             return
         if "message can't be edited" in error_text or "message can't be modified" in error_text:
             if chat_id is None or message_id is None:
                 raise
-            try:
-                await context.bot.delete_message(chat_id, message_id)
-            except BadRequest as delete_error:
-                delete_text = (delete_error.message or "").lower()
-                if "message to delete not found" in delete_text:
-                    last_messages.pop(chat_id, None)
-                elif "can't be deleted" in delete_text:
-                    logger.debug(
-                        "Message %s in chat %s cannot be deleted during update",
-                        message_id,
-                        chat_id,
-                    )
-                    last_messages.pop(chat_id, None)
-                else:
+            if remember:
+                try:
+                    await context.bot.delete_message(chat_id, message_id)
+                except BadRequest as delete_error:
+                    delete_text = (delete_error.message or "").lower()
+                    if "message to delete not found" in delete_text:
+                        last_messages.pop(chat_id, None)
+                    elif "can't be deleted" in delete_text:
+                        logger.debug(
+                            "Message %s in chat %s cannot be deleted during update",
+                            message_id,
+                            chat_id,
+                        )
+                        last_messages.pop(chat_id, None)
+                    else:
+                        remember_message(chat_id, message_id)
+                        raise
+                except Forbidden:
                     remember_message(chat_id, message_id)
                     raise
-            except Forbidden:
-                remember_message(chat_id, message_id)
-                raise
+                else:
+                    last_messages.pop(chat_id, None)
+                new_message = await send_main_message(
+                    context.bot,
+                    chat_id,
+                    text,
+                    reply_markup=reply_markup,
+                )
             else:
-                last_messages.pop(chat_id, None)
-            new_message = await send_main_message(
-                context.bot,
-                chat_id,
-                text,
-                reply_markup=reply_markup,
-            )
+                new_message = await context.bot.send_message(
+                    chat_id,
+                    text,
+                    reply_markup=reply_markup,
+                )
             return new_message
         if "message to edit not found" in error_text:
             if chat_id is None:
                 raise
-            new_message = await send_main_message(
-                context.bot,
-                chat_id,
-                text,
-                reply_markup=reply_markup,
-            )
+            if remember:
+                new_message = await send_main_message(
+                    context.bot,
+                    chat_id,
+                    text,
+                    reply_markup=reply_markup,
+                )
+            else:
+                new_message = await context.bot.send_message(
+                    chat_id,
+                    text,
+                    reply_markup=reply_markup,
+                )
             return new_message
         raise
-    remember_message(chat_id, message_id)
+    if remember:
+        remember_message(chat_id, message_id)
     return getattr(q, "message", None)
 
 
@@ -2094,7 +2238,10 @@ async def show_screen(
 ) -> None:
     prefs = await load_ui_preferences(user_id)
     prepared_text, prepared_markup = prepare_ui_output(text, reply_markup, prefs)
-    return await safe_update_screen(q, context, prepared_text, prepared_markup)
+    remember = not context.user_data.get("wizard_onboarding")
+    return await safe_update_screen(
+        q, context, prepared_text, prepared_markup, remember=remember
+    )
 
 
 def wizard_day_mode_text(day: int, prefs: UiPreferences) -> str:
@@ -5306,13 +5453,11 @@ async def schedule_all_reminders(app: Application):
                 continue
             try:
                 day_int = int(day_no)
-                dow_int = int(dow)
                 hour_int = int(hour)
                 minute_int = int(minute)
             except (TypeError, ValueError):
                 continue
-            if not 0 <= dow_int <= 6:
-                dow_int = normalize_dow(dow)
+            dow_int = normalize_dow(dow)
             job_name = f"rem_{user_id}_{day_int}_{dow_int}"
             _remove_reminder_jobs(app.job_queue, user_id, day_int, dow_int)
             if tg_id is None:
@@ -5357,21 +5502,16 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = await get_or_create_user(u.id, u.username)
     settings = await fetch_user_settings(user_id)
     prefs = await load_ui_preferences(user_id)
-    if not settings or not settings[0] or not settings[1]:
-        text = (
-            "В этом боте ты ведёшь дневник тренировок: сохраняешь упражнения, "
-            "отслеживаешь прогресс и получаешь напоминания. "
-            "Всё в одном удобном месте — больше не нужно записывать данные где попало.\n\n"
-            "Нажми кнопку ниже, чтобы продолжить."
-        )
-        kb = InlineKeyboardMarkup([[InlineKeyboardButton("Ясно, спасибо", callback_data="wiz:intro:ok")]])
-        text, kb = prepare_ui_output(text, kb, prefs)
+    if not settings or not settings[1]:
+        prompt = "Сколько тренировок в неделю?"
+        kb = week_count_kb()
+        prompt_text, prompt_kb = prepare_ui_output(prompt, kb, prefs)
         chat = update.effective_chat
+        context.user_data["wizard_onboarding"] = True
         if chat is not None:
-            await send_main_message_fresh(context.bot, chat.id, text, reply_markup=kb)
+            await context.bot.send_message(chat.id, prompt_text, reply_markup=prompt_kb)
         elif update.message:
-            msg = await update.message.reply_text(text, reply_markup=kb)
-            remember_message(msg.chat_id, msg.message_id)
+            await update.message.reply_text(prompt_text, reply_markup=prompt_kb)
         return
     text, kb, prefs = await compose_main_menu(user_id, prefs)
     text, kb = prepare_ui_output(text, kb, prefs)
@@ -6373,66 +6513,43 @@ async def prompt_day_mode(q, context, user_id: int, day: int):
 async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAULT_TYPE):
     try:
         if data == "wiz:sub:verify":
-            text = (
-                "В этом боте ты ведёшь дневник тренировок: сохраняешь упражнения, "
-                "отслеживаешь прогресс и получаешь напоминания. "
-                "Всё в одном удобном месте — больше не нужно записывать данные где попало.\n\n"
-                "Нажми кнопку ниже, чтобы продолжить."
+            context.user_data["wizard_onboarding"] = True
+            await show_screen(
+                q,
+                context,
+                "Сколько тренировок в неделю?",
+                week_count_kb(),
+                user_id,
             )
-            kb = InlineKeyboardMarkup(
-                [[InlineKeyboardButton("Ясно, спасибо", callback_data="wiz:intro:ok")]]
-            )
-            await show_screen(q, context, text, kb, user_id)
             return
-        if data == "wiz:intro:ok":
-            text = (
-                "Как ты тренируешься?\n\n"
-                "Если выбираешь Full Body, мы автоматически применим выбранные упражнения ко всем дням твоих тренировок. "
-                "Если выбираешь Split, сможешь настроить упражнения для каждого дня отдельно. "
-                "В любом случае ты всегда сможешь добавить или убрать упражнения в любой день."
-            )
-            await show_screen(q, context, text, system_kb(), user_id)
-            return
-        if data == "wiz:sys:back":
-            text = (
-                "Как ты тренируешься?\n\n"
-                "Если выбираешь Full Body, мы автоматически применим выбранные упражнения ко всем дням твоих тренировок. "
-                "Если выбираешь Split, сможешь настроить упражнения для каждого дня отдельно. "
-                "В любом случае ты всегда сможешь добавить или убрать упражнения в любой день."
-            )
-            await show_screen(q, context, text, system_kb(), user_id)
-            return
-        if data.startswith("wiz:sys:"):
-            code = data.split(":")[2]
-            if code == "help":
-                hint = (
-                    "Фулбоди — за одну тренировку тренируешь всё тело.\n"
-                    "Сплит — разные группы мышц в разные дни.\n"
-                    "Если не уверен, выбери «Другое»."
-                )
-                kb = InlineKeyboardMarkup(
-                    [[InlineKeyboardButton(t("BACK"), callback_data="wiz:sys:back")]]
-                )
-                await show_screen(q, context, hint, kb, user_id)
+        if data.startswith("wiz:week:set:"):
+            try:
+                n = int(data.split(":")[3])
+            except (IndexError, ValueError):
                 return
-            context.user_data["system"] = code
-            await update_user_system(user_id, code)
-            await show_screen(q, context, "Сколько тренировок планируешь в неделю?", days_kb(), user_id)
-            return
-        if data == "wiz:days:back":
-            await show_screen(q, context, "Как ты тренируешься?", system_kb(), user_id)
-            return
-        if data.startswith("wiz:days:"):
-            n = int(data.split(":")[2])
+            n = max(1, min(7, n))
             await set_workouts_per_week(user_id, n)
             context.user_data["workouts_per_week"] = n
-            context.user_data["day_groups"] = {}
-            context.user_data["day_modes"] = {}
-            context.user_data.pop("group_list", None)
-            context.user_data.pop("group_idx", None)
-            context.user_data.pop("wizard_copied_all_days", None)
-            context.user_data["current_day"] = 1
-            await prompt_day_mode(q, context, user_id, 1)
+            context.user_data.pop("reminder_day", None)
+            context.user_data.pop("reminder_skip_tz", None)
+            if chat_id is not None:
+                menu_text, menu_kb, prefs = await compose_main_menu(user_id)
+                prepared_text, prepared_markup = prepare_ui_output(
+                    menu_text, menu_kb, prefs
+                )
+                await send_main_message_fresh(
+                    context.bot,
+                    chat_id,
+                    prepared_text,
+                    reply_markup=prepared_markup,
+                )
+            await show_screen(
+                q,
+                context,
+                "Хочешь получать напоминания?",
+                reminder_prompt_kb(),
+                user_id,
+            )
             return
         if data.startswith("wiz:daymode:"):
             parts = data.split(":")
@@ -6861,14 +6978,29 @@ async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAUL
             await show_screen(q, context, f"{t('DAY')} {day} сохранён. Перейти к {t('DAY')} {day + 1}?", day_done_kb(day), user_id)
             return
         if data == "wiz:reminders:yes":
+            from_settings = context.user_data.get("from_settings")
+            if not from_settings and chat_id is not None:
+                menu_text, menu_kb, prefs = await compose_main_menu(user_id)
+                prepared_text, prepared_markup = prepare_ui_output(
+                    menu_text, menu_kb, prefs
+                )
+                await send_main_message_fresh(
+                    context.bot,
+                    chat_id,
+                    prepared_text,
+                    reply_markup=prepared_markup,
+                )
             skip_tz = context.user_data.pop("reminder_skip_tz", None)
+            tz_code = context.user_data.get("tz")
+            if not tz_code:
+                tz_code = await get_user_timezone(user_id)
+                context.user_data["tz"] = tz_code
+            if not skip_tz and tz_code and tz_code != "UTC":
+                skip_tz = True
             if skip_tz:
-                tz_code = context.user_data.get("tz")
-                if not tz_code:
-                    tz_code = await get_user_timezone(user_id)
-                    context.user_data["tz"] = tz_code
                 context.user_data[REMINDER_TIME_PAGE_KEY] = 0
-                day_no = context.user_data.get("reminder_day", 1)
+                day_no = context.user_data.get("reminder_day") or 1
+                context.user_data["reminder_day"] = day_no
                 await show_screen(
                     q,
                     context,
@@ -6879,21 +7011,65 @@ async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAUL
                 return
             context.user_data.pop(REMINDER_TIME_PAGE_KEY, None)
             context.user_data["tz_page"] = 0
+            context.user_data["reminder_day"] = 1
+            if not from_settings:
+                context.user_data["wizard_onboarding_tz"] = "reminders"
             if "workouts_per_week" not in context.user_data:
                 settings = await fetch_user_settings(user_id)
                 context.user_data["workouts_per_week"] = settings[1] if settings else 0
-            await show_screen(q, context, 'Выбери свой часовой пояс:', tz_select_kb(0), user_id)
+            await show_screen(
+                q,
+                context,
+                "Выбери свой часовой пояс:",
+                tz_select_kb(0),
+                user_id,
+            )
             return
         if data == "wiz:reminders:no":
-            context.user_data.pop("reminder_skip_tz", None)
-            context.user_data.pop(REMINDER_TIME_PAGE_KEY, None)
             if context.user_data.get("from_settings"):
                 context.user_data.pop("from_settings", None)
+                context.user_data.pop("reminder_skip_tz", None)
+                context.user_data.pop(REMINDER_TIME_PAGE_KEY, None)
                 kb = await build_settings_keyboard_for_user(context, user_id)
                 await show_screen(q, context, 'Настройки:', kb, user_id)
+                return
+            if chat_id is not None:
+                menu_text, menu_kb, prefs = await compose_main_menu(user_id)
+                prepared_text, prepared_markup = prepare_ui_output(
+                    menu_text, menu_kb, prefs
+                )
+                await send_main_message_fresh(
+                    context.bot,
+                    chat_id,
+                    prepared_text,
+                    reply_markup=prepared_markup,
+                )
+            context.user_data.pop("reminder_skip_tz", None)
+            context.user_data.pop(REMINDER_TIME_PAGE_KEY, None)
+            tz_code = context.user_data.get("tz")
+            if not tz_code:
+                tz_code = await get_user_timezone(user_id)
+                context.user_data["tz"] = tz_code
+            needs_tz = not tz_code or tz_code == "UTC"
+            if needs_tz:
+                context.user_data["tz_page"] = 0
+                context.user_data["wizard_onboarding_tz"] = "final"
+                await show_screen(
+                    q,
+                    context,
+                    "Выбери свой часовой пояс:",
+                    tz_select_kb(0),
+                    user_id,
+                )
             else:
-                _, menu_kb, _ = await compose_main_menu(user_id)
-                await show_screen(q, context, 'Настройка завершена.', menu_kb, user_id)
+                context.user_data.pop("wizard_onboarding", None)
+                await show_screen(
+                    q,
+                    context,
+                    "Настройка завершена. Напоминания можно включить позже в настройках.",
+                    None,
+                    user_id,
+                )
             return
         if data == "wiz:reminders:back":
             context.user_data.pop("reminder_skip_tz", None)
@@ -6917,6 +7093,18 @@ async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAUL
                 tz = parts[3]
                 context.user_data["tz"] = tz
                 await set_user_timezone(user_id, tz)
+                mode = context.user_data.pop("wizard_onboarding_tz", None)
+                if mode and chat_id is not None:
+                    menu_text, menu_kb, prefs = await compose_main_menu(user_id)
+                    prepared_text, prepared_markup = prepare_ui_output(
+                        menu_text, menu_kb, prefs
+                    )
+                    await send_main_message_fresh(
+                        context.bot,
+                        chat_id,
+                        prepared_text,
+                        reply_markup=prepared_markup,
+                    )
                 day_no = context.user_data.get("reminder_day", 1)
                 tz_only_change = context.user_data.pop("tz_only_change", None)
                 if tz_only_change:
@@ -6932,6 +7120,15 @@ async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAUL
                     else:
                         text = f"Часовой пояс обновлён: {tz_label}. Напоминания пока не настроены."
                     await show_screen(q, context, text, reminders_edit_kb(), user_id)
+                elif mode == "final":
+                    context.user_data.pop("wizard_onboarding", None)
+                    await show_screen(
+                        q,
+                        context,
+                        "Часовой пояс сохранён. Основные настройки завершены.",
+                        None,
+                        user_id,
+                    )
                 else:
                     context.user_data["reminder_day"] = day_no
                     await show_screen(
@@ -7038,12 +7235,29 @@ async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAUL
                 kb = await build_settings_keyboard_for_user(context, user_id)
                 await show_screen(q, context, 'Настройки:', kb, user_id)
             else:
-                _, menu_kb, _ = await compose_main_menu(user_id)
-                await show_screen(q, context, 'Настройка завершена.', menu_kb, user_id)
+                menu_text, menu_kb, prefs = await compose_main_menu(user_id)
+                prepared_text, prepared_markup = prepare_ui_output(
+                    menu_text, menu_kb, prefs
+                )
+                if chat_id is not None:
+                    await send_main_message_fresh(
+                        context.bot,
+                        chat_id,
+                        prepared_text,
+                        reply_markup=prepared_markup,
+                    )
+                context.user_data.pop("wizard_onboarding", None)
+                await show_screen(
+                    q,
+                    context,
+                    'Настройка завершена.',
+                    menu_kb,
+                    user_id,
+                )
             return
     finally:
         message = getattr(q, "message", None)
-        if message:
+        if message and not onboarding:
             chat = getattr(message, "chat", None)
             chat_id = getattr(chat, "id", None) if chat else getattr(message, "chat_id", None)
             remember_message(chat_id, getattr(message, "message_id", None))
@@ -7138,6 +7352,32 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         target = context.user_data.get(TRAINER_SETTINGS_MESSAGE_KEY)
         await refresh_trainee_trainer_settings_message(
             context, user_id, target if isinstance(target, tuple) else None
+        )
+        return
+    trainee_label_input = context.user_data.get(TRAINER_TRAINEE_LABEL_INPUT_KEY)
+    if trainee_label_input:
+        if not update.message or update.message.text is None:
+            return
+        try:
+            link_id = int(trainee_label_input)
+        except (TypeError, ValueError):
+            context.user_data.pop(TRAINER_TRAINEE_LABEL_INPUT_KEY, None)
+            return
+        new_label = normalize_whitespace(update.message.text)
+        if not new_label:
+            new_label = None
+        context.user_data.pop(TRAINER_TRAINEE_LABEL_INPUT_KEY, None)
+        await try_delete(update.message)
+        await update_trainer_label(link_id, new_label)
+        acting_id = context.user_data.get("acting_user_id")
+        if not isinstance(acting_id, int):
+            return
+        target = context.user_data.get(TRAINER_TRAINEE_SETTINGS_MESSAGE_KEY)
+        await refresh_trainer_manage_trainee_message(
+            context,
+            actor_user_id,
+            acting_id,
+            target if isinstance(target, tuple) else None,
         )
         return
     for_time_state = context.user_data.get(FOR_TIME_INPUT_KEY)
@@ -7795,12 +8035,32 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             action = parts[1]
             trainee_actions = {"settings", "allow", "label", "detach"}
             if action in trainee_actions:
+                acting_id = context.user_data.get("acting_user_id")
                 if action == "settings":
                     context.user_data.pop(TRAINER_LABEL_INPUT_KEY, None)
                     await show_trainee_trainer_settings(q, context, target_user_id)
                     return
                 if action == "allow" and len(parts) >= 3:
                     desired = parts[2]
+                    if acting_id:
+                        link = await get_trainer_link(actor_user_id, acting_id)
+                        if not link or str(link[1]) != "accepted":
+                            await q.answer("Связь недоступна.", show_alert=True)
+                            return
+                        link_id = int(link[0])
+                        new_value = 1 if desired == "on" else 0
+                        await update_trainer_link_permissions(link_id, new_value)
+                        context.user_data["acting_can_edit"] = bool(new_value)
+                        target_key = context.user_data.get(
+                            TRAINER_TRAINEE_SETTINGS_MESSAGE_KEY
+                        )
+                        await refresh_trainer_manage_trainee_message(
+                            context,
+                            actor_user_id,
+                            acting_id,
+                            target_key if isinstance(target_key, tuple) else None,
+                        )
+                        return
                     link = await get_active_trainer_link_for_trainee(target_user_id)
                     if not link:
                         await show_trainee_trainer_settings(q, context, target_user_id)
@@ -7813,6 +8073,37 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 if action == "label" and len(parts) >= 3:
                     sub_action = parts[2]
                     if sub_action == "set":
+                        if acting_id:
+                            link = await get_trainer_link(actor_user_id, acting_id)
+                            if not link or str(link[1]) != "accepted":
+                                await q.answer("Связь недоступна.", show_alert=True)
+                                return
+                            link_id = int(link[0])
+                            context.user_data[TRAINER_TRAINEE_LABEL_INPUT_KEY] = link_id
+                            message = await show_screen(
+                                q,
+                                context,
+                                "Отправь подпись для подопечного одним сообщением.",
+                                InlineKeyboardMarkup(
+                                    [
+                                        [
+                                            InlineKeyboardButton(
+                                                "⬅️ Назад",
+                                                callback_data="trainer:trainee_settings",
+                                            )
+                                        ]
+                                    ]
+                                ),
+                                acting_id,
+                            )
+                            if message:
+                                context.user_data[
+                                    TRAINER_TRAINEE_SETTINGS_MESSAGE_KEY
+                                ] = (
+                                    getattr(message, "chat_id", None),
+                                    getattr(message, "message_id", None),
+                                )
+                            return
                         link = await get_active_trainer_link_for_trainee(target_user_id)
                         if not link:
                             await show_trainee_trainer_settings(q, context, target_user_id)
@@ -7842,6 +8133,23 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             )
                     return
                 if action == "detach":
+                    if acting_id:
+                        link = await get_trainer_link(actor_user_id, acting_id)
+                        if not link or str(link[1]) != "accepted":
+                            await q.answer("Связь недоступна.", show_alert=True)
+                            return
+                        await update_trainer_link_status(int(link[0]), "removed")
+                        context.user_data.pop("acting_user_id", None)
+                        context.user_data.pop("acting_can_edit", None)
+                        context.user_data.pop(TRAINER_TRAINEE_SETTINGS_MESSAGE_KEY, None)
+                        context.user_data.pop(TRAINER_TRAINEE_LABEL_INPUT_KEY, None)
+                        await _render_trainer_overview(
+                            q,
+                            context,
+                            actor_user_id,
+                            message="Подопечный удалён.",
+                        )
+                        return
                     link = await get_active_trainer_link_for_trainee(target_user_id)
                     if not link:
                         await show_trainee_trainer_settings(q, context, target_user_id)
@@ -7860,11 +8168,29 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if not profile or not profile[0]:
                 await q.answer("Недоступно.", show_alert=True)
                 return
+            if action == "trainee" and len(parts) >= 3:
+                sub_action = parts[2]
+                acting_id = context.user_data.get("acting_user_id")
+                if sub_action == "menu" and acting_id:
+                    context.user_data.pop(TRAINER_TRAINEE_SETTINGS_MESSAGE_KEY, None)
+                    context.user_data.pop(TRAINER_TRAINEE_LABEL_INPUT_KEY, None)
+                    await show_trainer_acting_menu(q, context, actor_user_id, acting_id)
+                return
+            if action == "trainee_settings":
+                acting_id = context.user_data.get("acting_user_id")
+                if not acting_id:
+                    await q.answer("Недоступно.", show_alert=True)
+                    return
+                context.user_data.pop(TRAINER_TRAINEE_LABEL_INPUT_KEY, None)
+                await show_trainer_manage_trainee(q, context, actor_user_id, acting_id)
+                return
             if action == "list":
                 if context.user_data.get("acting_user_id"):
                     context.user_data.pop("acting_user_id", None)
                     context.user_data.pop("acting_can_edit", None)
                     context.user_data.pop(TRAINER_SETTINGS_MESSAGE_KEY, None)
+                    context.user_data.pop(TRAINER_TRAINEE_SETTINGS_MESSAGE_KEY, None)
+                    context.user_data.pop(TRAINER_TRAINEE_LABEL_INPUT_KEY, None)
                 if len(parts) == 2:
                     await _render_trainer_overview(q, context, actor_user_id)
                     return
@@ -7970,19 +8296,9 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 context.user_data["acting_user_id"] = trainee_id
                 context.user_data["acting_can_edit"] = bool(link[2])
                 context.user_data.pop(TRAINER_SETTINGS_MESSAGE_KEY, None)
-                extra_rows = [
-                    [
-                        InlineKeyboardButton(
-                            "⬅️ К списку подопечных", callback_data="trainer:list"
-                        )
-                    ]
-                ]
-                text, kb, _ = await compose_main_menu(
-                    trainee_id,
-                    show_support=False,
-                    extra_rows=extra_rows,
-                )
-                await show_screen(q, context, text, kb, trainee_id)
+                context.user_data.pop(TRAINER_TRAINEE_SETTINGS_MESSAGE_KEY, None)
+                context.user_data.pop(TRAINER_TRAINEE_LABEL_INPUT_KEY, None)
+                await show_trainer_acting_menu(q, context, actor_user_id, trainee_id)
                 return
 
         if data.startswith("ib:"):
