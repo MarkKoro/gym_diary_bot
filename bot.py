@@ -2504,12 +2504,81 @@ class FillEditorState:
     sheet_day: int | None
     sheet_page: int
     selected_before: int | None
-    sets: list[dict[str, float]] = field(default_factory=list)
+    sets: list[dict[str, int | float | None]] = field(default_factory=list)
     pointer: int = 0
     default_reps: int = 0
     default_seconds: int = 0
     default_weight: float = 0.0
     first_time: bool = False
+    can_set_seconds: bool = False
+    can_set_weight: bool = False
+
+
+def _coerce_fill_reps(value: object) -> int:
+    return max(_safe_int(value), 0)
+
+
+def _coerce_optional_seconds(value: object | None) -> int | None:
+    if value is None:
+        return None
+    return max(_safe_int(value), 0)
+
+
+def _coerce_optional_weight(value: object | None) -> float | None:
+    if value is None:
+        return None
+    return max(_safe_float(value), 0.0)
+
+
+def _build_fill_set_entry(
+    reps: object,
+    *,
+    include_seconds: bool,
+    seconds: object | None = None,
+    include_weight: bool,
+    weight: object | None = None,
+) -> dict[str, int | float | None]:
+    return {
+        "reps": _coerce_fill_reps(reps),
+        "seconds": None
+        if not include_seconds
+        else _coerce_optional_seconds(seconds),
+        "weight": None
+        if not include_weight
+        else _coerce_optional_weight(weight),
+    }
+
+
+def _default_optional_seconds(state: FillEditorState) -> int | None:
+    if not state.can_set_seconds:
+        return None
+    if state.default_seconds <= 0:
+        return None
+    return max(_safe_int(state.default_seconds), 0)
+
+
+def _default_optional_weight(state: FillEditorState) -> float | None:
+    if not state.can_set_weight:
+        return None
+    if state.default_weight <= 0:
+        return None
+    return max(_safe_float(state.default_weight), 0.0)
+
+
+def _create_fill_set_entry(
+    state: FillEditorState,
+    *,
+    reps: object,
+    seconds: object | None = None,
+    weight: object | None = None,
+) -> dict[str, int | float | None]:
+    return _build_fill_set_entry(
+        reps,
+        include_seconds=state.can_set_seconds,
+        seconds=seconds,
+        include_weight=state.can_set_weight,
+        weight=weight,
+    )
 
 
 def render_instant_baseline(
@@ -2787,24 +2856,25 @@ def _build_flex_fill_keyboard(state: FillEditorState) -> InlineKeyboardMarkup:
                 ),
             ]
         )
-    sec_steps = [60, 30, 10, 5, 1] if state.first_time else [30, 5, 1]
-    rows.append(
-        [
-            InlineKeyboardButton(
-                f"＋{step} сек", callback_data=f"fill:flex:inc:sec:{step}"
-            )
-            for step in sec_steps
-        ]
-    )
-    rows.append(
-        [
-            InlineKeyboardButton(
-                f"−{step} сек", callback_data=f"fill:flex:inc:sec:-{step}"
-            )
-            for step in sec_steps
-        ]
-    )
-    if state.with_weight:
+    if state.can_set_seconds:
+        sec_steps = [60, 30, 10, 5, 1] if state.first_time else [30, 5, 1]
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    f"＋{step} сек", callback_data=f"fill:flex:inc:sec:{step}"
+                )
+                for step in sec_steps
+            ]
+        )
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    f"−{step} сек", callback_data=f"fill:flex:inc:sec:-{step}"
+                )
+                for step in sec_steps
+            ]
+        )
+    if state.can_set_weight:
         weight_steps = (
             [0.5, 1, 3, 5, 10, 25, 50]
             if state.first_time
@@ -2875,14 +2945,27 @@ async def apply_fill_changes(
 ):
     today_str = await get_user_local_date(user_id)
     session_id = await get_or_create_today_session(user_id, today_str, state.day)
-    template = [
-        (
-            max(_safe_int(item.get("reps")), 0),
-            max(_safe_int(item.get("seconds")), 0),
-            max(_safe_float(item.get("weight")), 0.0) if state.with_weight else 0.0,
+    template: list[tuple[int, int | None, float | None]] = []
+    for item in state.sets:
+        reps_value = _coerce_fill_reps(item.get("reps"))
+        seconds_value = (
+            _coerce_optional_seconds(item.get("seconds"))
+            if state.can_set_seconds
+            else None
         )
-        for item in state.sets
-    ]
+        weight_value = (
+            _coerce_optional_weight(item.get("weight"))
+            if state.can_set_weight
+            else None
+        )
+        has_payload = (
+            reps_value > 0
+            or (seconds_value is not None and seconds_value > 0)
+            or (weight_value is not None and weight_value > 0)
+        )
+        if not has_payload:
+            continue
+        template.append((reps_value, seconds_value, weight_value))
     await apply_sets_template(session_id, state.ue_id, template)
     if template:
         sets = await fetch_exercise_sets(session_id, state.ue_id)
@@ -2920,6 +3003,8 @@ async def open_fill_editor(
     default_reps = 0
     default_seconds = 0
     default_weight = 0.0
+    can_set_seconds = kind == "duration"
+    can_set_weight = weight_enabled
     if baseline:
         default_reps = max(_safe_int(baseline[1]), 0)
         default_seconds = max(_safe_int(baseline[2]), 0)
@@ -2931,33 +3016,53 @@ async def open_fill_editor(
         if weight_enabled:
             default_weight = max(_safe_float(last_values[2]), 0.0)
 
-    sets_payload: list[dict[str, float]] = [
-        {
-            "reps": max(_safe_int(reps), 0),
-            "seconds": max(_safe_int(seconds), 0),
-            "weight": max(_safe_float(weight), 0.0) if weight_enabled else 0.0,
-        }
+    sets_payload: list[dict[str, int | float | None]] = [
+        _build_fill_set_entry(
+            reps,
+            include_seconds=can_set_seconds,
+            seconds=seconds if can_set_seconds else None,
+            include_weight=can_set_weight,
+            weight=weight if can_set_weight else None,
+        )
         for _, reps, seconds, weight in work_sets
     ]
     if not sets_payload:
         if baseline and baseline[0] > 0:
             sets_payload = [
-                {
-                    "reps": max(_safe_int(baseline[1]), 0),
-                    "seconds": max(_safe_int(baseline[2]), 0),
-                    "weight": max(_safe_float(baseline[3]), 0.0)
-                    if weight_enabled
-                    else 0.0,
-                }
+                _build_fill_set_entry(
+                    baseline[1],
+                    include_seconds=can_set_seconds,
+                    seconds=
+                    baseline[2]
+                    if can_set_seconds and max(_safe_int(baseline[2]), 0) > 0
+                    else None,
+                    include_weight=can_set_weight,
+                    weight=
+                    baseline[3]
+                    if can_set_weight and max(_safe_float(baseline[3]), 0.0) > 0
+                    else None,
+                )
                 for _ in range(baseline[0])
             ]
-        elif default_reps or default_weight:
+        elif (
+            default_reps
+            or (can_set_seconds and default_seconds > 0)
+            or (can_set_weight and default_weight > 0)
+        ):
             sets_payload = [
-                {
-                    "reps": default_reps,
-                    "seconds": default_seconds,
-                    "weight": default_weight if weight_enabled else 0.0,
-                }
+                _build_fill_set_entry(
+                    default_reps,
+                    include_seconds=can_set_seconds,
+                    seconds=
+                    default_seconds
+                    if can_set_seconds and default_seconds > 0
+                    else None,
+                    include_weight=can_set_weight,
+                    weight=
+                    default_weight
+                    if can_set_weight and default_weight > 0
+                    else None,
+                )
             ]
     pointer = 0
     if sets_payload and selected_before:
@@ -2979,6 +3084,8 @@ async def open_fill_editor(
         default_seconds=default_seconds,
         default_weight=default_weight if weight_enabled else 0.0,
         first_time=first_time,
+        can_set_seconds=can_set_seconds,
+        can_set_weight=can_set_weight,
     )
     clear_fill_state(context, q.message.chat_id, q.message.message_id)
     set_fill_state(context, q.message.chat_id, q.message.message_id, state)
@@ -3007,31 +3114,24 @@ async def handle_fill_callback(
         delta = int(parts[3])
         state.pointer = max(0, min(state.pointer + delta, len(state.sets) - 1))
     elif action == "add":
-        base_reps = (
-            _safe_int(state.sets[state.pointer]["reps"])
-            if state.sets
-            else state.default_reps
-        )
-        base_seconds = (
-            _safe_int(state.sets[state.pointer].get("seconds", state.default_seconds))
-            if state.sets
-            else state.default_seconds
-        )
-        base_weight = (
-            _safe_float(state.sets[state.pointer]["weight"])
-            if state.sets
-            else state.default_weight
-        )
+        if state.sets:
+            current_item = state.sets[state.pointer]
+            base_reps = current_item.get("reps")
+            base_seconds = current_item.get("seconds")
+            base_weight = current_item.get("weight")
+        else:
+            base_reps = state.default_reps
+            base_seconds = _default_optional_seconds(state)
+            base_weight = _default_optional_weight(state)
         insert_at = state.pointer + 1 if state.sets else 0
         state.sets.insert(
             insert_at,
-            {
-                "reps": max(_safe_int(base_reps), 0),
-                "seconds": max(_safe_int(base_seconds), 0),
-                "weight": max(_safe_float(base_weight), 0.0)
-                if state.with_weight
-                else 0.0,
-            },
+            _create_fill_set_entry(
+                state,
+                reps=base_reps,
+                seconds=base_seconds,
+                weight=base_weight,
+            ),
         )
         state.pointer = insert_at
     elif action == "del" and state.sets:
@@ -3043,25 +3143,26 @@ async def handle_fill_callback(
         delta = float(parts[4])
         if not state.sets:
             state.sets.append(
-                {
-                    "reps": max(_safe_int(state.default_reps), 0),
-                    "seconds": max(_safe_int(state.default_seconds), 0),
-                    "weight": max(_safe_float(state.default_weight), 0.0)
-                    if state.with_weight
-                    else 0.0,
-                }
+                _create_fill_set_entry(
+                    state,
+                    reps=state.default_reps,
+                    seconds=_default_optional_seconds(state),
+                    weight=_default_optional_weight(state),
+                )
             )
             state.pointer = 0
         current = state.sets[state.pointer]
         if target == "reps":
             current_reps = _safe_int(current.get("reps"))
             current["reps"] = max(0, current_reps + int(delta))
-        elif target == "sec":
+        elif target == "sec" and state.can_set_seconds:
             current_seconds = _safe_int(current.get("seconds"))
-            current["seconds"] = max(0, current_seconds + int(delta))
-        elif target == "kg" and state.with_weight:
+            new_seconds = max(0, current_seconds + int(delta))
+            current["seconds"] = new_seconds if new_seconds > 0 else None
+        elif target == "kg" and state.can_set_weight:
             current_weight = _safe_float(current.get("weight"))
-            current["weight"] = max(0.0, current_weight + delta)
+            new_weight = max(0.0, current_weight + delta)
+            current["weight"] = new_weight if new_weight > 0 else None
     elif action == "apply":
         await apply_fill_changes(q, context, user_id, state, prefs)
         return
