@@ -1381,9 +1381,10 @@ async def add_user_reminder(
 ):
     if dow is None:
         raise ValueError("dow must be provided for reminder")
-    dow = normalize_dow(dow)
-    if not 0 <= dow <= 6:
+    converted_dow = int(dow)
+    if not 0 <= converted_dow <= 6:
         raise ValueError("dow must be between 0 and 6")
+    dow = converted_dow
 
     async with connect_db() as db:
         if day_no is None:
