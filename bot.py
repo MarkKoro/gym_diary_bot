@@ -1456,6 +1456,29 @@ async def ensure_can_edit_from_message(
     return True
 
 
+async def resolve_target_user_id(
+    context: ContextTypes.DEFAULT_TYPE, actor_user_id: int
+) -> int:
+    acting_id = context.user_data.get("acting_user_id")
+    if acting_id is None:
+        context.user_data.pop("acting_can_edit", None)
+        return actor_user_id
+    try:
+        acting_id_int = int(acting_id)
+    except (TypeError, ValueError):
+        context.user_data.pop("acting_user_id", None)
+        context.user_data.pop("acting_can_edit", None)
+        return actor_user_id
+    link = await get_trainer_link(actor_user_id, acting_id_int)
+    if link and str(link[3]) == "accepted":
+        context.user_data["acting_user_id"] = acting_id_int
+        context.user_data["acting_can_edit"] = bool(link[4])
+        return acting_id_int
+    context.user_data.pop("acting_user_id", None)
+    context.user_data.pop("acting_can_edit", None)
+    return actor_user_id
+
+
 async def _fetch_trainer_profile(user_id: int) -> tuple[int, str | None] | None:
     async with connect_db() as db:
         cur = await db.execute(
@@ -7974,25 +7997,16 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if data.startswith("broadcast:"):
             preserve_keys = {BROADCAST_STATE_KEY}
         clear_linear_state(context.user_data, preserve_keys)
+        user = update.effective_user
+        if user is None:
+            return
+        actor_user_id = await get_or_create_user(user.id, user.username)
+        target_user_id = await resolve_target_user_id(context, actor_user_id)
         if data == MAIL_RETURN_CALLBACK:
             chat = getattr(q, "message", None)
             chat_id = getattr(chat, "chat_id", None)
-            user = update.effective_user
-            if chat_id is None or user is None:
+            if chat_id is None:
                 return
-            actor_user_id = await get_or_create_user(user.id, user.username)
-            target_user_id = actor_user_id
-            acting_id = context.user_data.get("acting_user_id")
-            if acting_id:
-                link = await get_trainer_link(actor_user_id, acting_id)
-                if link and str(link[3]) == "accepted":
-                    target_user_id = acting_id
-                    context.user_data["acting_can_edit"] = bool(link[4])
-                else:
-                    context.user_data.pop("acting_user_id", None)
-                    context.user_data.pop("acting_can_edit", None)
-            else:
-                context.user_data.pop("acting_can_edit", None)
             text, kb, _ = await compose_main_menu(target_user_id)
             await send_main_message_fresh(
                 context.bot,
@@ -8002,7 +8016,6 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
         if data.startswith("broadcast:"):
-            user = update.effective_user
             if user and user.id in ADMIN_IDS:
                 await handle_broadcast_callback(q, context)
             else:
@@ -8012,20 +8025,6 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         if data == "noop":
             return
-        u = update.effective_user
-        actor_user_id = await get_or_create_user(u.id, u.username)
-        target_user_id = actor_user_id
-        acting_id = context.user_data.get("acting_user_id")
-        if acting_id:
-            link = await get_trainer_link(actor_user_id, acting_id)
-            if link and str(link[3]) == "accepted":
-                target_user_id = acting_id
-                context.user_data["acting_can_edit"] = bool(link[4])
-            else:
-                context.user_data.pop("acting_user_id", None)
-                context.user_data.pop("acting_can_edit", None)
-        else:
-            context.user_data.pop("acting_can_edit", None)
         remember_message(q.message.chat_id, q.message.message_id)
 
         if data.startswith("trainer:"):
