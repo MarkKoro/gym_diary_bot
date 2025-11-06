@@ -5637,9 +5637,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         prompt_text, prompt_kb = prepare_ui_output(prompt, kb, prefs)
         chat = update.effective_chat
         context.user_data["wizard_onboarding"] = True
+        intro_text, _ = prepare_ui_output(t("ONBOARDING_INTRO"), None, prefs)
         if chat is not None:
+            await context.bot.send_message(chat.id, intro_text)
             await context.bot.send_message(chat.id, prompt_text, reply_markup=prompt_kb)
         elif update.message:
+            await update.message.reply_text(intro_text)
             await update.message.reply_text(prompt_text, reply_markup=prompt_kb)
         return
     text, kb, prefs = await compose_main_menu(user_id, prefs)
