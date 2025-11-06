@@ -134,6 +134,30 @@ class ReminderTests(unittest.IsolatedAsyncioTestCase):
         for job in stored_jobs:
             self.assertTrue(job.removed)
 
+    async def test_schedule_all_reminders_skips_disabled_users(self):
+        user_id = await db.get_or_create_user(9500, "disabled-user")
+        await db.add_user_reminder(
+            user_id,
+            dow=5,
+            hour=9,
+            minute=0,
+            day_no=1,
+        )
+        await db.set_user_notifications_enabled(user_id, False)
+
+        queue = FakeJobQueue()
+        job_name = f"rem_{user_id}_1_5"
+        queue.jobs_by_name[job_name] = [FakeJob(job_name)]
+        app = SimpleNamespace(job_queue=queue)
+
+        await bot.schedule_all_reminders(app)
+
+        self.assertFalse(queue.created_jobs)
+        stored_jobs = queue.jobs_by_name.get(job_name, [])
+        self.assertTrue(stored_jobs)
+        for job in stored_jobs:
+            self.assertTrue(job.removed)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -794,8 +794,21 @@ def reminder_prompt_kb():
     )
 
 
-def reminders_edit_kb():
-    return InlineKeyboardMarkup([
+def reminders_edit_kb(enabled: bool):
+    toggle_state = "off" if enabled else "on"
+    toggle_label = dual(
+        f"Уведомления: {'Вкл' if enabled else 'Выкл'}",
+        "Отключить все напоминания, не изменяя расписание"
+        if enabled
+        else "Включить напоминания по сохранённому расписанию",
+    )
+    rows = [
+        [
+            InlineKeyboardButton(
+                toggle_label,
+                callback_data=f"set:reminders:toggle:{toggle_state}",
+            )
+        ],
         [
             InlineKeyboardButton(
                 dual("Изменить часовой пояс", "Настроить часовой пояс напоминаний"),
@@ -809,7 +822,8 @@ def reminders_edit_kb():
             )
         ],
         [InlineKeyboardButton(BACK_BTN, callback_data="menu:settings")],
-    ])
+    ]
+    return InlineKeyboardMarkup(rows)
 
 
 def reminders_schedule_kb(entries: list[tuple[int, str]]):
