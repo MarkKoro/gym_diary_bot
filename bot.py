@@ -7180,7 +7180,15 @@ async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAUL
                 page = context.user_data.get("tz_page", 0)
                 await show_screen(q, context, 'Выбери свой часовой пояс:', tz_select_kb(page), user_id)
             else:
-                context.user_data["selected_dow"] = action
+                try:
+                    selected_dow = int(action) - 1
+                except ValueError:
+                    await q.answer()
+                    return
+                if not 0 <= selected_dow <= 6:
+                    await q.answer()
+                    return
+                context.user_data["selected_dow"] = selected_dow
                 context.user_data[REMINDER_TIME_PAGE_KEY] = 0
                 tz_code = context.user_data.get("tz")
                 if not tz_code:
@@ -7225,13 +7233,22 @@ async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAUL
                 return
             _, _, hh, mm = parts[:4]
             hour, minute = int(hh), int(mm)
-            dow_iso = context.user_data.get("selected_dow")
-            if dow_iso is None:
+            dow_value = context.user_data.get("selected_dow")
+            if dow_value is None:
                 await q.answer("Сначала выбери день недели.", show_alert=True)
                 return
-            dow = int(dow_iso)
+            try:
+                dow = int(dow_value)
+            except (TypeError, ValueError):
+                await q.answer("Не удалось определить день недели.", show_alert=True)
+                return
+            if not 0 <= dow <= 6:
+                await q.answer("Не удалось определить день недели.", show_alert=True)
+                return
             day_no = context.user_data.get("reminder_day", 1)
-            await add_user_reminder(user_id, dow, hour, minute, day_no=day_no)
+            if not await add_user_reminder(user_id, dow, hour, minute, day_no=day_no):
+                await q.answer("Не удалось сохранить напоминание.", show_alert=True)
+                return
             tz = context.user_data.get("tz", "UTC")
             zone = resolve_user_zone(tz)
             reminder_time = time(hour, minute, tzinfo=zone)
@@ -9885,9 +9902,8 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     await show_reminders_overview(q, context, target_user_id)
                     return
                 if len(parts) >= 5 and parts[-1] == "back":
-                    try:
-                        dow_iso = parts[3]
-                    except ValueError:
+                    dow_iso = parts[3] if len(parts) > 3 else None
+                    if dow_iso is None:
                         dow_iso = context.user_data.get(REMINDER_SELECTED_DOW_KEY)
                     context.user_data[REMINDER_SELECTED_DOW_KEY] = dow_iso
                     context.user_data.pop(REMINDER_TIME_PAGE_KEY, None)
@@ -9897,13 +9913,16 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     )
                     tz_code = await get_user_timezone(target_user_id)
                     tz_label = get_timezone_label(tz_code)
+                    selected_dow = None
+                    try:
+                        iso_value = int(dow_iso) if dow_iso is not None else None
+                    except (TypeError, ValueError):
+                        iso_value = None
+                    if iso_value is not None and 1 <= iso_value <= 7:
+                        selected_dow = iso_value - 1
                     kb = reminder_day_kb(
                         prefix=f"remedit:dow:{position}",
-                        selected=(
-                            normalize_dow(dow_iso)
-                            if dow_iso is not None
-                            else None
-                        ),
+                        selected=selected_dow,
                     )
                     await show_screen(
                         q,
@@ -9960,13 +9979,21 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     await show_reminders_overview(q, context, target_user_id)
                     return
                 try:
-                    dow_iso = parts[3]
+                    dow_iso_raw = parts[3]
                     hour = int(parts[4])
                     minute = int(parts[5])
                 except ValueError:
                     await show_reminders_overview(q, context, target_user_id)
                     return
-                dow = int(dow_iso)
+                try:
+                    dow_iso = int(dow_iso_raw)
+                except (TypeError, ValueError):
+                    await show_reminders_overview(q, context, target_user_id)
+                    return
+                if not 1 <= dow_iso <= 7:
+                    await show_reminders_overview(q, context, target_user_id)
+                    return
+                dow = dow_iso - 1
                 day_index = context.user_data.get(REMINDER_EDIT_DAY_INDEX_KEY, position)
                 label = context.user_data.get(
                     REMINDER_EDIT_LABEL_KEY,
@@ -9982,9 +10009,11 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     for day_no, d, h, m in reminders
                 }
                 previous = reminder_map.get(day_index)
-                await add_user_reminder(
+                if not await add_user_reminder(
                     target_user_id, dow, hour, minute, day_no=day_index
-                )
+                ):
+                    await q.answer("Не удалось сохранить напоминание.", show_alert=True)
+                    return
                 if previous and previous[0] is not None and previous[0] >= 0:
                     _remove_reminder_jobs(
                         context.job_queue, target_user_id, day_index, int(previous[0])
@@ -10011,7 +10040,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             "dow": dow,
                         },
                     )
-                context.user_data[REMINDER_SELECTED_DOW_KEY] = dow_iso
+                context.user_data[REMINDER_SELECTED_DOW_KEY] = str(dow_iso)
                 confirmation = format_reminder_status(label, (dow, hour, minute))
                 await q.answer(confirmation)
                 context.user_data.pop(REMINDER_TIME_PAGE_KEY, None)
@@ -10022,7 +10051,6 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if parts[0] == "day":
             action = parts[1]
             mutating_day_actions = {
-                "complete",
                 "sheetdone",
                 "groupdel",
                 "add_group",
@@ -10040,6 +10068,8 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await send_day_cards_view(q, target_user_id, day, context, prefs)
                 return
             if action == "complete":
+                if not await require_edit_allowed(q, context):
+                    return
                 day = int(parts[2])
                 _, added_new = await record_day_completion(target_user_id, day)
                 prefs = await load_ui_preferences(target_user_id)

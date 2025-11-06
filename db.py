@@ -1378,12 +1378,13 @@ async def get_user_timezone(user_id: int):
 
 async def add_user_reminder(
     user_id: int, dow: int, hour: int, minute: int, day_no: int | None = None
-):
-    if dow is None:
-        raise ValueError("dow must be provided for reminder")
-    converted_dow = int(dow)
+) -> bool:
+    try:
+        converted_dow = int(dow)
+    except (TypeError, ValueError):
+        return False
     if not 0 <= converted_dow <= 6:
-        raise ValueError("dow must be between 0 and 6")
+        return False
     dow = converted_dow
 
     async with connect_db() as db:
@@ -1403,6 +1404,7 @@ async def add_user_reminder(
             (user_id, day_no, dow, hour, minute),
         )
         await db.commit()
+    return True
 
 
 async def list_user_reminders(user_id: int):
