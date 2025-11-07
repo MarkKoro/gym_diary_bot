@@ -1,6 +1,7 @@
 import aiosqlite, asyncio
 import json
 from datetime import datetime, timedelta, UTC
+import secrets
 from contextlib import asynccontextmanager
 from typing import Sequence
 from settings import DB_PATH, TRIAL_DAYS, DB_POOL_SIZE
@@ -617,12 +618,50 @@ async def init_db():
         await _seed_exercises(db, WORKOUT_EXERCISES, update_group=False)
         await db.commit()
 
+async def _generate_trainer_code_value() -> str:
+    return "TR-" + secrets.token_hex(3).upper()
+
+
+async def _generate_unique_trainer_code(db) -> str:
+    while True:
+        candidate = _generate_trainer_code_value()
+        cur = await db.execute(
+            "SELECT 1 FROM users WHERE trainer_code = ?", (candidate,)
+        )
+        exists = await cur.fetchone()
+        if not exists:
+            return candidate
+
+
+async def _ensure_user_trainer_code(db, user_id: int) -> str:
+    cur = await db.execute(
+        "SELECT trainer_code FROM users WHERE id=?",
+        (user_id,),
+    )
+    row = await cur.fetchone()
+    if row and row[0]:
+        return row[0]
+    code = await _generate_unique_trainer_code(db)
+    await db.execute(
+        "UPDATE users SET trainer_code = ? WHERE id=?",
+        (code, user_id),
+    )
+    await db.commit()
+    return code
+
+
 async def get_or_create_user(tg_id: int, username: str|None):
     async with connect_db() as db:
-        cur = await db.execute("SELECT id, trial_until FROM users WHERE tg_id=?", (tg_id,))
+        cur = await db.execute(
+            "SELECT id, trial_until, trainer_code FROM users WHERE tg_id=?",
+            (tg_id,),
+        )
         row = await cur.fetchone()
         if row:
-            return row[0]
+            user_id = row[0]
+            if not row[2]:
+                await _ensure_user_trainer_code(db, user_id)
+            return user_id
         trial_until = (datetime.now(UTC) + timedelta(days=TRIAL_DAYS)).isoformat()
         await db.execute(
             "INSERT INTO users(tg_id, username, created_at, trial_until) VALUES(?,?,?,?)",
@@ -631,7 +670,11 @@ async def get_or_create_user(tg_id: int, username: str|None):
         await db.commit()
         cur = await db.execute("SELECT id FROM users WHERE tg_id=?", (tg_id,))
         row = await cur.fetchone()
-        return row[0]
+        if not row:
+            raise RuntimeError("Failed to create user")
+        user_id = row[0]
+        await _ensure_user_trainer_code(db, user_id)
+        return user_id
 
 async def ensure_default_plan(user_id: int):
     """Демо: создаём базовый День 1 с 3 упражнениями, если у юзера ничего нет."""
@@ -2843,7 +2886,7 @@ async def create_trainer_request(
                 can_edit_plan,
                 created_at
             )
-            VALUES(?, ?, 'pending', ?, ?)
+            VALUES(?, ?, 'accepted', ?, ?)
             """,
             (
                 trainer_user_id,

@@ -316,7 +316,7 @@ def trainee_trainer_settings_kb(can_edit: bool):
         [
             InlineKeyboardButton(
                 dual("Отвязаться от тренера", "Отключить связь с тренером"),
-                callback_data="trainer:detach",
+                callback_data="trainer:detach:start",
             )
         ],
         [
@@ -358,7 +358,7 @@ def trainer_manage_trainee_kb(
                     "Открепить подопечного",
                     "Завершить совместную работу",
                 ),
-                callback_data="trainer:detach",
+                callback_data="trainer:detach:start",
             )
         ],
         [
