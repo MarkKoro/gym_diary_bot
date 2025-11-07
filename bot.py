@@ -593,49 +593,56 @@ def maybe_hint(lines: list[str], prefs: UiPreferences, text: str | tuple[str, st
         lines.append(short_text)
 
 
-def build_main_menu_text(prefs: UiPreferences) -> str:
-    lines = [f"{t('MAIN_TITLE')}:", ""]
-    lines.append("Выбирай тренировочный день или другой раздел, чтобы вести дневник.")
-    if prefs.verbose_level:
-        lines.append(
-            "Ниже — подробное описание разделов с подсказками, как работать с упражнениями."
-        )
-    else:
-        lines.append("Ниже — краткое напоминание о назначении каждого раздела.")
-    lines.append("")
-    lines.append("────────")
-    lines.append("")
-    if prefs.verbose_level:
-        lines.append(
-            "Дни тренировок — открой нужный день, чтобы отмечать подходы, настраивать упражнения и тут же видеть актуальный результат. Добавлять и убирать упражнения можно прямо из карточек."
-        )
-        lines.append("")
-        lines.append(
-            "Мои упражнения — личная библиотека с описаниями и историей. Здесь удобно уточнять технику, обновлять план и возвращаться к сохранённым схемам."
-        )
-        lines.append("")
-        lines.append(
-            "Мои замеры — сохраняй динамику тела и контрольных показателей. Последние записи отображаются списком, чтобы видеть прогресс без лишних переходов."
-        )
-        lines.append("")
-        lines.append(
-            "Настройки — измени расписание, управление напоминаниями и выбери уровень пояснений. Все подсказки в интерфейсе синхронизируются с выбранным режимом."
-        )
-        lines.append("")
-        lines.append(
-            "Техподдержка — напиши, если что-то не работает или есть вопросы. Мы ответим прямо в чате и поможем настроить дневник."
-        )
-    else:
-        lines.append("Дни тренировок — открой нужный, чтобы отметить подходы и увидеть прогресс.")
-        lines.append("")
-        lines.append("Мои упражнения — личная библиотека с описаниями и историей.")
-        lines.append("")
-        lines.append("Мои замеры — записывай изменения тела и контрольных показателей.")
-        lines.append("")
-        lines.append("Настройки — меняй расписание, напоминания и оформление.")
-        lines.append("")
-        lines.append("Техподдержка — быстро связаться с нами, если нужна помощь.")
+def build_main_menu_text(prefs: dict[str, Any] | UiPreferences | None = None) -> str:
+    _ = prefs
+    lines = [
+        "Главное меню 💪",
+        "",
+        "Выбери тренировочный день ниже, чтобы отметить сегодняшнюю тренировку.",
+    ]
     return "\n".join(lines)
+
+
+def _format_days_ago(delta_days: int) -> str:
+    if delta_days <= 0:
+        return "сегодня"
+    if delta_days == 1:
+        return "1 день назад"
+    if 2 <= delta_days <= 4:
+        return f"{delta_days} дня назад"
+    return f"{delta_days} дней назад"
+
+
+def _find_next_reminder_time(
+    reminders: list[tuple[int, object, object, object]],
+    now_local: datetime,
+    zone: ZoneInfo,
+) -> datetime | None:
+    next_dt: datetime | None = None
+    for _, dow, hour, minute in reminders:
+        if dow is None:
+            continue
+        try:
+            dow_int = int(dow)
+        except (TypeError, ValueError):
+            continue
+        try:
+            hour_int = int(hour)
+        except (TypeError, ValueError):
+            hour_int = 0
+        try:
+            minute_int = int(minute)
+        except (TypeError, ValueError):
+            minute_int = 0
+        offset = (dow_int - now_local.weekday()) % 7
+        candidate_date = now_local.date() + timedelta(days=offset)
+        candidate_time = time(hour_int, minute_int, tzinfo=zone)
+        candidate_dt = datetime.combine(candidate_date, candidate_time)
+        if candidate_dt <= now_local:
+            candidate_dt += timedelta(days=7)
+        if next_dt is None or candidate_dt < next_dt:
+            next_dt = candidate_dt
+    return next_dt
 
 
 async def build_subscription_notice(user_id: int) -> list[str]:
@@ -764,6 +771,54 @@ async def compose_main_menu(
     ]
     completions = await get_active_day_completions(user_id)
     text = build_main_menu_text(prefs)
+    stats_lines: list[str] = []
+    stats_lines.append(
+        f"Завершено тренировок на этой неделе: {len(completions)}."
+    )
+    tz_code = await get_user_timezone(user_id)
+    zone = resolve_user_zone(tz_code)
+    now_local = datetime.now(UTC).astimezone(zone)
+    last_completion = await get_last_completion_for_user(user_id)
+    if last_completion:
+        _, completed_at = last_completion
+        if completed_at:
+            try:
+                last_dt = datetime.fromisoformat(completed_at)
+            except ValueError:
+                last_dt = None
+            if last_dt is not None:
+                if last_dt.tzinfo is None:
+                    last_dt = last_dt.replace(tzinfo=UTC)
+                last_local = last_dt.astimezone(zone)
+                delta_days = (now_local.date() - last_local.date()).days
+                ago_text = _format_days_ago(max(delta_days, 0))
+                stats_lines.append(
+                    f"Последняя отмеченная тренировка: {last_local.strftime('%d.%m.%Y')} — {ago_text}."
+                )
+    notifications_enabled = await get_user_notifications_enabled(user_id)
+    if notifications_enabled:
+        next_reminder_dt = _find_next_reminder_time(reminders, now_local, zone)
+        if next_reminder_dt:
+            weekday_label = WEEKDAY_FULL_NAMES.get(
+                next_reminder_dt.weekday(),
+                next_reminder_dt.strftime("%A"),
+            )
+            stats_lines.append(
+                f"Следующая тренировка по напоминаниям: {weekday_label} {next_reminder_dt.strftime('%H:%M')}"
+            )
+    active_subscription = await get_active_subscription(user_id)
+    if active_subscription and active_subscription.get("expires_at"):
+        expires_at = active_subscription["expires_at"]
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=UTC)
+        expires_local = expires_at.astimezone(zone)
+        stats_lines.append(
+            f"Подписка активна до {expires_local.strftime('%d.%m.%Y')}."
+        )
+    else:
+        stats_lines.append("Подписка не активна.")
+    if stats_lines:
+        text = text + "\n\n" + "\n".join(stats_lines)
     if include_subscription_notice:
         notice_lines = await build_subscription_notice(user_id)
         if notice_lines:
