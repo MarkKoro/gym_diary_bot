@@ -1717,7 +1717,6 @@ async def show_trainer_root_settings(
                         "📋 Скопировать код тренера",
                         "Скопировать код тренера в буфер обмена",
                     ),
-                    callback_data="trainer:code:copy",
                     copy_text=CopyTextButton(trainer_code),
                 )
             ]
@@ -1771,7 +1770,7 @@ async def _build_become_trainee_view(
     else:
         if prompt_for_code:
             status_lines.append(
-                "Отправь код тренера одним сообщением (формат TR-XXXXX)."
+                "Пришли код тренера одним сообщением ниже (формат TR-XXXXX)."
             )
         else:
             status_lines.append(
@@ -1849,6 +1848,8 @@ async def _render_trainer_link_message(
         text, kb, _ = await build_trainee_trainer_settings_view(user_id)
         if text is None or kb is None:
             return None
+        if status_message:
+            text = f"{status_message}\n\n{text}"
         keep_prompt = False
     else:
         text, kb = await _build_become_trainee_view(
@@ -1906,7 +1907,7 @@ async def _render_trainer_link_message(
 async def build_trainee_trainer_settings_view(
     trainee_user_id: int,
 ):
-    link = await get_active_trainer_link_for_trainee(trainee_user_id)
+    link = await get_latest_trainer_link_for_trainee(trainee_user_id)
     if not link:
         lines = [
             "Статус: пока нет активной связи.",
@@ -1926,27 +1927,89 @@ async def build_trainee_trainer_settings_view(
             ]
         )
         return text, kb, None
-    _link_id, trainer_user_id, status, can_edit_plan, trainer_label, _ = link
+    link_id, trainer_user_id, status, can_edit_plan, trainer_label, _ = link
+    status_value = str(status)
+    if status_value in {"removed"}:
+        lines = [
+            "Статус: пока нет активной связи.",
+            "",
+            "Чтобы подключиться к тренеру, вернись в настройки и введи его код.",
+        ]
+        text = "\n".join(lines)
+        kb = InlineKeyboardMarkup(
+            [
+                [
+                    InlineKeyboardButton(
+                        "🤝 Стать подопечным",
+                        callback_data="set:trainer_mode:trainee",
+                    )
+                ],
+                [InlineKeyboardButton(BACK_BTN, callback_data="menu:settings")],
+            ]
+        )
+        return text, kb, None
+    if status_value in {"trainer_disabled", "inactive"}:
+        lines = [
+            "Статус: тренер отключил режим, и связь больше не активна.",
+            "",
+            "Чтобы переподключиться, попроси новый код и введи его заново.",
+        ]
+        text = "\n".join(lines)
+        kb = InlineKeyboardMarkup(
+            [
+                [
+                    InlineKeyboardButton(
+                        "🔑 Ввести код тренера",
+                        callback_data="set:trainer_link",
+                    )
+                ],
+                [InlineKeyboardButton(BACK_BTN, callback_data="menu:settings")],
+            ]
+        )
+        return text, kb, None
     trainer_name = (trainer_label or "").strip()
     if not trainer_name:
         trainer_name = await _format_trainer_user_display(trainer_user_id)
+    trainer_record = await find_user_by_id(trainer_user_id)
+    tg_id = None
+    username = None
+    if trainer_record:
+        _internal_id, tg_id, username = trainer_record
     status_map = {
         "pending": "Статус: заявка отправлена тренеру — ждём подтверждения.",
         "accepted": "Статус: связь активна. Тренер уже может видеть твой дневник.",
     }
-    status_text = status_map.get(status, f"Статус: {status}.")
+    status_text = status_map.get(status_value, f"Статус: {status_value}.")
     can_edit = bool(can_edit_plan)
     permission_text = (
         "Разрешение: тренер может менять план тренировок."
         if can_edit
         else "Разрешение: тренеру запрещено менять план."
     )
-    if status == "pending":
+    if status_value == "pending":
         body_hint = "Когда тренер подтвердит заявку, он появится в списке подопечных."
+        header_line = f"Заявка тренеру {trainer_name} успешно отправлена."
     else:
         body_hint = "Используй кнопки ниже, чтобы управлять правами или отключить связь."
+        header_line = f"Тренер: {trainer_name}"
+    username_line = (
+        f"Имя пользователя: @{username}"
+        if username
+        else "Имя пользователя: не указано"
+    )
+    tg_line = (
+        f"Telegram ID: {tg_id}"
+        if tg_id
+        else "Telegram ID: недоступен"
+    )
+    internal_line = f"Внутренний ID: {trainer_user_id}"
     lines = [
-        f"Тренер: {trainer_name}",
+        header_line,
+        "",
+        username_line,
+        tg_line,
+        internal_line,
+        "",
         status_text,
         "",
         permission_text,
@@ -8078,7 +8141,10 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         trainer_id = int(trainer[0])
         link1 = await get_trainer_link(trainer_id, user_id)
         link2 = await get_trainer_link(user_id, trainer_id)
-        if link1 or link2 or trainer_id == user_id:
+        active_statuses = {"pending", "accepted"}
+        has_direct_link = bool(link1 and str(link1[1]) in active_statuses)
+        has_reverse_link = bool(link2 and str(link2[1]) in active_statuses)
+        if has_direct_link or has_reverse_link or trainer_id == user_id:
             await try_delete(update.message)
             await _render_trainer_link_message(
                 context,
@@ -8089,19 +8155,34 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 chat_id=update.effective_chat.id if update.effective_chat else None,
             )
             return
+        can_edit_request = bool(
+            context.user_data.get(TRAINER_PENDING_CAN_EDIT_KEY, False)
+        )
         await create_trainer_request(
             trainer_id,
             user_id,
-            can_edit_plan=bool(
-                context.user_data.get(TRAINER_PENDING_CAN_EDIT_KEY, False)
-            ),
+            can_edit_plan=can_edit_request,
         )
+        context.user_data.pop(TRAINER_PENDING_CAN_EDIT_KEY, None)
         await try_delete(update.message)
+        trainer_record = await find_user_by_id(trainer_id)
+        trainer_username = trainer_record[2] if trainer_record else None
+        trainer_tg_id = trainer_record[1] if trainer_record else None
+        trainer_display = await _format_trainer_user_display(trainer_id)
+        info_parts = [
+            f"Имя пользователя: @{trainer_username}" if trainer_username else "Имя пользователя: не указано",
+            f"Telegram ID: {trainer_tg_id}" if trainer_tg_id else "Telegram ID: недоступен",
+            f"Внутренний ID: {trainer_id}",
+        ]
+        success_message = (
+            f"Поздравляем! Вы присоединились к {trainer_display}."
+            f"\n{info_parts[0]}\n{info_parts[1]}\n{info_parts[2]}"
+        )
         await _render_trainer_link_message(
             context,
             user_id,
             target if isinstance(target, tuple) else None,
-            "Заявка отправлена тренеру.",
+            success_message,
             chat_id=update.effective_chat.id if update.effective_chat else None,
         )
         context.user_data.pop(TRAINER_CODE_PROMPT_KEY, None)
@@ -8893,6 +8974,94 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             )
                     return
                 if action == "detach":
+                    sub_action = parts[2] if len(parts) >= 3 else "start"
+                    if sub_action == "cancel":
+                        if acting_id:
+                            await show_trainer_manage_trainee(
+                                q, context, actor_user_id, acting_id
+                            )
+                        else:
+                            await show_trainee_trainer_settings(
+                                q, context, target_user_id
+                            )
+                        return
+                    if sub_action != "confirm":
+                        if acting_id:
+                            link = await get_trainer_link(actor_user_id, acting_id)
+                            if not link or str(link[1]) != "accepted":
+                                await q.answer("Связь недоступна.", show_alert=True)
+                                return
+                            trainee_display = await _format_trainer_user_display(
+                                acting_id
+                            )
+                            confirm_text = (
+                                f"Открепить подопечного {trainee_display}?\n"
+                                "Тренер потеряет доступ к дневнику и плану."
+                            )
+                            kb = InlineKeyboardMarkup(
+                                [
+                                    [
+                                        InlineKeyboardButton(
+                                            "✅ Да, открепить",
+                                            callback_data="trainer:detach:confirm",
+                                        )
+                                    ],
+                                    [
+                                        InlineKeyboardButton(
+                                            "⬅️ Назад",
+                                            callback_data="trainer:trainee_settings",
+                                        )
+                                    ],
+                                ]
+                            )
+                            await show_screen(
+                                q,
+                                context,
+                                confirm_text,
+                                kb,
+                                actor_user_id,
+                            )
+                            return
+                        link = await get_active_trainer_link_for_trainee(
+                            target_user_id
+                        )
+                        if not link:
+                            await show_trainee_trainer_settings(
+                                q, context, target_user_id
+                            )
+                            return
+                        trainer_user_id = int(link[1])
+                        trainer_display = await _format_trainer_user_display(
+                            trainer_user_id
+                        )
+                        confirm_text = (
+                            f"Вы уверены, что хотите отвязаться от {trainer_display}?\n"
+                            "Связь будет удалена, и тренер не увидит ваш дневник."
+                        )
+                        kb = InlineKeyboardMarkup(
+                            [
+                                [
+                                    InlineKeyboardButton(
+                                        "✅ Да, отвязаться",
+                                        callback_data="trainer:detach:confirm",
+                                    )
+                                ],
+                                [
+                                    InlineKeyboardButton(
+                                        "⬅️ Отмена",
+                                        callback_data="trainer:detach:cancel",
+                                    )
+                                ],
+                            ]
+                        )
+                        await show_screen(
+                            q,
+                            context,
+                            confirm_text,
+                            kb,
+                            target_user_id,
+                        )
+                        return
                     if acting_id:
                         link = await get_trainer_link(actor_user_id, acting_id)
                         if not link or str(link[1]) != "accepted":
@@ -8930,13 +9099,6 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             profile = await _fetch_trainer_profile(actor_user_id)
             if not profile or not profile[0]:
                 await q.answer("Недоступно.", show_alert=True)
-                return
-            if action == "code" and len(parts) >= 3 and parts[2] == "copy":
-                trainer_code_value = profile[1]
-                if not trainer_code_value:
-                    await q.answer("Код недоступен.", show_alert=True)
-                    return
-                await q.answer("Код скопирован. Отправьте его подопечному.")
                 return
             if action == "trainee" and len(parts) >= 3:
                 sub_action = parts[2]
