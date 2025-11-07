@@ -235,7 +235,10 @@ def settings_kb(
             rows.append(
                 [
                     InlineKeyboardButton(
-                        dual("💳 Подписка", "Управление подпиской"),
+                        dual(
+                            "💳 Подписка (убрать рекламу)",
+                            "Управление подпиской",
+                        ),
                         callback_data="menu:subscription",
                     )
                 ]
