@@ -236,7 +236,7 @@ def settings_kb(
                 [
                     InlineKeyboardButton(
                         dual(
-                            "💳 Подписка (убрать рекламу)",
+                            "💳 Подписка",
                             "Управление подпиской",
                         ),
                         callback_data="menu:subscription",

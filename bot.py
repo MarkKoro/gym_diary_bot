@@ -8,6 +8,7 @@ from datetime import datetime, time, timedelta, UTC
 from zoneinfo import ZoneInfo
 from collections import defaultdict
 from types import SimpleNamespace
+from typing import Any, TYPE_CHECKING
 import httpx
 import re
 from telegram import (
@@ -217,6 +218,11 @@ from db import (
 from text_utils import normalize_whitespace
 from ui_texts import t, e
 
+if TYPE_CHECKING:
+    from aiosqlite import Connection as Database
+else:
+    Database = Any
+
 user_locks = defaultdict(asyncio.Lock)
 logger = logging.getLogger(__name__)
 last_messages: dict[int, int] = {}
@@ -291,7 +297,18 @@ TRAINER_ACCEPTED_OFFSET_KEY = "trainer_accepted_offset"
 TRAINER_SETTINGS_MESSAGE_KEY = "trainer_settings_message"
 TRAINER_TRAINEE_SETTINGS_MESSAGE_KEY = "trainer_trainee_settings_message"
 TRAINER_LIST_LIMIT = 8
-TRAINER_MAX_TRAINEES = 10
+TRAINER_MAX_TRAINEES_FREE = 5
+TRAINER_MAX_TRAINEES_SUB = 10
+
+
+async def get_trainer_max_trainees(
+    trainer_user_id: int, db: "Database | None" = None
+) -> int:
+    _ = db
+    sub = await get_active_subscription(trainer_user_id)
+    if sub:
+        return TRAINER_MAX_TRAINEES_SUB
+    return TRAINER_MAX_TRAINEES_FREE
 RUNNING_GROUP = "run"
 RUNNING_INPUT_KEY = "running_input"
 RUNNING_HISTORY_PAGE_SIZE = 1
@@ -2178,6 +2195,8 @@ async def _render_trainer_overview(
             offset=accepted_offset + TRAINER_LIST_LIMIT,
         )
         accepted_has_next = bool(more)
+    active_sub = await get_active_subscription(user_id)
+    limit = await get_trainer_max_trainees(user_id)
     user_ids: set[int] = set()
     for entry in requests:
         user_ids.add(int(entry[1]))
@@ -2240,6 +2259,15 @@ async def _render_trainer_overview(
             lines.append(f"  последняя тренировка: {last_label}")
     else:
         lines.append("• Пока нет подопечных.")
+    lines.append("")
+    if active_sub:
+        lines.append(
+            f"С активной подпиской вам доступно до {limit} подопечных."
+        )
+    else:
+        lines.append(
+            f"Без подписки вам доступно до {limit} подопечных одновременно."
+        )
     rows: list[list[InlineKeyboardButton]] = []
     for entry in requests:
         link_id = int(entry[0])
@@ -6477,7 +6505,7 @@ async def show_subscription_overview(
     tz_code = await get_user_timezone(user_id)
     zone = resolve_user_zone(tz_code)
     lines = [
-        "Подписка — это способ поддержать разработку бота и отключить рекламные сообщения.",
+        "Подписка — поддержка проекта и расширенный функционал (больше подопечных, без рекламных рассылок).",
         "▸ Бот остаётся бесплатным для всех.",
         "▸ С подпиской мы просто не показываем тебе рекламные рассылки.",
         "Спасибо за поддержку! ❤️",
@@ -6542,7 +6570,7 @@ async def start_subscription_payment(
         await q.answer("Оплата временно недоступна.", show_alert=True)
         return
     amount = plan["amount_rub"]
-    description = f"Подписка (убрать рекламу) — {plan['title']}"
+    description = f"Подписка на бота (поддержка проекта) — {plan['title']}"
     try:
         bot_username = context.bot.username
         if not bot_username:
@@ -8758,15 +8786,19 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     return
                 trainee_user_id = int(link[2])
                 if req_action == "accept":
+                    limit = await get_trainer_max_trainees(actor_user_id)
                     accepted = await list_trainer_trainees(
-                        actor_user_id, limit=1000, offset=0
+                        actor_user_id, limit=limit + 1, offset=0
                     )
-                    if len(accepted) >= TRAINER_MAX_TRAINEES:
+                    if len(accepted) >= limit:
                         await _render_trainer_overview(
                             q,
                             context,
                             actor_user_id,
-                            message="Лимит подопечных достигнут (10)",
+                            message=(
+                                f"Лимит подопечных достигнут ({limit}). "
+                                "Оформите подписку, чтобы расширить лимит."
+                            ),
                         )
                         return
                     reverse = await get_trainer_link(trainee_user_id, actor_user_id)
@@ -8919,13 +8951,16 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "",
                 "🧑‍🏫 Тренер / подопечный — подключи тренера по коду или веди своих подопечных.",
                 "",
-                "💳 Подписка (убрать рекламу) — поддержи разработку и отключи рекламные сообщения.",
+                "💳 Подписка — поддержка проекта и расширенный функционал (больше подопечных, без рекламных рассылок).",
             ]
             active_sub = await get_active_subscription(target_user_id)
             if active_sub and active_sub.get("expires_at"):
                 zone = resolve_user_zone(tz)
                 expires_local = active_sub["expires_at"].astimezone(zone)
-                support_line = f"Спасибо за поддержку! Рекламных рассылок нет до {expires_local.strftime('%d.%m.%Y')}."
+                support_line = (
+                    "Спасибо за поддержку! Подписка активна до "
+                    f"{expires_local.strftime('%d.%m.%Y')}."
+                )
             else:
                 support_line = "Подписка остаётся добровольной: бот бесплатный для всех."
             text_lines.extend(["", support_line])
