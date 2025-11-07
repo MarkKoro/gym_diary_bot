@@ -37,6 +37,7 @@ from telegram.ext import (
     PreCheckoutQueryHandler,
 )
 from keyboards import (
+    dual,
     main_menu_kb,
     muscle_groups_kb,
     exercises_kb,
@@ -1603,16 +1604,24 @@ async def show_trainer_root_settings(
         "Включи режим тренера, чтобы вести подопечных по коду.",
         "Если у тебя есть тренер, управляй связью в этом разделе.",
         "",
+        f"Режим тренера: {'включён' if is_trainer else 'выключен'}.",
     ]
-    status_lines = [f"Режим тренера: {'Вкл' if is_trainer else 'Выкл'}"]
     if is_trainer and trainer_code:
-        status_lines.append(f"Код тренера: {trainer_code}")
-    status_lines.append(f"Связь с тренером: {link_status}")
-    lines.extend(status_lines)
+        lines.extend(
+            [
+                "",
+                f"Ваш код тренера: {trainer_code}",
+                "Нажми на кнопку, чтобы бот прислал код отдельным сообщением — так его проще скопировать и переслать подопечному.",
+            ]
+        )
+    lines.extend(["", f"Связь с тренером: {link_status}."])
     text = "\n".join(lines)
     toggle_target = "off" if is_trainer else "on"
     toggle_button = InlineKeyboardButton(
-        f"Режим тренера: {'Вкл' if is_trainer else 'Выкл'}",
+        dual(
+            f"Стать тренером: {'Вкл' if is_trainer else 'Выкл'}",
+            "Переключить режим тренера",
+        ),
         callback_data=f"set:trainer_mode:toggle:{toggle_target}",
     )
     trainee_button = InlineKeyboardButton(
@@ -1623,13 +1632,31 @@ async def show_trainer_root_settings(
         BACK_BTN,
         callback_data="menu:settings",
     )
-    kb = InlineKeyboardMarkup(
-        [
-            [toggle_button],
-            [trainee_button],
-            [back_button],
-        ]
-    )
+    rows: list[list[InlineKeyboardButton]] = [[toggle_button]]
+    if is_trainer and trainer_code:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    dual(
+                        "📨 Отправить код тренера",
+                        "Прислать код тренера отдельным сообщением",
+                    ),
+                    callback_data="trainer:code:send",
+                )
+            ]
+        )
+    if is_trainer:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    dual("👥 Мои подопечные", "Открыть список подопечных"),
+                    callback_data="trainer:list",
+                )
+            ]
+        )
+    rows.append([trainee_button])
+    rows.append([back_button])
+    kb = InlineKeyboardMarkup(rows)
     await show_screen(q, context, text, kb, user_id)
 
 
@@ -1936,7 +1963,7 @@ async def build_trainer_manage_trainee_view(
         "Используй кнопки ниже, чтобы управлять доступом и заметкой.",
     ]
     text = "\n".join(lines)
-    kb = trainer_manage_trainee_kb(bool(can_edit_plan))
+    kb = trainer_manage_trainee_kb(bool(can_edit_plan), trainee_user_id)
     return text, kb, int(link_id)
 
 
@@ -8576,9 +8603,70 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if not profile or not profile[0]:
                 await q.answer("Недоступно.", show_alert=True)
                 return
+            if action == "code" and len(parts) >= 3 and parts[2] == "send":
+                trainer_code_value = profile[1]
+                if not trainer_code_value:
+                    await q.answer("Код недоступен.", show_alert=True)
+                    return
+                chat = getattr(q, "message", None)
+                chat_id = getattr(chat, "chat_id", None)
+                if chat_id is None:
+                    return
+                message = await context.bot.send_message(
+                    chat_id,
+                    f"Ваш код тренера: {trainer_code_value}\nСкопируйте его и отправьте подопечному.",
+                )
+                remember_message(chat_id, getattr(message, "message_id", None))
+                await q.answer("Код отправлен.")
+                return
             if action == "trainee" and len(parts) >= 3:
                 sub_action = parts[2]
                 acting_id = context.user_data.get("acting_user_id")
+                if (
+                    sub_action == "label"
+                    and len(parts) >= 5
+                    and parts[3] == "set"
+                ):
+                    try:
+                        trainee_id = int(parts[4])
+                    except ValueError:
+                        return
+                    if acting_id is None:
+                        acting_id = trainee_id
+                        context.user_data["acting_user_id"] = trainee_id
+                    if acting_id != trainee_id:
+                        await q.answer("Недоступно.", show_alert=True)
+                        return
+                    link = await get_trainer_link(actor_user_id, trainee_id)
+                    if not link or str(link[1]) != "accepted":
+                        await q.answer("Связь недоступна.", show_alert=True)
+                        return
+                    link_id = int(link[0])
+                    context.user_data[TRAINER_TRAINEE_LABEL_INPUT_KEY] = link_id
+                    message = await show_screen(
+                        q,
+                        context,
+                        "Отправь новое имя подопечного одним сообщением.",
+                        InlineKeyboardMarkup(
+                            [
+                                [
+                                    InlineKeyboardButton(
+                                        "⬅️ Назад",
+                                        callback_data="trainer:trainee_settings",
+                                    )
+                                ]
+                            ]
+                        ),
+                        trainee_id,
+                    )
+                    if message:
+                        context.user_data[
+                            TRAINER_TRAINEE_SETTINGS_MESSAGE_KEY
+                        ] = (
+                            getattr(message, "chat_id", None),
+                            getattr(message, "message_id", None),
+                        )
+                    return
                 if sub_action == "menu" and acting_id:
                     context.user_data.pop(TRAINER_TRAINEE_SETTINGS_MESSAGE_KEY, None)
                     context.user_data.pop(TRAINER_TRAINEE_LABEL_INPUT_KEY, None)
