@@ -971,6 +971,7 @@ def apply_markup_preferences(
                     callback_game=button.callback_game,
                     pay=button.pay,
                     web_app=button.web_app,
+                    copy_text=button.copy_text,
                 )
             )
         new_rows.append(new_row)
