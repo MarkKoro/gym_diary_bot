@@ -243,6 +243,17 @@ def settings_kb(
                     )
                 ]
             )
+    rows.append(
+        [
+            InlineKeyboardButton(
+                dual(
+                    "📤 Поделиться результатом",
+                    "Сгенерировать текст с прогрессом",
+                ),
+                callback_data="settings:share_results",
+            )
+        ]
+    )
     rows.append([InlineKeyboardButton(BACK_BTN, callback_data="menu:root")])
     return InlineKeyboardMarkup(rows)
 
