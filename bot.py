@@ -18,6 +18,7 @@ from telegram import (
     InlineKeyboardButton,
     Message,
     LabeledPrice,
+    CopyTextButton,
 )
 from telegram.error import (
     BadRequest,
@@ -1630,7 +1631,7 @@ async def show_trainer_root_settings(
             [
                 "",
                 f"Ваш код тренера: {trainer_code}",
-                "Нажми на кнопку, чтобы бот прислал код отдельным сообщением — так его проще скопировать и переслать подопечному.",
+                "Нажми на кнопку, чтобы скопировать код в буфер обмена и сразу переслать его подопечному.",
             ]
         )
     lines.extend(["", f"Связь с тренером: {link_status}."])
@@ -1657,10 +1658,11 @@ async def show_trainer_root_settings(
             [
                 InlineKeyboardButton(
                     dual(
-                        "📨 Отправить код тренера",
-                        "Прислать код тренера отдельным сообщением",
+                        "📋 Скопировать код тренера",
+                        "Скопировать код тренера в буфер обмена",
                     ),
-                    callback_data="trainer:code:send",
+                    callback_data="trainer:code:copy",
+                    copy_text=CopyTextButton(trainer_code),
                 )
             ]
         )
@@ -5818,7 +5820,9 @@ async def reminder_job(context: ContextTypes.DEFAULT_TYPE):
     chat_id = context.job.chat_id
     user_id = None
     if context.job.data and isinstance(context.job.data, dict):
-        user_id = context.job.data.get("user_id")
+        user_id = context.job.data.get("user_id") or context.job.data.get(
+            "target_user_id"
+        )
     try:
         reply_markup = None
         cheer = ""
@@ -5847,6 +5851,55 @@ async def reminder_job(context: ContextTypes.DEFAULT_TYPE):
         logger.exception("Reminder job failed")
 
 
+def _build_reminder_job_name(user_id: int, day_no: int, dow: int) -> str:
+    return f"rem_{user_id}_{day_no}_{dow}"
+
+
+def _schedule_reminder_job(
+    job_queue,
+    *,
+    chat_id: int | None,
+    user_id: int,
+    day_no: int,
+    dow: int,
+    hour: int,
+    minute: int,
+    tz_name: str | None,
+    remove_existing: bool = True,
+):
+    try:
+        day_int = int(day_no)
+        hour_int = int(hour)
+        minute_int = int(minute)
+    except (TypeError, ValueError):
+        return None
+    try:
+        dow_int = normalize_dow(dow)
+    except Exception:
+        return None
+    if not 0 <= dow_int <= 6:
+        return None
+    job_name = _build_reminder_job_name(user_id, day_int, dow_int)
+    if job_queue is None:
+        return None
+    if remove_existing:
+        _remove_reminder_jobs(job_queue, user_id, day_int, dow_int)
+    if chat_id is None:
+        return None
+    zone = resolve_user_zone(tz_name)
+    tm = time(hour=hour_int, minute=minute_int)
+    job_queue.run_daily(
+        reminder_job,
+        tm,
+        days=(dow_int,),
+        chat_id=chat_id,
+        name=job_name,
+        data={"user_id": user_id, "day_no": day_int, "dow": dow_int},
+        timezone=zone,
+    )
+    return job_name
+
+
 def _remove_reminder_jobs(job_queue, user_id: int, day_no: int, dow: int | None = None) -> None:
     def _safe_remove(job) -> None:
         try:
@@ -5864,7 +5917,7 @@ def _remove_reminder_jobs(job_queue, user_id: int, day_no: int, dow: int | None 
         if name and name.startswith(job_prefix):
             _safe_remove(job)
     if dow is not None:
-        job_name = f"rem_{user_id}_{day_no}_{dow}"
+        job_name = _build_reminder_job_name(user_id, day_no, dow)
         for job in job_queue.get_jobs_by_name(job_name):
             _safe_remove(job)
     legacy_names = [f"rem_{user_id}_{day_no}"]
@@ -5893,7 +5946,6 @@ async def schedule_all_reminders(app: Application):
             logger.info("Scheduled 0 reminders for user %d", user_id)
             continue
         tz_code = await get_user_timezone(user_id)
-        zone = resolve_user_zone(tz_code)
         tg_id = info.get("tg_id")
         user_scheduled = 0
         for day_no, dow, hour, minute in reminders:
@@ -5905,23 +5957,20 @@ async def schedule_all_reminders(app: Application):
                 minute_int = int(minute)
             except (TypeError, ValueError):
                 continue
-            dow_int = normalize_dow(dow)
-            job_name = f"rem_{user_id}_{day_int}_{dow_int}"
-            _remove_reminder_jobs(app.job_queue, user_id, day_int, dow_int)
-            if tg_id is None:
-                continue
-            desired_jobs.add(job_name)
-            tm = time(hour=hour_int, minute=minute_int, tzinfo=zone)
-            app.job_queue.run_daily(
-                reminder_job,
-                tm,
-                days=(dow_int,),
+            job_name = _schedule_reminder_job(
+                app.job_queue,
                 chat_id=tg_id,
-                name=job_name,
-                data={"user_id": user_id, "day_no": day_int, "dow": dow_int},
+                user_id=user_id,
+                day_no=day_int,
+                dow=dow,
+                hour=hour_int,
+                minute=minute_int,
+                tz_name=tz_code,
             )
-            user_scheduled += 1
-            total_scheduled += 1
+            if job_name:
+                desired_jobs.add(job_name)
+                user_scheduled += 1
+                total_scheduled += 1
         logger.info("Scheduled %d reminders for user %d", user_scheduled, user_id)
     logger.info("Scheduled %d reminder jobs in total", total_scheduled)
     # remove orphaned reminder jobs that are no longer present in the database
@@ -7677,25 +7726,25 @@ async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAUL
             if not await add_user_reminder(user_id, dow, hour, minute, day_no=day_no):
                 await q.answer("Не удалось сохранить напоминание.", show_alert=True)
                 return
-            tz = context.user_data.get("tz", "UTC")
-            zone = resolve_user_zone(tz)
-            reminder_time = time(hour, minute, tzinfo=zone)
-            job_name = f"rem_{user_id}_{day_no}_{dow}"
-            _remove_reminder_jobs(context.job_queue, user_id, day_no, dow)
             message = getattr(q, "message", None)
             chat_id = getattr(message, "chat_id", None)
             if chat_id is None and message is not None:
                 chat = getattr(message, "chat", None)
                 chat_id = getattr(chat, "id", None)
-            if chat_id is not None:
-                context.job_queue.run_daily(
-                    reminder_job,
-                    reminder_time,
-                    days=(dow,),
-                    chat_id=chat_id,
-                    name=job_name,
-                    data={"user_id": user_id, "day_no": day_no, "dow": dow},
-                )
+            tz_code = context.user_data.get("tz")
+            if not tz_code:
+                tz_code = await get_user_timezone(user_id)
+                context.user_data["tz"] = tz_code
+            _schedule_reminder_job(
+                context.job_queue,
+                chat_id=chat_id,
+                user_id=user_id,
+                day_no=day_no,
+                dow=dow,
+                hour=hour,
+                minute=minute,
+                tz_name=tz_code,
+            )
             day_no = context.user_data.get("reminder_day", 1)
             total = context.user_data.get("workouts_per_week", 0)
             context.user_data.pop(REMINDER_TIME_PAGE_KEY, None)
@@ -8638,21 +8687,12 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if not profile or not profile[0]:
                 await q.answer("Недоступно.", show_alert=True)
                 return
-            if action == "code" and len(parts) >= 3 and parts[2] == "send":
+            if action == "code" and len(parts) >= 3 and parts[2] == "copy":
                 trainer_code_value = profile[1]
                 if not trainer_code_value:
                     await q.answer("Код недоступен.", show_alert=True)
                     return
-                chat = getattr(q, "message", None)
-                chat_id = getattr(chat, "chat_id", None)
-                if chat_id is None:
-                    return
-                message = await context.bot.send_message(
-                    chat_id,
-                    f"Ваш код тренера: {trainer_code_value}\nСкопируйте его и отправьте подопечному.",
-                )
-                remember_message(chat_id, getattr(message, "message_id", None))
-                await q.answer("Код отправлен.")
+                await q.answer("Код скопирован. Отправьте его подопечному.")
                 return
             if action == "trainee" and len(parts) >= 3:
                 sub_action = parts[2]
@@ -10596,28 +10636,22 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     _remove_reminder_jobs(
                         context.job_queue, target_user_id, day_index, int(previous[0])
                     )
-                _remove_reminder_jobs(context.job_queue, target_user_id, day_index, dow)
                 tz_code = await get_user_timezone(target_user_id)
-                zone = resolve_user_zone(tz_code)
-                reminder_time = time(hour, minute, tzinfo=zone)
                 message = getattr(q, "message", None)
                 chat_id = getattr(message, "chat_id", None)
                 if chat_id is None:
                     chat = getattr(message, "chat", None)
                     chat_id = getattr(chat, "id", None)
-                if chat_id is not None:
-                    context.job_queue.run_daily(
-                        reminder_job,
-                        reminder_time,
-                        days=(dow,),
-                        chat_id=chat_id,
-                        name=f"rem_{target_user_id}_{day_index}_{dow}",
-                        data={
-                            "target_user_id": target_user_id,
-                            "day_no": day_index,
-                            "dow": dow,
-                        },
-                    )
+                _schedule_reminder_job(
+                    context.job_queue,
+                    chat_id=chat_id,
+                    user_id=target_user_id,
+                    day_no=day_index,
+                    dow=dow,
+                    hour=hour,
+                    minute=minute,
+                    tz_name=tz_code,
+                )
                 context.user_data[REMINDER_SELECTED_DOW_KEY] = str(dow_iso)
                 confirmation = format_reminder_status(label, (dow, hour, minute))
                 await q.answer(confirmation)
