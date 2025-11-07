@@ -315,7 +315,9 @@ def trainee_trainer_settings_kb(can_edit: bool):
     return InlineKeyboardMarkup(rows)
 
 
-def trainer_manage_trainee_kb(can_edit: bool) -> InlineKeyboardMarkup:
+def trainer_manage_trainee_kb(
+    can_edit: bool, trainee_user_id: int
+) -> InlineKeyboardMarkup:
     toggle_state = "off" if can_edit else "on"
     rows = [
         [
@@ -330,10 +332,10 @@ def trainer_manage_trainee_kb(can_edit: bool) -> InlineKeyboardMarkup:
         [
             InlineKeyboardButton(
                 dual(
-                    "Изменить подпись",
-                    "Задать свою подпись для подопечного",
+                    "Переименовать подопечного",
+                    "Задать своё имя для подопечного",
                 ),
-                callback_data="trainer:label:set",
+                callback_data=f"trainer:trainee:label:set:{trainee_user_id}",
             )
         ],
         [
