@@ -1601,7 +1601,9 @@ async def show_trainer_root_settings(
     lines = [
         "Режим тренера / подопечного",
         "",
-        "Включи режим тренера, чтобы вести подопечных по коду.",
+        "В режиме тренера ты ведёшь подопечных: видишь их план и, если они разрешат, меняешь тренировки.",
+        "Подопечный вводит твой код в настройках, чтобы связать дневник.",
+        "",
         "Если у тебя есть тренер, управляй связью в этом разделе.",
         "",
         f"Режим тренера: {'включён' if is_trainer else 'выключен'}.",
@@ -1708,7 +1710,9 @@ async def _build_become_trainee_view(
     lines = [
         "Стать подопечным тренера.",
         "",
-        "Через этот режим ты можешь поделиться с тренером своим дневником: упражнения, веса и замеры.",
+        "Здесь ты можешь ввести код тренера.",
+        "Тренер сможет смотреть твои тренировки и замеры.",
+        "Дополнительно ты можешь разрешить ему менять твой план тренировок.",
         "",
         "По умолчанию тренер видит только твой план. Если дать разрешение ниже, тренер сможет менять упражнения и завершать дни за тебя.",
         "",
@@ -6473,7 +6477,10 @@ async def show_subscription_overview(
     tz_code = await get_user_timezone(user_id)
     zone = resolve_user_zone(tz_code)
     lines = [
-        "Подписка донат отключает рекламные рассылки и помогает развивать бота.",
+        "Подписка — это способ поддержать разработку бота и отключить рекламные сообщения.",
+        "▸ Бот остаётся бесплатным для всех.",
+        "▸ С подпиской мы просто не показываем тебе рекламные рассылки.",
+        "Спасибо за поддержку! ❤️",
         "",
     ]
     if active and active.get("expires_at"):
@@ -6535,7 +6542,7 @@ async def start_subscription_payment(
         await q.answer("Оплата временно недоступна.", show_alert=True)
         return
     amount = plan["amount_rub"]
-    description = f"Подписка донат — {plan['title']}"
+    description = f"Подписка (убрать рекламу) — {plan['title']}"
     try:
         bot_username = context.bot.username
         if not bot_username:
@@ -8910,17 +8917,18 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "",
                 f"⏰ Уведомления — {tz_label}, {rem_text}. Настрой время напоминаний.",
                 "",
+                "🧑‍🏫 Тренер / подопечный — подключи тренера по коду или веди своих подопечных.",
+                "",
+                "💳 Подписка (убрать рекламу) — поддержи разработку и отключи рекламные сообщения.",
             ]
             active_sub = await get_active_subscription(target_user_id)
             if active_sub and active_sub.get("expires_at"):
                 zone = resolve_user_zone(tz)
                 expires_local = active_sub["expires_at"].astimezone(zone)
-                support_line = (
-                    f"Спасибо за поддержку! Рекламных рассылок нет до {expires_local.strftime('%d.%m.%Y')}."
-                )
+                support_line = f"Спасибо за поддержку! Рекламных рассылок нет до {expires_local.strftime('%d.%m.%Y')}."
             else:
-                support_line = "⭐ Подписка донат — отключи рекламные рассылки и поддержи разработчиков."
-            text_lines.append(support_line)
+                support_line = "Подписка остаётся добровольной: бот бесплатный для всех."
+            text_lines.extend(["", support_line])
             text = "\n".join(text_lines)
             kb = await build_settings_keyboard_for_user(context, target_user_id)
             await show_screen(q, context, text, kb, target_user_id)
