@@ -198,6 +198,8 @@ from db import (
     find_user_by_tg_id,
     find_user_by_id,
     find_user_by_trainer_code,
+    get_latest_trainer_link_for_trainee,
+    deactivate_trainer_links,
     get_trainer_link,
     get_active_trainer_link_for_trainee,
     create_trainer_request,
@@ -1582,7 +1584,7 @@ async def show_trainer_root_settings(
     profile = await _fetch_trainer_profile(user_id)
     is_trainer = int(profile[0]) if profile and profile[0] else 0
     trainer_code = profile[1] if profile else None
-    link = await get_active_trainer_link_for_trainee(user_id)
+    link = await get_latest_trainer_link_for_trainee(user_id)
     if not link:
         link_status = "нет"
     else:
@@ -1591,6 +1593,8 @@ async def show_trainer_root_settings(
             link_status = "заявка отправлена"
         elif status_value == "accepted":
             link_status = "есть"
+        elif status_value in {"trainer_disabled", "inactive"}:
+            link_status = "тренер отключил режим"
         else:
             link_status = status_value or "нет"
     lines = [
@@ -1641,7 +1645,8 @@ async def _build_become_trainee_view(
         context.user_data.get(TRAINER_PENDING_CAN_EDIT_KEY, False)
     )
     status_lines: list[str] = []
-    if link and str(link[2]) == "pending":
+    status_value = str(link[2]) if link and len(link) > 2 else ""
+    if status_value == "pending":
         trainer_user_id = int(link[1])
         trainer_label = (link[4] or "").strip()
         if not trainer_label:
@@ -1651,6 +1656,14 @@ async def _build_become_trainee_view(
         status_lines.append(
             f"Статус: заявка отправлена тренеру {trainer_label}. Ждём подтверждения."
         )
+    elif status_value in {"trainer_disabled", "inactive"}:
+        status_lines.append(
+            "Статус: тренер отключил режим, и связь больше не активна."
+        )
+    elif status_value == "rejected":
+        status_lines.append("Статус: заявка отклонена тренером.")
+    elif status_value:
+        status_lines.append(f"Статус: {status_value}.")
     else:
         if prompt_for_code:
             status_lines.append(
@@ -1687,7 +1700,7 @@ async def show_become_trainee_screen(
     status_message: str | None = None,
     prompt_for_code: bool | None = None,
 ):
-    link = await get_active_trainer_link_for_trainee(user_id)
+    link = await get_latest_trainer_link_for_trainee(user_id)
     if link and str(link[2]) == "accepted":
         await show_trainee_trainer_settings(q, context, user_id)
         return link
@@ -1725,7 +1738,7 @@ async def _render_trainer_link_message(
     prompt_for_code: bool = False,
     chat_id: int | None = None,
 ) -> tuple[int, int] | None:
-    link = await get_active_trainer_link_for_trainee(user_id)
+    link = await get_latest_trainer_link_for_trainee(user_id)
     if link and str(link[2]) == "accepted":
         text, kb, _ = await build_trainee_trainer_settings_view(user_id)
         if text is None or kb is None:
@@ -1789,7 +1802,24 @@ async def build_trainee_trainer_settings_view(
 ):
     link = await get_active_trainer_link_for_trainee(trainee_user_id)
     if not link:
-        return None, None, None
+        lines = [
+            "Статус: пока нет активной связи.",
+            "",
+            "Чтобы подключиться к тренеру, вернись в настройки и введи его код.",
+        ]
+        text = "\n".join(lines)
+        kb = InlineKeyboardMarkup(
+            [
+                [
+                    InlineKeyboardButton(
+                        "🤝 Стать подопечным",
+                        callback_data="set:trainer_mode:trainee",
+                    )
+                ],
+                [InlineKeyboardButton(BACK_BTN, callback_data="menu:settings")],
+            ]
+        )
+        return text, kb, None
     _link_id, trainer_user_id, status, can_edit_plan, trainer_label, _ = link
     trainer_name = (trainer_label or "").strip()
     if not trainer_name:
@@ -9880,7 +9910,6 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             mutating_set_actions = {
                 "rename_day",
                 "edit_day",
-                "days_count",
                 "groups",
                 "reminders",
             }
@@ -9889,30 +9918,56 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     return
             if action == "trainer_mode":
                 if len(parts) == 2:
-                    await show_trainer_root_settings(q, context, target_user_id)
+                    await show_trainer_root_settings(q, context, actor_user_id)
                     return
                 if len(parts) >= 3 and parts[2] == "toggle":
                     desired_state = parts[3] if len(parts) > 3 else None
-                    profile = await _fetch_trainer_profile(target_user_id)
+                    profile = await _fetch_trainer_profile(actor_user_id)
                     if desired_state == "on":
-                        await _ensure_trainer_mode(target_user_id, profile)
+                        await _ensure_trainer_mode(actor_user_id, profile)
                     elif desired_state == "off":
                         async with connect_db() as db:
                             await db.execute(
                                 "UPDATE users SET is_trainer = 0 WHERE id=?",
-                                (target_user_id,),
+                                (actor_user_id,),
                             )
                             await db.commit()
-                    await show_trainer_root_settings(q, context, target_user_id)
+                        affected_trainees = await deactivate_trainer_links(actor_user_id)
+                        context.user_data.pop("acting_user_id", None)
+                        context.user_data.pop("acting_can_edit", None)
+                        context.user_data.pop(RESOLVE_TARGET_USER_KEY, None)
+                        if affected_trainees:
+                            app_user_data = getattr(context.application, "user_data", None)
+                            if isinstance(app_user_data, dict):
+                                for trainee_user_id in affected_trainees:
+                                    trainee_record = await find_user_by_id(trainee_user_id)
+                                    if not trainee_record:
+                                        continue
+                                    _db_id, trainee_tg_id, _username = trainee_record
+                                    if trainee_tg_id is None:
+                                        continue
+                                    trainee_context = app_user_data.get(trainee_tg_id)
+                                    if not isinstance(trainee_context, dict):
+                                        continue
+                                    target_message = trainee_context.get(
+                                        TRAINER_SETTINGS_MESSAGE_KEY
+                                    )
+                                    if isinstance(target_message, tuple):
+                                        await refresh_trainee_trainer_settings_message(
+                                            context,
+                                            trainee_user_id,
+                                            target_message,
+                                        )
+                    await show_trainer_root_settings(q, context, actor_user_id)
                     return
                 if len(parts) >= 3 and parts[2] == "trainee":
                     await show_become_trainee_screen(
-                        q, context, target_user_id, prompt_for_code=False
+                        q, context, actor_user_id, prompt_for_code=False
                     )
                     return
             if action == "trainer_link":
                 await show_become_trainee_screen(
-                    q, context, target_user_id, prompt_for_code=True
+                    q, context, actor_user_id, prompt_for_code=True
                 )
                 return
             if action == "rename_day":
@@ -10003,6 +10058,12 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     await show_screen(q, context, text, kb, target_user_id)
                 return
             if action == "days_count":
+                if not is_edit_allowed(context.user_data):
+                    await q.answer(
+                        "Подопечный не дал вам права менять его график тренировок.",
+                        show_alert=True,
+                    )
+                    return
                 if len(parts) == 2:
                     await show_screen(
                         q,
