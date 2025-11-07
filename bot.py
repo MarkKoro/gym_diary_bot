@@ -226,6 +226,8 @@ SUBSCRIPTION_PAYMENT_KEY = "subscription_payment"
 EXERCISE_NOTE_INPUT_KEY = "awaiting_exercise_note"
 YK_PROVIDER = "yookassa"
 
+RESOLVE_TARGET_USER_KEY = "resolved_target_user"
+
 SUBSCRIPTION_PLANS = {
     "1m": {
         "title": "Подписка на 1 месяц",
@@ -1509,20 +1511,29 @@ async def resolve_target_user_id(
     acting_id = context.user_data.get("acting_user_id")
     if acting_id is None:
         context.user_data.pop("acting_can_edit", None)
+        context.user_data.pop(RESOLVE_TARGET_USER_KEY, None)
         return actor_user_id
     try:
         acting_id_int = int(acting_id)
     except (TypeError, ValueError):
         context.user_data.pop("acting_user_id", None)
         context.user_data.pop("acting_can_edit", None)
+        context.user_data.pop(RESOLVE_TARGET_USER_KEY, None)
         return actor_user_id
     link = await get_trainer_link(actor_user_id, acting_id_int)
-    if link and str(link[3]) == "accepted":
+    if link and str(link[1]) == "accepted":
+        can_edit = bool(link[2])
         context.user_data["acting_user_id"] = acting_id_int
-        context.user_data["acting_can_edit"] = bool(link[4])
+        context.user_data["acting_can_edit"] = can_edit
+        context.user_data[RESOLVE_TARGET_USER_KEY] = {
+            "actor_user_id": actor_user_id,
+            "target_user_id": acting_id_int,
+            "can_edit": can_edit,
+        }
         return acting_id_int
     context.user_data.pop("acting_user_id", None)
     context.user_data.pop("acting_can_edit", None)
+    context.user_data.pop(RESOLVE_TARGET_USER_KEY, None)
     return actor_user_id
 
 
@@ -1957,6 +1968,18 @@ async def show_trainer_acting_menu(
     trainer_user_id: int,
     trainee_user_id: int,
 ):
+    link = await get_trainer_link(trainer_user_id, trainee_user_id)
+    trainee_label: str | None = None
+    if link:
+        raw_label = link[4]
+        if raw_label:
+            trainee_label = str(raw_label).strip() or None
+        acting_can_edit = bool(link[2])
+        context.user_data["acting_can_edit"] = acting_can_edit
+    else:
+        acting_can_edit = bool(context.user_data.get("acting_can_edit"))
+    if not trainee_label:
+        trainee_label = await _format_trainer_user_display(trainee_user_id)
     extra_rows = [
         [
             InlineKeyboardButton(
@@ -1978,6 +2001,12 @@ async def show_trainer_acting_menu(
         include_subscription_notice=False,
         include_settings=False,
     )
+    context_line = f"Сейчас вы смотрите план подопечного: {trainee_label}."
+    if acting_can_edit:
+        context_line += (
+            " Изменения в этом меню будут сохраняться для подопечного, а не для вас."
+        )
+    text = f"{context_line}\n\n{text}"
     await show_screen(q, context, text, kb, trainee_user_id)
 
 
@@ -8487,6 +8516,9 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         await update_trainer_link_status(int(link[0]), "removed")
                         context.user_data.pop("acting_user_id", None)
                         context.user_data.pop("acting_can_edit", None)
+                        context.user_data.pop(RESOLVE_TARGET_USER_KEY, None)
+                        context.user_data.pop(KB_PAGE_STATE, None)
+                        context.user_data.pop(SHEET_VIEWS_KEY, None)
                         context.user_data.pop(TRAINER_TRAINEE_SETTINGS_MESSAGE_KEY, None)
                         context.user_data.pop(TRAINER_TRAINEE_LABEL_INPUT_KEY, None)
                         await _render_trainer_overview(
@@ -8534,6 +8566,9 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 if context.user_data.get("acting_user_id"):
                     context.user_data.pop("acting_user_id", None)
                     context.user_data.pop("acting_can_edit", None)
+                    context.user_data.pop(RESOLVE_TARGET_USER_KEY, None)
+                    context.user_data.pop(KB_PAGE_STATE, None)
+                    context.user_data.pop(SHEET_VIEWS_KEY, None)
                     context.user_data.pop(TRAINER_SETTINGS_MESSAGE_KEY, None)
                     context.user_data.pop(TRAINER_TRAINEE_SETTINGS_MESSAGE_KEY, None)
                     context.user_data.pop(TRAINER_TRAINEE_LABEL_INPUT_KEY, None)
@@ -8641,6 +8676,9 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     return
                 context.user_data["acting_user_id"] = trainee_id
                 context.user_data["acting_can_edit"] = bool(link[2])
+                context.user_data.pop(RESOLVE_TARGET_USER_KEY, None)
+                context.user_data.pop(KB_PAGE_STATE, None)
+                context.user_data.pop(SHEET_VIEWS_KEY, None)
                 context.user_data.pop(TRAINER_SETTINGS_MESSAGE_KEY, None)
                 context.user_data.pop(TRAINER_TRAINEE_SETTINGS_MESSAGE_KEY, None)
                 context.user_data.pop(TRAINER_TRAINEE_LABEL_INPUT_KEY, None)
