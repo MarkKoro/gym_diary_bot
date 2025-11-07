@@ -18,14 +18,13 @@ class FakeJob:
 
 
 class FakeScheduledJob(FakeJob):
-    def __init__(self, name, callback, time_obj, days, chat_id, data, timezone):
+    def __init__(self, name, callback, time_obj, days, chat_id, data):
         super().__init__(name)
         self.callback = callback
         self.time = time_obj
         self.days = days
         self.chat_id = chat_id
         self.data = data
-        self.timezone = timezone
 
 
 class FakeJobQueue:
@@ -36,8 +35,9 @@ class FakeJobQueue:
     def get_jobs_by_name(self, name: str):
         return self.jobs_by_name.get(name, [])
 
-    def run_daily(self, callback, time_obj, days, chat_id, name, data, timezone=None):
-        job = FakeScheduledJob(name, callback, time_obj, days, chat_id, data, timezone)
+    def run_daily(self, callback, time_obj, days, chat_id, name, data, job_kwargs=None):
+        _ = job_kwargs
+        job = FakeScheduledJob(name, callback, time_obj, days, chat_id, data)
         self.jobs_by_name.setdefault(name, []).append(job)
         self.created_jobs.append(job)
 
@@ -117,9 +117,8 @@ class ReminderTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(new_job.chat_id, 9300)
         self.assertEqual(new_job.time.hour, 7)
         self.assertEqual(new_job.time.minute, 45)
-        self.assertIsNone(new_job.time.tzinfo)
-        self.assertIsInstance(new_job.timezone, ZoneInfo)
-        self.assertEqual(new_job.timezone.key, "Asia/Irkutsk")
+        self.assertIsInstance(new_job.time.tzinfo, ZoneInfo)
+        self.assertEqual(new_job.time.tzinfo.key, "Asia/Irkutsk")
         self.assertEqual(new_job.data, {"user_id": user_id, "day_no": 2, "dow": 4})
 
     async def test_schedule_all_reminders_removes_orphan_jobs(self):

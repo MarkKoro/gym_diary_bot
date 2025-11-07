@@ -300,12 +300,12 @@ TRAINER_SETTINGS_MESSAGE_KEY = "trainer_settings_message"
 TRAINER_TRAINEE_SETTINGS_MESSAGE_KEY = "trainer_trainee_settings_message"
 TRAINER_LIST_LIMIT = 8
 TRAINER_MAX_TRAINEES_FREE = 5
-TRAINER_MAX_TRAINEES_SUB = 10
+TRAINER_MAX_TRAINEES_SUB: int | None = None
 
 
 async def get_trainer_max_trainees(
     trainer_user_id: int, db: "Database | None" = None
-) -> int:
+) -> int | None:
     _ = db
     sub = await get_active_subscription(trainer_user_id)
     if sub:
@@ -2319,9 +2319,7 @@ async def _render_trainer_overview(
         lines.append("• Пока нет подопечных.")
     lines.append("")
     if active_sub:
-        lines.append(
-            f"С активной подпиской вам доступно до {limit} подопечных."
-        )
+        lines.append("С активной подпиской вам доступно неограниченное количество подопечных.")
     else:
         lines.append(
             f"Без подписки вам доступно до {limit} подопечных одновременно."
@@ -6134,7 +6132,7 @@ def _schedule_reminder_job(
     if chat_id is None:
         return None
     zone = resolve_user_zone(tz_name)
-    tm = time(hour=hour_int, minute=minute_int)
+    tm = time(hour=hour_int, minute=minute_int, tzinfo=zone)
     job_queue.run_daily(
         reminder_job,
         tm,
@@ -6142,7 +6140,6 @@ def _schedule_reminder_job(
         chat_id=chat_id,
         name=job_name,
         data={"user_id": user_id, "day_no": day_int, "dow": dow_int},
-        timezone=zone,
     )
     return job_name
 
@@ -9074,20 +9071,21 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 trainee_user_id = int(link[2])
                 if req_action == "accept":
                     limit = await get_trainer_max_trainees(actor_user_id)
-                    accepted = await list_trainer_trainees(
-                        actor_user_id, limit=limit + 1, offset=0
-                    )
-                    if len(accepted) >= limit:
-                        await _render_trainer_overview(
-                            q,
-                            context,
-                            actor_user_id,
-                            message=(
-                                f"Лимит подопечных достигнут ({limit}). "
-                                "Оформите подписку, чтобы расширить лимит."
-                            ),
+                    if limit is not None:
+                        accepted = await list_trainer_trainees(
+                            actor_user_id, limit=limit + 1, offset=0
                         )
-                        return
+                        if len(accepted) >= limit:
+                            await _render_trainer_overview(
+                                q,
+                                context,
+                                actor_user_id,
+                                message=(
+                                    f"Лимит подопечных достигнут ({limit}). "
+                                    "Оформите подписку, чтобы расширить лимит."
+                                ),
+                            )
+                            return
                     reverse = await get_trainer_link(trainee_user_id, actor_user_id)
                     if reverse and str(reverse[1]) in {"accepted", "pending"}:
                         await _render_trainer_overview(
