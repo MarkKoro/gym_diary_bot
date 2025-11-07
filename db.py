@@ -2805,7 +2805,22 @@ async def get_active_trainer_link_for_trainee(trainee_user_id: int):
             """
             SELECT id, trainer_user_id, status, can_edit_plan, trainer_label, trainee_label
             FROM trainer_links
-            WHERE trainee_user_id = ? AND status IN ('pending', 'accepted')
+            WHERE trainee_user_id = ? AND status = 'accepted'
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            (trainee_user_id,),
+        )
+        return await cur.fetchone()
+
+
+async def get_latest_trainer_link_for_trainee(trainee_user_id: int):
+    async with connect_db() as db:
+        cur = await db.execute(
+            """
+            SELECT id, trainer_user_id, status, can_edit_plan, trainer_label, trainee_label
+            FROM trainer_links
+            WHERE trainee_user_id = ?
             ORDER BY created_at DESC
             LIMIT 1
             """,
@@ -2878,6 +2893,33 @@ async def update_trainer_link_status(link_id: int, status: str):
             (status, link_id),
         )
         await db.commit()
+
+
+async def deactivate_trainer_links(
+    trainer_user_id: int, *, new_status: str = "trainer_disabled"
+) -> list[int]:
+    async with connect_db() as db:
+        cur = await db.execute(
+            """
+            SELECT trainee_user_id
+            FROM trainer_links
+            WHERE trainer_user_id = ? AND status = 'accepted'
+            """,
+            (trainer_user_id,),
+        )
+        rows = await cur.fetchall()
+        trainee_ids = [int(row[0]) for row in rows if row and row[0] is not None]
+        if trainee_ids:
+            await db.execute(
+                """
+                UPDATE trainer_links
+                SET status = ?
+                WHERE trainer_user_id = ? AND status = 'accepted'
+                """,
+                (new_status, trainer_user_id),
+            )
+            await db.commit()
+        return trainee_ids
 
 
 async def update_trainer_link_permissions(link_id: int, can_edit_plan: int):
