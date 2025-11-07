@@ -103,6 +103,7 @@ from settings import (
     ADMIN_IDS,
     YK_TOKEN,
     SUBSCRIPTION_CHAT,
+    BOT_PUBLIC_LINK,
 )
 from db import (
     init_db,
@@ -3560,6 +3561,7 @@ MEASUREMENT_CATEGORY_INPUT_KEY = "measurement_category_input"
 MEASUREMENT_CATEGORY_BACK_KEY = "measurement_category_back_target"
 LIBRARY_CUSTOM_KEY = "library_custom_input"
 DAY_DELETE_SCOPE_KEY = "day_delete_scope"
+SHARE_RESULTS_TEXT_KEY = "settings_share_results_text"
 
 MEASUREMENT_CUSTOM_CATEGORY = {
     "code": "custom",
@@ -3576,6 +3578,196 @@ MEASUREMENT_CATEGORIES = [
 ]
 
 FEATURED_MEASUREMENTS = {"body_weight", "body_fat", "chest", "hips"}
+FEATURED_MEASUREMENTS_ORDER = ["body_weight", "body_fat", "chest", "hips"]
+
+
+def _parse_iso_datetime(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    text = str(value)
+    try:
+        dt = datetime.fromisoformat(text)
+    except ValueError:
+        if text.endswith("Z"):
+            try:
+                dt = datetime.fromisoformat(text[:-1] + "+00:00")
+            except ValueError:
+                dt = None
+        else:
+            try:
+                base = text.split(".")[0]
+                dt = datetime.fromisoformat(base)
+            except ValueError:
+                try:
+                    dt = datetime.strptime(text.split("T")[0], "%Y-%m-%d")
+                except ValueError:
+                    dt = None
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=UTC)
+    return dt
+
+
+def _plural_ru(value: int, forms: tuple[str, str, str]) -> str:
+    num = abs(value) % 100
+    if 10 <= num <= 20:
+        return forms[2]
+    num %= 10
+    if num == 1:
+        return forms[0]
+    if 2 <= num <= 4:
+        return forms[1]
+    return forms[2]
+
+
+def _calculate_training_weeks(first: datetime | None, last: datetime | None) -> int:
+    if first is None or last is None:
+        return 1
+    if last < first:
+        first, last = last, first
+    span_days = max(0, (last.date() - first.date()).days)
+    if span_days <= 0:
+        return 1
+    weeks = round(span_days / 7)
+    return max(1, weeks)
+
+
+async def _load_training_summary(user_id: int) -> tuple[int, datetime | None, datetime | None]:
+    async with connect_db() as db:
+        cur = await db.execute(
+            """
+            SELECT COUNT(*), MIN(date), MAX(date)
+            FROM sessions
+            WHERE user_id=? AND day_index>0
+            """,
+            (user_id,),
+        )
+        row = await cur.fetchone()
+    if not row:
+        return 0, None, None
+    count = int(row[0] or 0)
+    first = _parse_iso_datetime(row[1])
+    last = _parse_iso_datetime(row[2])
+    return count, first, last
+
+
+async def _load_featured_measurement_changes(
+    user_id: int,
+) -> list[tuple[str, float, dict]]:
+    entries: list[tuple[str, float, dict]] = []
+    async with connect_db() as db:
+        for metric in FEATURED_MEASUREMENTS_ORDER:
+            cur = await db.execute(
+                """
+                SELECT value, created_at
+                FROM user_measurements
+                WHERE user_id=? AND metric=?
+                ORDER BY created_at ASC
+                LIMIT 1
+                """,
+                (user_id, metric),
+            )
+            first_row = await cur.fetchone()
+            cur = await db.execute(
+                """
+                SELECT value, created_at
+                FROM user_measurements
+                WHERE user_id=? AND metric=?
+                ORDER BY created_at DESC
+                LIMIT 1
+                """,
+                (user_id, metric),
+            )
+            last_row = await cur.fetchone()
+            if not first_row or not last_row:
+                continue
+            try:
+                first_value = float(first_row[0])
+                last_value = float(last_row[0])
+            except (TypeError, ValueError):
+                continue
+            delta = last_value - first_value
+            if abs(delta) <= 0:
+                continue
+            item = get_measurement_item(metric) or {
+                "name": metric,
+                "unit": "",
+                "precision": 1,
+            }
+            precision = int(item.get("precision", 1) or 1)
+            threshold = 0.5 * 10 ** (-precision)
+            if abs(delta) < threshold:
+                continue
+            entries.append((metric, delta, item))
+    entries.sort(key=lambda entry: abs(entry[1]), reverse=True)
+    return entries[:2]
+
+
+def _format_share_measurement_line(item: dict, delta: float) -> str:
+    precision = int(item.get("precision", 1) or 1)
+    formatted = f"{delta:+.{precision}f}"
+    unit = (item.get("unit") or "").strip()
+    unit_part = f" {unit}" if unit else ""
+    name = item.get("short_name") or item.get("name") or item.get("code") or ""
+    return f"{name}: {formatted}{unit_part}".strip()
+
+
+def _get_public_link() -> str:
+    link = (BOT_PUBLIC_LINK or "").strip()
+    if link:
+        return link
+    return "https://t.me/<имя_бота>"
+
+
+async def build_share_results_text(user_id: int) -> str:
+    trainings_count, first, last = await _load_training_summary(user_id)
+    measurement_entries = await _load_featured_measurement_changes(user_id)
+    link = _get_public_link()
+    has_training_data = trainings_count > 0 and first is not None and last is not None
+    has_measurements = bool(measurement_entries)
+    if not has_training_data or not has_measurements:
+        lines = [
+            "Я только начинаю тренироваться с этим ботом 💪",
+            "Скоро здесь будет мой прогресс.",
+            "",
+            "Присоединяйся:",
+            link,
+        ]
+        return "\n".join(lines)
+
+    weeks = _calculate_training_weeks(first, last)
+    week_label = _plural_ru(weeks, ("неделю", "недели", "недель"))
+    training_label = _plural_ru(
+        trainings_count, ("тренировку", "тренировки", "тренировок")
+    )
+    header = (
+        f"Я тренируюсь с ботом уже {weeks} {week_label} "
+        f"({trainings_count} {training_label}) 💪"
+    )
+    lines = [header]
+    for _metric, delta, item in measurement_entries:
+        lines.append(_format_share_measurement_line(item, delta))
+    lines.append("")
+    lines.append(
+        "Я молодец. Ты тоже можешь посмотреть, насколько ты молодец, вместе с этим ботом:"
+    )
+    lines.append(link)
+    return "\n".join(lines)
+
+
+def build_share_results_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [InlineKeyboardButton("⬅️ Назад", callback_data="menu:settings")],
+            [
+                InlineKeyboardButton(
+                    "📋 Текст для копирования",
+                    callback_data="settings:share_results:copy",
+                )
+            ],
+        ]
+    )
 
 
 def _measurement_item(
@@ -9013,6 +9205,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         if data == "menu:settings":
+            context.user_data.pop(SHARE_RESULTS_TEXT_KEY, None)
             settings = await fetch_user_settings(target_user_id)
             n = settings[1] if settings else 0
             tz = await get_user_timezone(target_user_id)
@@ -9047,6 +9240,8 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "🧑‍🏫 Тренер / подопечный — подключи тренера по коду или веди своих подопечных.",
                 "",
                 "💳 Подписка — поддержка проекта и расширенный функционал (больше подопечных, без рекламных рассылок).",
+                "",
+                "📤 Поделиться результатом — сгенерировать короткий текст с вашим прогрессом, чтобы отправить его друзьям.",
             ]
             active_sub = await get_active_subscription(target_user_id)
             if active_sub and active_sub.get("expires_at"):
@@ -9062,6 +9257,22 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             text = "\n".join(text_lines)
             kb = await build_settings_keyboard_for_user(context, target_user_id)
             await show_screen(q, context, text, kb, target_user_id)
+            return
+
+        if data == "settings:share_results":
+            share_text = await build_share_results_text(target_user_id)
+            context.user_data[SHARE_RESULTS_TEXT_KEY] = share_text
+            kb = build_share_results_keyboard()
+            await show_screen(q, context, share_text, kb, target_user_id)
+            return
+
+        if data == "settings:share_results:copy":
+            share_text = context.user_data.get(SHARE_RESULTS_TEXT_KEY)
+            if not share_text:
+                share_text = await build_share_results_text(target_user_id)
+                context.user_data[SHARE_RESULTS_TEXT_KEY] = share_text
+            kb = build_share_results_keyboard()
+            await show_screen(q, context, share_text, kb, target_user_id)
             return
 
         if data.startswith("measure:"):
