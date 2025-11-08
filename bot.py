@@ -3597,7 +3597,7 @@ CUSTOM_MEASUREMENT_REGISTRY: dict[str, dict] = {}
 SHARE_RESULTS_STATE_KEY = "settings_share_results_state"
 SHARE_RESULTS_EXERCISE_LIMIT = 5
 SHARE_RESULTS_WINDOW_DAYS = 90
-SHARE_RESULTS_COPY_TEXT_MAX_LENGTH = 256
+SHARE_RESULTS_COPY_TEXT_MAX_LENGTH = 4096
 
 
 @dataclass(frozen=True)
@@ -4031,7 +4031,7 @@ def build_share_results_keyboard(
     rows: list[list[InlineKeyboardButton]] = [
         [
             InlineKeyboardButton(
-                "📋 Текст для копирования",
+                "📋 Скопировать",
                 copy_text=CopyTextButton(copy_text),
             )
         ]
