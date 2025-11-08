@@ -2,6 +2,7 @@ from bot import (
     SHARE_RESULTS_COPY_TEXT_MAX_LENGTH,
     ShareExerciseProgress,
     _render_share_results_copy_text,
+    build_share_results_keyboard,
 )
 
 
@@ -51,3 +52,10 @@ def test_share_results_copy_text_is_shortened_when_too_long():
 
     assert len(copy_text.encode("utf-8")) <= SHARE_RESULTS_COPY_TEXT_MAX_LENGTH
     assert copy_text.endswith(f"Подключайся 👉 {link}")
+
+
+def test_build_share_results_keyboard_uses_callback_button():
+    kb = build_share_results_keyboard(enable_shuffle=False)
+
+    assert kb.inline_keyboard[0][0].text == "📋 Скопировать"
+    assert kb.inline_keyboard[0][0].callback_data == "settings:share_results:copy"
