@@ -4,6 +4,7 @@ import sys
 import tempfile
 import importlib
 import unittest
+from datetime import datetime, timedelta, UTC
 from types import SimpleNamespace
 
 
@@ -129,6 +130,50 @@ class MeasurementDbTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(seconds_cnt, 0)
         self.assertAlmostEqual(weight_val, 40.0)
         self.assertEqual(details, [(12, 0, 40.0), (12, 0, 40.0)])
+
+    async def test_list_exercise_weight_progress_orders_by_delta(self):
+        user_id = await db.get_or_create_user(3030, "progress-user")
+        bench_id = await db.get_or_create_exercise("Жим лёжа тест", "chest")
+        squat_id = await db.get_or_create_exercise("Присед тест", "legs")
+        await db.add_user_exercise(user_id, 1, bench_id)
+        await db.add_user_exercise(user_id, 1, squat_id)
+        async with db.connect_db() as conn:
+            cur = await conn.execute(
+                "SELECT id FROM user_exercises WHERE user_id=? AND exercise_id=?",
+                (user_id, bench_id),
+            )
+            bench_ue = (await cur.fetchone())[0]
+            cur = await conn.execute(
+                "SELECT id FROM user_exercises WHERE user_id=? AND exercise_id=?",
+                (user_id, squat_id),
+            )
+            squat_ue = (await cur.fetchone())[0]
+
+        today = datetime.now(UTC).date()
+        first_day = (today - timedelta(days=25)).isoformat()
+        mid_day = (today - timedelta(days=15)).isoformat()
+        last_day = (today - timedelta(days=5)).isoformat()
+
+        session1 = await db.get_or_create_today_session(user_id, first_day, day_index=1)
+        session2 = await db.get_or_create_today_session(user_id, mid_day, day_index=1)
+        session3 = await db.get_or_create_today_session(user_id, last_day, day_index=1)
+
+        await db.add_set(session1, bench_ue, reps=10, weight=60)
+        await db.add_set(session2, bench_ue, reps=8, weight=65)
+        await db.add_set(session3, bench_ue, reps=6, weight=70)
+
+        await db.add_set(session1, squat_ue, reps=8, weight=80)
+        await db.add_set(session2, squat_ue, reps=6, weight=95)
+        await db.add_set(session3, squat_ue, reps=4, weight=110)
+
+        progress = await db.list_exercise_weight_progress(user_id, days=60)
+        self.assertEqual(len(progress), 2)
+        self.assertEqual(progress[0]["name"], "Присед тест")
+        self.assertAlmostEqual(progress[0]["start_weight"], 80.0)
+        self.assertAlmostEqual(progress[0]["end_weight"], 110.0)
+        self.assertAlmostEqual(progress[0]["delta"], 30.0)
+        self.assertEqual(progress[1]["name"], "Жим лёжа тест")
+        self.assertAlmostEqual(progress[1]["delta"], 10.0)
 
     async def test_delete_custom_measurement_removes_entries(self):
         user_id = await db.get_or_create_user(202, "measure")
