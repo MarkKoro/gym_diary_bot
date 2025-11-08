@@ -9670,12 +9670,13 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 }
             if copy_text:
                 await q.answer("Текст отправлен отдельным сообщением")
+                actor_user_id = q.from_user.id if q.from_user else target_user_id
                 if len(copy_text) <= 4096:
-                    await context.bot.send_message(target_user_id, copy_text)
+                    await context.bot.send_message(actor_user_id, copy_text)
                 else:
                     for index in range(0, len(copy_text), 4096):
                         await context.bot.send_message(
-                            target_user_id, copy_text[index : index + 4096]
+                            actor_user_id, copy_text[index : index + 4096]
                         )
             else:
                 await q.answer("Нет текста для копирования", show_alert=True)
