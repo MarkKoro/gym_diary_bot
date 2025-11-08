@@ -3334,6 +3334,7 @@ async def finish_fill_editor(
         ue_id=state.ue_id,
         group=view.group,
         prefs=prefs,
+        context=context,
     )
     await show_screen(q, context, view.text, kb, user_id)
 
@@ -5902,6 +5903,7 @@ async def show_library_exercise_view(
         group=group,
         prefs=prefs,
         is_library=True,
+        context=context,
     )
     await show_screen(q, context, full_text, kb, user_id)
     return view.exercise_id, view.group
@@ -6109,6 +6111,7 @@ def build_exercise_actions_markup(
     prefs: UiPreferences,
     is_library: bool = False,
     back_callback: str | None = None,
+    context: ContextTypes.DEFAULT_TYPE | None = None,
 ):
     target_day = 0 if is_library else day
     callback_back = back_callback
@@ -8510,6 +8513,7 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     group=view.group,
                     prefs=prefs,
                     is_library=is_library,
+                    context=context,
                 )
             output_text = view.text if mode != "edit" else text
             text, kb = prepare_ui_output(output_text, kb, prefs)
@@ -8554,6 +8558,7 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 group=view.group,
                 prefs=prefs,
                 is_library=bool(note_state.get("is_library")),
+                context=context,
             )
             text_out, kb_out = prepare_ui_output(view.text, kb, prefs)
             await context.bot.edit_message_text(
@@ -8645,6 +8650,7 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             group=view.group,
             prefs=prefs,
             is_library=is_library,
+            context=context,
         )
         text, kb = prepare_ui_output(view.text, kb, prefs)
         await context.bot.edit_message_text(
@@ -8855,6 +8861,7 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             group=view.group,
             prefs=prefs,
             is_library=is_library,
+            context=context,
         )
         if chat_id and msg_id:
             text_view, kb = prepare_ui_output(view.text, kb, prefs)
@@ -10774,6 +10781,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     group=refreshed.group,
                     prefs=prefs,
                     is_library=is_library,
+                    context=context,
                 )
                 await show_screen(q, context, refreshed.text, kb, target_user_id)
                 return
@@ -11799,6 +11807,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     group=view.group,
                     prefs=prefs,
                     is_library=is_library,
+                    context=context,
                 )
                 await show_screen(q, context, view.text, kb, target_user_id)
                 return
@@ -11814,6 +11823,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     group=view.group,
                     prefs=prefs,
                     is_library=is_library,
+                    context=context,
                 )
                 await show_screen(q, context, view.text, kb, target_user_id)
                 return
@@ -12171,6 +12181,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         group=view.group,
                         prefs=prefs,
                         is_library=is_library,
+                        context=context,
                     )
                     base_rows = [row[:] for row in base_markup.inline_keyboard]
                     nav_rows: list[list[InlineKeyboardButton]] = []
@@ -12263,6 +12274,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             group=view.group,
             prefs=prefs,
             is_library=is_library,
+            context=context,
         )
         await show_screen(q, context, view.text, kb, target_user_id)
         return

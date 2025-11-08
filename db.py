@@ -618,7 +618,7 @@ async def init_db():
         await _seed_exercises(db, WORKOUT_EXERCISES, update_group=False)
         await db.commit()
 
-async def _generate_trainer_code_value() -> str:
+def _generate_trainer_code_value() -> str:
     return "TR-" + secrets.token_hex(3).upper()
 
 
