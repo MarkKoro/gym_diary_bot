@@ -23,7 +23,7 @@ def test_share_results_copy_text_contains_full_results_within_limit():
     assert "Талия: −4 см" in copy_text
     assert "• Жим лёжа: +20 кг" in copy_text
     assert "• Присед: +25 кг" in copy_text
-    assert len(copy_text) <= SHARE_RESULTS_COPY_TEXT_MAX_LENGTH
+    assert len(copy_text.encode("utf-8")) <= SHARE_RESULTS_COPY_TEXT_MAX_LENGTH
 
 
 def test_share_results_copy_text_is_shortened_when_too_long():
@@ -49,5 +49,5 @@ def test_share_results_copy_text_is_shortened_when_too_long():
 
     copy_text = _render_share_results_copy_text(header, measurements, exercises, link)
 
-    assert len(copy_text) <= SHARE_RESULTS_COPY_TEXT_MAX_LENGTH
+    assert len(copy_text.encode("utf-8")) <= SHARE_RESULTS_COPY_TEXT_MAX_LENGTH
     assert copy_text.endswith(f"Подключайся 👉 {link}")

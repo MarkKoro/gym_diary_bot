@@ -3857,15 +3857,34 @@ def _render_share_results_text(
     return "\n".join(lines)
 
 
-def _truncate_with_ellipsis(text: str, max_length: int) -> str:
-    if len(text) <= max_length:
+def _truncate_with_ellipsis(text: str, max_length_bytes: int) -> str:
+    encoded = text.encode("utf-8")
+    if len(encoded) <= max_length_bytes:
         return text
-    if max_length <= 1:
-        return text[:max_length]
-    trimmed = text[: max_length - 1].rstrip()
-    if not trimmed:
-        return text[:max_length]
-    return f"{trimmed}…"
+    if max_length_bytes <= 0:
+        return ""
+
+    ellipsis = "…"
+    ellipsis_bytes = ellipsis.encode("utf-8")
+
+    if max_length_bytes <= len(ellipsis_bytes):
+        truncated = encoded[:max_length_bytes]
+        return truncated.decode("utf-8", "ignore")
+
+    trimmed_bytes = encoded[: max_length_bytes - len(ellipsis_bytes)]
+    trimmed_text = trimmed_bytes.decode("utf-8", "ignore").rstrip()
+    if not trimmed_text:
+        return trimmed_bytes.decode("utf-8", "ignore")
+
+    candidate = f"{trimmed_text}{ellipsis}"
+    if len(candidate.encode("utf-8")) <= max_length_bytes:
+        return candidate
+
+    return trimmed_text
+
+
+def _copy_text_length(text: str) -> int:
+    return len(text.encode("utf-8"))
 
 
 def _render_share_results_copy_text(
@@ -3910,7 +3929,7 @@ def _render_share_results_copy_text(
         return "\n".join(parts)
 
     text = _join(lines)
-    if len(text) <= SHARE_RESULTS_COPY_TEXT_MAX_LENGTH:
+    if _copy_text_length(text) <= SHARE_RESULTS_COPY_TEXT_MAX_LENGTH:
         return text
 
     header_line = lines[0]
@@ -3918,15 +3937,17 @@ def _render_share_results_copy_text(
     middle_lines = lines[1:-2]
 
     trimmed_middle = list(middle_lines)
-    while trimmed_middle and len(_join([header_line, *trimmed_middle, *tail_lines])) > SHARE_RESULTS_COPY_TEXT_MAX_LENGTH:
+    while trimmed_middle and _copy_text_length(
+        _join([header_line, *trimmed_middle, *tail_lines])
+    ) > SHARE_RESULTS_COPY_TEXT_MAX_LENGTH:
         trimmed_middle.pop()
     candidate = _join([header_line, *trimmed_middle, *tail_lines])
-    if len(candidate) <= SHARE_RESULTS_COPY_TEXT_MAX_LENGTH:
+    if _copy_text_length(candidate) <= SHARE_RESULTS_COPY_TEXT_MAX_LENGTH:
         return candidate
 
     trimmed_middle = [line for line in trimmed_middle if line.strip()]
     candidate = _join([header_line, *trimmed_middle, *tail_lines])
-    if len(candidate) <= SHARE_RESULTS_COPY_TEXT_MAX_LENGTH:
+    if _copy_text_length(candidate) <= SHARE_RESULTS_COPY_TEXT_MAX_LENGTH:
         return candidate
 
     fallback_lines: list[str] = []
@@ -3935,18 +3956,18 @@ def _render_share_results_copy_text(
         fallback_lines.append("")
     fallback_lines.append(call_to_action)
     candidate = _join(fallback_lines)
-    if len(candidate) <= SHARE_RESULTS_COPY_TEXT_MAX_LENGTH:
+    if _copy_text_length(candidate) <= SHARE_RESULTS_COPY_TEXT_MAX_LENGTH:
         return candidate
 
     if header_line:
         suffix = f"\n\n{call_to_action}"
-        available = SHARE_RESULTS_COPY_TEXT_MAX_LENGTH - len(suffix)
+        available = SHARE_RESULTS_COPY_TEXT_MAX_LENGTH - _copy_text_length(suffix)
         if available > 0:
             shortened_header = _truncate_with_ellipsis(header_line, available)
             shortened_header = shortened_header.strip()
             if shortened_header:
                 candidate = f"{shortened_header}{suffix}"
-                if len(candidate) <= SHARE_RESULTS_COPY_TEXT_MAX_LENGTH:
+                if _copy_text_length(candidate) <= SHARE_RESULTS_COPY_TEXT_MAX_LENGTH:
                     return candidate
 
     return _truncate_with_ellipsis(call_to_action, SHARE_RESULTS_COPY_TEXT_MAX_LENGTH)
