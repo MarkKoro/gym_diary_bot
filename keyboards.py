@@ -187,12 +187,6 @@ def settings_kb(
                 ],
                 [
                     InlineKeyboardButton(
-                        dual("🔁 Изменить день", "Настроить программу дня"),
-                        callback_data="set:edit_day",
-                    )
-                ],
-                [
-                    InlineKeyboardButton(
                         dual(
                             "📅 Количество тренировок",
                             "Выбрать количество тренировочных дней",
@@ -407,99 +401,6 @@ def settings_groups_kb(groups: list[tuple[str, str]], context=None):
     rows.append([InlineKeyboardButton(BACK_BTN, callback_data="menu:settings")])
     return InlineKeyboardMarkup(rows)
 
-
-def edit_day_select_kb(days: list[tuple[int, str]], context=None):
-    editing_allowed = _is_editing_allowed(context)
-    rows = []
-    if editing_allowed:
-        for idx, label in days:
-            display_label = (label or "").strip() or f"{t('DAY')} {idx}"
-            rows.append(
-                [
-                    InlineKeyboardButton(
-                        dual(display_label, f"Настроить {display_label}"),
-                        callback_data=f"set:edit_day:{idx}",
-                    )
-                ]
-            )
-    rows.append([InlineKeyboardButton(BACK_BTN, callback_data="menu:settings")])
-    return InlineKeyboardMarkup(rows)
-
-
-def edit_day_mode_kb(day_index: int, *, context=None):
-    editing_allowed = _is_editing_allowed(context)
-    rows: list[list[InlineKeyboardButton]] = []
-    if editing_allowed:
-        rows.extend(
-            [
-                [
-                    InlineKeyboardButton(
-                        "🏋️ Силовая",
-                        callback_data=f"set:edit_day:{day_index}:strength",
-                    )
-                ],
-                [
-                    InlineKeyboardButton(
-                        "🏋️‍♀️ Гири", callback_data=f"set:edit_day:{day_index}:kb"
-                    )
-                ],
-                [
-                    InlineKeyboardButton(
-                        "🤸 Воркаут", callback_data=f"set:edit_day:{day_index}:workout"
-                    )
-                ],
-                [
-                    InlineKeyboardButton(
-                        "⏱️ Меткон", callback_data=f"set:edit_day:{day_index}:metcon"
-                    )
-                ],
-            ]
-        )
-    rows.append([InlineKeyboardButton(BACK_BTN, callback_data="set:edit_day")])
-    return InlineKeyboardMarkup(rows)
-
-
-def edit_day_strength_kb(day_index: int, *, context=None):
-    editing_allowed = _is_editing_allowed(context)
-    rows: list[list[InlineKeyboardButton]] = []
-    if editing_allowed:
-        rows.append(
-            [
-                InlineKeyboardButton(
-                    dual("🗂 Группы", "Выбрать группы упражнений"),
-                    callback_data=f"day:add_ex:{day_index}",
-                )
-            ]
-        )
-    rows.append(
-        [
-            InlineKeyboardButton(
-                dual("📋 Открыть день", "Открыть выбранный день"),
-                callback_data=f"day:open:{day_index}",
-            )
-        ]
-    )
-    rows.append([InlineKeyboardButton(BACK_BTN, callback_data=f"set:edit_day:{day_index}")])
-    return InlineKeyboardMarkup(rows)
-
-
-def edit_day_special_kb(day_index: int, group: str, label: str):
-    return InlineKeyboardMarkup(
-        [
-            [
-                InlineKeyboardButton(
-                    label, callback_data=f"day:add:{day_index}:mg:{group}"
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    dual("📋 Открыть день", "Открыть выбранный день"),
-                    callback_data=f"day:open:{day_index}",
-                )
-            ],
-            [InlineKeyboardButton(BACK_BTN, callback_data=f"set:edit_day:{day_index}")],
-        ]
-    )
 
 def days_count_kb(context=None):
     editing_allowed = _is_editing_allowed(context)
@@ -2029,38 +1930,6 @@ def measurements_category_kb(
             )
     rows.append([InlineKeyboardButton(BACK_BTN, callback_data=back_callback)])
     return InlineKeyboardMarkup(rows)
-
-
-def confirm_day_reset_kb(day_index: int, mode: str, *, context=None):
-    editing_allowed = _is_editing_allowed(context)
-    rows: list[list[InlineKeyboardButton]] = []
-    if editing_allowed:
-        rows.append(
-            [
-                InlineKeyboardButton(
-                    dual(
-                        "✅ Начать сначала",
-                        "Очистить упражнения и начать настройку заново",
-                    ),
-                    callback_data=f"set:edit_day:{day_index}:{mode}:reset",
-                )
-            ]
-        )
-        rows.append(
-            [
-                InlineKeyboardButton(
-                    dual(
-                        "↩️ Оставить упражнения",
-                        "Сохранить текущий план и продолжить настройку",
-                    ),
-                    callback_data=f"set:edit_day:{day_index}:{mode}:keep",
-                )
-            ]
-        )
-    rows.append([InlineKeyboardButton(BACK_BTN, callback_data=f"set:edit_day:{day_index}")])
-    return InlineKeyboardMarkup(rows)
-
-
 def measurements_metric_kb(
     action: str,
     category: str,
