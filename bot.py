@@ -1,14 +1,16 @@
 import asyncio
 import logging
 import math
+import random
 import secrets
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, time, timedelta, UTC
+from html import escape
 from zoneinfo import ZoneInfo
 from collections import defaultdict
 from types import SimpleNamespace
-from typing import Any, TYPE_CHECKING
+from typing import Any, Sequence, TYPE_CHECKING
 import httpx
 import re
 from telegram import (
@@ -20,6 +22,7 @@ from telegram import (
     LabeledPrice,
     CopyTextButton,
 )
+from telegram.constants import ParseMode
 from telegram.error import (
     BadRequest,
     Forbidden,
@@ -198,6 +201,7 @@ from db import (
     update_payment_status,
     get_payment_by_external_id,
     get_latest_pending_payment,
+    list_exercise_weight_progress,
     list_broadcast_targets,
     find_user_by_tg_id,
     find_user_by_id,
@@ -2622,13 +2626,14 @@ async def safe_update_screen(
     reply_markup=None,
     *,
     remember: bool = True,
+    **kwargs,
 ):
     message = getattr(q, "message", None)
     chat = getattr(message, "chat", None) if message else None
     chat_id = getattr(chat, "id", None) if chat else getattr(message, "chat_id", None)
     message_id = getattr(message, "message_id", None)
     try:
-        await q.edit_message_text(text, reply_markup=reply_markup)
+        await q.edit_message_text(text, reply_markup=reply_markup, **kwargs)
     except BadRequest as e:
         error_text = (e.message or "").lower()
         if "not modified" in error_text:
@@ -2665,12 +2670,14 @@ async def safe_update_screen(
                     chat_id,
                     text,
                     reply_markup=reply_markup,
+                    **kwargs,
                 )
             else:
                 new_message = await context.bot.send_message(
                     chat_id,
                     text,
                     reply_markup=reply_markup,
+                    **kwargs,
                 )
             return new_message
         if "message to edit not found" in error_text:
@@ -2682,12 +2689,14 @@ async def safe_update_screen(
                     chat_id,
                     text,
                     reply_markup=reply_markup,
+                    **kwargs,
                 )
             else:
                 new_message = await context.bot.send_message(
                     chat_id,
                     text,
                     reply_markup=reply_markup,
+                    **kwargs,
                 )
             return new_message
         raise
@@ -2702,12 +2711,18 @@ async def show_screen(
     text: str,
     reply_markup: InlineKeyboardMarkup | None,
     user_id: int,
+    **kwargs,
 ) -> None:
     prefs = await load_ui_preferences(user_id)
     prepared_text, prepared_markup = prepare_ui_output(text, reply_markup, prefs)
     remember = not context.user_data.get("wizard_onboarding")
     return await safe_update_screen(
-        q, context, prepared_text, prepared_markup, remember=remember
+        q,
+        context,
+        prepared_text,
+        prepared_markup,
+        remember=remember,
+        **kwargs,
     )
 
 
@@ -3623,7 +3638,6 @@ MEASUREMENT_CATEGORY_INPUT_KEY = "measurement_category_input"
 MEASUREMENT_CATEGORY_BACK_KEY = "measurement_category_back_target"
 LIBRARY_CUSTOM_KEY = "library_custom_input"
 DAY_DELETE_SCOPE_KEY = "day_delete_scope"
-SHARE_RESULTS_TEXT_KEY = "settings_share_results_text"
 
 MEASUREMENT_CUSTOM_CATEGORY = {
     "code": "custom",
@@ -3631,6 +3645,27 @@ MEASUREMENT_CUSTOM_CATEGORY = {
     "name": "Свои замеры",
 }
 CUSTOM_MEASUREMENT_REGISTRY: dict[str, dict] = {}
+
+SHARE_RESULTS_STATE_KEY = "settings_share_results_state"
+SHARE_RESULTS_EXERCISE_LIMIT = 5
+SHARE_RESULTS_WINDOW_DAYS = 30
+
+
+@dataclass(frozen=True)
+class ShareExerciseProgress:
+    name: str
+    start_weight: float
+    end_weight: float
+    delta: float
+
+
+@dataclass
+class ShareResultsView:
+    text_html: str
+    copy_text: str
+    all_exercises: list[ShareExerciseProgress]
+    displayed_exercises: list[ShareExerciseProgress]
+
 
 MEASUREMENT_CATEGORIES = [
     {"code": "body", "letter": "A", "name": "Масса/состав тела"},
@@ -3763,7 +3798,7 @@ async def _load_featured_measurement_changes(
                 continue
             entries.append((metric, delta, item))
     entries.sort(key=lambda entry: abs(entry[1]), reverse=True)
-    return entries[:2]
+    return entries[:4]
 
 
 def _format_share_measurement_line(item: dict, delta: float) -> str:
@@ -3782,21 +3817,142 @@ def _get_public_link() -> str:
     return "https://t.me/<имя_бота>"
 
 
-async def build_share_results_text(user_id: int) -> str:
+def _format_weight_value(value: float) -> str:
+    text = f"{value:.1f}"
+    if "." in text:
+        text = text.rstrip("0").rstrip(".")
+    if not text:
+        return "0"
+    return text
+
+
+def _convert_progress_entries(
+    entries: Sequence[dict],
+) -> list[ShareExerciseProgress]:
+    results: list[ShareExerciseProgress] = []
+    for entry in entries:
+        try:
+            delta = float(entry.get("delta", 0.0) or 0.0)
+            start = float(entry.get("start_weight", 0.0) or 0.0)
+            end = float(entry.get("end_weight", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            continue
+        name = str(entry.get("name") or "").strip()
+        if not name or delta <= 0 or end <= 0 or end <= start:
+            continue
+        results.append(
+            ShareExerciseProgress(
+                name=name,
+                start_weight=start,
+                end_weight=end,
+                delta=end - start,
+            )
+        )
+    results.sort(key=lambda item: item.delta, reverse=True)
+    return results
+
+
+def _select_share_exercises(
+    all_exercises: Sequence[ShareExerciseProgress],
+    *,
+    randomize: bool = False,
+) -> list[ShareExerciseProgress]:
+    items = list(all_exercises)
+    if not items:
+        return []
+    limit = min(SHARE_RESULTS_EXERCISE_LIMIT, len(items))
+    if randomize and len(items) > limit:
+        selected = random.sample(items, k=limit)
+    else:
+        selected = items[:limit]
+    return sorted(selected, key=lambda entry: entry.delta, reverse=True)
+
+
+def _render_share_results_text(
+    header: str,
+    measurements: Sequence[str],
+    exercises: Sequence[ShareExerciseProgress],
+    link: str,
+) -> str:
+    lines: list[str] = [escape(header)]
+    body_lines: list[str] = []
+    if measurements:
+        body_lines.append("Вот мои результаты:")
+        body_lines.append("Изменения в теле:")
+        for line in measurements:
+            body_lines.append(escape(line))
+    if exercises:
+        if not body_lines:
+            body_lines.append("Вот мои результаты:")
+        body_lines.append("Силовой прогресс за последний месяц:")
+        for progress in exercises:
+            delta_text = _format_weight_value(progress.delta)
+            start_text = _format_weight_value(progress.start_weight)
+            end_text = _format_weight_value(progress.end_weight)
+            body_lines.append(
+                "• {name}: +{delta} кг (с {start} до {end} кг)".format(
+                    name=escape(progress.name),
+                    delta=delta_text,
+                    start=start_text,
+                    end=end_text,
+                )
+            )
+    if body_lines:
+        lines.append("")
+        lines.extend(body_lines)
+    lines.append("")
+    lines.append(
+        "Это мой результат. Если ты хочешь так же прогрессировать со мной, то "
+        f"<a href=\"{escape(link)}\">Подключайся</a>."
+    )
+    return "\n".join(lines)
+
+
+async def build_share_results_view(
+    user_id: int,
+    *,
+    all_exercises: Sequence[ShareExerciseProgress] | None = None,
+    sample: Sequence[ShareExerciseProgress] | None = None,
+) -> ShareResultsView:
     trainings_count, first, last = await _load_training_summary(user_id)
     measurement_entries = await _load_featured_measurement_changes(user_id)
     link = _get_public_link()
     has_training_data = trainings_count > 0 and first is not None and last is not None
-    has_measurements = bool(measurement_entries)
-    if not has_training_data or not has_measurements:
+    measurements = [
+        _format_share_measurement_line(item, delta)
+        for _metric, delta, item in measurement_entries
+    ]
+    if all_exercises is None:
+        progress_entries = await list_exercise_weight_progress(
+            user_id, days=SHARE_RESULTS_WINDOW_DAYS
+        )
+        all_exercises = _convert_progress_entries(progress_entries)
+    else:
+        all_exercises = list(all_exercises)
+    if sample is None:
+        displayed = _select_share_exercises(all_exercises)
+    else:
+        displayed = _select_share_exercises(sample, randomize=False)
+        if not displayed and all_exercises:
+            displayed = _select_share_exercises(all_exercises)
+
+    if not has_training_data and not measurements and not displayed:
         lines = [
             "Я только начинаю тренироваться с этим ботом 💪",
             "Скоро здесь будет мой прогресс.",
             "",
-            "Присоединяйся:",
-            link,
+            (
+                "Если хочешь начать вместе со мной, то "
+                f"<a href=\"{escape(link)}\">Подключайся</a>."
+            ),
         ]
-        return "\n".join(lines)
+        fallback_text = "\n".join(lines)
+        return ShareResultsView(
+            text_html=fallback_text,
+            copy_text=fallback_text,
+            all_exercises=list(all_exercises),
+            displayed_exercises=list(displayed),
+        )
 
     weeks = _calculate_training_weeks(first, last)
     week_label = _plural_ru(weeks, ("неделю", "недели", "недель"))
@@ -3807,29 +3963,37 @@ async def build_share_results_text(user_id: int) -> str:
         f"Я тренируюсь с ботом уже {weeks} {week_label} "
         f"({trainings_count} {training_label}) 💪"
     )
-    lines = [header]
-    for _metric, delta, item in measurement_entries:
-        lines.append(_format_share_measurement_line(item, delta))
-    lines.append("")
-    lines.append(
-        "Я молодец. Ты тоже можешь посмотреть, насколько ты молодец, вместе с этим ботом:"
+    text_html = _render_share_results_text(header, measurements, displayed, link)
+    return ShareResultsView(
+        text_html=text_html,
+        copy_text=text_html,
+        all_exercises=list(all_exercises),
+        displayed_exercises=list(displayed),
     )
-    lines.append(link)
-    return "\n".join(lines)
 
 
-def build_share_results_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
+def build_share_results_keyboard(
+    copy_text: str, *, enable_shuffle: bool
+) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = [
         [
-            [InlineKeyboardButton("⬅️ Назад", callback_data="menu:settings")],
+            InlineKeyboardButton(
+                "📋 Текст для копирования",
+                copy_text=CopyTextButton(copy_text),
+            )
+        ]
+    ]
+    if enable_shuffle:
+        rows.append(
             [
                 InlineKeyboardButton(
-                    "📋 Текст для копирования",
-                    callback_data="settings:share_results:copy",
+                    "🎲 Случайная генерация",
+                    callback_data="settings:share_results:shuffle",
                 )
-            ],
-        ]
-    )
+            ]
+        )
+    rows.append([InlineKeyboardButton("⬅️ Назад", callback_data="menu:settings")])
+    return InlineKeyboardMarkup(rows)
 
 
 def _measurement_item(
@@ -9366,7 +9530,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         if data == "menu:settings":
-            context.user_data.pop(SHARE_RESULTS_TEXT_KEY, None)
+            context.user_data.pop(SHARE_RESULTS_STATE_KEY, None)
             settings = await fetch_user_settings(target_user_id)
             n = settings[1] if settings else 0
             tz = await get_user_timezone(target_user_id)
@@ -9421,19 +9585,53 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         if data == "settings:share_results":
-            share_text = await build_share_results_text(target_user_id)
-            context.user_data[SHARE_RESULTS_TEXT_KEY] = share_text
-            kb = build_share_results_keyboard()
-            await show_screen(q, context, share_text, kb, target_user_id)
+            view = await build_share_results_view(target_user_id)
+            context.user_data[SHARE_RESULTS_STATE_KEY] = {
+                "all_exercises": list(view.all_exercises),
+            }
+            enable_shuffle = len(view.all_exercises) > len(view.displayed_exercises)
+            kb = build_share_results_keyboard(
+                view.copy_text, enable_shuffle=enable_shuffle
+            )
+            await show_screen(
+                q,
+                context,
+                view.text_html,
+                kb,
+                target_user_id,
+                parse_mode=ParseMode.HTML,
+            )
+            await q.answer()
             return
 
-        if data == "settings:share_results:copy":
-            share_text = context.user_data.get(SHARE_RESULTS_TEXT_KEY)
-            if not share_text:
-                share_text = await build_share_results_text(target_user_id)
-                context.user_data[SHARE_RESULTS_TEXT_KEY] = share_text
-            kb = build_share_results_keyboard()
-            await show_screen(q, context, share_text, kb, target_user_id)
+        if data == "settings:share_results:shuffle":
+            state = context.user_data.get(SHARE_RESULTS_STATE_KEY) or {}
+            stored_all = state.get("all_exercises")
+            if stored_all:
+                sample = _select_share_exercises(stored_all, randomize=True)
+                view = await build_share_results_view(
+                    target_user_id,
+                    all_exercises=stored_all,
+                    sample=sample,
+                )
+            else:
+                view = await build_share_results_view(target_user_id)
+            context.user_data[SHARE_RESULTS_STATE_KEY] = {
+                "all_exercises": list(view.all_exercises),
+            }
+            enable_shuffle = len(view.all_exercises) > len(view.displayed_exercises)
+            kb = build_share_results_keyboard(
+                view.copy_text, enable_shuffle=enable_shuffle
+            )
+            await show_screen(
+                q,
+                context,
+                view.text_html,
+                kb,
+                target_user_id,
+                parse_mode=ParseMode.HTML,
+            )
+            await q.answer()
             return
 
         if data.startswith("measure:"):

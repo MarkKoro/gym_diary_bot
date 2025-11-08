@@ -2327,6 +2327,64 @@ async def list_recent_progress(
             results.append((date_value, sets_cnt, max_reps, max_seconds, max_weight, details))
         return results
 
+
+async def list_exercise_weight_progress(
+    user_id: int, *, days: int = 30
+) -> list[dict]:
+    since_date = (datetime.now(UTC) - timedelta(days=days)).date().isoformat()
+    async with connect_db() as db:
+        cur = await db.execute(
+            """
+            SELECT
+                ue.exercise_id,
+                e.name,
+                s.date,
+                MAX(NULLIF(sets.weight_kg, 0))
+            FROM sets
+            JOIN sessions s ON s.id = sets.session_id
+            JOIN user_exercises ue ON ue.id = sets.user_exercise_id
+            JOIN exercises e ON e.id = ue.exercise_id
+            WHERE s.user_id=?
+              AND sets.is_warmup=0
+              AND s.date>=?
+            GROUP BY ue.exercise_id, s.id
+            """,
+            (user_id, since_date),
+        )
+        rows = await cur.fetchall()
+    progress: dict[int, dict[str, object]] = {}
+    for exercise_id, name, date_value, max_weight in rows:
+        if max_weight is None:
+            continue
+        weight = float(max_weight or 0.0)
+        if weight <= 0:
+            continue
+        entry = progress.setdefault(
+            int(exercise_id), {"name": name, "values": []}
+        )
+        entry_values = entry.setdefault("values", [])
+        entry_values.append((str(date_value), weight))
+    results: list[dict] = []
+    for exercise_id, entry in progress.items():
+        values = sorted(entry.get("values", []), key=lambda item: item[0])
+        if len(values) < 2:
+            continue
+        start_weight = float(values[0][1])
+        end_weight = float(values[-1][1])
+        if end_weight <= start_weight:
+            continue
+        results.append(
+            {
+                "exercise_id": exercise_id,
+                "name": entry.get("name"),
+                "start_weight": start_weight,
+                "end_weight": end_weight,
+                "delta": end_weight - start_weight,
+            }
+        )
+    results.sort(key=lambda item: item["delta"], reverse=True)
+    return results
+
 async def count_exercise_progress_entries(user_id: int, day_index: int, ue_id: int) -> int:
     async with connect_db() as db:
         cur = await db.execute(
