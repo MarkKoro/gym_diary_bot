@@ -66,15 +66,10 @@ from keyboards import (
     exercise_actions_kb,
     settings_kb,
     settings_groups_kb,
-    edit_day_select_kb,
-    edit_day_mode_kb,
-    edit_day_strength_kb,
-    edit_day_special_kb,
     rename_day_kb,
     days_count_kb,
     confirm_day_group_delete_kb,
     confirm_settings_group_delete_kb,
-    confirm_day_reset_kb,
     TIMEZONES,
     library_menu_kb,
     library_group_kb,
@@ -139,7 +134,6 @@ from db import (
     get_last_completion_for_user,
     get_day_label,
     remove_user_exercise,
-    clear_day_plan,
     get_exercise_info,
     get_baseline,
     fetch_exercise_sets,
@@ -2726,52 +2720,6 @@ async def show_screen(
     )
 
 
-def wizard_day_mode_text(day: int, prefs: UiPreferences) -> str:
-    base = f"День {day}. Выбери тип тренировки."
-    if prefs.verbose_level:
-        return (
-            f"{base}\nОриентируйся на цели дня: выбери направление, затем подберёшь упражнения"
-            " с подходящими подсказками."
-        )
-    return base
-
-
-def wizard_day_mode_kb(day: int) -> InlineKeyboardMarkup:
-    base = edit_day_mode_kb(day)
-    rows: list[list[InlineKeyboardButton]] = []
-    prefix = f"set:edit_day:{day}:"
-    for row in base.inline_keyboard:
-        new_row: list[InlineKeyboardButton] = []
-        for button in row:
-            data = button.callback_data or ""
-            if data.startswith(prefix):
-                mode = data.split(":")[-1]
-                new_row.append(
-                    InlineKeyboardButton(
-                        text=button.text, callback_data=f"wiz:daymode:{day}:{mode}"
-                    )
-                )
-            elif data == "set:edit_day":
-                continue
-            else:
-                new_row.append(
-                    InlineKeyboardButton(
-                        text=button.text,
-                        callback_data=button.callback_data,
-                        url=button.url,
-                        switch_inline_query=button.switch_inline_query,
-                        switch_inline_query_current_chat=button.switch_inline_query_current_chat,
-                        login_url=button.login_url,
-                        callback_game=button.callback_game,
-                        pay=button.pay,
-                        web_app=button.web_app,
-                    )
-                )
-        if new_row:
-            rows.append(new_row)
-    return InlineKeyboardMarkup(rows)
-
-
 def wizard_apply_text(prefs: UiPreferences) -> str:
     text = (
         "Применить настройки Дня 1 ко всем остальным дням? Это можно менять позже в настройках."
@@ -3908,6 +3856,45 @@ def _render_share_results_text(
     return "\n".join(lines)
 
 
+def _render_share_results_copy_text(
+    header: str,
+    measurements: Sequence[str],
+    exercises: Sequence[ShareExerciseProgress],
+    link: str,
+) -> str:
+    lines: list[str] = [header]
+    body_lines: list[str] = []
+    if measurements:
+        body_lines.append("Вот мои результаты:")
+        body_lines.append("Изменения в теле:")
+        body_lines.extend(measurements)
+    if exercises:
+        if not body_lines:
+            body_lines.append("Вот мои результаты:")
+        body_lines.append("Силовой прогресс за последний месяц:")
+        for progress in exercises:
+            delta_text = _format_weight_value(progress.delta)
+            start_text = _format_weight_value(progress.start_weight)
+            end_text = _format_weight_value(progress.end_weight)
+            body_lines.append(
+                "• {name}: +{delta} кг (с {start} до {end} кг)".format(
+                    name=progress.name,
+                    delta=delta_text,
+                    start=start_text,
+                    end=end_text,
+                )
+            )
+    if body_lines:
+        lines.append("")
+        lines.extend(body_lines)
+    lines.append("")
+    lines.append(
+        "Это мой результат. Если ты хочешь так же прогрессировать со мной, то "
+        f"Подключайся: {link}"
+    )
+    return "\n".join(lines)
+
+
 async def build_share_results_view(
     user_id: int,
     *,
@@ -3947,9 +3934,17 @@ async def build_share_results_view(
             ),
         ]
         fallback_text = "\n".join(lines)
+        fallback_copy = "\n".join(
+            [
+                "Я только начинаю тренироваться с этим ботом 💪",
+                "Скоро здесь будет мой прогресс.",
+                "",
+                f"Если хочешь начать вместе со мной, то Подключайся: {link}",
+            ]
+        )
         return ShareResultsView(
             text_html=fallback_text,
-            copy_text=fallback_text,
+            copy_text=fallback_copy,
             all_exercises=list(all_exercises),
             displayed_exercises=list(displayed),
         )
@@ -3964,9 +3959,10 @@ async def build_share_results_view(
         f"({trainings_count} {training_label}) 💪"
     )
     text_html = _render_share_results_text(header, measurements, displayed, link)
+    copy_text = _render_share_results_copy_text(header, measurements, displayed, link)
     return ShareResultsView(
         text_html=text_html,
-        copy_text=text_html,
+        copy_text=copy_text,
         all_exercises=list(all_exercises),
         displayed_exercises=list(displayed),
     )
@@ -7481,8 +7477,19 @@ async def advance_day(q, context, user_id: int, next_day: int):
 
 async def prompt_day_mode(q, context, user_id: int, day: int):
     prefs = await load_ui_preferences(user_id)
-    text = wizard_day_mode_text(day, prefs)
-    kb = wizard_day_mode_kb(day)
+    groups_store = context.user_data.setdefault("day_groups", {})
+    selected_groups = groups_store.get(day)
+    if selected_groups is None:
+        selected_groups = set()
+        groups_store[day] = selected_groups
+    custom = await get_custom_groups(user_id, context)
+    text = day_groups_text(day)
+    if prefs.verbose_level:
+        text += (
+            "\nВыбирай все направления, которые подходят под цели тренировки. "
+            "После выбора добавь упражнения и при необходимости дополни день позже."
+        )
+    kb = muscle_groups_kb(day, selected_groups, custom)
     await show_screen(q, context, text, kb, user_id)
 
 async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAULT_TYPE):
@@ -7525,34 +7532,6 @@ async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAUL
                 reminder_prompt_kb(),
                 user_id,
             )
-            return
-        if data.startswith("wiz:daymode:"):
-            parts = data.split(":")
-            if len(parts) < 4:
-                return
-            day = int(parts[2])
-            mode = parts[3]
-            context.user_data.setdefault("day_modes", {})[day] = mode
-            context.user_data["current_day"] = day
-            context.user_data.pop("group_list", None)
-            context.user_data.pop("group_idx", None)
-            groups_store = context.user_data.setdefault("day_groups", {})
-            if mode == "strength":
-                selected = groups_store.setdefault(day, set())
-                custom = await get_custom_groups(user_id, context)
-                await show_screen(
-                    q,
-                    context,
-                    day_groups_text(day),
-                    muscle_groups_kb(day, selected or set(), custom),
-                    user_id,
-                )
-            elif mode in {"kb", "metcon", "workout"}:
-                selected = groups_store.setdefault(day, set())
-                selected.add(mode)
-                context.user_data["group_list"] = [mode]
-                context.user_data["group_idx"] = 0
-                await show_exercises(q, user_id, day, mode, context)
             return
         if data.startswith("wiz:base:"):
             parts = data.split(":")
@@ -10787,71 +10766,6 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         getattr(target_message, "chat_id", q.message.chat_id),
                         getattr(target_message, "message_id", q.message.message_id),
                     )
-                return
-            if action == "edit_day":
-                prefs = await load_ui_preferences(target_user_id)
-                if len(parts) == 2:
-                    days = await list_active_days(target_user_id)
-                    text = "Какой день изменить?"
-                    kb = edit_day_select_kb(days, context=context)
-                    await show_screen(q, context, text, kb, target_user_id)
-                else:
-                    day = int(parts[2])
-                    label = await get_day_label(target_user_id, day) or f"{t('DAY')} {day}"
-                    if len(parts) == 3:
-                        text = (
-                            f"{t('DAY')} {day} — {label}.\n"
-                            "Выбери основной тип тренировки. Силовая откроет группы мышц, остальные режимы сразу ведут в свой каталог. После выбора можно добавлять упражнения из любых групп через меню дня."
-                        )
-                        kb = edit_day_mode_kb(day, context=context)
-                    else:
-                        mode = parts[3]
-                        followup = parts[4] if len(parts) > 4 else None
-                        if mode in {"strength", "kb", "metcon", "workout"}:
-                            today_str = await get_user_local_date(target_user_id)
-                            ex_rows = await fetch_day_exercises(target_user_id, day, today_str)
-                            has_exercises = bool(ex_rows)
-                            if followup is None and has_exercises:
-                                confirm_text = (
-                                    f"{t('DAY')} {day} — {label}.\n"
-                                    "Начать настройку с нуля? Удалим все упражнения и планы этого дня, чтобы собрать его заново."
-                                )
-                                kb = confirm_day_reset_kb(day, mode, context=context)
-                                await show_screen(q, context, confirm_text, kb, target_user_id)
-                                return
-                            if followup == "reset" and has_exercises:
-                                await clear_day_plan(target_user_id, day)
-                                pending_add = context.user_data.get("add_group")
-                                if pending_add and pending_add[0] == day:
-                                    context.user_data.pop("add_group", None)
-                                context.user_data.pop(DAY_DELETE_SCOPE_KEY, None)
-                                await q.answer("День очищен. Начнём заново.")
-                                has_exercises = False
-                        if mode == "strength":
-                            text = (
-                                f"{t('DAY')} {day} — {label}.\n"
-                                "Открой список групп мышц, выбери нужные и добавь упражнения. В любой момент можешь расширить тренировку другими направлениями через кнопки «Добавить» и «Удалить»."
-                            )
-                            kb = edit_day_strength_kb(day, context=context)
-                        elif mode in {"kb", "metcon", "workout"}:
-                            labels = {
-                                "kb": "Каталог гиревых упражнений",
-                                "metcon": "Каталог кроссфита",
-                                "workout": "Каталог воркаута",
-                            }
-                            descriptions = {
-                                "kb": "Подбери упражнения с гирями. После добавления можно дополнять день силовыми или другими упражнениями.",
-                                "metcon": "Открой подборку кроссфит-упражнений и собери тренировку. Другие группы всегда доступны через меню дня.",
-                                "workout": "Выбери упражнения для воркаута. При желании добавляй силовые или гиревые упражнения через кнопки «Добавить» и «Удалить».",
-                            }
-                            text = (
-                                f"{t('DAY')} {day} — {label}.\n"
-                                f"{descriptions[mode]}"
-                            )
-                            kb = edit_day_special_kb(day, mode, labels[mode])
-                        else:
-                            return
-                    await show_screen(q, context, text, kb, target_user_id)
                 return
             if action == "days_count":
                 if not is_edit_allowed(context.user_data):
