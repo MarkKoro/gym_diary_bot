@@ -29,4 +29,4 @@ def test_share_results_copy_text_is_shortened_when_too_long():
     copy_text = _render_share_results_copy_text(header, measurements, exercises, link)
 
     assert len(copy_text) <= SHARE_RESULTS_COPY_TEXT_MAX_LENGTH
-    assert copy_text.endswith(f"Подключайся: {link}")
+    assert copy_text.endswith(f"Подключайся 👉 {link}")
