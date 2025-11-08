@@ -3597,6 +3597,7 @@ CUSTOM_MEASUREMENT_REGISTRY: dict[str, dict] = {}
 SHARE_RESULTS_STATE_KEY = "settings_share_results_state"
 SHARE_RESULTS_EXERCISE_LIMIT = 5
 SHARE_RESULTS_WINDOW_DAYS = 30
+SHARE_RESULTS_COPY_TEXT_MAX_LENGTH = 256
 
 
 @dataclass(frozen=True)
@@ -3856,6 +3857,17 @@ def _render_share_results_text(
     return "\n".join(lines)
 
 
+def _truncate_with_ellipsis(text: str, max_length: int) -> str:
+    if len(text) <= max_length:
+        return text
+    if max_length <= 1:
+        return text[:max_length]
+    trimmed = text[: max_length - 1].rstrip()
+    if not trimmed:
+        return text[:max_length]
+    return f"{trimmed}…"
+
+
 def _render_share_results_copy_text(
     header: str,
     measurements: Sequence[str],
@@ -3888,11 +3900,56 @@ def _render_share_results_copy_text(
         lines.append("")
         lines.extend(body_lines)
     lines.append("")
-    lines.append(
+    call_to_action = (
         "Это мой результат. Если ты хочешь так же прогрессировать со мной, то "
         f"Подключайся: {link}"
     )
-    return "\n".join(lines)
+    lines.append(call_to_action)
+
+    def _join(parts: Sequence[str]) -> str:
+        return "\n".join(parts)
+
+    text = _join(lines)
+    if len(text) <= SHARE_RESULTS_COPY_TEXT_MAX_LENGTH:
+        return text
+
+    header_line = lines[0]
+    tail_lines = lines[-2:]
+    middle_lines = lines[1:-2]
+
+    trimmed_middle = list(middle_lines)
+    while trimmed_middle and len(_join([header_line, *trimmed_middle, *tail_lines])) > SHARE_RESULTS_COPY_TEXT_MAX_LENGTH:
+        trimmed_middle.pop()
+    candidate = _join([header_line, *trimmed_middle, *tail_lines])
+    if len(candidate) <= SHARE_RESULTS_COPY_TEXT_MAX_LENGTH:
+        return candidate
+
+    trimmed_middle = [line for line in trimmed_middle if line.strip()]
+    candidate = _join([header_line, *trimmed_middle, *tail_lines])
+    if len(candidate) <= SHARE_RESULTS_COPY_TEXT_MAX_LENGTH:
+        return candidate
+
+    fallback_lines: list[str] = []
+    if header_line:
+        fallback_lines.append(header_line)
+        fallback_lines.append("")
+    fallback_lines.append(call_to_action)
+    candidate = _join(fallback_lines)
+    if len(candidate) <= SHARE_RESULTS_COPY_TEXT_MAX_LENGTH:
+        return candidate
+
+    if header_line:
+        suffix = f"\n\n{call_to_action}"
+        available = SHARE_RESULTS_COPY_TEXT_MAX_LENGTH - len(suffix)
+        if available > 0:
+            shortened_header = _truncate_with_ellipsis(header_line, available)
+            shortened_header = shortened_header.strip()
+            if shortened_header:
+                candidate = f"{shortened_header}{suffix}"
+                if len(candidate) <= SHARE_RESULTS_COPY_TEXT_MAX_LENGTH:
+                    return candidate
+
+    return _truncate_with_ellipsis(call_to_action, SHARE_RESULTS_COPY_TEXT_MAX_LENGTH)
 
 
 async def build_share_results_view(
