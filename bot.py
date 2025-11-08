@@ -3596,7 +3596,7 @@ CUSTOM_MEASUREMENT_REGISTRY: dict[str, dict] = {}
 
 SHARE_RESULTS_STATE_KEY = "settings_share_results_state"
 SHARE_RESULTS_EXERCISE_LIMIT = 5
-SHARE_RESULTS_WINDOW_DAYS = 30
+SHARE_RESULTS_WINDOW_DAYS = 90
 SHARE_RESULTS_COPY_TEXT_MAX_LENGTH = 256
 
 
@@ -3763,7 +3763,7 @@ def _get_public_link() -> str:
     link = (BOT_PUBLIC_LINK or "").strip()
     if link:
         return link
-    return "https://t.me/<имя_бота>"
+    return "https://t.me/progresor_bot"
 
 
 def _format_weight_value(value: float) -> str:
@@ -3833,7 +3833,7 @@ def _render_share_results_text(
     if exercises:
         if not body_lines:
             body_lines.append("Вот мои результаты:")
-        body_lines.append("Силовой прогресс за последний месяц:")
+        body_lines.append("Силовой прогресс за последние три месяца:")
         for progress in exercises:
             delta_text = _format_weight_value(progress.delta)
             start_text = _format_weight_value(progress.start_weight)
@@ -3883,7 +3883,7 @@ def _render_share_results_copy_text(
     if exercises:
         if not body_lines:
             body_lines.append("Вот мои результаты:")
-        body_lines.append("Силовой прогресс за последний месяц:")
+        body_lines.append("Силовой прогресс за последние три месяца:")
         for progress in exercises:
             delta_text = _format_weight_value(progress.delta)
             start_text = _format_weight_value(progress.start_weight)
@@ -3902,7 +3902,7 @@ def _render_share_results_copy_text(
     lines.append("")
     call_to_action = (
         "Это мой результат. Если ты хочешь так же прогрессировать со мной, то "
-        f"Подключайся: {link}"
+        f"Подключайся 👉 {link}"
     )
     lines.append(call_to_action)
 
@@ -3996,7 +3996,7 @@ async def build_share_results_view(
                 "Я только начинаю тренироваться с этим ботом 💪",
                 "Скоро здесь будет мой прогресс.",
                 "",
-                f"Если хочешь начать вместе со мной, то Подключайся: {link}",
+                f"Если хочешь начать вместе со мной, то Подключайся 👉 {link}",
             ]
         )
         return ShareResultsView(
@@ -4040,7 +4040,7 @@ def build_share_results_keyboard(
         rows.append(
             [
                 InlineKeyboardButton(
-                    "🎲 Случайная генерация",
+                    "🎲 Рандом",
                     callback_data="settings:share_results:shuffle",
                 )
             ]
@@ -9625,7 +9625,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context.user_data[SHARE_RESULTS_STATE_KEY] = {
                 "all_exercises": list(view.all_exercises),
             }
-            enable_shuffle = len(view.all_exercises) > len(view.displayed_exercises)
+            enable_shuffle = len(view.all_exercises) > SHARE_RESULTS_EXERCISE_LIMIT
             kb = build_share_results_keyboard(
                 view.copy_text, enable_shuffle=enable_shuffle
             )
@@ -9655,7 +9655,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context.user_data[SHARE_RESULTS_STATE_KEY] = {
                 "all_exercises": list(view.all_exercises),
             }
-            enable_shuffle = len(view.all_exercises) > len(view.displayed_exercises)
+            enable_shuffle = len(view.all_exercises) > SHARE_RESULTS_EXERCISE_LIMIT
             kb = build_share_results_keyboard(
                 view.copy_text, enable_shuffle=enable_shuffle
             )
