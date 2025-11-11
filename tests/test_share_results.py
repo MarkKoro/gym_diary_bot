@@ -1,3 +1,5 @@
+from telegram import CopyTextButton
+
 from bot import (
     SHARE_RESULTS_COPY_TEXT_MAX_LENGTH,
     ShareExerciseProgress,
@@ -54,8 +56,24 @@ def test_share_results_copy_text_is_shortened_when_too_long():
     assert copy_text.endswith(f"Подключайся 👉 {link}")
 
 
-def test_build_share_results_keyboard_uses_callback_button():
-    kb = build_share_results_keyboard(enable_shuffle=False)
+def test_build_share_results_keyboard_uses_copy_text_button_without_callback():
+    copy_text = "copy this text"
 
-    assert kb.inline_keyboard[0][0].text == "📋 Скопировать"
-    assert kb.inline_keyboard[0][0].callback_data == "settings:share_results:copy"
+    kb = build_share_results_keyboard(enable_shuffle=False, copy_text=copy_text)
+
+    button = kb.inline_keyboard[0][0]
+    assert button.text == "📋 Скопировать"
+    assert button.callback_data is None
+    assert isinstance(button.copy_text, CopyTextButton)
+    assert button.copy_text.text == copy_text
+    assert len(kb.inline_keyboard) == 2
+    assert kb.inline_keyboard[1][0].callback_data == "menu:settings"
+
+
+def test_build_share_results_keyboard_includes_shuffle_when_enabled():
+    kb = build_share_results_keyboard(enable_shuffle=True, copy_text="")
+
+    assert len(kb.inline_keyboard) == 3
+    shuffle_button = kb.inline_keyboard[1][0]
+    assert shuffle_button.text == "🎲 Рандом"
+    assert shuffle_button.callback_data == "settings:share_results:shuffle"
