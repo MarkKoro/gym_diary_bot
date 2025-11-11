@@ -7584,6 +7584,9 @@ async def prompt_day_mode(q, context, user_id: int, day: int):
     await show_screen(q, context, text, kb, user_id)
 
 async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAULT_TYPE):
+    message = getattr(q, "message", None)
+    chat = getattr(message, "chat", None) if message else None
+    chat_id = getattr(chat, "id", None) if chat else getattr(message, "chat_id", None)
     try:
         if data == "wiz:sub:verify":
             context.user_data["wizard_onboarding"] = True
@@ -8321,7 +8324,7 @@ async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAUL
             return
     finally:
         message = getattr(q, "message", None)
-        if message and not onboarding:
+        if message and not context.user_data.get("wizard_onboarding"):
             chat = getattr(message, "chat", None)
             chat_id = getattr(chat, "id", None) if chat else getattr(message, "chat_id", None)
             remember_message(chat_id, getattr(message, "message_id", None))
