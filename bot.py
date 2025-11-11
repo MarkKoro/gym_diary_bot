@@ -4047,15 +4047,22 @@ async def build_share_results_view(
     )
 
 
-def build_share_results_keyboard(*, enable_shuffle: bool) -> InlineKeyboardMarkup:
-    rows: list[list[InlineKeyboardButton]] = [
+def build_share_results_keyboard(
+    *, enable_shuffle: bool, copy_text: str
+) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+
+    # Кнопка копирования — через CopyTextButton, без callback_data
+    rows.append(
         [
             InlineKeyboardButton(
                 "📋 Скопировать",
-                callback_data="settings:share_results:copy",
+                copy_text=CopyTextButton(text=copy_text),
             )
         ]
-    ]
+    )
+
+    # Кнопка "Рандом" остаётся callback'ом
     if enable_shuffle:
         rows.append(
             [
@@ -4065,7 +4072,12 @@ def build_share_results_keyboard(*, enable_shuffle: bool) -> InlineKeyboardMarku
                 )
             ]
         )
-    rows.append([InlineKeyboardButton("⬅️ Назад", callback_data="menu:settings")])
+
+    # Кнопка "Назад" в настройки
+    rows.append(
+        [InlineKeyboardButton("⬅️ Назад", callback_data="menu:settings")]
+    )
+
     return InlineKeyboardMarkup(rows)
 
 
@@ -9653,7 +9665,10 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "copy_text": view.copy_text,
             }
             enable_shuffle = len(view.all_exercises) > SHARE_RESULTS_EXERCISE_LIMIT
-            kb = build_share_results_keyboard(enable_shuffle=enable_shuffle)
+            kb = build_share_results_keyboard(
+                enable_shuffle=enable_shuffle,
+                copy_text=view.copy_text,
+            )
             await show_screen(
                 q,
                 context,
@@ -9663,30 +9678,6 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 parse_mode=ParseMode.HTML,
             )
             await q.answer()
-            return
-
-        if data == "settings:share_results:copy":
-            state = context.user_data.get(SHARE_RESULTS_STATE_KEY) or {}
-            copy_text = state.get("copy_text")
-            if not copy_text:
-                view = await build_share_results_view(target_user_id)
-                copy_text = view.copy_text
-                context.user_data[SHARE_RESULTS_STATE_KEY] = {
-                    "all_exercises": list(view.all_exercises),
-                    "copy_text": copy_text,
-                }
-            if copy_text:
-                await q.answer("Текст отправлен отдельным сообщением")
-                actor_user_id = q.from_user.id if q.from_user else target_user_id
-                if len(copy_text) <= 4096:
-                    await context.bot.send_message(actor_user_id, copy_text)
-                else:
-                    for index in range(0, len(copy_text), 4096):
-                        await context.bot.send_message(
-                            actor_user_id, copy_text[index : index + 4096]
-                        )
-            else:
-                await q.answer("Нет текста для копирования", show_alert=True)
             return
 
         if data == "settings:share_results:shuffle":
@@ -9706,7 +9697,10 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "copy_text": view.copy_text,
             }
             enable_shuffle = len(view.all_exercises) > SHARE_RESULTS_EXERCISE_LIMIT
-            kb = build_share_results_keyboard(enable_shuffle=enable_shuffle)
+            kb = build_share_results_keyboard(
+                enable_shuffle=enable_shuffle,
+                copy_text=view.copy_text,
+            )
             await show_screen(
                 q,
                 context,
