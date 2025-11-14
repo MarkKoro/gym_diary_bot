@@ -9658,6 +9658,19 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         if data == "settings:share_results":
+            state = context.user_data.get(SHARE_RESULTS_STATE_KEY) or {}
+            primary_msg_id = state.get(SHARE_RESULTS_PRIMARY_MSG_ID_KEY)
+            if primary_msg_id:
+                try:
+                    await context.bot.delete_message(
+                        chat_id=q.message.chat_id,
+                        message_id=primary_msg_id,
+                    )
+                except TelegramError as e:
+                    message_text = (e.message or "").lower()
+                    if "message to delete not found" not in message_text:
+                        raise
+
             view = await build_share_results_view(target_user_id)
             primary = await context.bot.send_message(
                 chat_id=q.message.chat_id,
@@ -9676,12 +9689,17 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "• Нажмите и удерживайте верхнее сообщение, затем «Переслать» или «Копировать».\n\n"
                 "Можно сменить набор упражнений кнопкой ниже."
             )
-            await show_screen(
-                q,
-                context,
+            prefs = await load_ui_preferences(target_user_id)
+            prepared_text, prepared_markup = prepare_ui_output(
                 helper_text,
                 kb,
-                target_user_id,
+                prefs,
+            )
+            await send_main_message_fresh(
+                context.bot,
+                q.message.chat_id,
+                prepared_text,
+                reply_markup=prepared_markup,
             )
             await q.answer()
             return
