@@ -3596,6 +3596,7 @@ MEASUREMENT_CUSTOM_CATEGORY = {
 CUSTOM_MEASUREMENT_REGISTRY: dict[str, dict] = {}
 
 SHARE_RESULTS_STATE_KEY = "settings_share_results_state"
+SHARE_RESULTS_PRIMARY_MSG_ID_KEY = "settings_share_results_primary_message_id"
 SHARE_RESULTS_EXERCISE_LIMIT = 5
 SHARE_RESULTS_WINDOW_DAYS = 90
 SHARE_RESULTS_COPY_TEXT_MAX_LENGTH = 4096
@@ -4047,33 +4048,19 @@ async def build_share_results_view(
     )
 
 
-def build_share_results_keyboard(
-    *, enable_shuffle: bool, copy_text: str
-) -> InlineKeyboardMarkup:
+def build_share_results_keyboard(*, enable_shuffle: bool) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
 
-    # Кнопка копирования — через CopyTextButton, без callback_data
-    rows.append(
-        [
-            InlineKeyboardButton(
-                "📋 Скопировать",
-                copy_text=CopyTextButton(text=copy_text),
-            )
-        ]
-    )
-
-    # Кнопка "Рандом" остаётся callback'ом
     if enable_shuffle:
         rows.append(
             [
                 InlineKeyboardButton(
-                    "🎲 Рандом",
+                    "🎲 Сменить упражнения",
                     callback_data="settings:share_results:shuffle",
                 )
             ]
         )
 
-    # Кнопка "Назад" в настройки
     rows.append(
         [InlineKeyboardButton("⬅️ Назад", callback_data="menu:settings")]
     )
@@ -9607,6 +9594,15 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         if data == "menu:settings":
+            st = context.user_data.get(SHARE_RESULTS_STATE_KEY)
+            if st and st.get(SHARE_RESULTS_PRIMARY_MSG_ID_KEY):
+                try:
+                    await context.bot.delete_message(
+                        chat_id=q.message.chat_id,
+                        message_id=st[SHARE_RESULTS_PRIMARY_MSG_ID_KEY],
+                    )
+                except BadRequest:
+                    pass
             context.user_data.pop(SHARE_RESULTS_STATE_KEY, None)
             settings = await fetch_user_settings(target_user_id)
             n = settings[1] if settings else 0
@@ -9663,22 +9659,29 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         if data == "settings:share_results":
             view = await build_share_results_view(target_user_id)
+            primary = await context.bot.send_message(
+                chat_id=q.message.chat_id,
+                text=view.text_html,
+                parse_mode=ParseMode.HTML,
+                disable_web_page_preview=False,
+            )
             context.user_data[SHARE_RESULTS_STATE_KEY] = {
                 "all_exercises": list(view.all_exercises),
-                "copy_text": view.copy_text,
+                SHARE_RESULTS_PRIMARY_MSG_ID_KEY: primary.message_id,
             }
             enable_shuffle = len(view.all_exercises) > SHARE_RESULTS_EXERCISE_LIMIT
-            kb = build_share_results_keyboard(
-                enable_shuffle=enable_shuffle,
-                copy_text=view.copy_text,
+            kb = build_share_results_keyboard(enable_shuffle=enable_shuffle)
+            helper_text = (
+                "Сверху — ваш текст для пересылки/копирования.\n"
+                "• Нажмите и удерживайте верхнее сообщение, затем «Переслать» или «Копировать».\n\n"
+                "Можно сменить набор упражнений кнопкой ниже."
             )
             await show_screen(
                 q,
                 context,
-                view.text_html,
+                helper_text,
                 kb,
                 target_user_id,
-                parse_mode=ParseMode.HTML,
             )
             await q.answer()
             return
@@ -9695,24 +9698,39 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
             else:
                 view = await build_share_results_view(target_user_id)
+
+            primary_msg_id = state.get(SHARE_RESULTS_PRIMARY_MSG_ID_KEY)
+            if primary_msg_id:
+                try:
+                    await context.bot.edit_message_text(
+                        chat_id=q.message.chat_id,
+                        message_id=primary_msg_id,
+                        text=view.text_html,
+                        parse_mode=ParseMode.HTML,
+                        disable_web_page_preview=False,
+                    )
+                except BadRequest:
+                    new_primary = await context.bot.send_message(
+                        chat_id=q.message.chat_id,
+                        text=view.text_html,
+                        parse_mode=ParseMode.HTML,
+                        disable_web_page_preview=False,
+                    )
+                    primary_msg_id = new_primary.message_id
+            else:
+                new_primary = await context.bot.send_message(
+                    chat_id=q.message.chat_id,
+                    text=view.text_html,
+                    parse_mode=ParseMode.HTML,
+                    disable_web_page_preview=False,
+                )
+                primary_msg_id = new_primary.message_id
+
             context.user_data[SHARE_RESULTS_STATE_KEY] = {
                 "all_exercises": list(view.all_exercises),
-                "copy_text": view.copy_text,
+                SHARE_RESULTS_PRIMARY_MSG_ID_KEY: primary_msg_id,
             }
-            enable_shuffle = len(view.all_exercises) > SHARE_RESULTS_EXERCISE_LIMIT
-            kb = build_share_results_keyboard(
-                enable_shuffle=enable_shuffle,
-                copy_text=view.copy_text,
-            )
-            await show_screen(
-                q,
-                context,
-                view.text_html,
-                kb,
-                target_user_id,
-                parse_mode=ParseMode.HTML,
-            )
-            await q.answer()
+            await q.answer("Обновил упражнения")
             return
 
         if data.startswith("measure:"):
