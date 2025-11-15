@@ -119,7 +119,16 @@ class ReminderTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(new_job.time.minute, 45)
         self.assertIsInstance(new_job.time.tzinfo, ZoneInfo)
         self.assertEqual(new_job.time.tzinfo.key, "Asia/Irkutsk")
-        self.assertEqual(new_job.data, {"user_id": user_id, "day_no": 2, "dow": 4})
+        self.assertEqual(
+            {
+                "user_id": new_job.data["user_id"],
+                "day_no": new_job.data["day_no"],
+                "dow": new_job.data["dow"],
+            },
+            {"user_id": user_id, "day_no": 2, "dow": 4},
+        )
+        self.assertIn("tag", new_job.data)
+        self.assertIn("tz", new_job.data)
 
     async def test_schedule_all_reminders_removes_orphan_jobs(self):
         user_id = await db.get_or_create_user(9400, "cleanup-user")

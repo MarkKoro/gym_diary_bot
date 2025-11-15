@@ -1530,6 +1530,49 @@ async def clear_user_reminders(user_id: int):
         await db.commit()
 
 
+async def wipe_user(user_id: int):
+    async with connect_db() as db:
+        await db.execute("BEGIN")
+        try:
+            await db.execute("DELETE FROM running_entries WHERE user_id=?", (user_id,))
+            await db.execute("DELETE FROM session_exercises WHERE session_id IN (SELECT id FROM sessions WHERE user_id=?)", (user_id,))
+            await db.execute("DELETE FROM session_exercises WHERE user_exercise_id IN (SELECT id FROM user_exercises WHERE user_id=?)", (user_id,))
+            await db.execute("DELETE FROM sets WHERE session_id IN (SELECT id FROM sessions WHERE user_id=?)", (user_id,))
+            await db.execute("DELETE FROM sets WHERE user_exercise_id IN (SELECT id FROM user_exercises WHERE user_id=?)", (user_id,))
+            await db.execute("DELETE FROM day_completions WHERE user_id=?", (user_id,))
+            await db.execute("DELETE FROM exercise_baseline WHERE user_id=?", (user_id,))
+            await db.execute("DELETE FROM user_measurements WHERE user_id=?", (user_id,))
+            await db.execute("DELETE FROM user_measurement_custom WHERE user_id=?", (user_id,))
+            await db.execute("DELETE FROM user_measurement_categories WHERE user_id=?", (user_id,))
+            await db.execute("DELETE FROM user_muscle_groups WHERE user_id=?", (user_id,))
+            await db.execute("DELETE FROM user_reminders WHERE user_id=?", (user_id,))
+            await db.execute("DELETE FROM user_prefs WHERE user_id=?", (user_id,))
+            await db.execute("DELETE FROM subscriptions WHERE user_id=?", (user_id,))
+            await db.execute("DELETE FROM payments WHERE user_id=?", (user_id,))
+            await db.execute("DELETE FROM trainer_links WHERE trainee_user_id=? OR trainer_user_id=?", (user_id, user_id))
+            await db.execute("DELETE FROM user_days WHERE user_id=?", (user_id,))
+            await db.execute("DELETE FROM user_exercises WHERE user_id=?", (user_id,))
+            await db.execute("DELETE FROM sessions WHERE user_id=?", (user_id,))
+            await db.execute(
+                """
+                UPDATE users
+                SET
+                    tz='UTC',
+                    workouts_per_week=NULL,
+                    day_finish_total=0,
+                    subscription_prompt_total=0,
+                    notifications_enabled=1,
+                    is_trainer=0
+                WHERE id=?
+                """,
+                (user_id,),
+            )
+            await db.commit()
+        except Exception:
+            await db.rollback()
+            raise
+
+
 async def list_users_with_reminders():
     async with connect_db() as db:
         cur = await db.execute(
