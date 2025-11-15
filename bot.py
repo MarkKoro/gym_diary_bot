@@ -211,6 +211,7 @@ from db import (
     update_trainer_link_status,
     update_trainer_link_permissions,
     update_trainer_label,
+    set_trainer_accepting_requests,
     increment_day_finish_total,
     get_subscription_prompt_total,
     set_subscription_prompt_total,
@@ -1614,17 +1615,28 @@ async def resolve_target_user_id(
     return actor_user_id
 
 
-async def _fetch_trainer_profile(user_id: int) -> tuple[int, str | None] | None:
+async def _fetch_trainer_profile(
+    user_id: int,
+) -> tuple[int, str | None, int] | None:
     async with connect_db() as db:
         cur = await db.execute(
-            "SELECT is_trainer, trainer_code FROM users WHERE id=?",
+            """
+            SELECT is_trainer, trainer_code, trainer_accepts_requests
+            FROM users
+            WHERE id=?
+            """,
             (user_id,),
         )
         row = await cur.fetchone()
     if not row:
         return None
     is_trainer = int(row[0] or 0)
-    return is_trainer, row[1]
+    accepts = 1
+    try:
+        accepts = int(row[2]) if row[2] is not None else 1
+    except (IndexError, ValueError, TypeError):
+        accepts = 1
+    return is_trainer, row[1], accepts
 
 
 async def _ensure_trainer_mode(
@@ -1644,7 +1656,13 @@ async def _ensure_trainer_mode(
         existing_code = await _generate_unique_trainer_code()
     async with connect_db() as db:
         await db.execute(
-            "UPDATE users SET is_trainer = 1, trainer_code = ? WHERE id=?",
+            """
+            UPDATE users
+            SET is_trainer = 1,
+                trainer_code = ?,
+                trainer_accepts_requests = 1
+            WHERE id=?
+            """,
             (existing_code, user_id),
         )
         await db.commit()
@@ -1659,6 +1677,7 @@ async def show_trainer_root_settings(
     profile = await _fetch_trainer_profile(user_id)
     is_trainer = int(profile[0]) if profile and profile[0] else 0
     trainer_code = profile[1] if profile else None
+    accepts_requests = bool(profile and len(profile) > 2 and profile[2])
     link = await get_latest_trainer_link_for_trainee(user_id)
     if not link:
         link_status = "нет"
@@ -1691,6 +1710,10 @@ async def show_trainer_root_settings(
             ]
         )
     lines.extend(["", f"Связь с тренером: {link_status}."])
+    if is_trainer:
+        request_status = "включен" if accepts_requests else "выключен"
+        lines.append("")
+        lines.append(f"Прием заявок: {request_status}.")
     text = "\n".join(lines)
     toggle_target = "off" if is_trainer else "on"
     toggle_button = InlineKeyboardButton(
@@ -2296,6 +2319,9 @@ async def _render_trainer_overview(
     pending_offset, requests, accepted_offset, trainees = await _load_trainer_lists(
         user_id, current_pending, current_accepted
     )
+    profile = await _fetch_trainer_profile(user_id)
+    is_trainer = bool(profile and profile[0])
+    accepts_requests = bool(profile and len(profile) > 2 and profile[2])
     context.user_data[TRAINER_PENDING_OFFSET_KEY] = pending_offset
     context.user_data[TRAINER_ACCEPTED_OFFSET_KEY] = accepted_offset
     pending_has_prev = pending_offset > 0
@@ -2387,16 +2413,27 @@ async def _render_trainer_overview(
         lines.append(
             f"Без подписки вам доступно до {limit} подопечных одновременно."
         )
+    if is_trainer:
+        lines.append("")
+        lines.append(
+            "Прием заявок: "
+            + ("включен" if accepts_requests else "отключен")
+            + "."
+        )
     rows: list[list[InlineKeyboardButton]] = []
     for entry in requests:
         link_id = int(entry[0])
         rows.append(
             [
                 InlineKeyboardButton(
-                    "✅ Принять", callback_data=f"trainer:req:accept:{link_id}"
+                    labels.get(int(entry[1]), f"ID {entry[1]}") or "—",
+                    callback_data="noop",
                 ),
                 InlineKeyboardButton(
-                    "❌ Отклонить", callback_data=f"trainer:req:decline:{link_id}"
+                    "❌", callback_data=f"trainer:req:decline:{link_id}"
+                ),
+                InlineKeyboardButton(
+                    "✅", callback_data=f"trainer:req:accept:{link_id}"
                 ),
             ]
         )
@@ -2444,6 +2481,23 @@ async def _render_trainer_overview(
             )
         if nav_row:
             rows.append(nav_row)
+    if is_trainer:
+        toggle_state = "off" if accepts_requests else "on"
+        toggle_label = dual(
+            "🚫 Отключить прием заявок"
+            if accepts_requests
+            else "✅ Включить прием заявок",
+            "Отключить прием заявок"
+            if accepts_requests
+            else "Включить прием заявок",
+        )
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    toggle_label, callback_data=f"trainer:requests:{toggle_state}"
+                )
+            ]
+        )
     rows.append([InlineKeyboardButton(BACK_BTN, callback_data="menu:root")])
     kb = InlineKeyboardMarkup(rows)
     await show_screen(q, context, "\n".join(lines), kb, user_id)
@@ -6767,12 +6821,18 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         chat = update.effective_chat
         context.user_data["wizard_onboarding"] = True
         intro_text, _ = prepare_ui_output(t("ONBOARDING_INTRO"), None, prefs)
+        intro_msg = None
         if chat is not None:
-            await context.bot.send_message(chat.id, intro_text)
+            intro_msg = await context.bot.send_message(chat.id, intro_text)
             await context.bot.send_message(chat.id, prompt_text, reply_markup=prompt_kb)
         elif update.message:
-            await update.message.reply_text(intro_text)
+            intro_msg = await update.message.reply_text(intro_text)
             await update.message.reply_text(prompt_text, reply_markup=prompt_kb)
+        if intro_msg is not None:
+            context.user_data["wizard_intro_message"] = (
+                intro_msg.chat_id,
+                intro_msg.message_id,
+            )
         return
     text, kb, prefs = await compose_main_menu(user_id, prefs)
     text, kb = prepare_ui_output(text, kb, prefs)
@@ -7792,12 +7852,20 @@ async def finalize_wizard(
     context.user_data.pop("wizard_msg_id", None)
     context.user_data.pop("wizard_onboarding", None)
     context.user_data.pop("wizard_onboarding_tz", None)
+    intro_info = context.user_data.pop("wizard_intro_message", None)
     if chat_id is None:
         chat_id = stored_chat_id
     if chat_id is None:
         message = getattr(q, "message", None)
         chat = getattr(message, "chat", None) if message else None
         chat_id = getattr(chat, "id", None) if chat else getattr(message, "chat_id", None)
+    if intro_info:
+        intro_chat_id, intro_message_id = intro_info
+        if intro_chat_id and intro_message_id:
+            try:
+                await context.bot.delete_message(intro_chat_id, intro_message_id)
+            except (BadRequest, Forbidden):
+                pass
     if chat_id is None:
         return
     menu_text, menu_kb, prefs = await compose_main_menu(user_id)
@@ -8580,6 +8648,23 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 user_id,
                 target if isinstance(target, tuple) else None,
                 "Код тренера не найден.",
+                prompt_for_code=True,
+                chat_id=update.effective_chat.id if update.effective_chat else None,
+            )
+            return
+        trainer_accepts = True
+        if len(trainer) > 2:
+            try:
+                trainer_accepts = bool(int(trainer[2]))
+            except (ValueError, TypeError):
+                trainer_accepts = bool(trainer[2])
+        if not trainer_accepts:
+            await try_delete(update.message)
+            await _render_trainer_link_message(
+                context,
+                user_id,
+                target if isinstance(target, tuple) else None,
+                "На данный момент этот тренер отключил прием заявок.",
                 prompt_for_code=True,
                 chat_id=update.effective_chat.id if update.effective_chat else None,
             )
@@ -9661,6 +9746,23 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             accepted_offset=accepted_offset,
                         )
                         return
+                return
+            if action == "requests" and len(parts) >= 3:
+                desired_state = parts[2]
+                enable = desired_state == "on"
+                profile = await _fetch_trainer_profile(actor_user_id)
+                if not profile or not int(profile[0]):
+                    await q.answer("Сначала включите режим тренера.", show_alert=True)
+                    return
+                await set_trainer_accepting_requests(actor_user_id, enable)
+                message = (
+                    "Прием заявок включен"
+                    if enable
+                    else "Прием заявок отключен"
+                )
+                await _render_trainer_overview(
+                    q, context, actor_user_id, message=message
+                )
                 return
             if action == "req" and len(parts) >= 4:
                 req_action = parts[2]

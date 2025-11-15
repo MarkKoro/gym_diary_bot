@@ -288,7 +288,8 @@ async def init_db():
             workouts_per_week INTEGER,
             day_finish_total INTEGER DEFAULT 0,
             subscription_prompt_total INTEGER DEFAULT 0,
-            notifications_enabled INTEGER NOT NULL DEFAULT 1
+            notifications_enabled INTEGER NOT NULL DEFAULT 1,
+            trainer_accepts_requests INTEGER NOT NULL DEFAULT 1
         );
 
         CREATE TABLE IF NOT EXISTS exercises(
@@ -533,6 +534,16 @@ async def init_db():
         try:
             await db.execute(
                 "ALTER TABLE users ADD COLUMN notifications_enabled INTEGER NOT NULL DEFAULT 1"
+            )
+        except Exception:
+            pass
+        if not await _column_exists(db, "users", "trainer_accepts_requests"):
+            await db.execute(
+                "ALTER TABLE users ADD COLUMN trainer_accepts_requests INTEGER NOT NULL DEFAULT 1"
+            )
+        try:
+            await db.execute(
+                "UPDATE users SET trainer_accepts_requests = 1 WHERE trainer_accepts_requests IS NULL"
             )
         except Exception:
             pass
@@ -2924,10 +2935,23 @@ async def delete_measurement_category(user_id: int, code: str) -> bool:
 async def find_user_by_trainer_code(code: str):
     async with connect_db() as db:
         cur = await db.execute(
-            "SELECT id, username FROM users WHERE trainer_code = ? AND is_trainer = 1",
+            """
+            SELECT id, username, trainer_accepts_requests
+            FROM users
+            WHERE trainer_code = ? AND is_trainer = 1
+            """,
             (code,),
         )
         return await cur.fetchone()
+
+
+async def set_trainer_accepting_requests(user_id: int, accepting: bool) -> None:
+    async with connect_db() as db:
+        await db.execute(
+            "UPDATE users SET trainer_accepts_requests = ? WHERE id=?",
+            (1 if accepting else 0, user_id),
+        )
+        await db.commit()
 
 
 async def get_trainer_link(trainer_user_id: int, trainee_user_id: int):
