@@ -129,6 +129,7 @@ from db import (
     get_user_timezone,
     list_user_reminders,
     clear_user_reminders,
+    wipe_user,
     list_active_days,
     list_day_completions,
     get_last_completion_for_user,
@@ -2707,9 +2708,118 @@ async def show_screen(
     user_id: int,
     **kwargs,
 ) -> None:
+    async def _update_wizard_screen(
+        q,
+        context: ContextTypes.DEFAULT_TYPE,
+        text: str,
+        reply_markup: InlineKeyboardMarkup | None,
+        **kwargs,
+    ):
+        message = getattr(q, "message", None)
+        chat = getattr(message, "chat", None) if message else None
+        chat_id = (
+            getattr(chat, "id", None) if chat else getattr(message, "chat_id", None)
+        )
+        message_id = getattr(message, "message_id", None)
+        stored_chat_id = context.user_data.get("wizard_chat_id")
+        stored_message_id = context.user_data.get("wizard_msg_id")
+        if chat_id is None:
+            chat_id = stored_chat_id
+        if message_id is None:
+            message_id = stored_message_id
+
+        def _needs_new_message(error_text: str) -> bool:
+            return any(
+                phrase in error_text
+                for phrase in (
+                    "message can't be edited",
+                    "message can't be modified",
+                    "message to edit not found",
+                )
+            )
+
+        if message is not None and message_id is not None:
+            try:
+                edited = await message.edit_text(
+                    text, reply_markup=reply_markup, **kwargs
+                )
+            except BadRequest as e:
+                error_text = (e.message or "").lower()
+                if "not modified" in error_text:
+                    context.user_data["wizard_chat_id"] = chat_id
+                    context.user_data["wizard_msg_id"] = message_id
+                    return message
+                if _needs_new_message(error_text):
+                    if chat_id is None:
+                        raise
+                    new_message = await context.bot.send_message(
+                        chat_id,
+                        text,
+                        reply_markup=reply_markup,
+                        **kwargs,
+                    )
+                    context.user_data["wizard_chat_id"] = new_message.chat_id
+                    context.user_data["wizard_msg_id"] = new_message.message_id
+                    return new_message
+                raise
+            else:
+                context.user_data["wizard_chat_id"] = chat_id
+                context.user_data["wizard_msg_id"] = edited.message_id
+                return edited
+
+        if message_id is not None and chat_id is not None:
+            try:
+                edited = await context.bot.edit_message_text(
+                    text=text,
+                    chat_id=chat_id,
+                    message_id=message_id,
+                    reply_markup=reply_markup,
+                    **kwargs,
+                )
+            except BadRequest as e:
+                error_text = (e.message or "").lower()
+                if "not modified" in error_text:
+                    return None
+                if _needs_new_message(error_text):
+                    new_message = await context.bot.send_message(
+                        chat_id,
+                        text,
+                        reply_markup=reply_markup,
+                        **kwargs,
+                    )
+                    context.user_data["wizard_chat_id"] = new_message.chat_id
+                    context.user_data["wizard_msg_id"] = new_message.message_id
+                    return new_message
+                raise
+            else:
+                context.user_data["wizard_chat_id"] = chat_id
+                context.user_data["wizard_msg_id"] = edited.message_id
+                return edited
+
+        if chat_id is None:
+            raise RuntimeError("Cannot determine chat for wizard screen")
+
+        new_message = await context.bot.send_message(
+            chat_id,
+            text,
+            reply_markup=reply_markup,
+            **kwargs,
+        )
+        context.user_data["wizard_chat_id"] = new_message.chat_id
+        context.user_data["wizard_msg_id"] = new_message.message_id
+        return new_message
+
     prefs = await load_ui_preferences(user_id)
     prepared_text, prepared_markup = prepare_ui_output(text, reply_markup, prefs)
-    remember = not context.user_data.get("wizard_onboarding")
+    if context.user_data.get("wizard_onboarding"):
+        return await _update_wizard_screen(
+            q,
+            context,
+            prepared_text,
+            prepared_markup,
+            **kwargs,
+        )
+    remember = True
     return await safe_update_screen(
         q,
         context,
@@ -6366,14 +6476,22 @@ async def build_for_time_history_view(
 async def reminder_job(context: ContextTypes.DEFAULT_TYPE):
     chat_id = context.job.chat_id
     user_id = None
-    if context.job.data and isinstance(context.job.data, dict):
-        user_id = context.job.data.get("user_id") or context.job.data.get(
-            "target_user_id"
-        )
+    job_data = context.job.data if isinstance(context.job.data, dict) else None
+    if job_data:
+        user_id = job_data.get("user_id") or job_data.get("target_user_id")
     try:
         reply_markup = None
         cheer = ""
         if user_id:
+            tz_name = job_data.get("tz") if job_data else None
+            if not tz_name:
+                tz_name = await get_user_timezone(user_id)
+            zone = resolve_user_zone(tz_name)
+            logger.info(
+                "REMINDER FIRE user=%s local_now=%s",
+                user_id,
+                datetime.now(zone).isoformat(),
+            )
             completions = await get_active_day_completions(user_id)
             _text, reply_markup, _ = await compose_main_menu(user_id)
             cheer = format_reminder_cheer(len(completions))
@@ -6402,6 +6520,61 @@ def _build_reminder_job_name(user_id: int, day_no: int, dow: int) -> str:
     return f"rem_{user_id}_{day_no}_{dow}"
 
 
+def _remove_jobs_for_removed_reminders(
+    job_queue, user_id: int, removed: Sequence[tuple[int, int, int, int]]
+) -> None:
+    for day_no, dow, *_ in removed:
+        try:
+            day_int = int(day_no)
+            dow_int = int(dow)
+        except (TypeError, ValueError):
+            continue
+        if dow_int < 0 or dow_int > 6:
+            continue
+        _remove_reminder_jobs(job_queue, user_id, day_int, dow_int)
+
+
+def _build_reminder_job_tag(user_id: int, day_no: int, dow: int) -> str:
+    return f"u:{user_id}:rem:{day_no}:{dow}"
+
+
+def _get_job_tag(job) -> str | None:
+    job_kwargs = getattr(job, "job_kwargs", None)
+    if isinstance(job_kwargs, dict):
+        tag = job_kwargs.get("name")
+        if isinstance(tag, str):
+            return tag
+    data = getattr(job, "data", None)
+    if isinstance(data, dict):
+        tag = data.get("tag")
+        if isinstance(tag, str):
+            return tag
+    name = getattr(job, "name", None)
+    if isinstance(name, str) and name.startswith("u:"):
+        return name
+    return None
+
+
+def _safe_remove_job(job) -> None:
+    try:
+        job.schedule_removal()
+    except Exception:
+        pass
+
+
+def _remove_jobs_with_tag_prefix(job_queue, tag_prefix: str) -> None:
+    if job_queue is None:
+        return
+    try:
+        jobs = job_queue.jobs()
+    except AttributeError:
+        jobs = []
+    for job in jobs:
+        tag = _get_job_tag(job)
+        if isinstance(tag, str) and tag.startswith(tag_prefix):
+            _safe_remove_job(job)
+
+
 def _schedule_reminder_job(
     job_queue,
     *,
@@ -6418,11 +6591,8 @@ def _schedule_reminder_job(
         day_int = int(day_no)
         hour_int = int(hour)
         minute_int = int(minute)
+        dow_int = int(dow)
     except (TypeError, ValueError):
-        return None
-    try:
-        dow_int = normalize_dow(dow)
-    except Exception:
         return None
     if not 0 <= dow_int <= 6:
         return None
@@ -6435,23 +6605,51 @@ def _schedule_reminder_job(
         return None
     zone = resolve_user_zone(tz_name)
     tm = time(hour=hour_int, minute=minute_int, tzinfo=zone)
+    job_tag = _build_reminder_job_tag(user_id, day_int, dow_int)
+
     job_queue.run_daily(
         reminder_job,
         tm,
         days=(dow_int,),
         chat_id=chat_id,
         name=job_name,
-        data={"user_id": user_id, "day_no": day_int, "dow": dow_int},
+        data={
+            "user_id": user_id,
+            "day_no": day_int,
+            "dow": dow_int,
+            "tag": job_tag,
+            "tz": tz_name,
+        },
+    )
+
+    now = datetime.now(zone)
+    days_ahead = (dow_int - now.weekday()) % 7
+    next_date = (now + timedelta(days=days_ahead)).date()
+    next_run = datetime.combine(next_date, time(hour=hour_int, minute=minute_int), tzinfo=zone)
+    if next_run <= now:
+        next_date = next_date + timedelta(days=7)
+        next_run = datetime.combine(
+            next_date, time(hour=hour_int, minute=minute_int), tzinfo=zone
+        )
+    logger.info(
+        "REMINDER SCHEDULED user=%s tz=%s dow=%s hh:mm=%s next_local=%s",
+        user_id,
+        getattr(zone, "key", None) or tz_name or "UTC",
+        dow_int,
+        f"{hour_int:02d}:{minute_int:02d}",
+        next_run.isoformat(),
     )
     return job_name
 
 
 def _remove_reminder_jobs(job_queue, user_id: int, day_no: int, dow: int | None = None) -> None:
-    def _safe_remove(job) -> None:
-        try:
-            job.schedule_removal()
-        except Exception:
-            pass
+    if job_queue is None:
+        return
+    tag_prefix = f"u:{user_id}:rem:{day_no}:"
+    if dow is not None and 0 <= int(dow) <= 6:
+        _remove_jobs_with_tag_prefix(job_queue, f"{tag_prefix}{int(dow)}")
+    else:
+        _remove_jobs_with_tag_prefix(job_queue, tag_prefix)
 
     job_prefix = f"rem_{user_id}_{day_no}_"
     try:
@@ -6461,17 +6659,33 @@ def _remove_reminder_jobs(job_queue, user_id: int, day_no: int, dow: int | None 
     for job in jobs:
         name = getattr(job, "name", None)
         if name and name.startswith(job_prefix):
-            _safe_remove(job)
+            _safe_remove_job(job)
     if dow is not None:
-        job_name = _build_reminder_job_name(user_id, day_no, dow)
+        job_name = _build_reminder_job_name(user_id, day_no, int(dow))
         for job in job_queue.get_jobs_by_name(job_name):
-            _safe_remove(job)
+            _safe_remove_job(job)
     legacy_names = [f"rem_{user_id}_{day_no}"]
     if dow is not None:
         legacy_names.append(f"rem_{user_id}_{dow}")
     for legacy_name in legacy_names:
         for job in job_queue.get_jobs_by_name(legacy_name):
-            _safe_remove(job)
+            _safe_remove_job(job)
+
+
+def _sweep_user_reminder_jobs(job_queue, user_id: int) -> None:
+    if job_queue is None:
+        return
+    tag_prefix = f"u:{user_id}:rem:"
+    _remove_jobs_with_tag_prefix(job_queue, tag_prefix)
+    try:
+        jobs = job_queue.jobs()
+    except AttributeError:
+        jobs = []
+    legacy_prefix = f"rem_{user_id}_"
+    for job in jobs:
+        name = getattr(job, "name", None)
+        if name and name.startswith(legacy_prefix):
+            _safe_remove_job(job)
 
 
 async def schedule_all_reminders(app: Application):
@@ -6487,6 +6701,7 @@ async def schedule_all_reminders(app: Application):
     desired_jobs: set[str] = set()
     total_scheduled = 0
     for user_id, info in users.items():
+        _sweep_user_reminder_jobs(app.job_queue, user_id)
         reminders = await list_user_reminders(user_id)
         if not reminders:
             logger.info("Scheduled 0 reminders for user %d", user_id)
@@ -6667,6 +6882,20 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             update.message.chat_id,
             "Пришли текст сообщения для рассылки. После текста можно добавить фотографию. Отправь /cancel, чтобы отменить рассылку.",
         )
+
+
+async def splash_reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    chat = update.effective_chat
+    if not user or not chat:
+        return
+    db_user_id = await get_or_create_user(user.id, user.username)
+    tag_prefix = f"u:{db_user_id}:rem:"
+    _remove_jobs_with_tag_prefix(context.job_queue, tag_prefix)
+    _sweep_user_reminder_jobs(context.job_queue, db_user_id)
+    await wipe_user(db_user_id)
+    context.user_data.clear()
+    await chat.send_message("Данные очищены. Нажми /start, чтобы начать заново.")
 
 
 async def cancel_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -7553,6 +7782,34 @@ async def advance_day(q, context, user_id: int, next_day: int):
         await show_screen(q, context, "Присылать напоминания перед тренировками?", reminders_kb(), user_id)
 
 
+async def finalize_wizard(
+    q,
+    context: ContextTypes.DEFAULT_TYPE,
+    user_id: int,
+    chat_id: int | None = None,
+) -> None:
+    stored_chat_id = context.user_data.pop("wizard_chat_id", None)
+    context.user_data.pop("wizard_msg_id", None)
+    context.user_data.pop("wizard_onboarding", None)
+    context.user_data.pop("wizard_onboarding_tz", None)
+    if chat_id is None:
+        chat_id = stored_chat_id
+    if chat_id is None:
+        message = getattr(q, "message", None)
+        chat = getattr(message, "chat", None) if message else None
+        chat_id = getattr(chat, "id", None) if chat else getattr(message, "chat_id", None)
+    if chat_id is None:
+        return
+    menu_text, menu_kb, prefs = await compose_main_menu(user_id)
+    prepared_text, prepared_markup = prepare_ui_output(menu_text, menu_kb, prefs)
+    await send_main_message_fresh(
+        context.bot,
+        chat_id,
+        prepared_text,
+        reply_markup=prepared_markup,
+    )
+
+
 async def prompt_day_mode(q, context, user_id: int, day: int):
     prefs = await load_ui_preferences(user_id)
     groups_store = context.user_data.setdefault("day_groups", {})
@@ -7574,6 +7831,11 @@ async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAUL
     message = getattr(q, "message", None)
     chat = getattr(message, "chat", None) if message else None
     chat_id = getattr(chat, "id", None) if chat else getattr(message, "chat_id", None)
+    if isinstance(q, CallbackQuery) and data.startswith("wiz:"):
+        try:
+            await q.answer(cache_time=1)
+        except TelegramError:
+            pass
     try:
         if data == "wiz:sub:verify":
             context.user_data["wizard_onboarding"] = True
@@ -7591,21 +7853,15 @@ async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAUL
             except (IndexError, ValueError):
                 return
             n = max(1, min(7, n))
-            await set_workouts_per_week(user_id, n)
+            removed = await set_workouts_per_week(user_id, n)
+            if removed:
+                _remove_jobs_for_removed_reminders(context.job_queue, user_id, removed)
+            app = context.application
+            if app is not None:
+                await schedule_all_reminders(app)
             context.user_data["workouts_per_week"] = n
             context.user_data.pop("reminder_day", None)
             context.user_data.pop("reminder_skip_tz", None)
-            if chat_id is not None:
-                menu_text, menu_kb, prefs = await compose_main_menu(user_id)
-                prepared_text, prepared_markup = prepare_ui_output(
-                    menu_text, menu_kb, prefs
-                )
-                await send_main_message_fresh(
-                    context.bot,
-                    chat_id,
-                    prepared_text,
-                    reply_markup=prepared_markup,
-                )
             await show_screen(
                 q,
                 context,
@@ -8003,10 +8259,12 @@ async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAUL
             else:
                 _, menu_kb, _ = await compose_main_menu(user_id)
                 await show_screen(q, context, 'Настройка завершена.', menu_kb, user_id)
+                await finalize_wizard(q, context, user_id, chat_id)
             return
         if data == "wiz:finish_yes":
             _, menu_kb, _ = await compose_main_menu(user_id)
             await show_screen(q, context, 'Настройка завершена.', menu_kb, user_id)
+            await finalize_wizard(q, context, user_id, chat_id)
             return
         if data == "wiz:finish_no":
             day = context.user_data.get("confirm_finish_day", 1)
@@ -8018,17 +8276,6 @@ async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAUL
             if app is not None:
                 await schedule_all_reminders(app)
             from_settings = context.user_data.get("from_settings")
-            if not from_settings and chat_id is not None:
-                menu_text, menu_kb, prefs = await compose_main_menu(user_id)
-                prepared_text, prepared_markup = prepare_ui_output(
-                    menu_text, menu_kb, prefs
-                )
-                await send_main_message_fresh(
-                    context.bot,
-                    chat_id,
-                    prepared_text,
-                    reply_markup=prepared_markup,
-                )
             skip_tz = context.user_data.pop("reminder_skip_tz", None)
             tz_code = context.user_data.get("tz")
             if not tz_code:
@@ -8076,17 +8323,6 @@ async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAUL
                 kb = await build_settings_keyboard_for_user(context, user_id)
                 await show_screen(q, context, 'Настройки:', kb, user_id)
                 return
-            if chat_id is not None:
-                menu_text, menu_kb, prefs = await compose_main_menu(user_id)
-                prepared_text, prepared_markup = prepare_ui_output(
-                    menu_text, menu_kb, prefs
-                )
-                await send_main_message_fresh(
-                    context.bot,
-                    chat_id,
-                    prepared_text,
-                    reply_markup=prepared_markup,
-                )
             context.user_data.pop("reminder_skip_tz", None)
             context.user_data.pop(REMINDER_TIME_PAGE_KEY, None)
             tz_code = context.user_data.get("tz")
@@ -8105,7 +8341,6 @@ async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAUL
                     user_id,
                 )
             else:
-                context.user_data.pop("wizard_onboarding", None)
                 await show_screen(
                     q,
                     context,
@@ -8113,6 +8348,7 @@ async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAUL
                     None,
                     user_id,
                 )
+                await finalize_wizard(q, context, user_id, chat_id)
             return
         if data == "wiz:reminders:back":
             context.user_data.pop("reminder_skip_tz", None)
@@ -8136,18 +8372,10 @@ async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAUL
                 tz = parts[3]
                 context.user_data["tz"] = tz
                 await set_user_timezone(user_id, tz)
+                app = context.application
+                if app is not None:
+                    await schedule_all_reminders(app)
                 mode = context.user_data.pop("wizard_onboarding_tz", None)
-                if mode and chat_id is not None:
-                    menu_text, menu_kb, prefs = await compose_main_menu(user_id)
-                    prepared_text, prepared_markup = prepare_ui_output(
-                        menu_text, menu_kb, prefs
-                    )
-                    await send_main_message_fresh(
-                        context.bot,
-                        chat_id,
-                        prepared_text,
-                        reply_markup=prepared_markup,
-                    )
                 day_no = context.user_data.get("reminder_day", 1)
                 tz_only_change = context.user_data.pop("tz_only_change", None)
                 if tz_only_change:
@@ -8158,7 +8386,6 @@ async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAUL
                     text = f"Часовой пояс обновлён: {tz_label}.\n\n{overview}"
                     await show_screen(q, context, text, reminders_edit_kb(enabled), user_id)
                 elif mode == "final":
-                    context.user_data.pop("wizard_onboarding", None)
                     await show_screen(
                         q,
                         context,
@@ -8166,6 +8393,7 @@ async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAUL
                         None,
                         user_id,
                     )
+                    await finalize_wizard(q, context, user_id, chat_id)
                 else:
                     context.user_data["reminder_day"] = day_no
                     await show_screen(
@@ -8277,6 +8505,9 @@ async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAUL
                 minute=minute,
                 tz_name=tz_code,
             )
+            app = context.application
+            if app is not None:
+                await schedule_all_reminders(app)
             day_no = context.user_data.get("reminder_day", 1)
             total = context.user_data.get("workouts_per_week", 0)
             context.user_data.pop(REMINDER_TIME_PAGE_KEY, None)
@@ -8289,18 +8520,7 @@ async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAUL
                 kb = await build_settings_keyboard_for_user(context, user_id)
                 await show_screen(q, context, 'Настройки:', kb, user_id)
             else:
-                menu_text, menu_kb, prefs = await compose_main_menu(user_id)
-                prepared_text, prepared_markup = prepare_ui_output(
-                    menu_text, menu_kb, prefs
-                )
-                if chat_id is not None:
-                    await send_main_message_fresh(
-                        context.bot,
-                        chat_id,
-                        prepared_text,
-                        reply_markup=prepared_markup,
-                    )
-                context.user_data.pop("wizard_onboarding", None)
+                _, menu_kb, _ = await compose_main_menu(user_id)
                 await show_screen(
                     q,
                     context,
@@ -8308,6 +8528,7 @@ async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAUL
                     menu_kb,
                     user_id,
                 )
+                await finalize_wizard(q, context, user_id, chat_id)
             return
     finally:
         message = getattr(q, "message", None)
@@ -10925,14 +11146,12 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     n = int(parts[2])
                     removed = await set_workouts_per_week(target_user_id, n)
                     if removed:
-                        for day_no, dow, _hour, _minute in removed:
-                            normalized = dow if dow >= 0 else None
-                            _remove_reminder_jobs(
-                                context.job_queue,
-                                target_user_id,
-                                day_no,
-                                normalized,
-                            )
+                        _remove_jobs_for_removed_reminders(
+                            context.job_queue, target_user_id, removed
+                        )
+                    app = context.application
+                    if app is not None:
+                        await schedule_all_reminders(app)
                     rems = await list_user_reminders(target_user_id)
                     if len(rems) < n:
                         context.user_data["from_settings"] = True
@@ -11330,6 +11549,9 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     minute=minute,
                     tz_name=tz_code,
                 )
+                app = context.application
+                if app is not None:
+                    await schedule_all_reminders(app)
                 context.user_data[REMINDER_SELECTED_DOW_KEY] = str(dow_iso)
                 confirmation = format_reminder_status(label, (dow, hour, minute))
                 await q.answer(confirmation)
@@ -12379,6 +12601,7 @@ def main():
         .build()
     )
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("splash_reset", splash_reset))
     app.add_handler(CommandHandler("broadcast", broadcast_command))
     app.add_handler(CommandHandler("cancel", cancel_command))
     app.add_handler(CommandHandler(("grant", "grunt"), grant_command))
