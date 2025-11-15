@@ -205,6 +205,28 @@ class MeasurementDbTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIn("Гибкость — нет данных", text)
 
+    async def test_measurements_view_includes_trainer_context(self):
+        user_id = await db.get_or_create_user(505, "acting-view")
+        context = SimpleNamespace(
+            user_data={"acting_user_id": user_id, "acting_label": "Тестовый"}
+        )
+
+        text, _ = await bot.build_measurements_view(user_id, context)
+
+        self.assertIn("Сейчас вы смотрите замеры подопечного", text)
+        self.assertIn("Тестовый", text)
+
+    async def test_measurements_history_includes_trainer_context(self):
+        user_id = await db.get_or_create_user(506, "acting-history")
+        context = SimpleNamespace(
+            user_data={"acting_user_id": user_id, "acting_label": "История"}
+        )
+
+        text, _ = await bot.build_measurements_history_view(user_id, context)
+
+        self.assertIn("Сейчас вы смотрите историю замеров подопечного", text)
+        self.assertIn("История", text)
+
     async def test_custom_measurement_uses_origin_category(self):
         tg_id = 5050
         user_id = await db.get_or_create_user(tg_id, "category-flow")

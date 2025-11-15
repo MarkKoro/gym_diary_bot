@@ -1559,6 +1559,30 @@ def is_edit_allowed(user_data: dict) -> bool:
     return bool(user_data.get("acting_can_edit"))
 
 
+def get_acting_context_line(
+    context: ContextTypes.DEFAULT_TYPE,
+    user_id: int,
+    *,
+    subject: str,
+) -> str | None:
+    user_data = getattr(context, "user_data", None)
+    if not isinstance(user_data, dict):
+        return None
+    acting_id = user_data.get("acting_user_id")
+    if acting_id is None:
+        return None
+    try:
+        acting_id_int = int(acting_id)
+    except (TypeError, ValueError):
+        return None
+    if acting_id_int != user_id:
+        return None
+    label = user_data.get("acting_label")
+    if label:
+        return f"Сейчас вы смотрите {subject} подопечного: {label}."
+    return f"Сейчас вы смотрите {subject} подопечного."
+
+
 async def require_edit_allowed(q: CallbackQuery, context: ContextTypes.DEFAULT_TYPE) -> bool:
     if not is_edit_allowed(context.user_data):
         await q.answer("Подопечный не дал доступ на изменение плана.", show_alert=True)
@@ -1591,6 +1615,7 @@ async def resolve_target_user_id(
     if acting_id is None:
         context.user_data.pop("acting_can_edit", None)
         context.user_data.pop(RESOLVE_TARGET_USER_KEY, None)
+        context.user_data.pop("acting_label", None)
         return actor_user_id
     try:
         acting_id_int = int(acting_id)
@@ -1598,12 +1623,21 @@ async def resolve_target_user_id(
         context.user_data.pop("acting_user_id", None)
         context.user_data.pop("acting_can_edit", None)
         context.user_data.pop(RESOLVE_TARGET_USER_KEY, None)
+        context.user_data.pop("acting_label", None)
         return actor_user_id
     link = await get_trainer_link(actor_user_id, acting_id_int)
     if link and str(link[1]) == "accepted":
         can_edit = bool(link[2])
         context.user_data["acting_user_id"] = acting_id_int
         context.user_data["acting_can_edit"] = can_edit
+        raw_label = None
+        if len(link) > 4:
+            raw_label = link[4]
+        label = str(raw_label).strip() if raw_label else None
+        if label:
+            context.user_data["acting_label"] = label
+        else:
+            context.user_data.pop("acting_label", None)
         context.user_data[RESOLVE_TARGET_USER_KEY] = {
             "actor_user_id": actor_user_id,
             "target_user_id": acting_id_int,
@@ -1613,6 +1647,7 @@ async def resolve_target_user_id(
     context.user_data.pop("acting_user_id", None)
     context.user_data.pop("acting_can_edit", None)
     context.user_data.pop(RESOLVE_TARGET_USER_KEY, None)
+    context.user_data.pop("acting_label", None)
     return actor_user_id
 
 
@@ -2226,6 +2261,7 @@ async def show_trainer_acting_menu(
         acting_can_edit = bool(context.user_data.get("acting_can_edit"))
     if not trainee_label:
         trainee_label = await _format_trainer_user_display(trainee_user_id)
+    context.user_data["acting_label"] = trainee_label
     extra_rows = [
         [
             InlineKeyboardButton(
@@ -2247,7 +2283,9 @@ async def show_trainer_acting_menu(
         include_subscription_notice=False,
         include_settings=False,
     )
-    context_line = f"Сейчас вы смотрите план подопечного: {trainee_label}."
+    context_line = get_acting_context_line(
+        context, trainee_user_id, subject="план"
+    ) or f"Сейчас вы смотрите план подопечного: {trainee_label}."
     if acting_can_edit:
         context_line += (
             " Изменения в этом меню будут сохраняться для подопечного, а не для вас."
@@ -4923,6 +4961,9 @@ async def build_measurements_view(
     if not lines:
         lines.append("Пока нет замеров. Добавь показатели, чтобы отслеживать прогресс.")
     text = header + "\n\n" + "\n".join(lines)
+    context_line = get_acting_context_line(context, user_id, subject="замеры")
+    if context_line:
+        text = f"{context_line}\n\n{text}"
     return text, measurements_main_kb(show_all, context=context)
 
 
@@ -4984,6 +5025,11 @@ async def build_measurements_history_view(
             "История пока пуста. Добавь как минимум два значения для показателя, чтобы увидеть изменения."
         )
     text = "История замеров:\n\n" + "\n".join(lines)
+    context_line = get_acting_context_line(
+        context, user_id, subject="историю замеров"
+    )
+    if context_line:
+        text = f"{context_line}\n\n{text}"
     kb = InlineKeyboardMarkup(
         [[InlineKeyboardButton(BACK_BTN, callback_data="measure:back")]]
     )
@@ -6690,11 +6736,21 @@ def _schedule_reminder_job(
         return None
     if not 0 <= dow_int <= 6:
         return None
-    job_name = _build_reminder_job_name(user_id, day_int, dow_int)
     if job_queue is None:
         return None
+    legacy_dow = (dow_int - 1) % 7
+    legacy_name = _build_reminder_job_name(user_id, day_int, legacy_dow)
+    job_name = _build_reminder_job_name(user_id, day_int, dow_int)
     if remove_existing:
         _remove_reminder_jobs(job_queue, user_id, day_int, dow_int)
+        try:
+            legacy_jobs = job_queue.get_jobs_by_name(legacy_name)
+        except Exception:
+            legacy_jobs = []
+        else:
+            if legacy_jobs and dow_int != legacy_dow:
+                dow_int = legacy_dow
+                job_name = legacy_name
     if chat_id is None:
         return None
     zone = resolve_user_zone(tz_name)
@@ -9733,6 +9789,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     context.user_data.pop(TRAINER_SETTINGS_MESSAGE_KEY, None)
                     context.user_data.pop(TRAINER_TRAINEE_SETTINGS_MESSAGE_KEY, None)
                     context.user_data.pop(TRAINER_TRAINEE_LABEL_INPUT_KEY, None)
+                    context.user_data.pop("acting_label", None)
                 if len(parts) == 2:
                     await _render_trainer_overview(q, context, actor_user_id)
                     return
@@ -9921,6 +9978,24 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         if data == "menu:root":
+            acting_id = context.user_data.get("acting_user_id")
+            if acting_id is not None:
+                try:
+                    acting_id_int = int(acting_id)
+                except (TypeError, ValueError):
+                    context.user_data.pop("acting_user_id", None)
+                    context.user_data.pop("acting_can_edit", None)
+                    context.user_data.pop(RESOLVE_TARGET_USER_KEY, None)
+                    context.user_data.pop("acting_label", None)
+                else:
+                    if (
+                        acting_id_int == target_user_id
+                        and actor_user_id != target_user_id
+                    ):
+                        await show_trainer_acting_menu(
+                            q, context, actor_user_id, acting_id_int
+                        )
+                        return
             prefs = await load_ui_preferences(target_user_id)
             text, kb, prefs = await compose_main_menu(target_user_id, prefs)
             await show_screen(q, context, text, kb, target_user_id)
@@ -11230,6 +11305,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         context.user_data.pop("acting_user_id", None)
                         context.user_data.pop("acting_can_edit", None)
                         context.user_data.pop(RESOLVE_TARGET_USER_KEY, None)
+                        context.user_data.pop("acting_label", None)
                         if affected_trainees:
                             app_user_data = getattr(context.application, "user_data", None)
                             if isinstance(app_user_data, dict):
