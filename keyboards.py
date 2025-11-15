@@ -323,20 +323,8 @@ def trainee_trainer_settings_kb(can_edit: bool):
     return InlineKeyboardMarkup(rows)
 
 
-def trainer_manage_trainee_kb(
-    can_edit: bool, trainee_user_id: int
-) -> InlineKeyboardMarkup:
-    toggle_state = "off" if can_edit else "on"
+def trainer_manage_trainee_kb(trainee_user_id: int) -> InlineKeyboardMarkup:
     rows = [
-        [
-            InlineKeyboardButton(
-                dual(
-                    f"Право менять план: {'Вкл' if can_edit else 'Выкл'}",
-                    "Переключить доступ к редактированию плана",
-                ),
-                callback_data=f"trainer:allow:{toggle_state}",
-            )
-        ],
         [
             InlineKeyboardButton(
                 dual(

@@ -203,6 +203,7 @@ from db import (
     find_user_by_trainer_code,
     get_latest_trainer_link_for_trainee,
     deactivate_trainer_links,
+    reactivate_trainer_links,
     get_trainer_link,
     get_active_trainer_link_for_trainee,
     create_trainer_request,
@@ -1673,6 +1674,8 @@ async def show_trainer_root_settings(
     q,
     context: ContextTypes.DEFAULT_TYPE,
     user_id: int,
+    *,
+    status_message: str | None = None,
 ):
     profile = await _fetch_trainer_profile(user_id)
     is_trainer = int(profile[0]) if profile and profile[0] else 0
@@ -1688,7 +1691,7 @@ async def show_trainer_root_settings(
         elif status_value == "accepted":
             link_status = "есть"
         elif status_value in {"trainer_disabled", "inactive"}:
-            link_status = "тренер отключил режим"
+            link_status = "тренер отключил режим тренера"
         else:
             link_status = status_value or "нет"
     lines = [
@@ -1714,6 +1717,9 @@ async def show_trainer_root_settings(
         request_status = "включен" if accepts_requests else "выключен"
         lines.append("")
         lines.append(f"Прием заявок: {request_status}.")
+    if status_message:
+        lines.append("")
+        lines.append(status_message)
     text = "\n".join(lines)
     toggle_target = "off" if is_trainer else "on"
     toggle_button = InlineKeyboardButton(
@@ -1753,6 +1759,23 @@ async def show_trainer_root_settings(
                 )
             ]
         )
+        toggle_state = "off" if accepts_requests else "on"
+        toggle_label = dual(
+            "🚫 Отключить прием заявок"
+            if accepts_requests
+            else "✅ Включить прием заявок",
+            "Отключить прием заявок"
+            if accepts_requests
+            else "Включить прием заявок",
+        )
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    toggle_label,
+                    callback_data=f"trainer:requests:{toggle_state}",
+                )
+            ]
+        )
     rows.append([trainee_button])
     rows.append([back_button])
     kb = InlineKeyboardMarkup(rows)
@@ -1784,7 +1807,7 @@ async def _build_become_trainee_view(
         )
     elif status_value in {"trainer_disabled", "inactive"}:
         status_lines.append(
-            "Статус: тренер отключил режим, и связь больше не активна."
+            "Статус: тренер отключил режим тренера. Связь временно приостановлена до его возвращения."
         )
     elif status_value == "rejected":
         status_lines.append("Статус: заявка отклонена тренером.")
@@ -1973,9 +1996,9 @@ async def build_trainee_trainer_settings_view(
         return text, kb, None
     if status_value in {"trainer_disabled", "inactive"}:
         lines = [
-            "Статус: тренер отключил режим, и связь больше не активна.",
+            "Статус: тренер отключил режим тренера. Связь временно приостановлена.",
             "",
-            "Чтобы переподключиться, попроси новый код и введи его заново.",
+            "Как только тренер вернётся в режим тренера, доступ восстановится автоматически.",
         ]
         text = "\n".join(lines)
         kb = InlineKeyboardMarkup(
@@ -2125,10 +2148,11 @@ async def build_trainer_manage_trainee_view(
         "",
         permission_text,
         "",
-        "Используй кнопки ниже, чтобы управлять доступом и заметкой.",
+        "Переименуй подопечного или отключи связь с помощью кнопок ниже.",
+        "Разрешение менять план можно обновить только в настройках подопечного.",
     ]
     text = "\n".join(lines)
-    kb = trainer_manage_trainee_kb(bool(can_edit_plan), trainee_user_id)
+    kb = trainer_manage_trainee_kb(trainee_user_id)
     return text, kb, int(link_id)
 
 
@@ -2481,23 +2505,6 @@ async def _render_trainer_overview(
             )
         if nav_row:
             rows.append(nav_row)
-    if is_trainer:
-        toggle_state = "off" if accepts_requests else "on"
-        toggle_label = dual(
-            "🚫 Отключить прием заявок"
-            if accepts_requests
-            else "✅ Включить прием заявок",
-            "Отключить прием заявок"
-            if accepts_requests
-            else "Включить прием заявок",
-        )
-        rows.append(
-            [
-                InlineKeyboardButton(
-                    toggle_label, callback_data=f"trainer:requests:{toggle_state}"
-                )
-            ]
-        )
     rows.append([InlineKeyboardButton(BACK_BTN, callback_data="menu:root")])
     kb = InlineKeyboardMarkup(rows)
     await show_screen(q, context, "\n".join(lines), kb, user_id)
@@ -6534,27 +6541,60 @@ async def reminder_job(context: ContextTypes.DEFAULT_TYPE):
     if job_data:
         user_id = job_data.get("user_id") or job_data.get("target_user_id")
     try:
-        reply_markup = None
         cheer = ""
+        text_lines = ["🔔 Пришло время тренировки!", ""]
+        keyboard_rows: list[list[InlineKeyboardButton]] = []
         if user_id:
             tz_name = job_data.get("tz") if job_data else None
             if not tz_name:
                 tz_name = await get_user_timezone(user_id)
             zone = resolve_user_zone(tz_name)
+            now_local = datetime.now(zone)
             logger.info(
                 "REMINDER FIRE user=%s local_now=%s",
                 user_id,
-                datetime.now(zone).isoformat(),
+                now_local.isoformat(),
             )
+            weekday_label = WEEKDAY_FULL_NAMES.get(now_local.weekday())
+            date_str = now_local.strftime("%d.%m.%Y")
+            time_str = now_local.strftime("%H:%M")
+            if weekday_label:
+                text_lines.append(
+                    f"Сегодня {weekday_label}, {date_str} в {time_str}."
+                )
+            else:
+                text_lines.append(f"Сегодня {date_str} в {time_str}.")
+            day_index = None
+            day_label = None
+            if job_data:
+                try:
+                    day_index = int(job_data.get("day_no"))
+                except (TypeError, ValueError):
+                    day_index = None
+            if user_id and day_index:
+                day_label = await get_day_label(user_id, day_index)
+            if day_label:
+                text_lines.append(f"Тренировочный день: {day_label}.")
+            elif day_index:
+                text_lines.append(f"Тренировочный день: День {day_index}.")
             completions = await get_active_day_completions(user_id)
-            _text, reply_markup, _ = await compose_main_menu(user_id)
             cheer = format_reminder_cheer(len(completions))
-        text = (
-            "Напоминание о тренировке!\n"
-            "Открой нужный день и отметь новые подходы, чтобы сохранить прогресс."
+            if day_index:
+                keyboard_rows.append(
+                    [
+                        InlineKeyboardButton(
+                            "Перейти ко дню",
+                            callback_data=f"day:open:{day_index}",
+                        )
+                    ]
+                )
+        keyboard_rows.append(
+            [InlineKeyboardButton("В главное меню", callback_data="menu:root")]
         )
         if cheer:
-            text = f"{text}\n{cheer}"
+            text_lines.extend(["", cheer])
+        text = "\n".join(text_lines)
+        reply_markup = InlineKeyboardMarkup(keyboard_rows)
         await send_main_message_fresh(
             context.bot,
             chat_id,
@@ -9412,22 +9452,9 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     desired = parts[2]
                     allow_on = desired == "on"
                     if acting_id:
-                        link = await get_trainer_link(actor_user_id, acting_id)
-                        if not link or str(link[1]) != "accepted":
-                            await q.answer("Связь недоступна.", show_alert=True)
-                            return
-                        link_id = int(link[0])
-                        new_value = 1 if allow_on else 0
-                        await update_trainer_link_permissions(link_id, new_value)
-                        context.user_data["acting_can_edit"] = bool(new_value)
-                        target_key = context.user_data.get(
-                            TRAINER_TRAINEE_SETTINGS_MESSAGE_KEY
-                        )
-                        await refresh_trainer_manage_trainee_message(
-                            context,
-                            actor_user_id,
-                            acting_id,
-                            target_key if isinstance(target_key, tuple) else None,
+                        await q.answer(
+                            "Подопечный сам управляет этим в своих настройках.",
+                            show_alert=True,
                         )
                         return
                     link = await get_active_trainer_link_for_trainee(target_user_id)
@@ -9760,9 +9787,10 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     if enable
                     else "Прием заявок отключен"
                 )
-                await _render_trainer_overview(
-                    q, context, actor_user_id, message=message
+                await show_trainer_root_settings(
+                    q, context, actor_user_id, status_message=message
                 )
+                await q.answer(message)
                 return
             if action == "req" and len(parts) >= 4:
                 req_action = parts[2]
@@ -11162,6 +11190,35 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     profile = await _fetch_trainer_profile(actor_user_id)
                     if desired_state == "on":
                         await _ensure_trainer_mode(actor_user_id, profile)
+                        reactivated_trainees = await reactivate_trainer_links(
+                            actor_user_id
+                        )
+                        if reactivated_trainees:
+                            app_user_data = getattr(
+                                context.application, "user_data", None
+                            )
+                            if isinstance(app_user_data, dict):
+                                for trainee_user_id in reactivated_trainees:
+                                    trainee_record = await find_user_by_id(
+                                        trainee_user_id
+                                    )
+                                    if not trainee_record:
+                                        continue
+                                    _db_id, trainee_tg_id, _username = trainee_record
+                                    if trainee_tg_id is None:
+                                        continue
+                                    trainee_context = app_user_data.get(trainee_tg_id)
+                                    if not isinstance(trainee_context, dict):
+                                        continue
+                                    target_message = trainee_context.get(
+                                        TRAINER_SETTINGS_MESSAGE_KEY
+                                    )
+                                    if isinstance(target_message, tuple):
+                                        await refresh_trainee_trainer_settings_message(
+                                            context,
+                                            trainee_user_id,
+                                            target_message,
+                                        )
                     elif desired_state == "off":
                         async with connect_db() as db:
                             await db.execute(

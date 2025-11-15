@@ -2954,6 +2954,33 @@ async def set_trainer_accepting_requests(user_id: int, accepting: bool) -> None:
         await db.commit()
 
 
+async def reactivate_trainer_links(trainer_user_id: int) -> list[int]:
+    async with connect_db() as db:
+        cur = await db.execute(
+            """
+            SELECT trainee_user_id
+            FROM trainer_links
+            WHERE trainer_user_id = ?
+              AND status = 'trainer_disabled'
+            """,
+            (trainer_user_id,),
+        )
+        rows = await cur.fetchall()
+        trainee_ids = [int(row[0]) for row in rows if row and row[0] is not None]
+        if trainee_ids:
+            await db.execute(
+                """
+                UPDATE trainer_links
+                SET status = 'accepted'
+                WHERE trainer_user_id = ?
+                  AND status = 'trainer_disabled'
+                """,
+                (trainer_user_id,),
+            )
+            await db.commit()
+        return trainee_ids
+
+
 async def get_trainer_link(trainer_user_id: int, trainee_user_id: int):
     async with connect_db() as db:
         cur = await db.execute(
