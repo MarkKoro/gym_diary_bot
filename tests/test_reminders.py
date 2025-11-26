@@ -130,6 +130,20 @@ class ReminderTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("tag", new_job.data)
         self.assertIn("tz", new_job.data)
 
+    async def test_reminder_status_sorted_by_day(self):
+        text = bot.build_reminders_settings_text(
+            "МСК",
+            enabled=True,
+            reminders=[
+                (3, 5, 9, 0),
+                (1, 2, 8, 30),
+                (2, 3, 7, 45),
+            ],
+        )
+
+        expected_line = "Сейчас выбраны напоминания: Ср 08:30, Чт 07:45, Сб 09:00."
+        self.assertIn(expected_line, text)
+
     async def test_schedule_all_reminders_removes_orphan_jobs(self):
         user_id = await db.get_or_create_user(9400, "cleanup-user")
         queue = FakeJobQueue()
