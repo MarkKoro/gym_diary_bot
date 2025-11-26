@@ -2557,6 +2557,7 @@ async def _render_trainer_overview(
             + ("включен" if accepts_requests else "отключен")
             + "."
         )
+        lines.append(f"Активных заявок: {pending_total}.")
     rows: list[list[InlineKeyboardButton]] = []
     for entry in trainees:
         trainee_id = int(entry[1])

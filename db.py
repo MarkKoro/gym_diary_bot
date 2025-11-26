@@ -2988,6 +2988,8 @@ async def get_trainer_link(trainer_user_id: int, trainee_user_id: int):
             SELECT id, status, can_edit_plan, trainer_label, trainee_label
             FROM trainer_links
             WHERE trainer_user_id = ? AND trainee_user_id = ?
+            ORDER BY created_at DESC
+            LIMIT 1
             """,
             (trainer_user_id, trainee_user_id),
         )
