@@ -678,6 +678,34 @@ def _format_day_label(day_index: int, raw_label: str | None, weekday_label: str 
     return base
 
 
+def _sort_reminders(
+    reminders: list[tuple[int, int, int, int]]
+) -> list[tuple[int, int, int, int]]:
+    """Return reminders sorted by day number and weekday."""
+
+    def _key(item: tuple[int, int, int, int]) -> tuple[int, int, int, int]:
+        day_no, dow, hour, minute = item
+        try:
+            day_idx = int(day_no)
+        except (TypeError, ValueError):
+            day_idx = 10**6
+        try:
+            dow_idx = normalize_dow(dow)
+        except Exception:
+            dow_idx = 10**6
+        try:
+            hour_val = int(hour)
+        except (TypeError, ValueError):
+            hour_val = 0
+        try:
+            minute_val = int(minute)
+        except (TypeError, ValueError):
+            minute_val = 0
+        return (day_idx, dow_idx, hour_val, minute_val)
+
+    return sorted(reminders, key=_key)
+
+
 def _build_day_weekday_map(
     days: list[tuple[int, str]], reminders: list[tuple[int, int, int, int]]
 ) -> dict[int, str]:
@@ -688,7 +716,7 @@ def _build_day_weekday_map(
             int(hour),
             int(minute),
         )
-        for day_no, dow, hour, minute in reminders
+        for day_no, dow, hour, minute in _sort_reminders(reminders)
     }
     has_any_reminders = bool(reminder_map)
     for day_index, _label in days:
@@ -724,7 +752,7 @@ def build_reminders_settings_text(
     weekday_labels = dict(WEEKDAYS)
     if reminders:
         parts: list[str] = []
-        for _day_no, dow, hour, minute in reminders:
+        for _day_no, dow, hour, minute in _sort_reminders(reminders):
             try:
                 dow_int = int(dow)
             except (TypeError, ValueError):
@@ -6864,7 +6892,7 @@ async def schedule_all_reminders(app: Application):
     total_scheduled = 0
     for user_id, info in users.items():
         _sweep_user_reminder_jobs(app.job_queue, user_id)
-        reminders = await list_user_reminders(user_id)
+        reminders = _sort_reminders(await list_user_reminders(user_id))
         if not reminders:
             logger.info("Scheduled 0 reminders for user %d", user_id)
             continue
