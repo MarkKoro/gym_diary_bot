@@ -164,6 +164,16 @@ def subscribe_channel_prompt_kb(join_url: str):
     )
 
 
+def channel_support_prompt_kb(join_url: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [InlineKeyboardButton("Перейти в канал", url=join_url)],
+            [InlineKeyboardButton("✅ Подписался", callback_data="promo:channel:subscribed")],
+            [InlineKeyboardButton("↩︎ В меню", callback_data="promo:channel:skip")],
+        ]
+    )
+
+
 def settings_kb(
     *,
     include_notifications: bool = True,

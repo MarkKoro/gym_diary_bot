@@ -116,7 +116,7 @@ class SubscriptionDbTests(unittest.IsolatedAsyncioTestCase):
     async def test_channel_prompt_sent_every_five_completions(self):
         user_id = await db.get_or_create_user(7500, "prompted")
         fake_bot = _FakeBot(status="left")
-        context = SimpleNamespace(bot=fake_bot)
+        context = SimpleNamespace(bot=fake_bot, user_data={})
         q = SimpleNamespace(
             message=SimpleNamespace(chat_id=5555),
             from_user=SimpleNamespace(id=7500),
@@ -145,7 +145,7 @@ class SubscriptionDbTests(unittest.IsolatedAsyncioTestCase):
     async def test_channel_prompt_skipped_for_channel_members(self):
         user_id = await db.get_or_create_user(7600, "subscriber")
         fake_bot = _FakeBot(status="member")
-        context = SimpleNamespace(bot=fake_bot)
+        context = SimpleNamespace(bot=fake_bot, user_data={})
         q = SimpleNamespace(
             message=SimpleNamespace(chat_id=7777),
             from_user=SimpleNamespace(id=7600),
@@ -159,8 +159,12 @@ class SubscriptionDbTests(unittest.IsolatedAsyncioTestCase):
                 await bot.maybe_prompt_channel_support(q, context, user_id)
             self.assertEqual(fake_bot.sent_messages, [])
             prompt_total = await db.get_subscription_prompt_total(user_id)
-            self.assertEqual(prompt_total, 5)
+            self.assertEqual(prompt_total, bot.SUBSCRIPTION_PROMPT_DISABLED)
             self.assertGreaterEqual(len(fake_bot.membership_checks), 1)
+            for _ in range(5):
+                await bot.maybe_prompt_channel_support(q, context, user_id)
+            self.assertEqual(fake_bot.sent_messages, [])
+            self.assertEqual(len(fake_bot.membership_checks), 1)
         finally:
             bot.JOIN_URL = old_join_url
             bot.SUBSCRIPTION_CHAT = old_subscription_chat
