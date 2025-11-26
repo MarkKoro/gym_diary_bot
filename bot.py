@@ -87,6 +87,7 @@ from keyboards import (
     ui_footer_rows,
     HISTORY_BTN,
     subscribe_channel_prompt_kb,
+    channel_support_prompt_kb,
     trainee_trainer_settings_kb,
     trainee_become_kb,
     week_count_kb,
@@ -465,24 +466,17 @@ async def record_day_completion(user_id: int, day_index: int) -> tuple[set[int],
     return current, not already_tracked
 
 
-def _resolve_subscription_chat() -> str | int | None:
-    raw = (SUBSCRIPTION_CHAT or "").strip()
-    if not raw:
-        return None
-    if raw.startswith("https://t.me/"):
-        slug = raw.split("/")[-1].split("?", 1)[0]
-        if slug:
-            return slug if slug.startswith("@") else f"@{slug}"
-    if raw.startswith("@"):
+def _resolve_subscription_chat(raw: str | int | None, default: int | str) -> int | str:
+    if raw is None:
+        return default
+    if isinstance(raw, int):
         return raw
-    try:
-        message = getattr(q, "message", None)
-        chat = getattr(message, "chat", None) if message else None
-        chat_id = getattr(chat, "id", None) if chat else getattr(message, "chat_id", None)
-        onboarding = bool(context.user_data.get("wizard_onboarding"))
-        return int(raw)
-    except ValueError:
-        return raw
+    if isinstance(raw, str):
+        try:
+            return int(raw)
+        except ValueError:
+            return raw
+    return default
 
 
 def _is_active_channel_status(status) -> bool:
@@ -501,7 +495,7 @@ def _is_active_channel_status(status) -> bool:
 async def _is_user_subscribed_to_channel(
     context: ContextTypes.DEFAULT_TYPE, tg_user_id: int
 ) -> bool:
-    chat_id = _resolve_subscription_chat()
+    chat_id = _resolve_subscription_chat(SUBSCRIPTION_CHAT, "")
     if not chat_id:
         return False
     try:
@@ -514,47 +508,54 @@ async def _is_user_subscribed_to_channel(
     return _is_active_channel_status(getattr(member, "status", None))
 
 
+def _channel_support_prompt_text(total: int) -> str:
+    return (
+        "Мы видим, что дневник помогает — вы завершили уже {total} тренировочных дней!\n"
+        "Не хотите посмотреть наши другие проекты и поддержать авторов подпиской на канал?"
+    ).format(total=total)
+
+
+SUBSCRIPTION_PROMPT_DISABLED = -1
+
+
 async def maybe_prompt_channel_support(
     q, context: ContextTypes.DEFAULT_TYPE, user_id: int
-) -> None:
+) -> bool:
     total = await increment_day_finish_total(user_id)
     prompt_total = await get_subscription_prompt_total(user_id)
+    if prompt_total == SUBSCRIPTION_PROMPT_DISABLED:
+        return False
     if total - prompt_total < 5:
-        return
+        return False
     active = await get_active_subscription(user_id)
     if active:
-        await set_subscription_prompt_total(user_id, total)
-        return
+        await set_subscription_prompt_total(user_id, SUBSCRIPTION_PROMPT_DISABLED)
+        return False
     tg_user = getattr(q, "from_user", None)
     tg_user_id = getattr(tg_user, "id", None)
     if tg_user_id is not None and await _is_user_subscribed_to_channel(context, tg_user_id):
-        await set_subscription_prompt_total(user_id, total)
-        return
+        await set_subscription_prompt_total(user_id, SUBSCRIPTION_PROMPT_DISABLED)
+        return False
     if not JOIN_URL:
         await set_subscription_prompt_total(user_id, total)
-        return
+        return False
     message = getattr(q, "message", None)
-    chat_id = getattr(message, "chat_id", None)
+    chat = getattr(message, "chat", None) if message else None
+    chat_id = getattr(chat, "id", None) if chat else getattr(message, "chat_id", None)
     if chat_id is None:
         await set_subscription_prompt_total(user_id, total)
-        return
-    text = (
-        "Мы видим, что дневник помогает — вы завершили уже {total} тренировочных дней!\n"
-        "Пожалуйста, поддержите авторов: подпишитесь на наш канал. Там мы делимся новостями и другими нашими ботами — будем рады вашей поддержке!"
-    ).format(total=total)
-    markup = subscribe_channel_prompt_kb(JOIN_URL)
-    try:
-        sent = await context.bot.send_message(
-            chat_id,
-            text,
-            reply_markup=markup,
-            disable_web_page_preview=True,
-        )
-    except TelegramError:
-        await set_subscription_prompt_total(user_id, total)
-        return
-    remember_message(sent.chat_id, sent.message_id)
+        return False
+    markup = channel_support_prompt_kb(JOIN_URL)
     await set_subscription_prompt_total(user_id, total)
+    await show_screen(
+        q,
+        context,
+        _channel_support_prompt_text(total),
+        markup,
+        user_id,
+        disable_web_page_preview=True,
+    )
+    return True
 
 
 def format_reminder_cheer(done_count: int) -> str:
@@ -2726,8 +2727,18 @@ async def safe_update_screen(
     chat = getattr(message, "chat", None) if message else None
     chat_id = getattr(chat, "id", None) if chat else getattr(message, "chat_id", None)
     message_id = getattr(message, "message_id", None)
+    edit_func = getattr(q, "edit_message_text", None)
+    if edit_func is None:
+        if chat_id is None:
+            return
+        sent = await context.bot.send_message(
+            chat_id, text, reply_markup=reply_markup, **kwargs
+        )
+        if remember:
+            remember_message(chat_id, getattr(sent, "message_id", None))
+        return
     try:
-        await q.edit_message_text(text, reply_markup=reply_markup, **kwargs)
+        await edit_func(text, reply_markup=reply_markup, **kwargs)
     except BadRequest as e:
         error_text = (e.message or "").lower()
         if "not modified" in error_text:
@@ -8660,6 +8671,7 @@ async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAUL
             if not tz_code:
                 tz_code = await get_user_timezone(user_id)
                 context.user_data["tz"] = tz_code
+            _sweep_user_reminder_jobs(context.job_queue, user_id)
             _schedule_reminder_job(
                 context.job_queue,
                 chat_id=chat_id,
@@ -9974,8 +9986,31 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await wizard_router(q, data, target_user_id, context)
             return
 
-        if data == "promo:channel:no":
-            await q.answer("Спасибо! Напомним позже.")
+        if data.startswith("promo:channel:"):
+            parts = data.split(":")
+            action = parts[2] if len(parts) > 2 else ""
+            if action == "subscribed":
+                tg_user = getattr(q, "from_user", None)
+                tg_user_id = getattr(tg_user, "id", None)
+                if tg_user_id is None or not await _is_user_subscribed_to_channel(
+                    context, tg_user_id
+                ):
+                    await q.answer(
+                        "Не удалось подтвердить подписку. Проверь, подписан ли ты на канал, и попробуй ещё раз.",
+                        show_alert=True,
+                    )
+                    return
+                prefs = await load_ui_preferences(target_user_id)
+                text, kb, prefs = await compose_main_menu(target_user_id, prefs)
+                thank_you_text = "Спасибо ❤️\n\n" + text
+                await show_screen(q, context, thank_you_text, kb, target_user_id)
+                return
+            if action in {"skip", "no"}:
+                await q.answer("Спасибо! Напомним позже.")
+                prefs = await load_ui_preferences(target_user_id)
+                text, kb, prefs = await compose_main_menu(target_user_id, prefs)
+                await show_screen(q, context, text, kb, target_user_id)
+                return
             return
 
         if data == "menu:root":
@@ -11775,6 +11810,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 if chat_id is None:
                     chat = getattr(message, "chat", None)
                     chat_id = getattr(chat, "id", None)
+                _sweep_user_reminder_jobs(context.job_queue, target_user_id)
                 _schedule_reminder_job(
                     context.job_queue,
                     chat_id=chat_id,
@@ -11825,9 +11861,14 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 label = await get_day_label(target_user_id, day)
                 title = label or f"{t('DAY')} {day}"
                 await q.answer(f"{title} завершён. Отличная работа!")
-                await show_screen(q, context, text, kb, target_user_id)
+                should_show_support = False
                 if added_new:
-                    await maybe_prompt_channel_support(q, context, target_user_id)
+                    should_show_support = await maybe_prompt_channel_support(
+                        q, context, target_user_id
+                    )
+                if should_show_support:
+                    return
+                await show_screen(q, context, text, kb, target_user_id)
                 return
             if action == "sheet":
                 day = int(parts[2])
@@ -11846,9 +11887,11 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 _, added_new = await record_day_completion(target_user_id, day)
                 await q.answer(f"{t('DAY')} отмечен выполненным.")
                 prefs = await load_ui_preferences(target_user_id)
+                if added_new and await maybe_prompt_channel_support(
+                    q, context, target_user_id
+                ):
+                    return
                 await send_day_cards_view(q, target_user_id, day, context, prefs)
-                if added_new:
-                    await maybe_prompt_channel_support(q, context, target_user_id)
                 return
             if action == "group":
                 day = int(parts[2])
