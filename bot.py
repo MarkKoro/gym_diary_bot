@@ -798,11 +798,29 @@ async def compose_main_menu(
 ) -> tuple[str, InlineKeyboardMarkup, UiPreferences]:
     prefs = prefs or await load_ui_preferences(user_id)
     raw_days = await list_active_days(user_id)
+    settings = await fetch_user_settings(user_id)
+    max_days: int | None = None
+    if settings and len(settings) > 1 and settings[1] is not None:
+        try:
+            max_days = int(settings[1])
+        except (TypeError, ValueError):
+            max_days = None
     reminders = await list_user_reminders(user_id)
-    weekday_map = _build_day_weekday_map(raw_days, reminders) if raw_days else {}
+    if max_days is not None:
+        filtered_days = [
+            (idx, label) for idx, label in raw_days if idx <= max_days
+        ]
+    else:
+        filtered_days = list(raw_days)
+    weekday_map = (
+        _build_day_weekday_map(filtered_days, reminders) if filtered_days else {}
+    )
     days = [
-        (day_index, _format_day_label(day_index, label, weekday_map.get(day_index)))
-        for day_index, label in raw_days
+        (
+            day_index,
+            _format_day_label(day_index, label, weekday_map.get(day_index)),
+        )
+        for day_index, label in filtered_days
     ]
     completions = await get_active_day_completions(user_id)
     text = build_main_menu_text(prefs)
@@ -6869,6 +6887,61 @@ async def reminder_job(context: ContextTypes.DEFAULT_TYPE):
         logger.exception("Reminder job failed")
 
 
+async def _schedule_user_reminders(
+    app: Application | None, user_id: int, *, chat_id: int | None = None
+) -> set[str]:
+    if app is None:
+        return set()
+
+    if not await get_user_notifications_enabled(user_id):
+        _sweep_user_reminder_jobs(app.job_queue, user_id)
+        logger.info("Skipping reminders for user %s: notifications disabled", user_id)
+        return set()
+
+    reminders = _sort_reminders(await list_user_reminders(user_id))
+    _sweep_user_reminder_jobs(app.job_queue, user_id)
+    if not reminders:
+        logger.info("Scheduled 0 reminders for user %d", user_id)
+        return set()
+
+    tz_code = await get_user_timezone(user_id)
+    if chat_id is None:
+        record = await find_user_by_id(user_id)
+        if record and record[1] is not None:
+            try:
+                chat_id = int(record[1])
+            except (TypeError, ValueError):
+                chat_id = None
+    if chat_id is None:
+        logger.info("Skipping reminders for user %s: chat ID is missing", user_id)
+        return set()
+
+    scheduled: set[str] = set()
+    for day_no, dow, hour, minute in reminders:
+        if dow is None:
+            continue
+        try:
+            day_int = int(day_no)
+            hour_int = int(hour)
+            minute_int = int(minute)
+        except (TypeError, ValueError):
+            continue
+        job_name = _schedule_reminder_job(
+            app.job_queue,
+            chat_id=chat_id,
+            user_id=user_id,
+            day_no=day_int,
+            dow=dow,
+            hour=hour_int,
+            minute=minute_int,
+            tz_name=tz_code,
+        )
+        if job_name:
+            scheduled.add(job_name)
+    logger.info("Scheduled %d reminders for user %d", len(scheduled), user_id)
+    return scheduled
+
+
 def _build_reminder_job_name(user_id: int, day_no: int, dow: int) -> str:
     return f"rem_{user_id}_{day_no}_{dow}"
 
@@ -7054,49 +7127,13 @@ def _sweep_user_reminder_jobs(job_queue, user_id: int) -> None:
 
 async def schedule_all_reminders(app: Application):
     raw_rows = await list_users_with_reminders()
-    users: dict[int, dict[str, int | None]] = {}
-    for user_id, tg_id, _day_no, _dow, _hour, _minute in raw_rows:
-        info = users.setdefault(int(user_id), {"tg_id": None})
-        if tg_id is not None:
-            try:
-                info["tg_id"] = int(tg_id)
-            except (TypeError, ValueError):
-                info["tg_id"] = None
+    users: set[int] = {int(user_id) for user_id, *_ in raw_rows}
     desired_jobs: set[str] = set()
     total_scheduled = 0
-    for user_id, info in users.items():
-        _sweep_user_reminder_jobs(app.job_queue, user_id)
-        reminders = _sort_reminders(await list_user_reminders(user_id))
-        if not reminders:
-            logger.info("Scheduled 0 reminders for user %d", user_id)
-            continue
-        tz_code = await get_user_timezone(user_id)
-        tg_id = info.get("tg_id")
-        user_scheduled = 0
-        for day_no, dow, hour, minute in reminders:
-            if dow is None:
-                continue
-            try:
-                day_int = int(day_no)
-                hour_int = int(hour)
-                minute_int = int(minute)
-            except (TypeError, ValueError):
-                continue
-            job_name = _schedule_reminder_job(
-                app.job_queue,
-                chat_id=tg_id,
-                user_id=user_id,
-                day_no=day_int,
-                dow=dow,
-                hour=hour_int,
-                minute=minute_int,
-                tz_name=tz_code,
-            )
-            if job_name:
-                desired_jobs.add(job_name)
-                user_scheduled += 1
-                total_scheduled += 1
-        logger.info("Scheduled %d reminders for user %d", user_scheduled, user_id)
+    for user_id in users:
+        scheduled = await _schedule_user_reminders(app, user_id)
+        desired_jobs.update(scheduled)
+        total_scheduled += len(scheduled)
     logger.info("Scheduled %d reminder jobs in total", total_scheduled)
     # remove orphaned reminder jobs that are no longer present in the database
     try:
@@ -8236,7 +8273,7 @@ async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAUL
                 _remove_jobs_for_removed_reminders(context.job_queue, user_id, removed)
             app = context.application
             if app is not None:
-                await schedule_all_reminders(app)
+                await _schedule_user_reminders(app, user_id)
             context.user_data["workouts_per_week"] = n
             context.user_data.pop("reminder_day", None)
             context.user_data.pop("reminder_skip_tz", None)
@@ -8652,7 +8689,7 @@ async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAUL
             await set_user_notifications_enabled(user_id, True)
             app = context.application
             if app is not None:
-                await schedule_all_reminders(app)
+                await _schedule_user_reminders(app, user_id, chat_id=chat_id)
             from_settings = context.user_data.get("from_settings")
             skip_tz = context.user_data.pop("reminder_skip_tz", None)
             tz_code = context.user_data.get("tz")
@@ -8693,7 +8730,7 @@ async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAUL
             await set_user_notifications_enabled(user_id, False)
             app = context.application
             if app is not None:
-                await schedule_all_reminders(app)
+                await _schedule_user_reminders(app, user_id, chat_id=chat_id)
             if context.user_data.get("from_settings"):
                 context.user_data.pop("from_settings", None)
                 context.user_data.pop("reminder_skip_tz", None)
@@ -8752,7 +8789,7 @@ async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAUL
                 await set_user_timezone(user_id, tz)
                 app = context.application
                 if app is not None:
-                    await schedule_all_reminders(app)
+                    await _schedule_user_reminders(app, user_id, chat_id=chat_id)
                 mode = context.user_data.pop("wizard_onboarding_tz", None)
                 day_no = context.user_data.get("reminder_day", 1)
                 tz_only_change = context.user_data.pop("tz_only_change", None)
@@ -8873,20 +8910,7 @@ async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAUL
             if not tz_code:
                 tz_code = await get_user_timezone(user_id)
                 context.user_data["tz"] = tz_code
-            _sweep_user_reminder_jobs(context.job_queue, user_id)
-            _schedule_reminder_job(
-                context.job_queue,
-                chat_id=chat_id,
-                user_id=user_id,
-                day_no=day_no,
-                dow=dow,
-                hour=hour,
-                minute=minute,
-                tz_name=tz_code,
-            )
-            app = context.application
-            if app is not None:
-                await schedule_all_reminders(app)
+            await _schedule_user_reminders(context.application, user_id, chat_id=chat_id)
             day_no = context.user_data.get("reminder_day", 1)
             total = context.user_data.get("workouts_per_week", 0)
             context.user_data.pop(REMINDER_TIME_PAGE_KEY, None)
@@ -11698,7 +11722,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         )
                     app = context.application
                     if app is not None:
-                        await schedule_all_reminders(app)
+                        await _schedule_user_reminders(app, target_user_id)
                     rems = await list_user_reminders(target_user_id)
                     if len(rems) < n:
                         context.user_data["from_settings"] = True
@@ -11821,7 +11845,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     await set_user_notifications_enabled(target_user_id, enabled)
                     app = context.application
                     if app is not None:
-                        await schedule_all_reminders(app)
+                        await _schedule_user_reminders(app, target_user_id)
                     await q.answer(
                         "Уведомления включены." if enabled else "Уведомления отключены."
                     )
@@ -12086,20 +12110,9 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 if chat_id is None:
                     chat = getattr(message, "chat", None)
                     chat_id = getattr(chat, "id", None)
-                _sweep_user_reminder_jobs(context.job_queue, target_user_id)
-                _schedule_reminder_job(
-                    context.job_queue,
-                    chat_id=chat_id,
-                    user_id=target_user_id,
-                    day_no=day_index,
-                    dow=dow,
-                    hour=hour,
-                    minute=minute,
-                    tz_name=tz_code,
+                await _schedule_user_reminders(
+                    context.application, target_user_id, chat_id=chat_id
                 )
-                app = context.application
-                if app is not None:
-                    await schedule_all_reminders(app)
                 context.user_data[REMINDER_SELECTED_DOW_KEY] = str(dow_iso)
                 confirmation = format_reminder_status(label, (dow, hour, minute))
                 await q.answer(confirmation)
