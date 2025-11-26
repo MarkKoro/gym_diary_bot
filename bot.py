@@ -198,6 +198,9 @@ from db import (
     get_payment_by_external_id,
     get_latest_pending_payment,
     list_exercise_weight_progress,
+    clear_trainer_requests,
+    count_trainer_requests,
+    count_trainer_trainees,
     list_broadcast_targets,
     find_user_by_tg_id,
     find_user_by_id,
@@ -298,6 +301,7 @@ TRAINER_LABEL_INPUT_KEY = "awaiting_trainer_label"
 TRAINER_TRAINEE_LABEL_INPUT_KEY = "awaiting_trainee_label"
 TRAINER_PENDING_OFFSET_KEY = "trainer_pending_offset"
 TRAINER_ACCEPTED_OFFSET_KEY = "trainer_accepted_offset"
+TRAINER_REQUESTS_VIEW_KEY = "trainer_requests_view"
 TRAINER_SETTINGS_MESSAGE_KEY = "trainer_settings_message"
 TRAINER_TRAINEE_SETTINGS_MESSAGE_KEY = "trainer_trainee_settings_message"
 TRAINER_LIST_LIMIT = 8
@@ -1746,18 +1750,18 @@ async def show_trainer_root_settings(
     trainer_code = profile[1] if profile else None
     accepts_requests = bool(profile and len(profile) > 2 and profile[2])
     link = await get_latest_trainer_link_for_trainee(user_id)
+    link_status_value = str(link[2]) if link and len(link) > 2 else ""
     if not link:
         link_status = "нет"
     else:
-        status_value = str(link[2]) if len(link) > 2 else ""
-        if status_value == "pending":
+        if link_status_value == "pending":
             link_status = "заявка отправлена"
-        elif status_value == "accepted":
+        elif link_status_value == "accepted":
             link_status = "есть"
-        elif status_value in {"trainer_disabled", "inactive"}:
+        elif link_status_value in {"trainer_disabled", "inactive"}:
             link_status = "тренер отключил режим тренера"
         else:
-            link_status = status_value or "нет"
+            link_status = link_status_value or "нет"
     lines = [
         "Режим тренера / подопечного",
         "",
@@ -1793,8 +1797,11 @@ async def show_trainer_root_settings(
         ),
         callback_data=f"set:trainer_mode:toggle:{toggle_target}",
     )
+    trainee_cta = "🤝 Стать подопечным"
+    if link_status_value == "accepted":
+        trainee_cta = "🏠 Хаб подопечного"
     trainee_button = InlineKeyboardButton(
-        "🤝 Стать подопечным",
+        trainee_cta,
         callback_data="set:trainer_mode:trainee",
     )
     back_button = InlineKeyboardButton(
@@ -2366,9 +2373,11 @@ async def _format_trainer_user_display(user_id: int) -> str:
 
 async def _load_trainer_lists(
     user_id: int, pending_offset: int, accepted_offset: int
-) -> tuple[int, list, int, list]:
+) -> tuple[int, list, int, int, list, int]:
     safe_pending = max(0, pending_offset)
     safe_accepted = max(0, accepted_offset)
+    pending_total = await count_trainer_requests(user_id)
+    accepted_total = await count_trainer_trainees(user_id)
     requests: list
     while True:
         requests = await list_trainer_requests(
@@ -2385,7 +2394,14 @@ async def _load_trainer_lists(
         if trainees or safe_accepted == 0:
             break
         safe_accepted = max(0, safe_accepted - TRAINER_LIST_LIMIT)
-    return safe_pending, requests, safe_accepted, trainees
+    return (
+        safe_pending,
+        requests,
+        pending_total,
+        safe_accepted,
+        trainees,
+        accepted_total,
+    )
 
 
 async def _render_trainer_overview(
@@ -2397,6 +2413,7 @@ async def _render_trainer_overview(
     pending_offset: int | None = None,
     accepted_offset: int | None = None,
 ) -> None:
+    context.user_data.pop(TRAINER_REQUESTS_VIEW_KEY, None)
     current_pending = (
         pending_offset
         if pending_offset is not None
@@ -2407,9 +2424,14 @@ async def _render_trainer_overview(
         if accepted_offset is not None
         else context.user_data.get(TRAINER_ACCEPTED_OFFSET_KEY, 0)
     )
-    pending_offset, requests, accepted_offset, trainees = await _load_trainer_lists(
-        user_id, current_pending, current_accepted
-    )
+    (
+        pending_offset,
+        requests,
+        pending_total,
+        accepted_offset,
+        trainees,
+        accepted_total,
+    ) = await _load_trainer_lists(user_id, current_pending, current_accepted)
     profile = await _fetch_trainer_profile(user_id)
     is_trainer = bool(profile and profile[0])
     accepts_requests = bool(profile and len(profile) > 2 and profile[2])
@@ -2417,22 +2439,10 @@ async def _render_trainer_overview(
     context.user_data[TRAINER_ACCEPTED_OFFSET_KEY] = accepted_offset
     pending_has_prev = pending_offset > 0
     accepted_has_prev = accepted_offset > 0
-    pending_has_next = False
-    accepted_has_next = False
-    if len(requests) == TRAINER_LIST_LIMIT:
-        more = await list_trainer_requests(
-            user_id,
-            limit=1,
-            offset=pending_offset + TRAINER_LIST_LIMIT,
-        )
-        pending_has_next = bool(more)
-    if len(trainees) == TRAINER_LIST_LIMIT:
-        more = await list_trainer_trainees(
-            user_id,
-            limit=1,
-            offset=accepted_offset + TRAINER_LIST_LIMIT,
-        )
-        accepted_has_next = bool(more)
+    pending_has_next = pending_offset + TRAINER_LIST_LIMIT < pending_total
+    accepted_has_next = accepted_offset + TRAINER_LIST_LIMIT < accepted_total
+    pending_last_offset = max(0, math.floor(max(pending_total - 1, 0) / TRAINER_LIST_LIMIT) * TRAINER_LIST_LIMIT)
+    accepted_last_offset = max(0, math.floor(max(accepted_total - 1, 0) / TRAINER_LIST_LIMIT) * TRAINER_LIST_LIMIT)
     active_sub = await get_active_subscription(user_id)
     limit = await get_trainer_max_trainees(user_id)
     user_ids: set[int] = set()
@@ -2477,15 +2487,16 @@ async def _render_trainer_overview(
     lines: list[str] = []
     if message:
         lines.extend([message, ""])
-    lines.append("Заявки:")
-    if requests:
-        for entry in requests:
-            trainee_id = int(entry[1])
-            label = labels.get(trainee_id, f"ID {trainee_id}")
-            lines.append(f"• {label}")
-    else:
-        lines.append("• Нет заявок.")
-    lines.append("")
+    if accepts_requests:
+        lines.append("Заявки:")
+        if requests:
+            for entry in requests:
+                trainee_id = int(entry[1])
+                label = labels.get(trainee_id, f"ID {trainee_id}")
+                lines.append(f"• {label}")
+        else:
+            lines.append("• Нет заявок.")
+        lines.append("")
     lines.append("Подопечные:")
     if trainees:
         for entry in trainees:
@@ -2512,9 +2523,171 @@ async def _render_trainer_overview(
             + "."
         )
     rows: list[list[InlineKeyboardButton]] = []
+    if accepts_requests:
+        for entry in requests:
+            link_id = int(entry[0])
+            rows.append(
+                [
+                    InlineKeyboardButton(
+                        labels.get(int(entry[1]), f"ID {entry[1]}") or "—",
+                        callback_data="noop",
+                    ),
+                    InlineKeyboardButton(
+                        "❌", callback_data=f"trainer:req:decline:{link_id}"
+                    ),
+                    InlineKeyboardButton(
+                        "✅", callback_data=f"trainer:req:accept:{link_id}"
+                    ),
+                ]
+            )
+        if pending_has_prev or pending_has_next:
+            nav_row: list[InlineKeyboardButton] = []
+            if pending_offset > 0:
+                nav_row.append(
+                    InlineKeyboardButton(
+                        "⏮️ В начало", callback_data="trainer:list:pending:first"
+                    )
+                )
+            if pending_has_prev:
+                nav_row.append(
+                    InlineKeyboardButton(
+                        "⬅️ Предыдущие заявки",
+                        callback_data="trainer:list:pending:prev",
+                    )
+                )
+            if pending_has_next:
+                nav_row.append(
+                    InlineKeyboardButton(
+                        "Следующие заявки ➡️", callback_data="trainer:list:pending:next"
+                    )
+                )
+            if pending_has_next:
+                nav_row.append(
+                    InlineKeyboardButton(
+                        "В конец ⏭️",
+                        callback_data=f"trainer:list:pending:last:{pending_last_offset}",
+                    )
+                )
+            if nav_row:
+                rows.append(nav_row)
+    for entry in trainees:
+        trainee_id = int(entry[1])
+        label = labels.get(trainee_id, f"ID {trainee_id}")
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    label, callback_data=f"trainer:view:{trainee_id}"
+                )
+            ]
+        )
+    if accepted_has_prev or accepted_has_next:
+        nav_row = []
+        if accepted_offset > 0:
+            nav_row.append(
+                InlineKeyboardButton(
+                    "⏮️ К первым",
+                    callback_data="trainer:list:accepted:first",
+                )
+            )
+        if accepted_has_prev:
+            nav_row.append(
+                InlineKeyboardButton(
+                    "⬅️ Предыдущие подопечные",
+                    callback_data="trainer:list:accepted:prev",
+                )
+            )
+        if accepted_has_next:
+            nav_row.append(
+                InlineKeyboardButton(
+                    "Следующие подопечные ➡️",
+                    callback_data="trainer:list:accepted:next",
+                )
+            )
+        if accepted_has_next:
+            nav_row.append(
+                InlineKeyboardButton(
+                    "К последним ⏭️",
+                    callback_data=f"trainer:list:accepted:last:{accepted_last_offset}",
+                )
+            )
+        if nav_row:
+            rows.append(nav_row)
+    if accepts_requests:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    "📨 Мои заявки", callback_data="trainer:list:pending"
+                )
+            ]
+        )
+    rows.append([InlineKeyboardButton(BACK_BTN, callback_data="menu:root")])
+    kb = InlineKeyboardMarkup(rows)
+    await show_screen(q, context, "\n".join(lines), kb, user_id)
+
+
+async def _render_trainer_requests_view(
+    q,
+    context: ContextTypes.DEFAULT_TYPE,
+    user_id: int,
+    *,
+    message: str | None = None,
+    pending_offset: int | None = None,
+) -> None:
+    profile = await _fetch_trainer_profile(user_id)
+    accepts_requests = bool(profile and profile[0] and len(profile) > 2 and profile[2])
+    if not accepts_requests:
+        context.user_data.pop(TRAINER_REQUESTS_VIEW_KEY, None)
+        await _render_trainer_overview(
+            q, context, user_id, message="Прием заявок отключен."
+        )
+        return
+    current_pending = (
+        pending_offset
+        if pending_offset is not None
+        else context.user_data.get(TRAINER_PENDING_OFFSET_KEY, 0)
+    )
+    (
+        safe_pending,
+        requests,
+        pending_total,
+        _,
+        _,
+        _,
+    ) = await _load_trainer_lists(user_id, current_pending, 0)
+    context.user_data[TRAINER_PENDING_OFFSET_KEY] = safe_pending
+    context.user_data[TRAINER_REQUESTS_VIEW_KEY] = True
+    pending_has_prev = safe_pending > 0
+    pending_has_next = safe_pending + TRAINER_LIST_LIMIT < pending_total
+    pending_last_offset = max(
+        0,
+        math.floor(max(pending_total - 1, 0) / TRAINER_LIST_LIMIT)
+        * TRAINER_LIST_LIMIT,
+    )
+    user_ids: set[int] = set()
+    for entry in requests:
+        user_ids.add(int(entry[1]))
+    labels: dict[int, str] = {}
+    if user_ids:
+        ordered_ids = list(user_ids)
+        resolved = await asyncio.gather(
+            *(_format_trainer_user_display(uid) for uid in ordered_ids)
+        )
+        labels = dict(zip(ordered_ids, resolved))
+    lines: list[str] = []
+    if message:
+        lines.extend([message, ""])
+    lines.append("Мои заявки:")
+    if requests:
+        for entry in requests:
+            trainee_id = int(entry[1])
+            label = labels.get(trainee_id, f"ID {trainee_id}")
+            lines.append(f"• {label}")
+    else:
+        lines.append("• Нет заявок.")
+    kb_rows: list[list[InlineKeyboardButton]] = []
     for entry in requests:
         link_id = int(entry[0])
-        rows.append(
+        kb_rows.append(
             [
                 InlineKeyboardButton(
                     labels.get(int(entry[1]), f"ID {entry[1]}") or "—",
@@ -2530,50 +2703,42 @@ async def _render_trainer_overview(
         )
     if pending_has_prev or pending_has_next:
         nav_row: list[InlineKeyboardButton] = []
+        if safe_pending > 0:
+            nav_row.append(
+                InlineKeyboardButton(
+                    "⏮️ В начало", callback_data="trainer:list:pending:first"
+                )
+            )
         if pending_has_prev:
             nav_row.append(
                 InlineKeyboardButton(
-                    "⬅️ Предыдущие заявки", callback_data="trainer:list:pending:prev"
+                    "⬅️ Предыдущие", callback_data="trainer:list:pending:prev"
                 )
             )
         if pending_has_next:
             nav_row.append(
                 InlineKeyboardButton(
-                    "Следующие заявки ➡️", callback_data="trainer:list:pending:next"
+                    "Следующие ➡️", callback_data="trainer:list:pending:next"
+                )
+            )
+        if pending_has_next:
+            nav_row.append(
+                InlineKeyboardButton(
+                    "В конец ⏭️",
+                    callback_data=f"trainer:list:pending:last:{pending_last_offset}",
                 )
             )
         if nav_row:
-            rows.append(nav_row)
-    for entry in trainees:
-        trainee_id = int(entry[1])
-        label = labels.get(trainee_id, f"ID {trainee_id}")
-        rows.append(
-            [
-                InlineKeyboardButton(
-                    label, callback_data=f"trainer:view:{trainee_id}"
-                )
-            ]
-        )
-    if accepted_has_prev or accepted_has_next:
-        nav_row = []
-        if accepted_has_prev:
-            nav_row.append(
-                InlineKeyboardButton(
-                    "⬅️ Предыдущие подопечные",
-                    callback_data="trainer:list:accepted:prev",
-                )
+            kb_rows.append(nav_row)
+    kb_rows.append(
+        [
+            InlineKeyboardButton(
+                "⬅️ К подопечным", callback_data="trainer:list"
             )
-        if accepted_has_next:
-            nav_row.append(
-                InlineKeyboardButton(
-                    "Следующие подопечные ➡️",
-                    callback_data="trainer:list:accepted:next",
-                )
-            )
-        if nav_row:
-            rows.append(nav_row)
-    rows.append([InlineKeyboardButton(BACK_BTN, callback_data="menu:root")])
-    kb = InlineKeyboardMarkup(rows)
+        ]
+    )
+    kb_rows.append([InlineKeyboardButton(BACK_BTN, callback_data="menu:root")])
+    kb = InlineKeyboardMarkup(kb_rows)
     await show_screen(q, context, "\n".join(lines), kb, user_id)
 
 
@@ -4673,6 +4838,7 @@ async def prompt_custom_measurement_value(
         "chat_id": chat_id,
         "message_id": message_id,
         "category": category_code,
+        "target_user_id": user_id,
     }
     prompt = f"Введи значение для «{name}» (например: 10)."
     kb = InlineKeyboardMarkup(
@@ -6206,8 +6372,10 @@ async def render_exercise_view(
     title = f"{name} · {type_label}"
 
     if group == "kb":
-        prev_text = format_kb_previous(last_sets, kind=kind) or t("NOT_FIXED")
-        if prev_text == "—":
+        prev_text = format_kb_previous(last_sets, kind=kind) or ""
+        if (not prev_text or prev_text == "—") and work_sets:
+            prev_text = format_kb_previous(work_sets, kind=kind)
+        if not prev_text or prev_text == "—":
             prev_text = t("NOT_FIXED")
         summary = build_strength_summary_from_sets(sets)
         summary["kind"] = kind
@@ -6294,6 +6462,8 @@ async def render_exercise_view(
             if last_rounds or last_extra
             else t("NOT_FIXED")
         )
+        if (not last_rounds and not last_extra) and (rounds or extra):
+            prev_text = t("AMRAP_RESULT", rounds=rounds, extra=extra)
         done_text = t("AMRAP_RESULT", rounds=rounds, extra=extra)
     elif is_for_time:
         rows = await fetch_measurement_history(user_id, FOR_TIME_METRIC, limit=1)
@@ -6312,6 +6482,10 @@ async def render_exercise_view(
         prev_text = summarize_previous_sets(
             last_sets, with_weight=weight_enabled, kind=kind
         )
+        if not prev_text and work_sets:
+            prev_text = summarize_previous_sets(
+                work_sets, with_weight=weight_enabled, kind=kind
+            )
         if not prev_text:
             prev_text = summarize_baseline(
                 baseline, with_weight=weight_enabled, kind=kind
@@ -8843,7 +9017,7 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"Внутренний ID: {trainer_id}",
         ]
         success_message = (
-            f"Поздравляем! Вы присоединились к {trainer_display}."
+            f"Заявка отправлена тренеру {trainer_display}. Ждём подтверждения."
             f"\n{info_parts[0]}\n{info_parts[1]}\n{info_parts[2]}"
         )
         await _render_trainer_link_message(
@@ -9250,21 +9424,28 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
         u = update.effective_user
-        user_id = await get_or_create_user(u.id, u.username)
+        actor_user_id = await get_or_create_user(u.id, u.username)
+        target_user_id = input_state.get("target_user_id")
+        try:
+            target_user_id = int(target_user_id)
+        except (TypeError, ValueError):
+            target_user_id = await resolve_target_user_id(context, actor_user_id)
         action = input_state.get("action")
         if action == "add":
-            await add_measurement_entry(user_id, item["code"], value, extra)
+            await add_measurement_entry(target_user_id, item["code"], value, extra)
         else:
-            updated = await update_last_measurement(user_id, item["code"], value, extra)
+            updated = await update_last_measurement(
+                target_user_id, item["code"], value, extra
+            )
             if not updated:
-                await add_measurement_entry(user_id, item["code"], value, extra)
+                await add_measurement_entry(target_user_id, item["code"], value, extra)
         await try_delete(update.message)
         chat_id = input_state.get("chat_id")
         msg_id = input_state.get("message_id")
         context.user_data.pop(MEASUREMENT_INPUT_KEY, None)
         if chat_id and msg_id:
-            text, kb = await build_measurements_view(user_id, context)
-            prefs = await load_ui_preferences(user_id)
+            text, kb = await build_measurements_view(target_user_id, context)
+            prefs = await load_ui_preferences(target_user_id)
             text, kb = prepare_ui_output(text, kb, prefs)
             await context.bot.edit_message_text(
                 text,
@@ -9834,6 +10015,9 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 if len(parts) == 2:
                     await _render_trainer_overview(q, context, actor_user_id)
                     return
+                if len(parts) == 3 and parts[2] == "pending":
+                    await _render_trainer_requests_view(q, context, actor_user_id)
+                    return
                 if len(parts) >= 4:
                     section = parts[2]
                     direction = parts[3]
@@ -9848,12 +10032,18 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             pending_offset += TRAINER_LIST_LIMIT
                         elif direction == "prev":
                             pending_offset = max(0, pending_offset - TRAINER_LIST_LIMIT)
-                        await _render_trainer_overview(
+                        elif direction == "first":
+                            pending_offset = 0
+                        elif direction == "last" and len(parts) >= 5:
+                            try:
+                                pending_offset = max(0, int(parts[4]))
+                            except ValueError:
+                                pending_offset = 0
+                        await _render_trainer_requests_view(
                             q,
                             context,
                             actor_user_id,
                             pending_offset=pending_offset,
-                            accepted_offset=accepted_offset,
                         )
                         return
                     if section == "accepted":
@@ -9862,6 +10052,15 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         elif direction == "prev":
                             accepted_offset = max(
                                 0, accepted_offset - TRAINER_LIST_LIMIT
+                            )
+                        elif direction == "first":
+                            accepted_offset = 0
+                        elif direction == "last":
+                            total = await count_trainer_trainees(actor_user_id)
+                            accepted_offset = max(
+                                0,
+                                math.floor(max(total - 1, 0) / TRAINER_LIST_LIMIT)
+                                * TRAINER_LIST_LIMIT,
                             )
                         await _render_trainer_overview(
                             q,
@@ -9879,14 +10078,51 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 if not profile or not int(profile[0]):
                     await q.answer("Сначала включите режим тренера.", show_alert=True)
                     return
-                await set_trainer_accepting_requests(actor_user_id, enable)
-                message = (
-                    "Прием заявок включен"
-                    if enable
-                    else "Прием заявок отключен"
-                )
-                await show_trainer_root_settings(
-                    q, context, actor_user_id, status_message=message
+                if enable:
+                    pending_count = await count_trainer_requests(actor_user_id)
+                    if pending_count and (len(parts) < 4):
+                        text = (
+                            "Включить прием заявок?\n"
+                            f"У вас {pending_count} ожидающих заявок. Очистить список перед включением?"
+                        )
+                        kb = InlineKeyboardMarkup(
+                            [
+                                [
+                                    InlineKeyboardButton(
+                                        "✅ Да, очистить",
+                                        callback_data="trainer:requests:on:clear",
+                                    ),
+                                    InlineKeyboardButton(
+                                        "❌ Нет, оставить",
+                                        callback_data="trainer:requests:on:keep",
+                                    ),
+                                ],
+                                [
+                                    InlineKeyboardButton(
+                                        BACK_BTN, callback_data="trainer:list"
+                                    )
+                                ],
+                            ]
+                        )
+                        await show_screen(q, context, text, kb, actor_user_id)
+                        return
+                    if len(parts) >= 4 and parts[3] == "clear":
+                        await clear_trainer_requests(actor_user_id)
+                    await set_trainer_accepting_requests(actor_user_id, True)
+                    message = "Прием заявок включен"
+                    if len(parts) >= 4 and parts[3] == "clear":
+                        message = "Прием заявок включен, список очищен"
+                    context.user_data.pop(TRAINER_PENDING_OFFSET_KEY, None)
+                    await _render_trainer_requests_view(
+                        q, context, actor_user_id, message=message
+                    )
+                    await q.answer(message)
+                    return
+                context.user_data.pop(TRAINER_REQUESTS_VIEW_KEY, None)
+                await set_trainer_accepting_requests(actor_user_id, False)
+                message = "Прием заявок отключен"
+                await _render_trainer_overview(
+                    q, context, actor_user_id, message=message
                 )
                 await q.answer(message)
                 return
@@ -9936,15 +10172,25 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         )
                         return
                     await update_trainer_link_status(link_id, "accepted")
-                    await _render_trainer_overview(
-                        q, context, actor_user_id, message="Заявка принята"
-                    )
+                    if context.user_data.get(TRAINER_REQUESTS_VIEW_KEY):
+                        await _render_trainer_requests_view(
+                            q, context, actor_user_id, message="Заявка принята"
+                        )
+                    else:
+                        await _render_trainer_overview(
+                            q, context, actor_user_id, message="Заявка принята"
+                        )
                     return
                 if req_action == "decline":
                     await update_trainer_link_status(link_id, "rejected")
-                    await _render_trainer_overview(
-                        q, context, actor_user_id, message="Заявка отклонена"
-                    )
+                    if context.user_data.get(TRAINER_REQUESTS_VIEW_KEY):
+                        await _render_trainer_requests_view(
+                            q, context, actor_user_id, message="Заявка отклонена"
+                        )
+                    else:
+                        await _render_trainer_overview(
+                            q, context, actor_user_id, message="Заявка отклонена"
+                        )
                     return
                 return
             if action == "view" and len(parts) >= 3:
@@ -10575,6 +10821,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "chat_id": q.message.chat_id,
                 "message_id": q.message.message_id,
                 "category": category,
+                "target_user_id": target_user_id,
             }
             kb = InlineKeyboardMarkup(
                 [[InlineKeyboardButton(t("BACK"), callback_data=f"measure:add:cat:{category}")]]
@@ -10718,6 +10965,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "metric": code,
                 "chat_id": q.message.chat_id,
                 "message_id": q.message.message_id,
+                "target_user_id": target_user_id,
             }
             back_target = (
                 f"measure:edit:cat:{item.get('category')}"
