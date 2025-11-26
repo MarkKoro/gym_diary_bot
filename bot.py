@@ -304,7 +304,7 @@ TRAINER_ACCEPTED_OFFSET_KEY = "trainer_accepted_offset"
 TRAINER_REQUESTS_VIEW_KEY = "trainer_requests_view"
 TRAINER_SETTINGS_MESSAGE_KEY = "trainer_settings_message"
 TRAINER_TRAINEE_SETTINGS_MESSAGE_KEY = "trainer_trainee_settings_message"
-TRAINER_LIST_LIMIT = 8
+TRAINER_LIST_LIMIT = 5
 TRAINER_MAX_TRAINEES_FREE = 5
 TRAINER_MAX_TRAINEES_SUB: int | None = None
 
@@ -2455,12 +2455,13 @@ async def _render_trainer_overview(
     accepts_requests = bool(profile and len(profile) > 2 and profile[2])
     context.user_data[TRAINER_PENDING_OFFSET_KEY] = pending_offset
     context.user_data[TRAINER_ACCEPTED_OFFSET_KEY] = accepted_offset
-    pending_has_prev = pending_offset > 0
     accepted_has_prev = accepted_offset > 0
-    pending_has_next = pending_offset + TRAINER_LIST_LIMIT < pending_total
     accepted_has_next = accepted_offset + TRAINER_LIST_LIMIT < accepted_total
-    pending_last_offset = max(0, math.floor(max(pending_total - 1, 0) / TRAINER_LIST_LIMIT) * TRAINER_LIST_LIMIT)
-    accepted_last_offset = max(0, math.floor(max(accepted_total - 1, 0) / TRAINER_LIST_LIMIT) * TRAINER_LIST_LIMIT)
+    accepted_last_offset = max(
+        0,
+        math.floor(max(accepted_total - 1, 0) / TRAINER_LIST_LIMIT)
+        * TRAINER_LIST_LIMIT,
+    )
     active_sub = await get_active_subscription(user_id)
     limit = await get_trainer_max_trainees(user_id)
     user_ids: set[int] = set()
@@ -2476,12 +2477,27 @@ async def _render_trainer_overview(
         )
         labels = dict(zip(ordered_ids, resolved))
     last_completion_map: dict[int, tuple] = {}
+    next_training_map: dict[int, datetime | None] = {}
     if trainees:
         trainee_ids = [int(entry[1]) for entry in trainees]
         completion_rows = await asyncio.gather(
             *(get_last_completion_for_user(uid) for uid in trainee_ids)
         )
         last_completion_map = dict(zip(trainee_ids, completion_rows))
+
+        async def _next_training_dt(trainee_id: int) -> datetime | None:
+            reminders = await list_user_reminders(trainee_id)
+            if not reminders:
+                return None
+            tz_code = await get_user_timezone(trainee_id)
+            zone = resolve_user_zone(tz_code)
+            now_local = datetime.now(UTC).astimezone(zone)
+            return _find_next_reminder_time(reminders, now_local, zone)
+
+        next_training_rows = await asyncio.gather(
+            *(_next_training_dt(uid) for uid in trainee_ids)
+        )
+        next_training_map = dict(zip(trainee_ids, next_training_rows))
 
     def _format_last_completion(entry) -> str:
         if not entry:
@@ -2502,19 +2518,17 @@ async def _render_trainer_overview(
             return str(completed_at).split("T")[0] or "нет данных"
         return completed_dt.date().strftime("%d.%m.%Y")
 
+    def _format_next_training(entry: datetime | None) -> str:
+        if not entry:
+            return "не запланирована"
+        try:
+            return entry.strftime("%d.%m.%Y %H:%M")
+        except Exception:
+            return str(entry)
+
     lines: list[str] = []
     if message:
         lines.extend([message, ""])
-    if accepts_requests:
-        lines.append("Заявки:")
-        if requests:
-            for entry in requests:
-                trainee_id = int(entry[1])
-                label = labels.get(trainee_id, f"ID {trainee_id}")
-                lines.append(f"• {label}")
-        else:
-            lines.append("• Нет заявок.")
-        lines.append("")
     lines.append("Подопечные:")
     if trainees:
         for entry in trainees:
@@ -2524,6 +2538,9 @@ async def _render_trainer_overview(
             last_completion = last_completion_map.get(trainee_id)
             last_label = _format_last_completion(last_completion)
             lines.append(f"  последняя тренировка: {last_label}")
+            next_training = next_training_map.get(trainee_id)
+            next_label = _format_next_training(next_training)
+            lines.append(f"  следующая тренировка: {next_label}")
     else:
         lines.append("• Пока нет подопечных.")
     lines.append("")
@@ -2541,53 +2558,6 @@ async def _render_trainer_overview(
             + "."
         )
     rows: list[list[InlineKeyboardButton]] = []
-    if accepts_requests:
-        for entry in requests:
-            link_id = int(entry[0])
-            rows.append(
-                [
-                    InlineKeyboardButton(
-                        labels.get(int(entry[1]), f"ID {entry[1]}") or "—",
-                        callback_data="noop",
-                    ),
-                    InlineKeyboardButton(
-                        "❌", callback_data=f"trainer:req:decline:{link_id}"
-                    ),
-                    InlineKeyboardButton(
-                        "✅", callback_data=f"trainer:req:accept:{link_id}"
-                    ),
-                ]
-            )
-        if pending_has_prev or pending_has_next:
-            nav_row: list[InlineKeyboardButton] = []
-            if pending_offset > 0:
-                nav_row.append(
-                    InlineKeyboardButton(
-                        "⏮️ В начало", callback_data="trainer:list:pending:first"
-                    )
-                )
-            if pending_has_prev:
-                nav_row.append(
-                    InlineKeyboardButton(
-                        "⬅️ Предыдущие заявки",
-                        callback_data="trainer:list:pending:prev",
-                    )
-                )
-            if pending_has_next:
-                nav_row.append(
-                    InlineKeyboardButton(
-                        "Следующие заявки ➡️", callback_data="trainer:list:pending:next"
-                    )
-                )
-            if pending_has_next:
-                nav_row.append(
-                    InlineKeyboardButton(
-                        "В конец ⏭️",
-                        callback_data=f"trainer:list:pending:last:{pending_last_offset}",
-                    )
-                )
-            if nav_row:
-                rows.append(nav_row)
     for entry in trainees:
         trainee_id = int(entry[1])
         label = labels.get(trainee_id, f"ID {trainee_id}")
@@ -2630,14 +2600,9 @@ async def _render_trainer_overview(
             )
         if nav_row:
             rows.append(nav_row)
-    if accepts_requests:
-        rows.append(
-            [
-                InlineKeyboardButton(
-                    "📨 Мои заявки", callback_data="trainer:list:pending"
-                )
-            ]
-        )
+    rows.append(
+        [InlineKeyboardButton("📨 Мои заявки", callback_data="trainer:list:pending")]
+    )
     rows.append([InlineKeyboardButton(BACK_BTN, callback_data="menu:root")])
     kb = InlineKeyboardMarkup(rows)
     await show_screen(q, context, "\n".join(lines), kb, user_id)
@@ -2748,6 +2713,13 @@ async def _render_trainer_requests_view(
             )
         if nav_row:
             kb_rows.append(nav_row)
+    kb_rows.append(
+        [
+            InlineKeyboardButton(
+                "🚫 Отключить прием заявок", callback_data="trainer:requests:off"
+            )
+        ]
+    )
     kb_rows.append(
         [
             InlineKeyboardButton(
