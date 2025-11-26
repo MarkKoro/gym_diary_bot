@@ -3038,7 +3038,7 @@ async def create_trainer_request(
                 can_edit_plan,
                 created_at
             )
-            VALUES(?, ?, 'accepted', ?, ?)
+            VALUES(?, ?, 'pending', ?, ?)
             """,
             (
                 trainer_user_id,
@@ -3049,6 +3049,15 @@ async def create_trainer_request(
         )
         await db.commit()
         return cur.lastrowid
+
+
+async def clear_trainer_requests(trainer_user_id: int) -> None:
+    async with connect_db() as db:
+        await db.execute(
+            "DELETE FROM trainer_links WHERE trainer_user_id = ? AND status = 'pending'",
+            (trainer_user_id,),
+        )
+        await db.commit()
 
 
 async def list_trainer_requests(trainer_user_id: int, limit: int = 20, offset: int = 0):
@@ -3066,6 +3075,16 @@ async def list_trainer_requests(trainer_user_id: int, limit: int = 20, offset: i
         return await cur.fetchall()
 
 
+async def count_trainer_requests(trainer_user_id: int) -> int:
+    async with connect_db() as db:
+        cur = await db.execute(
+            "SELECT COUNT(*) FROM trainer_links WHERE trainer_user_id = ? AND status = 'pending'",
+            (trainer_user_id,),
+        )
+        row = await cur.fetchone()
+        return int(row[0]) if row else 0
+
+
 async def list_trainer_trainees(trainer_user_id: int, limit: int = 20, offset: int = 0):
     async with connect_db() as db:
         cur = await db.execute(
@@ -3079,6 +3098,16 @@ async def list_trainer_trainees(trainer_user_id: int, limit: int = 20, offset: i
             (trainer_user_id, limit, offset),
         )
         return await cur.fetchall()
+
+
+async def count_trainer_trainees(trainer_user_id: int) -> int:
+    async with connect_db() as db:
+        cur = await db.execute(
+            "SELECT COUNT(*) FROM trainer_links WHERE trainer_user_id = ? AND status = 'accepted'",
+            (trainer_user_id,),
+        )
+        row = await cur.fetchone()
+        return int(row[0]) if row else 0
 
 
 async def update_trainer_link_status(link_id: int, status: str):
