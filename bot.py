@@ -6731,11 +6731,12 @@ def _schedule_reminder_job(
         day_int = int(day_no)
         hour_int = int(hour)
         minute_int = int(minute)
-        dow_int = int(dow)
+        dow_raw = int(dow)
     except (TypeError, ValueError):
         return None
-    if not 0 <= dow_int <= 6:
+    if not (0 <= dow_raw <= 6 or 1 <= dow_raw <= 7):
         return None
+    dow_int = normalize_dow(dow_raw)
     if job_queue is None:
         return None
     legacy_dow = (dow_int - 1) % 7
