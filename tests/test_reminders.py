@@ -83,6 +83,11 @@ class ReminderTests(unittest.IsolatedAsyncioTestCase):
                 await conn.execute(f"DELETE FROM {table}")
             await conn.commit()
 
+    async def test_normalize_dow_preserves_zero_based_values(self):
+        self.assertEqual(db.normalize_dow(0), 0)
+        self.assertEqual(db.normalize_dow(3), 3)
+        self.assertEqual(db.normalize_dow(6), 6)
+
     async def test_reminders_trimmed_when_days_reduced(self):
         user_id = await db.get_or_create_user(9100, "reminder-user")
         await db.set_workouts_per_week(user_id, 4)
@@ -113,7 +118,7 @@ class ReminderTests(unittest.IsolatedAsyncioTestCase):
         )
 
         queue = FakeJobQueue()
-        job_name = f"rem_{user_id}_2_4"
+        job_name = f"rem_{user_id}_2_5"
         queue.jobs_by_name[job_name] = [FakeJob(job_name)]
         app = SimpleNamespace(job_queue=queue)
 
@@ -138,7 +143,7 @@ class ReminderTests(unittest.IsolatedAsyncioTestCase):
                 "day_no": new_job.data["day_no"],
                 "dow": new_job.data["dow"],
             },
-            {"user_id": user_id, "day_no": 2, "dow": 4},
+            {"user_id": user_id, "day_no": 2, "dow": 5},
         )
         self.assertIn("tag", new_job.data)
         self.assertIn("tz", new_job.data)
