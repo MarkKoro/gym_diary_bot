@@ -3,6 +3,7 @@ import importlib
 import os
 import tempfile
 import unittest
+from datetime import timezone
 from types import SimpleNamespace
 
 from zoneinfo import ZoneInfo
@@ -18,11 +19,10 @@ class FakeJob:
 
 
 class FakeScheduledJob(FakeJob):
-    def __init__(self, name, callback, time_obj, days, chat_id, data):
+    def __init__(self, name, callback, when_obj, chat_id, data):
         super().__init__(name)
         self.callback = callback
-        self.time = time_obj
-        self.days = days
+        self.when = when_obj
         self.chat_id = chat_id
         self.data = data
 
@@ -36,8 +36,14 @@ class FakeJobQueue:
         return self.jobs_by_name.get(name, [])
 
     def run_daily(self, callback, time_obj, days, chat_id, name, data, job_kwargs=None):
+        _ = (callback, time_obj, days, job_kwargs)
+        job = FakeScheduledJob(name, callback, time_obj, chat_id, data)
+        self.jobs_by_name.setdefault(name, []).append(job)
+        self.created_jobs.append(job)
+
+    def run_once(self, callback, when, chat_id=None, name=None, data=None, job_kwargs=None):
         _ = job_kwargs
-        job = FakeScheduledJob(name, callback, time_obj, days, chat_id, data)
+        job = FakeScheduledJob(name, callback, when, chat_id, data)
         self.jobs_by_name.setdefault(name, []).append(job)
         self.created_jobs.append(job)
 
@@ -113,12 +119,14 @@ class ReminderTests(unittest.IsolatedAsyncioTestCase):
         old_job, new_job = stored_jobs[0], stored_jobs[-1]
         self.assertTrue(old_job.removed)
         self.assertIsInstance(new_job, FakeScheduledJob)
-        self.assertEqual(new_job.days, (4,))
         self.assertEqual(new_job.chat_id, 9300)
-        self.assertEqual(new_job.time.hour, 7)
-        self.assertEqual(new_job.time.minute, 45)
-        self.assertIsInstance(new_job.time.tzinfo, ZoneInfo)
-        self.assertEqual(new_job.time.tzinfo.key, "Asia/Irkutsk")
+        self.assertIsNotNone(new_job.when)
+        self.assertEqual(new_job.when.tzinfo, timezone.utc)
+        local_time = new_job.when.astimezone(ZoneInfo("Asia/Irkutsk"))
+        self.assertEqual(local_time.hour, 7)
+        self.assertEqual(local_time.minute, 45)
+        expected_weekday = db.normalize_dow(5)
+        self.assertEqual(local_time.weekday(), expected_weekday)
         self.assertEqual(
             {
                 "user_id": new_job.data["user_id"],
