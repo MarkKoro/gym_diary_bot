@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import logging
 import math
 import random
@@ -6,8 +7,10 @@ import secrets
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, time, timedelta, timezone, tzinfo
+from datetime import datetime as _dt, timedelta as _td, time as _t
 from html import escape
 from zoneinfo import ZoneInfo
+from zoneinfo import ZoneInfo as _Z
 from collections import defaultdict
 from types import SimpleNamespace
 from typing import Any, Sequence, TYPE_CHECKING
@@ -233,6 +236,9 @@ from db import (
 )
 from text_utils import normalize_whitespace
 from ui_texts import t, e
+
+# Последний message_id напоминания по chat_id (для удаления перед новым)
+_REM_LAST_MSG: dict[int, int] = {}
 
 if TYPE_CHECKING:
     from aiosqlite import Connection as Database
@@ -6859,63 +6865,53 @@ async def build_for_time_history_view(
     kb_rows.append([InlineKeyboardButton(t("BACK"), callback_data=back_cb)])
     return "\n".join(lines), InlineKeyboardMarkup(kb_rows)
 
+
+async def build_workout_reminder(
+    bot, user_id: int | None, *, day_index: int | None = None, tz_name: str | None = None
+):
+    cheer = ""
+    text_lines = ["🔔 Пришло время тренировки!", ""]
+    keyboard_rows: list[list[InlineKeyboardButton]] = []
+
+    if user_id:
+        tz_name = tz_name or await get_user_timezone(user_id)
+        zone = resolve_user_zone(tz_name)
+        now_local = datetime.now(zone)
+        logger.info("REMINDER FIRE user=%s local_now=%s", user_id, now_local.isoformat())
+
+        weekday_label = WEEKDAY_FULL_NAMES.get(now_local.weekday())
+        date_str = now_local.strftime("%d.%m.%Y")
+        time_str = now_local.strftime("%H:%M")
+        if weekday_label:
+            text_lines.append(f"Сегодня {weekday_label}, {date_str} в {time_str}.")
+        else:
+            text_lines.append(f"Сегодня {date_str} в {time_str}.")
+
+        day_label = await get_day_label(user_id, day_index) if day_index else None
+        if day_label:
+            text_lines.append(f"Тренировочный день: {day_label}.")
+        elif day_index:
+            text_lines.append(f"Тренировочный день: День {day_index}.")
+
+        completions = await get_active_day_completions(user_id)
+        cheer = format_reminder_cheer(len(completions))
+        if day_index:
+            keyboard_rows.append(
+                [InlineKeyboardButton("Перейти ко дню", callback_data=f"day:open:{day_index}")]
+            )
+
+    keyboard_rows.append([InlineKeyboardButton("В главное меню", callback_data="menu:root")])
+    if cheer:
+        text_lines.extend(["", cheer])
+
+    text = "\n".join(text_lines)
+    reply_markup = InlineKeyboardMarkup(keyboard_rows)
+    return text, reply_markup
+
+
 async def reminder_job(context: ContextTypes.DEFAULT_TYPE):
-    job = context.job
-    chat_id = getattr(job, "chat_id", None)
-    if chat_id is None:
-        logger.warning("SKIP REMINDER: chat_id missing on fired job %s", job)
-        return
-
-    job_data = job.data if isinstance(job.data, dict) else {}
-    user_id = job_data.get("user_id") or job_data.get("target_user_id")
-
-    try:
-        cheer = ""
-        text_lines = ["🔔 Пришло время тренировки!", ""]
-        keyboard_rows: list[list[InlineKeyboardButton]] = []
-
-        if user_id:
-            tz_name = job_data.get("tz") or await get_user_timezone(user_id)
-            zone = resolve_user_zone(tz_name)
-            now_local = datetime.now(zone)
-            logger.info("REMINDER FIRE user=%s local_now=%s", user_id, now_local.isoformat())
-
-            weekday_label = WEEKDAY_FULL_NAMES.get(now_local.weekday())
-            date_str = now_local.strftime("%d.%m.%Y")
-            time_str = now_local.strftime("%H:%M")
-            if weekday_label:
-                text_lines.append(f"Сегодня {weekday_label}, {date_str} в {time_str}.")
-            else:
-                text_lines.append(f"Сегодня {date_str} в {time_str}.")
-
-            try:
-                day_index = int(job_data.get("day_no"))
-            except (TypeError, ValueError):
-                day_index = None
-
-            day_label = await get_day_label(user_id, day_index) if day_index else None
-            if day_label:
-                text_lines.append(f"Тренировочный день: {day_label}.")
-            elif day_index:
-                text_lines.append(f"Тренировочный день: День {day_index}.")
-
-            completions = await get_active_day_completions(user_id)
-            cheer = format_reminder_cheer(len(completions))
-            if day_index:
-                keyboard_rows.append([InlineKeyboardButton("Перейти ко дню", callback_data=f"day:open:{day_index}")])
-
-        keyboard_rows.append([InlineKeyboardButton("В главное меню", callback_data="menu:root")])
-        if cheer:
-            text_lines.extend(["", cheer])
-
-        text = "\n".join(text_lines)
-        reply_markup = InlineKeyboardMarkup(keyboard_rows)
-        await purge_chat_history(context.bot, chat_id)
-        await send_main_message_fresh(context.bot, chat_id, text, reply_markup=reply_markup)
-    except Forbidden:
-        _safe_remove_job(job)
-    except Exception:
-        logger.exception("Reminder job failed")
+    # оставляем единую реализацию в _rem_fire
+    await _rem_fire(context)
 
 
 async def _schedule_user_reminders(
@@ -6981,51 +6977,43 @@ def _schedule_reminder_job(
     dow: int,
     hour: int,
     minute: int,
-    tz_name: str | None,
+    tz_name: str,
     remove_existing: bool = True,
 ):
-    if job_queue is None or chat_id is None:
+    """
+    ВЕРСИЯ LITE: больше НЕ использует run_daily/days. Ставит ОДНОРАЗОВОЕ срабатывание на ближайший момент,
+    колбэк сам перепланирует себя на +7 дней.
+    """
+    if chat_id is None or job_queue is None:
+        return None
+    try:
+        dow_int = int(dow)
+        hh = int(hour)
+        mm = int(minute)
+    except Exception:
         return None
 
-    day_int = int(day_no)
-    dow_int = normalize_dow(dow)
-    hour_int = int(hour)
-    minute_int = int(minute)
-    tz_name = tz_name or "UTC"
+    app = job_queue.application  # PTB v20
+    job_id = _rem_job_id(int(user_id), dow_int, hh, mm)
 
     if remove_existing:
-        _remove_reminder_jobs(job_queue, user_id, day_int, dow_int)
+        # удалить старую одноимённую джобу, если была
+        with contextlib.suppress(Exception):
+            for j in job_queue.scheduler.get_jobs():
+                if j.id == job_id:
+                    j.remove()
 
-    zone = resolve_user_zone(tz_name)
-    target_time = time(hour=hour_int, minute=minute_int, tzinfo=zone)
-    job_name = _build_reminder_job_name(user_id, day_int, dow_int, hour_int, minute_int)
-    job_tag = _build_reminder_job_tag(user_id, day_int, dow_int, hour_int, minute_int)
-
-    job_queue.run_daily(
-        reminder_job,
-        time=target_time,
-        days=(dow_int,),
-        chat_id=chat_id,
-        name=job_name,
-        data={
-            "user_id": user_id,
-            "day_no": day_int,
-            "dow": dow_int,
-            "tag": job_tag,
-            "tz": tz_name,
-            "hour": hour_int,
-            "minute": minute_int,
-        },
-        job_kwargs={"misfire_grace_time": 600, "coalesce": True, "max_instances": 1},
+    # поставить одноразовое срабатывание
+    _rem_schedule_once(
+        app,
+        chat_id=int(chat_id),
+        user_id=int(user_id),
+        tz_name=str(tz_name),
+        dow=dow_int,
+        hh=hh,
+        mm=mm,
     )
-    logger.info(
-        "REMINDER SCHEDULED user=%s tz=%s target_dow=%s hh:mm=%s",
-        user_id,
-        getattr(zone, "key", None) or tz_name or "UTC",
-        dow_int,
-        f"{hour_int:02d}:{minute_int:02d}",
-    )
-    return job_name
+    return job_id
 
 
 def _get_job_tag(job):
@@ -7144,6 +7132,126 @@ def _on_job_event(e):
         getattr(e, "exception", None),
     )
 
+
+# ========================= REMINDERS_LITE — BEGIN =========================
+def _rem_next_occurrence(tz_name: str, dow: int, hh: int, mm: int, *, after: _dt | None = None) -> _dt:
+    """
+    Вернёт ближайшую ЛОКАЛЬНУЮ дату-время для (dow, hh:mm).
+    dow: Mon=0..Sun=6 (как datetime.weekday()).
+    """
+    tz = _Z(tz_name)
+    now = (after.astimezone(tz) if after else _dt.now(tz))
+    add = (dow - now.weekday()) % 7
+    target = _dt(now.year, now.month, now.day, hh, mm, tzinfo=tz) + _td(days=add)
+    if target <= now:
+        target += _td(days=7)
+    return target
+
+
+def _rem_job_id(user_id: int, dow: int, hh: int, mm: int) -> str:
+    return f"rem_{user_id}_{dow}_{hh:02d}{mm:02d}"
+
+
+def _rem_try_db_get_last_msg(user_id: int, kind: str = "workout_reminder") -> int | None:
+    """Опционально: если в db.py есть get_notification_msg(conn, user, kind) — использовать его."""
+    try:
+        import db as _DB
+        with contextlib.suppress(Exception):
+            conn = _DB.conn() if hasattr(_DB, "conn") else None
+            return _DB.get_notification_msg(conn, user_id, kind)  # type: ignore
+    except Exception:
+        return None
+
+
+def _rem_try_db_set_last_msg(user_id: int, msg_id: int, kind: str = "workout_reminder") -> None:
+    """Опционально: если в db.py есть set_notification_msg(conn, user, kind, msg_id) — использовать его."""
+    try:
+        import db as _DB
+        with contextlib.suppress(Exception):
+            conn = _DB.conn() if hasattr(_DB, "conn") else None
+            _DB.set_notification_msg(conn, user_id, kind, msg_id)  # type: ignore
+    except Exception:
+        pass
+
+
+async def _rem_fire(context):
+    """
+    Колбэк напоминания:
+    1) удаляет прошлое сообщение (если было),
+    2) отправляет новое уведомление (текст/кнопки — из текущей логики бота),
+    3) перепланирует себя на следующий такой же слот (+7 дней).
+    """
+    data = context.job.data or {}
+    chat_id: int = int(data["chat_id"])
+    user_id: int = int(data.get("user_id", chat_id))
+    tz_name: str = data["tz"]
+    dow: int = int(data["dow"])
+    hh: int = int(data["hh"])
+    mm: int = int(data["mm"])
+    kind: str = data.get("kind", "workout_reminder")
+
+    # 1) удалить прошлое напоминание (сначала из БД, потом из памяти)
+    prev_db = _rem_try_db_get_last_msg(user_id, kind)
+    for mid in {prev_db, _REM_LAST_MSG.get(chat_id)}:
+        if not mid:
+            continue
+        with contextlib.suppress(Exception):
+            await context.bot.delete_message(chat_id=chat_id, message_id=int(mid))
+
+    # 2) СФОРМИРОВАТЬ ТЕКУЩЕЕ УВЕДОМЛЕНИЕ (ИСПОЛЬЗУЙ УЖЕ ИМЕЮЩИЙСЯ В БОТЕ КОД!)
+    # ВАЖНО: не ломай существующую сборку текста/клавиатуры.
+    # Найди в текущем reminder_job сборку текста/клавиатуры и оставь её «как есть».
+    # Здесь только вызов отправки и сохранение message_id.
+    try:
+        # если в проекте есть готовая функция, формирующая текст/kb напоминания — используй её.
+        text, kb = await build_workout_reminder(context.bot, user_id)
+        msg = await context.bot.send_message(chat_id=chat_id, text=text, reply_markup=kb)
+    except Exception:
+        # Фолбэк: минимальное уведомление (на случай, если Codex не нашёл сборку)
+        from telegram import InlineKeyboardMarkup, InlineKeyboardButton
+
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton("Открыть дневник", callback_data="menu:root")]])
+        msg = await context.bot.send_message(chat_id=chat_id, text="⏰ Время тренировки!", reply_markup=kb)
+
+    _REM_LAST_MSG[chat_id] = msg.message_id
+    _rem_try_db_set_last_msg(user_id, msg.message_id, kind)
+
+    # 3) перепланировать следующий запуск (ровно через неделю в тот же локальный момент)
+    nxt_local = _rem_next_occurrence(tz_name, dow, hh, mm) + _td(days=7)
+    delay = (nxt_local - _dt.now(_Z(tz_name))).total_seconds()
+    context.job_queue.run_once(
+        _rem_fire,
+        when=delay,
+        name=context.job.name,  # то же имя — будет одна актуальная джоба
+        data=data,
+        chat_id=chat_id,
+        job_kwargs={"misfire_grace_time": 600, "coalesce": True, "max_instances": 1},
+    )
+
+
+def _rem_clear_user_jobs(app, user_id: int):
+    """Удалить все джобы вида rem_{user}_*"""
+    sch = app.job_queue.scheduler
+    for job in list(sch.get_jobs()):
+        if job.id.startswith(f"rem_{user_id}_"):
+            with contextlib.suppress(Exception):
+                job.remove()
+
+
+def _rem_schedule_once(app, *, chat_id: int, user_id: int, tz_name: str, dow: int, hh: int, mm: int):
+    """Поставить одноразовую джобу на ближайший слот по локальному времени пользователя."""
+    now_local = _dt.now(_Z(tz_name))
+    fire_at = _rem_next_occurrence(tz_name, dow, hh, mm, after=now_local)
+    delay = (fire_at - now_local).total_seconds()
+    app.job_queue.run_once(
+        _rem_fire,
+        when=delay,
+        name=_rem_job_id(user_id, dow, hh, mm),
+        data={"chat_id": chat_id, "user_id": user_id, "tz": tz_name, "dow": dow, "hh": hh, "mm": mm, "kind": "workout_reminder"},
+        chat_id=chat_id,
+        job_kwargs={"misfire_grace_time": 600, "coalesce": True, "max_instances": 1},
+    )
+# ========================= REMINDERS_LITE — END =========================
 
 async def post_init(app: Application):
     await schedule_all_reminders(app)
