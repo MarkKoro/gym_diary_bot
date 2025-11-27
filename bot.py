@@ -5,7 +5,7 @@ import random
 import secrets
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime, time, timedelta, UTC
+from datetime import datetime, time, timedelta, timezone
 from html import escape
 from zoneinfo import ZoneInfo
 from collections import defaultdict
@@ -238,6 +238,7 @@ PROGRESS_PAGE_SIZE = 5
 DAY_SHEET_PAGE_SIZE = 6
 SHEET_VIEWS_KEY = "day_sheet_views"
 BROADCAST_STATE_KEY = "broadcast_state"
+UTC = timezone.utc
 SUBSCRIPTION_PAYMENT_KEY = "subscription_payment"
 EXERCISE_NOTE_INPUT_KEY = "awaiting_exercise_note"
 YK_PROVIDER = "yookassa"
@@ -6851,6 +6852,30 @@ async def reminder_job(context: ContextTypes.DEFAULT_TYPE):
             text,
             reply_markup=reply_markup,
         )
+
+        # После отправки — перепланируем следующее напоминание для этого же слота
+        if job_data and user_id:
+            try:
+                day_no = int(job_data.get("day_no"))
+                dow = int(job_data.get("dow"))
+                tz_name = job_data.get("tz")
+                hour = int(job_data.get("hour")) if job_data.get("hour") is not None else None
+                minute = int(job_data.get("minute")) if job_data.get("minute") is not None else None
+
+                if hour is not None and minute is not None:
+                    _schedule_reminder_job(
+                        context.job_queue,
+                        chat_id=chat_id,
+                        user_id=int(user_id),
+                        day_no=day_no,
+                        dow=dow,
+                        hour=hour,
+                        minute=minute,
+                        tz_name=tz_name,
+                        remove_existing=False,  # job уже отработал, чистить нечего
+                    )
+            except Exception:
+                logger.exception("Failed to reschedule reminder after firing")
     except Forbidden:
         try:
             context.job.schedule_removal()
@@ -6993,14 +7018,18 @@ def _schedule_reminder_job(
         dow_raw = int(dow)
     except (TypeError, ValueError):
         return None
+
     if not (0 <= dow_raw <= 6 or 1 <= dow_raw <= 7):
         return None
+
     dow_int = normalize_dow(dow_raw)
     if job_queue is None:
         return None
+
     legacy_dow = (dow_int - 1) % 7
     legacy_name = _build_reminder_job_name(user_id, day_int, legacy_dow)
     job_name = _build_reminder_job_name(user_id, day_int, dow_int)
+
     if remove_existing:
         _remove_reminder_jobs(job_queue, user_id, day_int, dow_int)
         try:
@@ -7011,16 +7040,40 @@ def _schedule_reminder_job(
             if legacy_jobs and dow_int != legacy_dow:
                 dow_int = legacy_dow
                 job_name = legacy_name
+
     if chat_id is None:
+        logger.warning(
+            "SKIP REMINDER: user_id=%s day_no=%s dow=%s — chat_id is None",
+            user_id,
+            day_int,
+            dow_int,
+        )
         return None
+
     zone = resolve_user_zone(tz_name)
-    tm = time(hour=hour_int, minute=minute_int, tzinfo=zone)
+
+    # локальное текущее время пользователя
+    now_utc = datetime.now(UTC)
+    now_local = now_utc.astimezone(zone)
+
+    # ближайший нужный день недели
+    days_ahead = (dow_int - now_local.weekday()) % 7
+    target_date = (now_local + timedelta(days=days_ahead)).date()
+    target_local = datetime.combine(
+        target_date,
+        time(hour=hour_int, minute=minute_int),
+    ).replace(tzinfo=zone)
+
+    # если время уже прошло сегодня — переносим на следующую неделю
+    if target_local <= now_local:
+        target_local = target_local + timedelta(days=7)
+
+    target_utc = target_local.astimezone(UTC)
     job_tag = _build_reminder_job_tag(user_id, day_int, dow_int)
 
-    job_queue.run_daily(
+    job_queue.run_once(
         reminder_job,
-        tm,
-        days=(dow_int,),
+        when=target_utc,
         chat_id=chat_id,
         name=job_name,
         data={
@@ -7029,25 +7082,18 @@ def _schedule_reminder_job(
             "dow": dow_int,
             "tag": job_tag,
             "tz": tz_name,
+            "hour": hour_int,
+            "minute": minute_int,
         },
     )
 
-    now = datetime.now(zone)
-    days_ahead = (dow_int - now.weekday()) % 7
-    next_date = (now + timedelta(days=days_ahead)).date()
-    next_run = datetime.combine(next_date, time(hour=hour_int, minute=minute_int), tzinfo=zone)
-    if next_run <= now:
-        next_date = next_date + timedelta(days=7)
-        next_run = datetime.combine(
-            next_date, time(hour=hour_int, minute=minute_int), tzinfo=zone
-        )
     logger.info(
         "REMINDER SCHEDULED user=%s tz=%s dow=%s hh:mm=%s next_local=%s",
         user_id,
         getattr(zone, "key", None) or tz_name or "UTC",
         dow_int,
         f"{hour_int:02d}:{minute_int:02d}",
-        next_run.isoformat(),
+        target_local.isoformat(),
     )
     return job_name
 
