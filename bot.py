@@ -240,6 +240,7 @@ logging.getLogger("telegram").setLevel(logging.INFO)
 user_locks = defaultdict(asyncio.Lock)
 logger = logging.getLogger(__name__)
 last_messages: dict[int, int] = {}
+message_history: dict[int, list[int]] = defaultdict(list)
 MAIL_RETURN_CALLBACK = "promo:return_menu"
 PROGRESS_PAGE_SIZE = 5
 DAY_SHEET_PAGE_SIZE = 6
@@ -1597,6 +1598,61 @@ def remember_message(chat_id: int | None, message_id: int | None):
     if chat_id is None or message_id is None:
         return
     last_messages[chat_id] = message_id
+    history = message_history[chat_id]
+    if message_id not in history:
+        history.append(message_id)
+        if len(history) > 100:
+            history.pop(0)
+
+
+def _remove_message_from_history(chat_id: int, message_id: int):
+    history = message_history.get(chat_id)
+    if not history:
+        return
+    try:
+        history.remove(message_id)
+    except ValueError:
+        pass
+    if not history:
+        message_history.pop(chat_id, None)
+
+
+async def purge_chat_history(bot, chat_id: int) -> None:
+    history = list(message_history.get(chat_id, []))
+    if not history:
+        return
+    for msg_id in sorted(history, reverse=True):
+        try:
+            await bot.delete_message(chat_id, msg_id)
+        except BadRequest as delete_error:
+            error_text = (delete_error.message or "").lower()
+            if "message to delete not found" in error_text:
+                pass
+            elif "can't be deleted" in error_text:
+                logger.debug(
+                    "Message %s in chat %s cannot be deleted during purge",
+                    msg_id,
+                    chat_id,
+                )
+            else:
+                logger.warning(
+                    "Failed to delete message %s in chat %s during purge", msg_id, chat_id
+                )
+        except Forbidden:
+            logger.debug(
+                "Bot is not allowed to delete message %s in chat %s during purge",
+                msg_id,
+                chat_id,
+            )
+        except TelegramError:
+            logger.warning(
+                "Unexpected error when deleting message %s in chat %s during purge",
+                msg_id,
+                chat_id,
+                exc_info=True,
+            )
+        else:
+            _remove_message_from_history(chat_id, msg_id)
 
 
 async def _generate_trainer_code():
@@ -2876,6 +2932,7 @@ async def reset_main_message(bot, chat_id: int | None) -> None:
         else:
             logger.warning("Failed to delete main message", exc_info=True)
         last_messages.pop(chat_id, None)
+        _remove_message_from_history(chat_id, previous_id)
         return
     except Forbidden:
         logger.debug(
@@ -2886,6 +2943,7 @@ async def reset_main_message(bot, chat_id: int | None) -> None:
     except TelegramError:
         logger.warning("Unexpected error when deleting main message", exc_info=True)
     last_messages.pop(chat_id, None)
+    _remove_message_from_history(chat_id, previous_id)
 
 
 async def send_main_message_fresh(
@@ -6843,6 +6901,7 @@ async def reminder_job(context: ContextTypes.DEFAULT_TYPE):
 
         text = "\n".join(text_lines)
         reply_markup = InlineKeyboardMarkup(keyboard_rows)
+        await purge_chat_history(context.bot, chat_id)
         await send_main_message_fresh(context.bot, chat_id, text, reply_markup=reply_markup)
 
         if job_data and user_id:
