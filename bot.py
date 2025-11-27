@@ -6905,43 +6905,6 @@ async def reminder_job(context: ContextTypes.DEFAULT_TYPE):
         reply_markup = InlineKeyboardMarkup(keyboard_rows)
         await purge_chat_history(context.bot, chat_id)
         await send_main_message_fresh(context.bot, chat_id, text, reply_markup=reply_markup)
-        try:
-            if user_id is not None:
-                day_int = int(job_data.get("day_no")) if job_data.get("day_no") is not None else 1
-                dow_int = normalize_dow(int(job_data.get("dow")))
-                hour_int = int(job_data.get("hour", 0))
-                minute_int = int(job_data.get("minute", 0))
-                tz_name = job_data.get("tz") or "UTC"
-                zone = resolve_user_zone(tz_name)
-                next_utc = compute_next_occurrence(
-                    zone,
-                    dow_int,
-                    hour_int,
-                    minute_int,
-                    datetime.now(timezone.utc),
-                )
-                _remove_reminder_jobs(context.job_queue, user_id, day_int, dow_int)
-                _schedule_reminder_job(
-                    context.job_queue,
-                    chat_id=chat_id,
-                    user_id=user_id,
-                    day_no=day_int,
-                    dow=dow_int,
-                    hour=hour_int,
-                    minute=minute_int,
-                    tz_name=tz_name,
-                )
-                logger.info(
-                    "REMINDER RESCHEDULED user=%s tz=%s target_dow=%s hh:mm=%s next_local=%s next_utc=%s",
-                    user_id,
-                    getattr(zone, "key", None) or tz_name,
-                    dow_int,
-                    f"{hour_int:02d}:{minute_int:02d}",
-                    next_utc.astimezone(zone).isoformat(),
-                    next_utc.isoformat(),
-                )
-        except Exception:
-            logger.exception("Failed to reschedule reminder for user %s", user_id)
     except Forbidden:
         _safe_remove_job(job)
     except Exception:
@@ -6995,27 +6958,11 @@ async def _schedule_user_reminders(
 
 
 def _build_reminder_job_name(user_id: int, day_no: int, dow: int, hour: int, minute: int) -> str:
-    return f"rem_{user_id}_{day_no}_{dow}_{hour:02d}{minute:02d}"
+    return f"rem_{user_id}_{day_no}_{dow}"
 
 
 def _build_reminder_job_tag(user_id: int, day_no: int, dow: int, hour: int, minute: int) -> str:
     return f"u:{user_id}:rem:{day_no}:{dow}:{hour:02d}{minute:02d}"
-
-
-def compute_next_occurrence(
-    user_tz: tzinfo,
-    target_dow: int,
-    hh: int,
-    mm: int,
-    now_utc: datetime,
-) -> datetime:
-    now_local = now_utc.astimezone(user_tz)
-    days_ahead = (target_dow - now_local.weekday()) % 7
-    target_date = now_local.date() + timedelta(days=days_ahead)
-    dt_local = datetime.combine(target_date, time(hour=hh, minute=mm), tzinfo=user_tz)
-    if dt_local <= now_local:
-        dt_local += timedelta(days=7)
-    return dt_local.astimezone(timezone.utc)
 
 
 def _schedule_reminder_job(
@@ -7043,15 +6990,14 @@ def _schedule_reminder_job(
         _remove_reminder_jobs(job_queue, user_id, day_int, dow_int)
 
     zone = resolve_user_zone(tz_name)
-    now_utc = datetime.now(timezone.utc)
-    target_utc = compute_next_occurrence(zone, dow_int, hour_int, minute_int, now_utc)
-    target_local = target_utc.astimezone(zone)
+    target_time = time(hour=hour_int, minute=minute_int, tzinfo=zone)
     job_name = _build_reminder_job_name(user_id, day_int, dow_int, hour_int, minute_int)
     job_tag = _build_reminder_job_tag(user_id, day_int, dow_int, hour_int, minute_int)
 
-    job_queue.run_once(
+    job_queue.run_daily(
         reminder_job,
-        when=target_utc,
+        time=target_time,
+        days=(dow_int,),
         chat_id=chat_id,
         name=job_name,
         data={
@@ -7066,31 +7012,12 @@ def _schedule_reminder_job(
         job_kwargs={"misfire_grace_time": 600, "coalesce": True, "max_instances": 1},
     )
     logger.info(
-        "REMINDER SCHEDULED user=%s tz=%s target_dow=%s hh:mm=%s next_local=%s next_utc=%s",
+        "REMINDER SCHEDULED user=%s tz=%s target_dow=%s hh:mm=%s",
         user_id,
         getattr(zone, "key", None) or tz_name or "UTC",
         dow_int,
         f"{hour_int:02d}:{minute_int:02d}",
-        target_local.isoformat(),
-        target_utc.isoformat(),
     )
-    # LEGACY: previous daily scheduling path retained for reference
-    # job_queue.run_daily(
-    #     reminder_job,
-    #     time=time(hour=hour_int, minute=minute_int, tzinfo=zone),
-    #     days=(dow_int,),
-    #     chat_id=chat_id,
-    #     name=job_name,
-    #     data={
-    #         "user_id": user_id,
-    #         "day_no": day_int,
-    #         "dow": dow_int,
-    #         "tag": job_tag,
-    #         "tz": tz_name,
-    #         "hour": hour_int,
-    #         "minute": minute_int,
-    #     },
-    # )
     return job_name
 
 
@@ -7139,20 +7066,22 @@ def _remove_reminder_jobs(job_queue, user_id: int, day_no: int, dow: int | None 
             jobs = []
         for job in jobs:
             name = getattr(job, "name", None)
-            if isinstance(name, str) and name.startswith(job_name_prefix):
+            if isinstance(name, str) and name.startswith(job_name_prefix.rstrip("_")):
                 _safe_remove_job(job)
         return
 
     dow_int = int(dow)
     _remove_jobs_with_tag_prefix(job_queue, f"{tag_prefix}{dow_int}")
-    job_name_prefix = f"rem_{user_id}_{day_no}_{dow_int}_"
+    job_name_prefix = f"rem_{user_id}_{day_no}_{dow_int}"
     try:
         jobs = job_queue.jobs()
     except AttributeError:
         jobs = []
     for job in jobs:
         name = getattr(job, "name", None)
-        if isinstance(name, str) and name.startswith(job_name_prefix):
+        if isinstance(name, str) and (
+            name == job_name_prefix or name.startswith(f"{job_name_prefix}_")
+        ):
             _safe_remove_job(job)
 
 
