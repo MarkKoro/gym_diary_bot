@@ -111,8 +111,11 @@ def normalize_dow(dow: int | str) -> int:
     """Normalize a day-of-week value to the range 0..6."""
 
     d = int(dow)
+    # Values already in the 0-6 range are treated as normalized (Monday=0).
+    if 0 <= d <= 6:
+        return d
     if 1 <= d <= 7:
-        d = (d - 1) % 7
+        return (d - 1) % 7
     return d % 7
 
 SCHEME_SENTINEL = -1
