@@ -42,7 +42,14 @@ from telegram.ext import (
     PreCheckoutQueryHandler,
     Defaults,
 )
-from apscheduler.events import EVENT_JOB_ERROR, EVENT_JOB_EXECUTED, EVENT_JOB_MISSED
+try:
+    from apscheduler.events import EVENT_JOB_ERROR, EVENT_JOB_EXECUTED, EVENT_JOB_MISSED
+except ModuleNotFoundError as exc:  # pragma: no cover - defensive dependency check
+    raise SystemExit(
+        "APScheduler is required for reminder notifications. "
+        "Install project dependencies with `pip install -r requirements.txt` "
+        "or `pip install \"python-telegram-bot[job-queue]\" APScheduler`"
+    ) from exc
 from keyboards import (
     dual,
     main_menu_kb,
