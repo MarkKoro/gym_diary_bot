@@ -6793,101 +6793,75 @@ async def build_for_time_history_view(
     return "\n".join(lines), InlineKeyboardMarkup(kb_rows)
 
 async def reminder_job(context: ContextTypes.DEFAULT_TYPE):
-    chat_id = context.job.chat_id
-    user_id = None
-    job_data = context.job.data if isinstance(context.job.data, dict) else None
-    if job_data:
-        user_id = job_data.get("user_id") or job_data.get("target_user_id")
+    job = context.job
+    chat_id = getattr(job, "chat_id", None)
+    if chat_id is None:
+        logger.warning("SKIP REMINDER: chat_id missing on fired job %s", job)
+        return
+
+    job_data = job.data if isinstance(job.data, dict) else {}
+    user_id = job_data.get("user_id") or job_data.get("target_user_id")
+
     try:
         cheer = ""
         text_lines = ["🔔 Пришло время тренировки!", ""]
         keyboard_rows: list[list[InlineKeyboardButton]] = []
+
         if user_id:
-            tz_name = job_data.get("tz") if job_data else None
-            if not tz_name:
-                tz_name = await get_user_timezone(user_id)
+            tz_name = job_data.get("tz") or await get_user_timezone(user_id)
             zone = resolve_user_zone(tz_name)
             now_local = datetime.now(zone)
-            logger.info(
-                "REMINDER FIRE user=%s local_now=%s",
-                user_id,
-                now_local.isoformat(),
-            )
+            logger.info("REMINDER FIRE user=%s local_now=%s", user_id, now_local.isoformat())
+
             weekday_label = WEEKDAY_FULL_NAMES.get(now_local.weekday())
             date_str = now_local.strftime("%d.%m.%Y")
             time_str = now_local.strftime("%H:%M")
             if weekday_label:
-                text_lines.append(
-                    f"Сегодня {weekday_label}, {date_str} в {time_str}."
-                )
+                text_lines.append(f"Сегодня {weekday_label}, {date_str} в {time_str}.")
             else:
                 text_lines.append(f"Сегодня {date_str} в {time_str}.")
-            day_index = None
-            day_label = None
-            if job_data:
-                try:
-                    day_index = int(job_data.get("day_no"))
-                except (TypeError, ValueError):
-                    day_index = None
-            if user_id and day_index:
-                day_label = await get_day_label(user_id, day_index)
+
+            try:
+                day_index = int(job_data.get("day_no"))
+            except (TypeError, ValueError):
+                day_index = None
+
+            day_label = await get_day_label(user_id, day_index) if day_index else None
             if day_label:
                 text_lines.append(f"Тренировочный день: {day_label}.")
             elif day_index:
                 text_lines.append(f"Тренировочный день: День {day_index}.")
+
             completions = await get_active_day_completions(user_id)
             cheer = format_reminder_cheer(len(completions))
             if day_index:
-                keyboard_rows.append(
-                    [
-                        InlineKeyboardButton(
-                            "Перейти ко дню",
-                            callback_data=f"day:open:{day_index}",
-                        )
-                    ]
-                )
-        keyboard_rows.append(
-            [InlineKeyboardButton("В главное меню", callback_data="menu:root")]
-        )
+                keyboard_rows.append([InlineKeyboardButton("Перейти ко дню", callback_data=f"day:open:{day_index}")])
+
+        keyboard_rows.append([InlineKeyboardButton("В главное меню", callback_data="menu:root")])
         if cheer:
             text_lines.extend(["", cheer])
+
         text = "\n".join(text_lines)
         reply_markup = InlineKeyboardMarkup(keyboard_rows)
-        await send_main_message_fresh(
-            context.bot,
-            chat_id,
-            text,
-            reply_markup=reply_markup,
-        )
+        await send_main_message_fresh(context.bot, chat_id, text, reply_markup=reply_markup)
 
-        # После отправки — перепланируем следующее напоминание для этого же слота
         if job_data and user_id:
             try:
-                day_no = int(job_data.get("day_no"))
-                dow = int(job_data.get("dow"))
-                tz_name = job_data.get("tz")
-                hour = int(job_data.get("hour")) if job_data.get("hour") is not None else None
-                minute = int(job_data.get("minute")) if job_data.get("minute") is not None else None
-
-                if hour is not None and minute is not None:
-                    _schedule_reminder_job(
-                        context.job_queue,
-                        chat_id=chat_id,
-                        user_id=int(user_id),
-                        day_no=day_no,
-                        dow=dow,
-                        hour=hour,
-                        minute=minute,
-                        tz_name=tz_name,
-                        remove_existing=False,  # job уже отработал, чистить нечего
-                    )
+                _schedule_reminder_job(
+                    context.job_queue,
+                    chat_id=chat_id,
+                    user_id=int(user_id),
+                    day_no=int(job_data.get("day_no")),
+                    dow=int(job_data.get("dow")),
+                    hour=int(job_data.get("hour")),
+                    minute=int(job_data.get("minute")),
+                    tz_name=job_data.get("tz"),
+                    remove_existing=False,
+                )
             except Exception:
                 logger.exception("Failed to reschedule reminder after firing")
     except Forbidden:
-        try:
-            context.job.schedule_removal()
-        except Exception:
-            pass
+        _safe_remove_job(job)
     except Exception:
         logger.exception("Reminder job failed")
 
@@ -6918,32 +6892,23 @@ async def _schedule_user_reminders(
             except (TypeError, ValueError):
                 chat_id = None
     if chat_id is None:
-        logger.info("Skipping reminders for user %s: chat ID is missing", user_id)
+        logger.warning("SKIP REMINDER: chat_id is None for user %s", user_id)
         return set()
 
     scheduled: set[str] = set()
     for day_no, dow, hour, minute in reminders:
-        if dow is None:
-            continue
-        try:
-            day_int = int(day_no)
-            hour_int = int(hour)
-            minute_int = int(minute)
-        except (TypeError, ValueError):
-            continue
-        job_name = _schedule_reminder_job(
+        name = _schedule_reminder_job(
             app.job_queue,
             chat_id=chat_id,
             user_id=user_id,
-            day_no=day_int,
+            day_no=day_no,
             dow=dow,
-            hour=hour_int,
-            minute=minute_int,
+            hour=hour,
+            minute=minute,
             tz_name=tz_code,
         )
-        if job_name:
-            scheduled.add(job_name)
-    logger.info("Scheduled %d reminders for user %d", len(scheduled), user_id)
+        if name:
+            scheduled.add(name)
     return scheduled
 
 
@@ -6951,30 +6916,82 @@ def _build_reminder_job_name(user_id: int, day_no: int, dow: int) -> str:
     return f"rem_{user_id}_{day_no}_{dow}"
 
 
-def _remove_jobs_for_removed_reminders(
-    job_queue, user_id: int, removed: Sequence[tuple[int, int, int, int]]
-) -> None:
-    for day_no, dow, *_ in removed:
-        try:
-            day_int = int(day_no)
-            dow_int = int(dow)
-        except (TypeError, ValueError):
-            continue
-        if dow_int < 0 or dow_int > 6:
-            continue
-        _remove_reminder_jobs(job_queue, user_id, day_int, dow_int)
-
-
 def _build_reminder_job_tag(user_id: int, day_no: int, dow: int) -> str:
     return f"u:{user_id}:rem:{day_no}:{dow}"
 
 
-def _get_job_tag(job) -> str | None:
-    job_kwargs = getattr(job, "job_kwargs", None)
-    if isinstance(job_kwargs, dict):
-        tag = job_kwargs.get("name")
-        if isinstance(tag, str):
-            return tag
+def _compute_next_run(tz_name: str, dow: int, hour: int, minute: int):
+    zone = resolve_user_zone(tz_name)
+    now_utc = datetime.now(UTC)
+    now_local = now_utc.astimezone(zone)
+    target_local = datetime.combine(
+        now_local.date(),
+        time(hour=hour, minute=minute),
+        tzinfo=zone,
+    )
+    days_ahead = (dow - now_local.weekday()) % 7
+    if days_ahead:
+        target_local += timedelta(days=days_ahead)
+    if target_local <= now_local:
+        target_local += timedelta(days=7)
+    return target_local.astimezone(UTC), zone
+
+
+def _schedule_reminder_job(
+    job_queue,
+    *,
+    chat_id: int | None,
+    user_id: int,
+    day_no: int,
+    dow: int,
+    hour: int,
+    minute: int,
+    tz_name: str | None,
+    remove_existing: bool = True,
+):
+    if job_queue is None or chat_id is None:
+        return None
+
+    day_int = int(day_no)
+    dow_int = normalize_dow(dow)
+    hour_int = int(hour)
+    minute_int = int(minute)
+    tz_name = tz_name or "UTC"
+
+    if remove_existing:
+        _remove_reminder_jobs(job_queue, user_id, day_int, dow_int)
+
+    target_utc, zone = _compute_next_run(tz_name, dow_int, hour_int, minute_int)
+    job_name = _build_reminder_job_name(user_id, day_int, dow_int)
+    job_tag = _build_reminder_job_tag(user_id, day_int, dow_int)
+
+    job_queue.run_once(
+        reminder_job,
+        when=target_utc,
+        chat_id=chat_id,
+        name=job_name,
+        data={
+            "user_id": user_id,
+            "day_no": day_int,
+            "dow": dow_int,
+            "tag": job_tag,
+            "tz": tz_name,
+            "hour": hour_int,
+            "minute": minute_int,
+        },
+    )
+    logger.info(
+        "REMINDER SCHEDULED user=%s tz=%s dow=%s hh:mm=%s next_local=%s",
+        user_id,
+        getattr(zone, "key", None) or tz_name or "UTC",
+        dow_int,
+        f"{hour_int:02d}:{minute_int:02d}",
+        target_utc.astimezone(zone).isoformat(),
+    )
+    return job_name
+
+
+def _get_job_tag(job):
     data = getattr(job, "data", None)
     if isinstance(data, dict):
         tag = data.get("tag")
@@ -7006,148 +7023,48 @@ def _remove_jobs_with_tag_prefix(job_queue, tag_prefix: str) -> None:
             _safe_remove_job(job)
 
 
-def _schedule_reminder_job(
-    job_queue,
-    *,
-    chat_id: int | None,
-    user_id: int,
-    day_no: int,
-    dow: int,
-    hour: int,
-    minute: int,
-    tz_name: str | None,
-    remove_existing: bool = True,
-):
-    try:
-        day_int = int(day_no)
-        hour_int = int(hour)
-        minute_int = int(minute)
-        dow_raw = int(dow)
-    except (TypeError, ValueError):
-        return None
-
-    if not (0 <= dow_raw <= 6 or 1 <= dow_raw <= 7):
-        return None
-
-    dow_int = normalize_dow(dow_raw)
-    if job_queue is None:
-        return None
-
-    legacy_dow = (dow_int - 1) % 7
-    legacy_name = _build_reminder_job_name(user_id, day_int, legacy_dow)
-    job_name = _build_reminder_job_name(user_id, day_int, dow_int)
-
-    if remove_existing:
-        _remove_reminder_jobs(job_queue, user_id, day_int, dow_int)
-        try:
-            legacy_jobs = job_queue.get_jobs_by_name(legacy_name)
-        except Exception:
-            legacy_jobs = []
-        else:
-            if legacy_jobs and dow_int != legacy_dow:
-                dow_int = legacy_dow
-                job_name = legacy_name
-
-    if chat_id is None:
-        logger.warning(
-            "SKIP REMINDER: user_id=%s day_no=%s dow=%s — chat_id is None",
-            user_id,
-            day_int,
-            dow_int,
-        )
-        return None
-
-    zone = resolve_user_zone(tz_name)
-
-    # локальное текущее время пользователя
-    now_utc = datetime.now(UTC)
-    now_local = now_utc.astimezone(zone)
-
-    # ближайший нужный день недели
-    days_ahead = (dow_int - now_local.weekday()) % 7
-    target_date = (now_local + timedelta(days=days_ahead)).date()
-    target_local = datetime.combine(
-        target_date,
-        time(hour=hour_int, minute=minute_int),
-    ).replace(tzinfo=zone)
-
-    # если время уже прошло сегодня — переносим на следующую неделю
-    if target_local <= now_local:
-        target_local = target_local + timedelta(days=7)
-
-    target_utc = target_local.astimezone(UTC)
-    job_tag = _build_reminder_job_tag(user_id, day_int, dow_int)
-
-    job_queue.run_once(
-        reminder_job,
-        when=target_utc,
-        chat_id=chat_id,
-        name=job_name,
-        data={
-            "user_id": user_id,
-            "day_no": day_int,
-            "dow": dow_int,
-            "tag": job_tag,
-            "tz": tz_name,
-            "hour": hour_int,
-            "minute": minute_int,
-        },
-    )
-
-    logger.info(
-        "REMINDER SCHEDULED user=%s tz=%s dow=%s hh:mm=%s next_local=%s",
-        user_id,
-        getattr(zone, "key", None) or tz_name or "UTC",
-        dow_int,
-        f"{hour_int:02d}:{minute_int:02d}",
-        target_local.isoformat(),
-    )
-    return job_name
-
-
 def _remove_reminder_jobs(job_queue, user_id: int, day_no: int, dow: int | None = None) -> None:
     if job_queue is None:
         return
     tag_prefix = f"u:{user_id}:rem:{day_no}:"
-    if dow is not None and 0 <= int(dow) <= 6:
-        _remove_jobs_with_tag_prefix(job_queue, f"{tag_prefix}{int(dow)}")
-    else:
+    if dow is None:
         _remove_jobs_with_tag_prefix(job_queue, tag_prefix)
+        job_name_prefix = f"rem_{user_id}_{day_no}_"
+        try:
+            jobs = job_queue.jobs()
+        except AttributeError:
+            jobs = []
+        for job in jobs:
+            name = getattr(job, "name", None)
+            if isinstance(name, str) and name.startswith(job_name_prefix):
+                _safe_remove_job(job)
+        return
 
-    job_prefix = f"rem_{user_id}_{day_no}_"
-    try:
-        jobs = job_queue.jobs()
-    except AttributeError:
-        jobs = []
-    for job in jobs:
-        name = getattr(job, "name", None)
-        if name and name.startswith(job_prefix):
-            _safe_remove_job(job)
-    if dow is not None:
-        job_name = _build_reminder_job_name(user_id, day_no, int(dow))
-        for job in job_queue.get_jobs_by_name(job_name):
-            _safe_remove_job(job)
-    legacy_names = [f"rem_{user_id}_{day_no}"]
-    if dow is not None:
-        legacy_names.append(f"rem_{user_id}_{dow}")
-    for legacy_name in legacy_names:
-        for job in job_queue.get_jobs_by_name(legacy_name):
-            _safe_remove_job(job)
+    _remove_jobs_with_tag_prefix(job_queue, f"{tag_prefix}{int(dow)}")
+    job_name = _build_reminder_job_name(user_id, day_no, int(dow))
+    for job in job_queue.get_jobs_by_name(job_name):
+        _safe_remove_job(job)
+
+
+def _remove_jobs_for_removed_reminders(
+    job_queue, user_id: int, removed: Sequence[tuple[int, int, int, int]]
+) -> None:
+    for day_no, dow, _hour, _minute in removed:
+        _remove_reminder_jobs(job_queue, user_id, int(day_no), int(dow))
 
 
 def _sweep_user_reminder_jobs(job_queue, user_id: int) -> None:
     if job_queue is None:
         return
-    tag_prefix = f"u:{user_id}:rem:"
-    _remove_jobs_with_tag_prefix(job_queue, tag_prefix)
+    _remove_jobs_with_tag_prefix(job_queue, f"u:{user_id}:rem:")
     try:
         jobs = job_queue.jobs()
     except AttributeError:
         jobs = []
-    legacy_prefix = f"rem_{user_id}_"
+    prefix = f"rem_{user_id}_"
     for job in jobs:
         name = getattr(job, "name", None)
-        if name and name.startswith(legacy_prefix):
+        if isinstance(name, str) and name.startswith(prefix):
             _safe_remove_job(job)
 
 
@@ -7161,20 +7078,15 @@ async def schedule_all_reminders(app: Application):
         desired_jobs.update(scheduled)
         total_scheduled += len(scheduled)
     logger.info("Scheduled %d reminder jobs in total", total_scheduled)
-    # remove orphaned reminder jobs that are no longer present in the database
+
     try:
         jobs = app.job_queue.jobs()
     except AttributeError:
         jobs = []
     for job in jobs:
         name = getattr(job, "name", None)
-        if not name:
-            continue
-        if name.startswith("rem_") and name not in desired_jobs:
-            try:
-                job.schedule_removal()
-            except Exception:
-                continue
+        if name and name.startswith("rem_") and name not in desired_jobs:
+            _safe_remove_job(job)
 
 
 async def post_init(app: Application):
