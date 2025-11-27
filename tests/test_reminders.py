@@ -1,11 +1,16 @@
 import atexit
 import importlib
 import os
+import sys
 import tempfile
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
 
 from zoneinfo import ZoneInfo
+
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(_REPO_ROOT))
 
 
 class FakeJob:
