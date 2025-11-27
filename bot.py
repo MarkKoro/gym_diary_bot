@@ -6903,22 +6903,6 @@ async def reminder_job(context: ContextTypes.DEFAULT_TYPE):
         reply_markup = InlineKeyboardMarkup(keyboard_rows)
         await purge_chat_history(context.bot, chat_id)
         await send_main_message_fresh(context.bot, chat_id, text, reply_markup=reply_markup)
-
-        if job_data and user_id:
-            try:
-                _schedule_reminder_job(
-                    context.job_queue,
-                    chat_id=chat_id,
-                    user_id=int(user_id),
-                    day_no=int(job_data.get("day_no")),
-                    dow=int(job_data.get("dow")),
-                    hour=int(job_data.get("hour")),
-                    minute=int(job_data.get("minute")),
-                    tz_name=job_data.get("tz"),
-                    remove_existing=False,
-                )
-            except Exception:
-                logger.exception("Failed to reschedule reminder after firing")
     except Forbidden:
         _safe_remove_job(job)
     except Exception:
@@ -7024,9 +7008,10 @@ def _schedule_reminder_job(
     job_name = _build_reminder_job_name(user_id, day_int, dow_int)
     job_tag = _build_reminder_job_tag(user_id, day_int, dow_int)
 
-    job_queue.run_once(
+    job_queue.run_daily(
         reminder_job,
-        when=target_utc,
+        time=time(hour=hour_int, minute=minute_int, tzinfo=zone),
+        days=(dow_int,),
         chat_id=chat_id,
         name=job_name,
         data={

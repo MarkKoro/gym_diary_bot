@@ -3,7 +3,6 @@ import importlib
 import os
 import tempfile
 import unittest
-from datetime import timezone
 from types import SimpleNamespace
 
 from zoneinfo import ZoneInfo
@@ -19,12 +18,13 @@ class FakeJob:
 
 
 class FakeScheduledJob(FakeJob):
-    def __init__(self, name, callback, when_obj, chat_id, data):
+    def __init__(self, name, callback, when_obj, chat_id, data, days=None):
         super().__init__(name)
         self.callback = callback
         self.when = when_obj
         self.chat_id = chat_id
         self.data = data
+        self.days = tuple(days or [])
 
 
 class FakeJobQueue:
@@ -35,9 +35,9 @@ class FakeJobQueue:
     def get_jobs_by_name(self, name: str):
         return self.jobs_by_name.get(name, [])
 
-    def run_daily(self, callback, time_obj, days, chat_id, name, data, job_kwargs=None):
-        _ = (callback, time_obj, days, job_kwargs)
-        job = FakeScheduledJob(name, callback, time_obj, chat_id, data)
+    def run_daily(self, callback, time=None, days=None, chat_id=None, name=None, data=None, job_kwargs=None):
+        _ = (callback, job_kwargs)
+        job = FakeScheduledJob(name, callback, time, chat_id, data, days=days or [])
         self.jobs_by_name.setdefault(name, []).append(job)
         self.created_jobs.append(job)
 
@@ -121,12 +121,12 @@ class ReminderTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(new_job, FakeScheduledJob)
         self.assertEqual(new_job.chat_id, 9300)
         self.assertIsNotNone(new_job.when)
-        self.assertEqual(new_job.when.tzinfo, timezone.utc)
-        local_time = new_job.when.astimezone(ZoneInfo("Asia/Irkutsk"))
+        self.assertEqual(new_job.when.tzinfo, ZoneInfo("Asia/Irkutsk"))
+        local_time = new_job.when
         self.assertEqual(local_time.hour, 7)
         self.assertEqual(local_time.minute, 45)
         expected_weekday = db.normalize_dow(5)
-        self.assertEqual(local_time.weekday(), expected_weekday)
+        self.assertEqual(new_job.days, (expected_weekday,))
         self.assertEqual(
             {
                 "user_id": new_job.data["user_id"],
