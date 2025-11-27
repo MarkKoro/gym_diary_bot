@@ -819,8 +819,8 @@ def reminder_time_kb(
     selected: tuple[int, int] | None = None,
     page: int = 0,
 ):
-    slots = [(h, m) for h in range(6, 23) for m in (0, 30)]
-    page_size = 16
+    slots = [(h, m) for h in range(6, 23) for m in (0, 15, 30, 45)]
+    page_size = 32
     total_pages = (len(slots) + page_size - 1) // page_size or 1
     page = max(0, min(page, total_pages - 1))
     start = page * page_size
@@ -839,8 +839,8 @@ def reminder_time_kb(
                 callback_data=f"{prefix}:{time_label}",
             )
         )
-    for idx in range(0, len(buttons), 2):
-        rows.append(buttons[idx : idx + 2])
+    for idx in range(0, len(buttons), 4):
+        rows.append(buttons[idx : idx + 4])
     if total_pages > 1:
         nav_row: list[InlineKeyboardButton] = []
         if page > 0:
