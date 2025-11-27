@@ -230,6 +230,13 @@ if TYPE_CHECKING:
 else:
     Database = Any
 
+logging.basicConfig(
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    level=logging.INFO,
+)
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("telegram").setLevel(logging.INFO)
+
 user_locks = defaultdict(asyncio.Lock)
 logger = logging.getLogger(__name__)
 last_messages: dict[int, int] = {}
@@ -13175,6 +13182,7 @@ async def successful_payment_handler(update: Update, context: ContextTypes.DEFAU
 
 
 def main():
+    logger.info("Starting Gym Diary bot")
     asyncio.run(init_db())
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
