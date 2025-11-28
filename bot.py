@@ -6889,9 +6889,9 @@ async def build_workout_reminder(
 
         day_label = await get_day_label(user_id, day_index) if day_index else None
         if day_label:
-            text_lines.append(f"Тренировочный день: {day_label}.")
+            text_lines.append(f"Сегодняшний день: {day_label}.")
         elif day_index:
-            text_lines.append(f"Тренировочный день: День {day_index}.")
+            text_lines.append(f"Сегодняшний день: День {day_index}.")
 
         completions = await get_active_day_completions(user_id)
         cheer = format_reminder_cheer(len(completions))
@@ -7012,6 +7012,7 @@ def _schedule_reminder_job(
         dow=dow_int,
         hh=hh,
         mm=mm,
+        day_no=day_no,
     )
     return job_id
 
@@ -7188,9 +7189,15 @@ async def _rem_fire(context):
     dow: int = int(data["dow"])
     hh: int = int(data["hh"])
     mm: int = int(data["mm"])
+    day_no: int | None
+    try:
+        day_no = int(data.get("day_no")) if data.get("day_no") is not None else None
+    except (TypeError, ValueError):
+        day_no = None
     kind: str = data.get("kind", "workout_reminder")
 
     # 1) удалить прошлое напоминание (сначала из БД, потом из памяти)
+    await purge_chat_history(context.bot, chat_id)
     prev_db = _rem_try_db_get_last_msg(user_id, kind)
     for mid in {prev_db, _REM_LAST_MSG.get(chat_id)}:
         if not mid:
@@ -7204,7 +7211,12 @@ async def _rem_fire(context):
     # Здесь только вызов отправки и сохранение message_id.
     try:
         # если в проекте есть готовая функция, формирующая текст/kb напоминания — используй её.
-        text, kb = await build_workout_reminder(context.bot, user_id)
+        text, kb = await build_workout_reminder(
+            context.bot,
+            user_id,
+            day_index=day_no or dow,
+            tz_name=tz_name,
+        )
         msg = await context.bot.send_message(chat_id=chat_id, text=text, reply_markup=kb)
     except Exception:
         # Фолбэк: минимальное уведомление (на случай, если Codex не нашёл сборку)
@@ -7214,6 +7226,7 @@ async def _rem_fire(context):
         msg = await context.bot.send_message(chat_id=chat_id, text="⏰ Время тренировки!", reply_markup=kb)
 
     _REM_LAST_MSG[chat_id] = msg.message_id
+    remember_message(msg.chat_id, msg.message_id)
     _rem_try_db_set_last_msg(user_id, msg.message_id, kind)
 
     # 3) перепланировать следующий запуск (ровно через неделю в тот же локальный момент)
@@ -7238,7 +7251,17 @@ def _rem_clear_user_jobs(app, user_id: int):
                 job.remove()
 
 
-def _rem_schedule_once(app, *, chat_id: int, user_id: int, tz_name: str, dow: int, hh: int, mm: int):
+def _rem_schedule_once(
+    app,
+    *,
+    chat_id: int,
+    user_id: int,
+    tz_name: str,
+    dow: int,
+    hh: int,
+    mm: int,
+    day_no: int | None = None,
+):
     """Поставить одноразовую джобу на ближайший слот по локальному времени пользователя."""
     now_local = _dt.now(_Z(tz_name))
     fire_at = _rem_next_occurrence(tz_name, dow, hh, mm, after=now_local)
@@ -7247,7 +7270,16 @@ def _rem_schedule_once(app, *, chat_id: int, user_id: int, tz_name: str, dow: in
         _rem_fire,
         when=delay,
         name=_rem_job_id(user_id, dow, hh, mm),
-        data={"chat_id": chat_id, "user_id": user_id, "tz": tz_name, "dow": dow, "hh": hh, "mm": mm, "kind": "workout_reminder"},
+        data={
+            "chat_id": chat_id,
+            "user_id": user_id,
+            "tz": tz_name,
+            "dow": dow,
+            "hh": hh,
+            "mm": mm,
+            "kind": "workout_reminder",
+            "day_no": day_no,
+        },
         chat_id=chat_id,
         job_kwargs={"misfire_grace_time": 600, "coalesce": True, "max_instances": 1},
     )
