@@ -66,6 +66,22 @@ class DayCompletionTests(unittest.IsolatedAsyncioTestCase):
         completions = await bot.get_active_day_completions(user_id)
         self.assertEqual(set(), completions)
 
+    async def test_completions_persist_two_days_without_reminders(self):
+        user_id = await db.get_or_create_user(8002, "persistuser")
+        now = datetime.now(UTC)
+        recent = now - timedelta(days=1, hours=23)
+        await db.mark_day_completed(user_id, 1, recent.isoformat())
+        completions = await bot.get_active_day_completions(user_id)
+        self.assertEqual({1}, completions)
+
+    async def test_completions_reset_after_two_days_without_reminders(self):
+        user_id = await db.get_or_create_user(8003, "timeoutuser")
+        now = datetime.now(UTC)
+        past = now - timedelta(days=2, hours=1)
+        await db.mark_day_completed(user_id, 1, past.isoformat())
+        completions = await bot.get_active_day_completions(user_id)
+        self.assertEqual(set(), completions)
+
 
 if __name__ == "__main__":
     unittest.main()
