@@ -289,7 +289,7 @@ SUBSCRIPTION_PLANS = {
     },
 }
 
-DAY_COMPLETION_TTL = timedelta(hours=6)
+DAY_COMPLETION_TTL = timedelta(days=2)
 ORDINAL_WORDS = {
     1: "первая",
     2: "вторая",
@@ -466,7 +466,7 @@ async def _should_clear_day_completions(
         return False
     if now - latest >= DAY_COMPLETION_TTL:
         return True
-    return now_local.date() != latest_local.date()
+    return False
 
 
 async def get_active_day_completions(user_id: int) -> set[int]:
