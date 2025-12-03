@@ -1,6 +1,6 @@
 import aiosqlite, asyncio
 import json
-from datetime import datetime, timedelta, UTC
+from datetime import datetime, timedelta, timezone, UTC
 import secrets
 from contextlib import asynccontextmanager
 from typing import Sequence
@@ -159,6 +159,70 @@ async def connect_db():
     async with _db_semaphore:
         async with aiosqlite.connect(DB_PATH) as db:
             yield db
+
+
+# Глобальная статистика для /stats — всё из текущих таблиц.
+async def fetch_global_stats(now_iso: str | None = None) -> dict:
+    now = datetime.now(timezone.utc) if now_iso is None else datetime.fromisoformat(now_iso)
+    day30 = (now - timedelta(days=30)).isoformat()
+    day365 = (now - timedelta(days=365)).isoformat()
+
+    async with connect_db() as db:
+        stats: dict[str, object] = {}
+
+        # Пользователи
+        cur = await db.execute("SELECT COUNT(*) FROM users")
+        stats["users_total"] = int((await cur.fetchone())[0])
+        cur = await db.execute("SELECT COUNT(*) FROM users WHERE created_at >= ?", (day30,))
+        stats["users_last_30d"] = int((await cur.fetchone())[0])
+        cur = await db.execute("SELECT COUNT(*) FROM users WHERE created_at >= ?", (day365,))
+        stats["users_last_365d"] = int((await cur.fetchone())[0])
+        cur = await db.execute("SELECT COUNT(*) FROM users WHERE COALESCE(notifications_enabled,1)=1")
+        stats["users_notifications_on"] = int((await cur.fetchone())[0])
+
+        # Подписки
+        cur = await db.execute("SELECT COUNT(*) FROM subscriptions WHERE status='active' AND expires_at >= ?", (now.isoformat(),))
+        stats["subs_active"] = int((await cur.fetchone())[0])
+        cur = await db.execute("SELECT COUNT(*) FROM subscriptions WHERE status='active'")
+        stats["subs_total_records_active_flag"] = int((await cur.fetchone())[0])
+
+        # Тренировки/сеты
+        cur = await db.execute("SELECT COUNT(*) FROM sessions")
+        sessions_total = int((await cur.fetchone())[0])
+        stats["sessions_total"] = sessions_total
+        cur = await db.execute("SELECT COUNT(DISTINCT date) FROM sessions")
+        days_total = int((await cur.fetchone())[0]) or 1
+        stats["avg_sessions_per_day_global"] = round(sessions_total / days_total, 3)
+        cur = await db.execute("SELECT COUNT(*) FROM sets")
+        sets_total = int((await cur.fetchone())[0])
+        stats["sets_total"] = sets_total
+        cur = await db.execute("SELECT COUNT(DISTINCT session_id) FROM sets")
+        set_sessions = int((await cur.fetchone())[0]) or 1
+        stats["avg_sets_per_session"] = round(sets_total / set_sessions, 3)
+
+        # Топ-упражнений по количеству сетов
+        cur = await db.execute(
+            """
+            SELECT e.name, COUNT(*) AS c
+            FROM sets s
+            JOIN user_exercises ue ON ue.id = s.user_exercise_id
+            JOIN exercises e ON e.id = ue.exercise_id
+            GROUP BY e.name
+            ORDER BY c DESC
+            LIMIT 10
+        """
+        )
+        stats["top_exercises_by_sets"] = [{"name": r[0], "sets": int(r[1])} for r in await cur.fetchall()]
+
+        # Тренер/подопечный
+        cur = await db.execute("SELECT COUNT(*) FROM trainer_links WHERE status='accepted'")
+        accepted = int((await cur.fetchone())[0])
+        cur = await db.execute("SELECT COUNT(*) FROM trainer_links")
+        links_all = int((await cur.fetchone())[0])
+        stats["trainer_links_total"] = links_all
+        stats["trainer_links_accepted"] = accepted
+
+    return stats
 
 
 async def _column_exists(db, table: str, column: str) -> bool:

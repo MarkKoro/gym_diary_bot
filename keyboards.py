@@ -125,6 +125,21 @@ def main_menu_kb(
     return InlineKeyboardMarkup(rows)
 
 
+def instruction_row(url: str | None) -> list[list[InlineKeyboardButton]]:
+    if not url:
+        return []
+    return [[InlineKeyboardButton("📖 Инструкция", url=url)]]
+
+
+def onboarding_tips_kb(ok_cb: str, url: str | None) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = [
+        [InlineKeyboardButton("Ясно, понял", callback_data=ok_cb)]
+    ]
+    if url:
+        rows.append([InlineKeyboardButton("📖 Инструкция", url=url)])
+    return InlineKeyboardMarkup(rows)
+
+
 def week_count_kb() -> InlineKeyboardMarkup:
     rows = []
     for i in range(1, 8):

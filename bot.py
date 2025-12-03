@@ -1,6 +1,7 @@
 import asyncio
 import contextlib
 import logging
+import json
 import math
 import random
 import secrets
@@ -105,6 +106,8 @@ from keyboards import (
     week_count_kb,
     reminder_prompt_kb,
     trainer_manage_trainee_kb,
+    onboarding_tips_kb,
+    instruction_row,
 )
 from settings import (
     TG_TOKEN,
@@ -115,6 +118,7 @@ from settings import (
     YK_TOKEN,
     SUBSCRIPTION_CHAT,
     BOT_PUBLIC_LINK,
+    INSTRUCTION_URL,
 )
 from db import (
     init_db,
@@ -233,9 +237,10 @@ from db import (
     get_subscription_prompt_total,
     set_subscription_prompt_total,
     get_latest_subscription,
+    fetch_global_stats,
 )
 from text_utils import normalize_whitespace
-from ui_texts import t, e
+from ui_texts import t, e, ONBOARDING_TIPS
 
 # Последний message_id напоминания по chat_id (для удаления перед новым)
 _REM_LAST_MSG: dict[int, int] = {}
@@ -902,6 +907,9 @@ async def compose_main_menu(
             text = "\n".join([text, "", *notice_lines])
     profile = await _fetch_trainer_profile(user_id)
     is_trainer = bool(profile and profile[0])
+    extra_instruction_rows = instruction_row(INSTRUCTION_URL)
+    if extra_rows:
+        extra_instruction_rows.extend(extra_rows)
     kb = main_menu_kb(
         days,
         SUPPORT_DEEPLINK,
@@ -909,7 +917,7 @@ async def compose_main_menu(
         show_trainer=is_trainer,
         show_support=show_support,
         include_settings=include_settings,
-        extra_rows=extra_rows,
+        extra_rows=extra_instruction_rows,
     )
     return text, kb, prefs
 
@@ -7425,6 +7433,21 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 
+async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    if not user:
+        return
+    user_id = user.id
+    if int(user_id) not in ADMIN_IDS:
+        return
+    try:
+        data = await fetch_global_stats(None)
+        text = "<b>Stats</b>\n<code>" + json.dumps(data, ensure_ascii=False, indent=2) + "</code>"
+        await update.effective_message.reply_html(text)
+    except Exception as e:
+        await update.effective_message.reply_text(f"stats error: {e!s}")
+
+
 async def splash_reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     chat = update.effective_chat
@@ -8323,6 +8346,16 @@ async def advance_day(q, context, user_id: int, next_day: int):
         await show_screen(q, context, "Присылать напоминания перед тренировками?", reminders_kb(), user_id)
 
 
+async def _wizard_finish_show_tips(q, context, user_id: int):
+    await show_screen(
+        q,
+        context,
+        ONBOARDING_TIPS,
+        onboarding_tips_kb("wiz:tips:ok", INSTRUCTION_URL),
+        user_id,
+    )
+
+
 async def finalize_wizard(
     q,
     context: ContextTypes.DEFAULT_TYPE,
@@ -8806,13 +8839,12 @@ async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAUL
                 )
                 await show_screen(q, context, f'У тебя было заявлено {n} тренировок. Завершить на {day}?', kb, user_id)
             else:
-                _, menu_kb, _ = await compose_main_menu(user_id)
-                await show_screen(q, context, 'Настройка завершена.', menu_kb, user_id)
-                await finalize_wizard(q, context, user_id, chat_id)
+                await _wizard_finish_show_tips(q, context, user_id)
             return
         if data == "wiz:finish_yes":
-            _, menu_kb, _ = await compose_main_menu(user_id)
-            await show_screen(q, context, 'Настройка завершена.', menu_kb, user_id)
+            await _wizard_finish_show_tips(q, context, user_id)
+            return
+        if data == "wiz:tips:ok":
             await finalize_wizard(q, context, user_id, chat_id)
             return
         if data == "wiz:finish_no":
@@ -8890,14 +8922,7 @@ async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAUL
                     user_id,
                 )
             else:
-                await show_screen(
-                    q,
-                    context,
-                    "Настройка завершена. Напоминания можно включить позже в настройках.",
-                    None,
-                    user_id,
-                )
-                await finalize_wizard(q, context, user_id, chat_id)
+                await _wizard_finish_show_tips(q, context, user_id)
             return
         if data == "wiz:reminders:back":
             context.user_data.pop("reminder_skip_tz", None)
@@ -8935,14 +8960,7 @@ async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAUL
                     text = f"Часовой пояс обновлён: {tz_label}.\n\n{overview}"
                     await show_screen(q, context, text, reminders_edit_kb(enabled), user_id)
                 elif mode == "final":
-                    await show_screen(
-                        q,
-                        context,
-                        "Часовой пояс сохранён. Основные настройки завершены.",
-                        None,
-                        user_id,
-                    )
-                    await finalize_wizard(q, context, user_id, chat_id)
+                    await _wizard_finish_show_tips(q, context, user_id)
                 else:
                     context.user_data["reminder_day"] = day_no
                     await show_screen(
@@ -9058,14 +9076,7 @@ async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAUL
                 await show_screen(q, context, 'Настройки:', kb, user_id)
             else:
                 _, menu_kb, _ = await compose_main_menu(user_id)
-                await show_screen(
-                    q,
-                    context,
-                    'Настройка завершена.',
-                    menu_kb,
-                    user_id,
-                )
-                await finalize_wizard(q, context, user_id, chat_id)
+                await _wizard_finish_show_tips(q, context, user_id)
             return
     finally:
         message = getattr(q, "message", None)
@@ -13311,6 +13322,7 @@ def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("splash_reset", splash_reset))
     app.add_handler(CommandHandler("broadcast", broadcast_command))
+    app.add_handler(CommandHandler("stats", cmd_stats))
     app.add_handler(CommandHandler("cancel", cancel_command))
     app.add_handler(CommandHandler(("grant", "grunt"), grant_command))
     app.add_handler(CallbackQueryHandler(on_subscription_menu, pattern="^menu:subscription$"))
