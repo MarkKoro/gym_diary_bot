@@ -8470,7 +8470,9 @@ async def prompt_day_mode(q, context, user_id: int, day: int):
     kb = muscle_groups_kb(day, selected_groups, custom)
     await show_screen(q, context, text, kb, user_id)
 
-async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAULT_TYPE):
+async def wizard_router(
+    update: Update, q, data: str, user_id: int, context: ContextTypes.DEFAULT_TYPE
+):
     message = getattr(q, "message", None)
     chat = getattr(message, "chat", None) if message else None
     chat_id = getattr(chat, "id", None) if chat else getattr(message, "chat_id", None)
@@ -8481,11 +8483,46 @@ async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAUL
             pass
     try:
         if data == "wiz:intro:ok":
-            prefs = await load_ui_preferences(user_id)
-            prompt = "Сколько тренировок в неделю?"
-            kb = week_count_kb()
-            prompt_text, prompt_kb = prepare_ui_output(prompt, kb, prefs)
-            await show_screen(q, context, prompt_text, prompt_kb, user_id)
+            # 1) Снимаем клавиатуру под видео (чтобы не спамили повторы)
+            try:
+                if q and q.message:
+                    await q.answer()
+                    await q.message.edit_reply_markup(reply_markup=None)
+            except Exception:
+                pass
+
+            chat_id = q.message.chat_id if (q and q.message) else update.effective_chat.id
+            user = update.effective_user
+            user_id = user.id if user else None
+
+            # 2) Удаляем старое «привет»-сообщение, если мы его сохраняли
+            tup = context.user_data.get("wizard_intro_message")
+            if tup and isinstance(tup, tuple) and len(tup) == 2:
+                old_chat_id, old_msg_id = tup
+                try:
+                    await context.bot.delete_message(old_chat_id, old_msg_id)
+                except Exception:
+                    pass
+                context.user_data.pop("wizard_intro_message", None)
+
+            # 3) Пересылаем «привет» и первый вопрос визарда как два новых сообщения
+            #    (поведение становится идентичным старому онбордингу, только после видео)
+            try:
+                prefs = await load_ui_preferences(user_id)
+                intro_text, _ = prepare_ui_output(t("ONBOARDING_INTRO"), None, prefs)
+                await context.bot.send_message(chat_id, intro_text)
+
+                prompt = "Сколько тренировок в неделю?"
+                kb = week_count_kb()
+                prompt_text, prompt_kb = prepare_ui_output(prompt, kb, prefs)
+                await context.bot.send_message(chat_id, prompt_text, reply_markup=prompt_kb)
+
+                # отметим, что дальше мы в мастер-режиме «одно сообщение»
+                context.user_data["wizard_onboarding"] = True
+            except Exception as e:
+                # Фолбэк: хотя бы не уронить поток
+                await context.bot.send_message(chat_id, "Давай продолжим: сколько тренировок в неделю?", reply_markup=week_count_kb())
+
             return
         if data == "wiz:sub:verify":
             context.user_data["wizard_onboarding"] = True
@@ -10494,7 +10531,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         if data.startswith("wiz:"):
-            await wizard_router(q, data, target_user_id, context)
+            await wizard_router(update, q, data, target_user_id, context)
             return
 
         if data.startswith("promo:channel:"):
