@@ -238,6 +238,8 @@ from db import (
     set_subscription_prompt_total,
     get_latest_subscription,
     fetch_global_stats,
+    get_intro_video,
+    set_intro_video,
 )
 from text_utils import normalize_whitespace
 from ui_texts import t, e, ONBOARDING_TIPS
@@ -269,6 +271,7 @@ BROADCAST_STATE_KEY = "broadcast_state"
 UTC = timezone.utc
 SUBSCRIPTION_PAYMENT_KEY = "subscription_payment"
 EXERCISE_NOTE_INPUT_KEY = "awaiting_exercise_note"
+INTRO_AWAIT_KEY = "await_intro_video"
 YK_PROVIDER = "yookassa"
 
 RESOLVE_TARGET_USER_KEY = "resolved_target_user"
@@ -7304,24 +7307,39 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     settings = await fetch_user_settings(user_id)
     prefs = await load_ui_preferences(user_id)
     if not settings or not settings[1]:
+        chat = update.effective_chat
+        context.user_data["wizard_onboarding"] = True
+
+        prefs = await load_ui_preferences(user_id)
+        intro_text, _ = prepare_ui_output(t("ONBOARDING_INTRO"), None, prefs)
         prompt = "Сколько тренировок в неделю?"
         kb = week_count_kb()
         prompt_text, prompt_kb = prepare_ui_output(prompt, kb, prefs)
-        chat = update.effective_chat
-        context.user_data["wizard_onboarding"] = True
-        intro_text, _ = prepare_ui_output(t("ONBOARDING_INTRO"), None, prefs)
+
         intro_msg = None
         if chat is not None:
             intro_msg = await context.bot.send_message(chat.id, intro_text)
-            await context.bot.send_message(chat.id, prompt_text, reply_markup=prompt_kb)
         elif update.message:
             intro_msg = await update.message.reply_text(intro_text)
-            await update.message.reply_text(prompt_text, reply_markup=prompt_kb)
+
         if intro_msg is not None:
             context.user_data["wizard_intro_message"] = (
                 intro_msg.chat_id,
                 intro_msg.message_id,
             )
+
+        video_id = await get_intro_video()
+        if video_id:
+            if chat is not None:
+                await context.bot.send_video(chat.id, video_id, reply_markup=intro_video_ack_kb())
+            else:
+                await update.message.reply_video(video_id, reply_markup=intro_video_ack_kb())
+            return
+
+        if chat is not None:
+            await context.bot.send_message(chat.id, prompt_text, reply_markup=prompt_kb)
+        else:
+            await update.message.reply_text(prompt_text, reply_markup=prompt_kb)
         return
     text, kb, prefs = await compose_main_menu(user_id, prefs)
     text, kb = prepare_ui_output(text, kb, prefs)
@@ -7369,6 +7387,12 @@ def broadcast_photo_manage_markup(has_photo: bool) -> InlineKeyboardMarkup:
 def broadcast_return_markup() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [[InlineKeyboardButton("Ясно, вернуть меню", callback_data=MAIL_RETURN_CALLBACK)]]
+    )
+
+
+def intro_video_ack_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [[InlineKeyboardButton("Ознакомился — продолжаем", callback_data="wiz:intro:ok")]]
     )
 
 
@@ -7431,6 +7455,43 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             update.message.chat_id,
             "Пришли текст сообщения для рассылки. После текста можно добавить фотографию. Отправь /cancel, чтобы отменить рассылку.",
         )
+
+
+async def cmd_set_intro(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    if not user or user.id not in ADMIN_IDS:
+        return
+    context.user_data[INTRO_AWAIT_KEY] = True
+    await update.message.reply_text(
+        "Пришли видео-гайд одним сообщением (файл/видео). Я сохраню file_id и буду показывать новым пользователям в начале онбординга."
+    )
+
+
+async def capture_intro_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Ловит видео от админа, если он ранее вызвал команду и мы ждём ролик."""
+
+    user = update.effective_user
+    if not user or user.id not in ADMIN_IDS:
+        return
+    if not context.user_data.get(INTRO_AWAIT_KEY):
+        return
+
+    file_id = None
+    msg = update.message
+    if msg and msg.video:
+        file_id = msg.video.file_id
+    elif msg and msg.document and msg.document.mime_type and msg.document.mime_type.startswith("video/"):
+        file_id = msg.document.file_id
+
+    if not file_id:
+        await msg.reply_text("Не вижу видео. Пришли ролик обычным сообщением (как видео или видео-документ).")
+        return
+
+    await set_intro_video(file_id)
+    context.user_data.pop(INTRO_AWAIT_KEY, None)
+    await msg.reply_text(
+        "✅ Видео сохранено. Теперь оно будет показано всем новым пользователям перед началом онбординга."
+    )
 
 
 async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -8419,6 +8480,13 @@ async def wizard_router(q, data: str, user_id: int, context: ContextTypes.DEFAUL
         except TelegramError:
             pass
     try:
+        if data == "wiz:intro:ok":
+            prefs = await load_ui_preferences(user_id)
+            prompt = "Сколько тренировок в неделю?"
+            kb = week_count_kb()
+            prompt_text, prompt_kb = prepare_ui_output(prompt, kb, prefs)
+            await show_screen(q, context, prompt_text, prompt_kb, user_id)
+            return
         if data == "wiz:sub:verify":
             context.user_data["wizard_onboarding"] = True
             await show_screen(
@@ -13320,11 +13388,13 @@ def main():
         _on_job_event, EVENT_JOB_EXECUTED | EVENT_JOB_MISSED | EVENT_JOB_ERROR
     )
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("set_intro", cmd_set_intro))
     app.add_handler(CommandHandler("splash_reset", splash_reset))
     app.add_handler(CommandHandler("broadcast", broadcast_command))
     app.add_handler(CommandHandler("stats", cmd_stats))
     app.add_handler(CommandHandler("cancel", cancel_command))
     app.add_handler(CommandHandler(("grant", "grunt"), grant_command))
+    app.add_handler(MessageHandler(filters.VIDEO | filters.Document.VIDEO, capture_intro_video))
     app.add_handler(CallbackQueryHandler(on_subscription_menu, pattern="^menu:subscription$"))
     app.add_handler(CallbackQueryHandler(on_subscription_choose, pattern="^sub:"))
     app.add_handler(CallbackQueryHandler(on_subscription_back, pattern="^back:main$"))
