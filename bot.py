@@ -7392,7 +7392,7 @@ def broadcast_return_markup() -> InlineKeyboardMarkup:
 
 def intro_video_ack_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
-        [[InlineKeyboardButton("Ознакомился — продолжаем", callback_data="wiz:intro:ok")]]
+        [[InlineKeyboardButton("Продолжаем", callback_data="wiz:intro:ok")]]
     )
 
 
