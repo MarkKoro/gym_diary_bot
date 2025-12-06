@@ -8510,7 +8510,11 @@ async def wizard_router(
             try:
                 prefs = await load_ui_preferences(user_id)
                 intro_text, _ = prepare_ui_output(t("ONBOARDING_INTRO"), None, prefs)
-                await context.bot.send_message(chat_id, intro_text)
+                intro_msg = await context.bot.send_message(chat_id, intro_text)
+                context.user_data["wizard_intro_message"] = (
+                    intro_msg.chat_id,
+                    intro_msg.message_id,
+                )
 
                 prompt = "Сколько тренировок в неделю?"
                 kb = week_count_kb()
