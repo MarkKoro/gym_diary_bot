@@ -3,7 +3,7 @@ import json
 from datetime import datetime, timedelta, timezone, UTC
 import secrets
 from contextlib import asynccontextmanager
-from typing import Sequence
+from typing import Optional, Sequence
 from settings import DB_PATH, TRIAL_DAYS, DB_POOL_SIZE
 from kb_catalog import KB_EXERCISE_NAMES
 
@@ -159,6 +159,45 @@ async def connect_db():
     async with _db_semaphore:
         async with aiosqlite.connect(DB_PATH) as db:
             yield db
+
+
+class _DBPoolWrapper:
+    @asynccontextmanager
+    async def acquire(self):
+        async with connect_db() as db:
+            yield db
+
+
+_pool = _DBPoolWrapper()
+
+
+async def set_app_meta(key: str, value: str) -> None:
+    async with _pool.acquire() as db:
+        await db.execute(
+            "INSERT INTO app_meta(key, value) VALUES (?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            (key, value),
+        )
+        await db.commit()
+
+
+async def get_app_meta(key: str) -> Optional[str]:
+    async with _pool.acquire() as db:
+        cur = await db.execute("SELECT value FROM app_meta WHERE key = ?", (key,))
+        row = await cur.fetchone()
+        return row[0] if row else None
+
+
+# Специализации для вступительного видео
+INTRO_VIDEO_KEY = "intro_video_file_id"
+
+
+async def set_intro_video(file_id: str) -> None:
+    await set_app_meta(INTRO_VIDEO_KEY, file_id)
+
+
+async def get_intro_video() -> Optional[str]:
+    return await get_app_meta(INTRO_VIDEO_KEY)
 
 
 # Глобальная статистика для /stats — всё из текущих таблиц.
@@ -542,6 +581,11 @@ async def init_db():
             trainer_label TEXT,
             trainee_label TEXT,
             created_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS app_meta (
+            key TEXT PRIMARY KEY,
+            value TEXT
         );
         """)
         try:
