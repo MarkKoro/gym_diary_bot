@@ -293,6 +293,23 @@ class ProgressFormattingTests(unittest.TestCase):
             "1️⃣ 30 повт. · 45 сек 2️⃣ 30 повт. · 45 сек 3️⃣ 20 повт. · 30 сек",
         )
 
+    def test_format_sets_history_uses_number_emojis(self):
+        from bot import format_sets_history
+
+        sets = [(1, 10, 0, 40.0), (2, 10, 0, 40.0), (3, 8, 0, 45.0)]
+        text = format_sets_history(sets, with_weight=True, kind="reps")
+        self.assertEqual(
+            text,
+            "1️⃣ 10 повт. при 40 кг 2️⃣ 10 повт. при 40 кг 3️⃣ 8 повт. при 45 кг",
+        )
+
+    def test_format_sets_history_skips_warmups_for_duration(self):
+        from bot import format_sets_history
+
+        sets = [(1, 30, 45, 0.0, 0), (2, 5, 10, 0.0, 1), (3, 25, 60, 0.0, 0)]
+        text = format_sets_history(sets, with_weight=False, kind="duration")
+        self.assertEqual(text, "1️⃣ 30 повт. · 45 сек 2️⃣ 25 повт. · 60 сек")
+
 
 if __name__ == "__main__":
     unittest.main()

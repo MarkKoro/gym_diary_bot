@@ -1225,6 +1225,34 @@ def format_progress_sets_details(
     return " ".join(parts)
 
 
+def format_sets_history(
+    sets: list[tuple], *, with_weight: bool, kind: str = "reps"
+) -> str:
+    details: list[tuple[int, int, float]] = []
+    for entry in sets:
+        if len(entry) >= 5:
+            _no, reps, seconds, weight, warm = entry[:5]
+            if warm:
+                continue
+        elif len(entry) >= 4:
+            _no, reps, seconds, weight = entry[:4]
+        elif len(entry) >= 3:
+            _no, reps, weight = entry[:3]
+            seconds = 0
+        else:
+            continue
+        details.append(
+            (
+                max(_safe_int(reps), 0),
+                max(_safe_int(seconds), 0),
+                _safe_float(weight),
+            )
+        )
+    if not details:
+        return ""
+    return format_progress_sets_details(details, with_weight, kind)
+
+
 def format_compact_sets_value(
     sets: int, reps: int, seconds: int, weight: float, with_weight: bool, kind: str = "reps"
 ) -> str:
@@ -1445,14 +1473,14 @@ def format_kb_summary(
     kind: str = "reps",
 ) -> str:
     if current_sets:
-        detailed = summarize_previous_sets(
+        detailed = format_sets_history(
             current_sets, with_weight=True, kind=kind
         )
         if detailed:
             return f"{t('MADE')} {detailed}"
         return f"{t('MADE')} {format_kb_done(current_sets, kind=kind)}"
     if last_sets:
-        return f"{t('LAST_TIME')}: {format_kb_previous(last_sets, kind=kind)}"
+        return f"{t('LAST_TIME')}: {format_sets_history(last_sets, with_weight=True, kind=kind)}"
     return f"{t('MADE')} 0 сетов"
 
 
@@ -5603,9 +5631,11 @@ async def fetch_day_sheet_data(
             summary["kind"] = kind
             entry["today_summary"] = summary
             if resolved_group == "kb":
-                entry["prev_summary"] = format_kb_previous(last_sets, kind=kind)
+                entry["prev_summary"] = format_sets_history(
+                    last_sets, with_weight=weight_enabled, kind=kind
+                )
             else:
-                entry["prev_summary"] = summarize_previous_sets(
+                entry["prev_summary"] = format_sets_history(
                     last_sets, with_weight=weight_enabled, kind=kind
                 )
         data.append(entry)
@@ -6194,11 +6224,15 @@ async def build_summary_map(
         if resolved == "kb":
             work_sets = filter_work_sets(current_sets_full)
             if work_sets:
-                last_label = format_kb_previous(work_sets, kind=kind)
+                last_label = format_sets_history(
+                    work_sets, with_weight=weight_enabled, kind=kind
+                )
             else:
                 last_sets = await fetch_last_session_sets(user_id, day, ue_id, today)
                 if last_sets:
-                    last_label = format_kb_previous(last_sets, kind=kind)
+                    last_label = format_sets_history(
+                        last_sets, with_weight=weight_enabled, kind=kind
+                    )
             if (not last_label or last_label == "—") and baseline:
                 plan_value = format_kb_plan(baseline, kind=kind)
                 if plan_value and plan_value != "—":
@@ -6246,14 +6280,14 @@ async def build_summary_map(
         else:
             work_sets = filter_work_sets(current_sets_full)
             if work_sets:
-                last_label = summarize_previous_sets(
+                last_label = format_sets_history(
                     work_sets, with_weight=weight_enabled, kind=kind
                 )
             if not last_label:
                 last_sets = await fetch_last_session_sets(
                     user_id, day, ue_id, today
                 )
-                last_label = summarize_previous_sets(
+                last_label = format_sets_history(
                     last_sets, with_weight=weight_enabled, kind=kind
                 )
             if not last_label and baseline:
@@ -6485,9 +6519,13 @@ async def render_exercise_view(
     title = f"{name} · {type_label}"
 
     if group == "kb":
-        prev_text = format_kb_previous(last_sets, kind=kind) or ""
+        prev_text = format_sets_history(
+            last_sets, with_weight=weight_enabled, kind=kind
+        )
         if (not prev_text or prev_text == "—") and work_sets:
-            prev_text = format_kb_previous(work_sets, kind=kind)
+            prev_text = format_sets_history(
+                work_sets, with_weight=weight_enabled, kind=kind
+            )
         if not prev_text or prev_text == "—":
             prev_text = t("NOT_FIXED")
         summary = build_strength_summary_from_sets(sets)
@@ -6592,11 +6630,11 @@ async def render_exercise_view(
         prev_text = value_text
         done_text = value_text
     else:
-        prev_text = summarize_previous_sets(
+        prev_text = format_sets_history(
             last_sets, with_weight=weight_enabled, kind=kind
         )
         if not prev_text and work_sets:
-            prev_text = summarize_previous_sets(
+            prev_text = format_sets_history(
                 work_sets, with_weight=weight_enabled, kind=kind
             )
         if not prev_text:
