@@ -1453,7 +1453,7 @@ def exercise_actions_kb(
     if with_weight and editing_allowed:
         positive_row: list[InlineKeyboardButton] = []
         negative_row: list[InlineKeyboardButton] = []
-        for step in (0.5, 3.0, 10.0):
+        for step in (0.5, 3.0, 10.0, 25.0):
             compact, detailed = _format_major_weight_label(step, True)
             positive_row.append(
                 InlineKeyboardButton(

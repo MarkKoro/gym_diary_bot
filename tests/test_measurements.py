@@ -278,14 +278,20 @@ class ProgressFormattingTests(unittest.TestCase):
 
         details = [(10, 0, 40.0), (10, 0, 40.0), (8, 0, 45.0)]
         text = format_progress_sets_details(details, with_weight=True, kind="reps")
-        self.assertEqual(text, "2× 10 повт. при 40 кг; 8 повт. при 45 кг")
+        self.assertEqual(
+            text,
+            "1️⃣ 10 повт. при 40 кг 2️⃣ 10 повт. при 40 кг 3️⃣ 8 повт. при 45 кг",
+        )
 
     def test_format_progress_sets_details_without_weight(self):
         from bot import format_progress_sets_details
 
         details = [(30, 45, 0.0), (30, 45, 0.0), (20, 30, 0.0)]
         text = format_progress_sets_details(details, with_weight=False, kind="duration")
-        self.assertEqual(text, "2× 30 повт. · 45 сек; 20 повт. · 30 сек")
+        self.assertEqual(
+            text,
+            "1️⃣ 30 повт. · 45 сек 2️⃣ 30 повт. · 45 сек 3️⃣ 20 повт. · 30 сек",
+        )
 
 
 if __name__ == "__main__":
