@@ -1191,29 +1191,38 @@ def format_sets_value(
     return f"{base} при {format_weight_value(weight_value)} кг"
 
 
+def _number_emoji(value: int) -> str:
+    mapping = {
+        0: "0️⃣",
+        1: "1️⃣",
+        2: "2️⃣",
+        3: "3️⃣",
+        4: "4️⃣",
+        5: "5️⃣",
+        6: "6️⃣",
+        7: "7️⃣",
+        8: "8️⃣",
+        9: "9️⃣",
+        10: "🔟",
+    }
+    return mapping.get(value, f"{value}️⃣")
+
+
 def format_progress_sets_details(
     details: list[tuple[int, int, float]], with_weight: bool, kind: str
 ) -> str:
     if not details:
         return "—"
-    enumerated = [
-        (index + 1, reps, seconds, weight)
-        for index, (reps, seconds, weight) in enumerate(details)
-    ]
-    grouped = _compress_flex_triplets(enumerated, with_weight=with_weight, kind=kind)
     parts: list[str] = []
-    for entry in grouped:
-        reps_value = int(entry["reps"])
-        seconds_value = int(entry.get("seconds", 0))
-        weight_value = float(entry["weight"])
+    for index, (reps, seconds, weight) in enumerate(details, start=1):
+        reps_value = int(reps)
+        seconds_value = int(seconds)
+        weight_value = float(weight)
         text = format_metric_value(reps_value, seconds_value, kind)
         if with_weight and weight_value > 0:
             text = f"{text} при {format_weight_value(weight_value)} кг"
-        count = int(entry["count"])
-        if count > 1:
-            text = f"{count}× {text}"
-        parts.append(text)
-    return "; ".join(parts) if parts else "—"
+        parts.append(f"{_number_emoji(index)} {text}")
+    return " ".join(parts)
 
 
 def format_compact_sets_value(
@@ -3776,7 +3785,7 @@ def _build_flex_fill_keyboard(state: FillEditorState) -> InlineKeyboardMarkup:
         weight_steps = (
             [0.5, 1, 3, 5, 10, 25, 50]
             if state.first_time
-            else [0.5, 3, 10]
+            else [0.5, 3, 10, 25]
         )
         weight_labels = [format_weight_value(step) for step in weight_steps]
         rows.append(
@@ -5871,7 +5880,7 @@ async def build_day_sheet_message(
             if with_weight:
                 plus_row: list[InlineKeyboardButton] = []
                 minus_row: list[InlineKeyboardButton] = []
-                for step in (0.5, 3.0, 10.0):
+                for step in (0.5, 3.0, 10.0, 25.0):
                     label = format_weight_value(step)
                     plus_row.append(
                         InlineKeyboardButton(
@@ -6061,8 +6070,19 @@ def format_current_training(
         empty = format_sets_value(0, 0, 0, 0.0, with_weight, kind)
         return [f"Текущая тренировка: {empty}"]
     lines = ["Текущая тренировка:"]
-    grouped = _compress_flex_entries(sets, with_weight=with_weight, kind=kind)
-    for entry in grouped:
+    entries = [
+        {
+            "start": int(no),
+            "end": int(no),
+            "count": 1,
+            "reps": _safe_int(reps),
+            "seconds": _safe_int(seconds),
+            "weight": _safe_float(weight),
+            "warm": _safe_int(warm),
+        }
+        for no, reps, seconds, weight, warm in sets
+    ]
+    for entry in entries:
         start = int(entry["start"])
         end = int(entry["end"])
         count = int(entry["count"])
@@ -6107,8 +6127,18 @@ def build_flex_session_lines(
         lines.append("Когда закончишь, нажми «Готово».")
         return lines
     lines.append("Сегодняшние подходы:")
-    grouped = _compress_flex_triplets(work_sets, with_weight=with_weight, kind=kind)
-    for entry in grouped:
+    entries = [
+        {
+            "start": int(no),
+            "end": int(no),
+            "count": 1,
+            "reps": _safe_int(reps),
+            "seconds": _safe_int(seconds),
+            "weight": _safe_float(weight),
+        }
+        for no, reps, seconds, weight in work_sets
+    ]
+    for entry in entries:
         start = int(entry["start"])
         end = int(entry["end"])
         count = int(entry["count"])
@@ -12715,22 +12745,14 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                 group = detected_group
                                 context.user_data["add_group"] = (day, group)
 
-                        async def edit_instant(text, kb):
-                            await show_screen(q, context, text, kb, target_user_id)
-
-                        started = await start_instant_baseline(
-                            context,
-                            target_user_id,
-                            day,
-                            ex_id,
-                            "day",
-                            group,
-                            edit_instant,
-                        )
-                        if started:
-                            return
                     if group:
-                        await show_day_add_exercises_view(q, target_user_id, day, group, context)
+                        prefs = await load_ui_preferences(target_user_id)
+                        await show_day_group_view(
+                            q, target_user_id, day, group, context, prefs=prefs
+                        )
+                    else:
+                        prefs = await load_ui_preferences(target_user_id)
+                        await send_day_cards_view(q, target_user_id, day, context, prefs)
                     return
                 if sub == "custom":
                     group = parts[4]
