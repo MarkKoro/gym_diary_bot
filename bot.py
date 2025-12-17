@@ -297,7 +297,7 @@ SUBSCRIPTION_PLANS = {
     },
 }
 
-DAY_COMPLETION_TTL = timedelta(days=2)
+UNSCHEDULED_COMPLETION_EXPIRY_DAYS = 5
 ORDINAL_WORDS = {
     1: "первая",
     2: "вторая",
@@ -472,9 +472,14 @@ async def _should_clear_day_completions(
         if current_week_start > latest_week_start:
             return True
         return False
-    if now - latest >= DAY_COMPLETION_TTL:
-        return True
-    return False
+    expiration_date = latest_local.date() + timedelta(
+        days=UNSCHEDULED_COMPLETION_EXPIRY_DAYS
+    )
+    expiration_local = datetime.combine(
+        expiration_date,
+        time(12, tzinfo=zone),
+    )
+    return now_local >= expiration_local
 
 
 async def get_active_day_completions(user_id: int) -> set[int]:
@@ -10721,6 +10726,8 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "",
                 "💳 Подписка — поддержка проекта и расширенный функционал (больше подопечных, без рекламных рассылок).",
                 "",
+                "✅ Убрать галочки — сбросить отметки выполненных дней, не затрагивая записанные подходы.",
+                "",
                 "📤 Поделиться результатом — сгенерировать короткий текст с вашим прогрессом, чтобы отправить его друзьям.",
             ]
             active_sub = await get_active_subscription(target_user_id)
@@ -11910,6 +11917,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "edit_day",
                 "groups",
                 "reminders",
+                "clear_completions",
             }
             if action in mutating_set_actions:
                 if not await require_edit_allowed(q, context):
@@ -12142,6 +12150,17 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             target_user_id,
                         )
                         return
+                return
+            if action == "clear_completions":
+                await clear_day_completions(target_user_id)
+                kb = await build_settings_keyboard_for_user(context, target_user_id)
+                await show_screen(
+                    q,
+                    context,
+                    "Галочки сброшены. Записи по упражнениям остаются.",
+                    kb,
+                    target_user_id,
+                )
                 return
             if action == "reminders":
                 if len(parts) == 2:

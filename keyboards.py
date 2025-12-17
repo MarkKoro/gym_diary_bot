@@ -262,6 +262,17 @@ def settings_kb(
                     )
                 ]
             )
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    dual(
+                        "✅ Убрать галочки",
+                        "Сбросить отметки выполненных дней",
+                    ),
+                    callback_data="set:clear_completions",
+                )
+            ]
+        )
     rows.append(
         [
             InlineKeyboardButton(
