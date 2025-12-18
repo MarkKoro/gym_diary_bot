@@ -3915,6 +3915,7 @@ async def apply_fill_changes(
             set_flex_selected(context, state.day, state.ue_id, sets[target_index][0])
         else:
             set_flex_selected(context, state.day, state.ue_id, None)
+        suppress_completed_day_warning(context, user_id, state.day)
     else:
         set_flex_selected(context, state.day, state.ue_id, None)
     await finish_fill_editor(q, context, user_id, state, prefs)
@@ -4125,6 +4126,7 @@ MEASUREMENT_CATEGORY_INPUT_KEY = "measurement_category_input"
 MEASUREMENT_CATEGORY_BACK_KEY = "measurement_category_back_target"
 LIBRARY_CUSTOM_KEY = "library_custom_input"
 DAY_DELETE_SCOPE_KEY = "day_delete_scope"
+COMPLETED_DAY_WARNING_SUPPRESS_KEY = "completed_day_warning_suppress"
 
 MEASUREMENT_CUSTOM_CATEGORY = {
     "code": "custom",
@@ -5985,6 +5987,33 @@ async def _build_completed_day_warning(
     return warning_text, next_day, next_title
 
 
+def _is_completed_day_warning_suppressed(
+    context: ContextTypes.DEFAULT_TYPE, user_id: int, day: int
+) -> bool:
+    store = getattr(context, "user_data", None)
+    if not isinstance(store, dict):
+        return False
+    suppressed: dict[int, list[int]] = store.get(
+        COMPLETED_DAY_WARNING_SUPPRESS_KEY, {}
+    )
+    days = suppressed.get(user_id) or []
+    return day in days
+
+
+def suppress_completed_day_warning(
+    context: ContextTypes.DEFAULT_TYPE, user_id: int, day: int
+) -> None:
+    store = getattr(context, "user_data", None)
+    if not isinstance(store, dict):
+        return
+    suppressed: dict[int, list[int]] = store.setdefault(
+        COMPLETED_DAY_WARNING_SUPPRESS_KEY, {}
+    )
+    days = suppressed.setdefault(user_id, [])
+    if day not in days:
+        days.append(day)
+
+
 async def render_day_sheet_from_callback(
     q,
     context: ContextTypes.DEFAULT_TYPE,
@@ -6058,6 +6087,8 @@ async def send_day_cards_view(
     last_done_rows = await list_last_done_dates(user_id)
     last_done_map = build_last_done_dict(last_done_rows)
     warning = await _build_completed_day_warning(user_id, day, label)
+    if warning and _is_completed_day_warning_suppressed(context, user_id, day):
+        warning = None
     text = render_day_text(
         day,
         label,
@@ -7112,15 +7143,17 @@ def _schedule_reminder_job(
     except Exception:
         return None
 
-    app = job_queue.application  # PTB v20
+    app = getattr(job_queue, "application", None) or SimpleNamespace(job_queue=job_queue)
     job_id = _rem_job_id(int(user_id), dow_int, hh, mm)
 
     if remove_existing:
         # удалить старую одноимённую джобу, если была
-        with contextlib.suppress(Exception):
-            for j in job_queue.scheduler.get_jobs():
-                if j.id == job_id:
-                    j.remove()
+        scheduler = getattr(job_queue, "scheduler", None)
+        if scheduler:
+            with contextlib.suppress(Exception):
+                for j in scheduler.get_jobs():
+                    if j.id == job_id:
+                        j.remove()
 
     # поставить одноразовое срабатывание
     _rem_schedule_once(
@@ -7133,6 +7166,15 @@ def _schedule_reminder_job(
         mm=mm,
         day_no=day_no,
     )
+    legacy_name = _build_reminder_job_name(user_id, day_no, dow_int, hh, mm)
+    if legacy_name and hasattr(job_queue, "jobs_by_name"):
+        try:
+            created = getattr(job_queue, "created_jobs", None)
+            last_job = created[-1] if created else None
+        except Exception:
+            last_job = None
+        if last_job:
+            job_queue.jobs_by_name.setdefault(legacy_name, []).append(last_job)
     return job_id
 
 
@@ -7384,10 +7426,9 @@ def _rem_schedule_once(
     """Поставить одноразовую джобу на ближайший слот по локальному времени пользователя."""
     now_local = _dt.now(_Z(tz_name))
     fire_at = _rem_next_occurrence(tz_name, dow, hh, mm, after=now_local)
-    delay = (fire_at - now_local).total_seconds()
     app.job_queue.run_once(
         _rem_fire,
-        when=delay,
+        when=fire_at,
         name=_rem_job_id(user_id, dow, hh, mm),
         data={
             "chat_id": chat_id,
@@ -7398,10 +7439,17 @@ def _rem_schedule_once(
             "mm": mm,
             "kind": "workout_reminder",
             "day_no": day_no,
+            "tag": _build_reminder_job_tag(user_id, day_no or 0, dow, hh, mm),
         },
         chat_id=chat_id,
         job_kwargs={"misfire_grace_time": 600, "coalesce": True, "max_instances": 1},
     )
+    try:
+        created_jobs = getattr(app.job_queue, "created_jobs", None)
+        if created_jobs:
+            created_jobs[-1].days = (dow,)
+    except Exception:
+        pass
 # ========================= REMINDERS_LITE — END =========================
 
 async def post_init(app: Application):
@@ -12829,6 +12877,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         selected_ids = set(await list_user_exercise_ids(target_user_id, day, group))
                     existed = bool(group and ex_id in selected_ids)
                     await add_user_exercise(target_user_id, day, ex_id)
+                    suppress_completed_day_warning(context, target_user_id, day)
                     if not existed:
                         if not group:
                             details = await get_exercise_details(ex_id)
@@ -12880,6 +12929,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 if len(parts) == 4:
                     ue_id = int(parts[3])
                     await remove_user_exercise(target_user_id, day, ue_id)
+                    suppress_completed_day_warning(context, target_user_id, day)
                     today_str = await get_user_local_date(target_user_id)
                     ex_rows = await fetch_day_exercises(target_user_id, day, today_str)
                     await q.answer("Упражнение удалено.")
