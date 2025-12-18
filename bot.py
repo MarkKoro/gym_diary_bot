@@ -5961,6 +5961,30 @@ async def build_day_sheet_message(
     return text, InlineKeyboardMarkup(kb_rows), page, total_pages
 
 
+async def _build_completed_day_warning(
+    user_id: int, day: int, current_label: str
+) -> tuple[str, int, str] | None:
+    days = await list_active_days(user_id)
+    if len(days) <= 1:
+        return None
+    completions = await get_active_day_completions(user_id)
+    if day not in completions:
+        return None
+    pending_days = [idx for idx, _ in days if idx not in completions and idx != day]
+    if not pending_days:
+        return None
+    next_day = pending_days[0]
+    next_label = next((label for idx, label in days if idx == next_day), None)
+    next_title = next_label or f"{t('DAY')} {next_day}"
+    current_title = current_label or f"{t('DAY')} {day}"
+    warning_text = (
+        "⚠️ ВНИМАНИЕ\n"
+        f"Вы снова открыли {current_title}. Этот день уже отмечен выполненным, а на очереди — {next_title}.\n"
+        "Вы уверены, что хотите продолжить этот день или перейти к следующей тренировке?"
+    )
+    return warning_text, next_day, next_title
+
+
 async def render_day_sheet_from_callback(
     q,
     context: ContextTypes.DEFAULT_TYPE,
@@ -6033,6 +6057,7 @@ async def send_day_cards_view(
     summaries = await build_summary_map(user_id, day, ex_rows, today_str)
     last_done_rows = await list_last_done_dates(user_id)
     last_done_map = build_last_done_dict(last_done_rows)
+    warning = await _build_completed_day_warning(user_id, day, label)
     text = render_day_text(
         day,
         label,
@@ -6042,6 +6067,14 @@ async def send_day_cards_view(
         last_done_map,
         prefs,
     )
+    warning_button = None
+    if warning:
+        warning_text, next_day, next_title = warning
+        text = f"{warning_text}\n\n{text}"
+        warning_button = InlineKeyboardButton(
+            dual(f"➡️ Перейти к {next_title}", f"Открыть {next_title}"),
+            callback_data=f"day:open:{next_day}",
+        )
     base_markup = day_kb(day, ex_rows, context=context)
     back_cb = "menu:root"
     content_rows: list[list[InlineKeyboardButton]] = []
@@ -6083,6 +6116,8 @@ async def send_day_cards_view(
             continue
         content_rows.append(row)
     rows: list[list[InlineKeyboardButton]] = []
+    if warning_button is not None:
+        rows.append([warning_button])
     rows += content_rows
     rows += ui_footer_rows(primary_actions, None)
     if completion_action:
