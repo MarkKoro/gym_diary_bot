@@ -12998,6 +12998,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             action = parts[1]
             day = int(parts[2])
             ue_id = int(parts[3])
+            is_library = day == 0
             mutating_ex_actions = {
                 "note",
                 "fill",
@@ -13012,8 +13013,9 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if action in mutating_ex_actions:
                 if not await require_edit_allowed(q, context):
                     return
+                if not is_library:
+                    suppress_completed_day_warning(context, target_user_id, day)
             selected = get_flex_selected(context, day, ue_id)
-            is_library = day == 0
             sheet_context = get_sheet_context(context, q.message.chat_id, q.message.message_id)
             sheet_day = int(sheet_context.get("day")) if sheet_context else None
             sheet_page = int(sheet_context.get("page")) if sheet_context else 0
