@@ -11851,7 +11851,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     index,
                     back_callback=back_cb,
                     prefs=prefs,
-                )
+                    )
                 if sheet_context and not is_library and sheet_day is not None:
                     set_sheet_context(
                         context,
@@ -11862,6 +11862,8 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     )
                 await show_screen(q, context, text, kb, target_user_id)
                 return
+            if not is_library:
+                suppress_completed_day_warning(context, target_user_id, day)
             async with user_locks[target_user_id]:
                 selected = get_flex_selected(context, day, ue_id)
                 view = await render_exercise_view(
