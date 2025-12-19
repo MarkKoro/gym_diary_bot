@@ -191,6 +191,55 @@ async def _ensure_user_exercise(user_id: int, ue_id: int, day_index: int) -> Non
         raise HTTPException(status_code=404, detail="Упражнение не принадлежит пользователю или дню")
 
 
+async def _resolve_user_exercise_id(user_id: int, ue_id: int, day_index: int) -> int:
+    async with db.connect_db() as conn:
+        cur = await conn.execute(
+            "SELECT exercise_id FROM user_exercises WHERE id=? AND user_id=? AND day_index=?",
+            (ue_id, user_id, day_index),
+        )
+        row = await cur.fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Упражнение не найдено")
+    return int(row[0])
+
+
+def _format_prev_summary(data: tuple[int, int, int, float] | None) -> str | None:
+    if not data:
+        return None
+    count, reps, seconds, weight = data
+    if seconds and seconds > 0:
+        value = f"{int(seconds)} сек"
+    else:
+        weight_part = f"{weight:g} кг" if weight else None
+        if weight_part:
+            value = f"{weight_part} × {int(reps)}"
+        else:
+            value = f"{int(reps)} повт."
+    return f"{int(count)}× {value}"
+
+
+async def _get_previous_done_date(user_id: int, ue_id: int, exclude_session_id: int | None) -> str | None:
+    async with db.connect_db() as conn:
+        cur = await conn.execute(
+            """
+            SELECT s.date
+            FROM session_exercises se
+            JOIN sessions s ON s.id = se.session_id
+            WHERE se.user_exercise_id=?
+              AND s.user_id=?
+              AND se.is_done=1
+              AND se.session_id<>?
+            ORDER BY s.date DESC, COALESCE(se.done_at, s.date || 'T00:00:00') DESC
+            LIMIT 1
+            """,
+            (ue_id, user_id, exclude_session_id or -1),
+        )
+        row = await cur.fetchone()
+        if not row:
+            return None
+        return row[0]
+
+
 def _serialize_sets(rows: list[tuple]) -> list[dict]:
     return [
         {
@@ -198,7 +247,6 @@ def _serialize_sets(rows: list[tuple]) -> list[dict]:
             "reps": int(r[1]),
             "seconds": int(r[2]),
             "weight_kg": float(r[3]),
-            "is_warmup": bool(r[4]),
         }
         for r in rows
     ]
@@ -373,13 +421,85 @@ async def inc_last_set_fast(
     await _ensure_user_exercise(user_id, user_exercise_id, day_index)
     field = payload.get("field") if payload else None
     delta = payload.get("delta") if payload else None
-    if field not in {"reps", "seconds", "weight_kg"}:
-        raise HTTPException(status_code=400, detail="Поле должно быть reps/seconds/weight_kg")
+    set_no = payload.get("set_no") if payload else None
+
+    field_map = {"kg": "weight_kg", "reps": "reps", "sec": "seconds"}
+    db_field = field_map.get(field)
+    if db_field is None:
+        raise HTTPException(status_code=400, detail="Поле должно быть reps/sec/kg")
     if delta is None:
         raise HTTPException(status_code=400, detail="Нужно передать delta")
+
     target_date = _parse_date_param(date)
     iso_date = _iso_date(target_date)
     session_id = await db.get_or_create_today_session(user_id, iso_date, day_index)
-    await db.inc_last_set(user_exercise_id, session_id, field, float(delta))
+
+    if set_no is not None:
+        await db.inc_specific_set(user_exercise_id, session_id, int(set_no), db_field, float(delta))
+    else:
+        await db.inc_last_set(user_exercise_id, session_id, db_field, float(delta))
+
     new_sets = await db.fetch_exercise_sets(session_id, user_exercise_id)
     return {"ok": True, "sets": _serialize_sets(new_sets)}
+
+
+@app.get("/day/{day_index}/exercise/{ue_id}/context")
+async def exercise_context(
+    day_index: int,
+    ue_id: int,
+    date: str | None = None,
+    tg: TelegramInitData = Depends(get_tg_init_data),
+):
+    user_id = tg.user.id
+    await _validate_day(user_id, day_index)
+    exercise_id = await _resolve_user_exercise_id(user_id, ue_id, day_index)
+    target_date = _parse_date_param(date)
+    iso_date = _iso_date(target_date)
+    session_id = await db.get_or_create_today_session(user_id, iso_date, day_index)
+
+    current_note = await db.get_exercise_note(session_id, ue_id)
+    _prev_note_session_id, previous_note = await db.get_latest_completed_note(
+        user_id, exercise_id, exclude_session_id=session_id
+    )
+    previous_date = await _get_previous_done_date(user_id, ue_id, session_id)
+    previous_summary = _format_prev_summary(
+        await db.get_last_session_summary(user_id, day_index, ue_id, iso_date)
+    )
+    previous_sets_rows = await db.fetch_last_session_sets(user_id, day_index, ue_id, iso_date)
+
+    return {
+        "ok": True,
+        "day_index": day_index,
+        "date": iso_date,
+        "ue_id": ue_id,
+        "exercise_id": exercise_id,
+        "current_note": current_note,
+        "previous_note": previous_note,
+        "previous_date": previous_date,
+        "previous_summary": previous_summary,
+        "previous_sets": _serialize_sets(previous_sets_rows),
+    }
+
+
+@app.put("/day/{day_index}/exercise/{ue_id}/note")
+async def update_exercise_note(
+    day_index: int,
+    ue_id: int,
+    payload: dict = Body(...),
+    date: str | None = None,
+    tg: TelegramInitData = Depends(get_tg_init_data),
+):
+    user_id = tg.user.id
+    await _validate_day(user_id, day_index)
+    await _resolve_user_exercise_id(user_id, ue_id, day_index)
+
+    note_raw = (payload or {}).get("note", "")
+    note_clean = note_raw.strip() if isinstance(note_raw, str) else ""
+    note_value = note_clean if note_clean else None
+
+    target_date = _parse_date_param(date)
+    iso_date = _iso_date(target_date)
+    session_id = await db.get_or_create_today_session(user_id, iso_date, day_index)
+    await db.set_exercise_note(session_id, ue_id, note_value)
+
+    return {"ok": True, "current_note": note_value}

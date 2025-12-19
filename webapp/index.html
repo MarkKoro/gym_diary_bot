@@ -7,83 +7,51 @@
   <style>
     :root {
       color-scheme: light dark;
-      --bg: #f5f5f7;
+      --bg: #f6f7fb;
       --card: #ffffff;
-      --text: #0b0b0f;
-      --muted: #5c5c62;
+      --text: #0f1115;
+      --muted: #6b7280;
       --accent: #007aff;
-      --danger: #d70015;
-      --border: #e5e5ea;
-      --shadow: 0 8px 30px rgba(0, 0, 0, 0.08);
+      --border: #e5e7eb;
+      --danger: #e53935;
       --radius: 14px;
-      --toast-bg: rgba(0,0,0,0.85);
-      --toast-text: #fff;
+      --shadow: 0 10px 30px rgba(0,0,0,0.08);
+      --sheet-shadow: 0 -12px 30px rgba(0,0,0,0.22);
     }
     [data-theme="dark"] {
       --bg: #0f1115;
       --card: #181b22;
-      --text: #f5f7ff;
-      --muted: #9ba0ad;
+      --text: #f4f5f8;
+      --muted: #a5acba;
       --accent: #6ea8ff;
-      --danger: #ff5b5b;
       --border: #262b34;
-      --shadow: 0 6px 24px rgba(0, 0, 0, 0.35);
-      --toast-bg: rgba(255,255,255,0.9);
-      --toast-text: #0f1115;
+      --shadow: 0 8px 24px rgba(0,0,0,0.35);
+      --sheet-shadow: 0 -16px 32px rgba(0,0,0,0.55);
     }
-    * {
-      box-sizing: border-box;
-    }
+    * { box-sizing: border-box; }
     body {
       margin: 0;
-      font-family: "SF Pro Text", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
       background: var(--bg);
       color: var(--text);
+      font-family: "SF Pro Text", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
       min-height: 100vh;
     }
     .app {
       display: flex;
       flex-direction: column;
+      gap: 16px;
       padding: 16px;
       padding-bottom: calc(18px + env(safe-area-inset-bottom));
-      gap: 12px;
     }
     header.top-bar {
       display: flex;
+      gap: 12px;
       align-items: center;
       justify-content: space-between;
-      gap: 12px;
     }
-    .icon-btn {
-      width: 38px;
-      height: 38px;
-      border: 1px solid var(--border);
-      background: var(--card);
-      border-radius: 12px;
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      box-shadow: var(--shadow);
-      color: var(--text);
-      cursor: default;
-      position: relative;
-    }
-    .icon-btn.disabled {
-      opacity: 0.6;
-    }
-    .day-block {
-      flex: 1;
-      display: flex;
-      flex-direction: column;
-      gap: 4px;
-      min-width: 0;
-    }
-    .day-row {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-    }
-    select.day-select {
+    .day-block { flex: 1; min-width: 0; }
+    .day-row { display: flex; gap: 8px; align-items: center; }
+    .day-select {
       flex: 1;
       padding: 10px 12px;
       border-radius: 12px;
@@ -93,244 +61,74 @@
       font-size: 15px;
       box-shadow: var(--shadow);
     }
-    .date-label {
-      font-size: 13px;
-      color: var(--muted);
-      white-space: nowrap;
-    }
+    .date-label { font-size: 13px; color: var(--muted); margin-top: 4px; }
     .status {
       display: inline-flex;
       align-items: center;
       gap: 6px;
-      font-size: 13px;
-      color: var(--muted);
       padding: 8px 12px;
-      border-radius: 20px;
-      background: var(--card);
-      border: 1px solid var(--border);
-      box-shadow: var(--shadow);
-    }
-    .status .dot {
-      width: 10px;
-      height: 10px;
-      border-radius: 50%;
-      background: #34c759;
-    }
-    .status.error .dot {
-      background: var(--danger);
-    }
-    .controls {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 10px;
-      align-items: center;
-    }
-    .control-group {
-      background: var(--card);
-      padding: 10px;
       border-radius: 12px;
+      background: var(--card);
       border: 1px solid var(--border);
-      box-shadow: var(--shadow);
-      display: flex;
-      flex-direction: column;
-      gap: 6px;
-      min-width: 120px;
-    }
-    .control-label {
-      font-size: 12px;
       color: var(--muted);
-      letter-spacing: 0.2px;
-    }
-    .chip-row {
-      display: flex;
-      gap: 8px;
-      flex-wrap: wrap;
-    }
-    .chip {
-      padding: 8px 10px;
-      border-radius: 12px;
-      border: 1px solid var(--border);
-      background: var(--bg);
-      color: var(--text);
-      font-size: 14px;
-      cursor: pointer;
-      transition: all 0.15s ease;
-      min-width: 44px;
-      text-align: center;
-      box-shadow: inset 0 1px 0 rgba(255,255,255,0.4);
-    }
-    .chip.active {
-      background: var(--accent);
-      color: #fff;
-      border-color: var(--accent);
-      box-shadow: 0 6px 14px rgba(0, 122, 255, 0.25);
-    }
-    .refresh-btn {
-      padding: 12px 16px;
-      border-radius: 12px;
-      border: 1px solid var(--border);
-      background: var(--card);
-      color: var(--text);
-      font-size: 15px;
+      font-size: 13px;
       box-shadow: var(--shadow);
-      cursor: pointer;
-      min-width: 110px;
+      white-space: nowrap;
     }
-    .card-list {
-      display: flex;
-      flex-direction: column;
-      gap: 14px;
-      padding-bottom: 8px;
-    }
+    .status .dot { width: 10px; height: 10px; border-radius: 50%; background: #34c759; }
+    .status.error .dot { background: var(--danger); }
+    .card-list { display: flex; flex-direction: column; gap: 12px; }
     .card {
       background: var(--card);
       border-radius: var(--radius);
       padding: 14px;
       box-shadow: var(--shadow);
       border: 1px solid var(--border);
-    }
-    .card-header {
       display: flex;
-      align-items: center;
-      justify-content: space-between;
+      flex-direction: column;
       gap: 10px;
-      margin-bottom: 10px;
     }
-    .card-title {
-      font-size: 16px;
-      font-weight: 700;
-      letter-spacing: -0.01em;
-    }
-    .pill {
-      background: rgba(0, 122, 255, 0.12);
-      color: var(--accent);
-      border: 1px solid rgba(0, 122, 255, 0.25);
-      padding: 6px 10px;
-      border-radius: 999px;
-      font-size: 12px;
-    }
-    [data-theme="dark"] .pill {
-      background: rgba(110, 168, 255, 0.15);
-      border-color: rgba(110, 168, 255, 0.35);
-    }
-    .sets-table {
-      width: 100%;
-      border-collapse: collapse;
-      margin-bottom: 12px;
-      font-size: 14px;
-    }
-    .sets-table th, .sets-table td {
-      padding: 8px 6px;
-      text-align: center;
-      border-bottom: 1px solid var(--border);
-    }
-    .sets-table th {
-      color: var(--muted);
-      font-weight: 600;
-      font-size: 12px;
-      letter-spacing: 0.2px;
-    }
-    .sets-table tr:last-child td {
-      border-bottom: none;
-    }
-    .sets-table tr.last-set {
-      background: rgba(0, 122, 255, 0.06);
-    }
-    [data-theme="dark"] .sets-table tr.last-set {
-      background: rgba(110, 168, 255, 0.08);
-    }
-    .actions {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
-      gap: 8px;
-    }
+    .card-header { display: flex; justify-content: space-between; gap: 8px; align-items: center; }
+    .card-title { font-size: 16px; font-weight: 700; letter-spacing: -0.01em; }
+    .pill { font-size: 12px; color: var(--muted); background: rgba(0,0,0,0.04); padding: 4px 8px; border-radius: 999px; }
+    [data-theme="dark"] .pill { background: rgba(255,255,255,0.05); }
+    .card-summary { font-size: 14px; color: var(--muted); }
+    .card-actions { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 10px; }
     .btn {
       padding: 12px 14px;
       border-radius: 12px;
       border: 1px solid var(--border);
-      background: var(--bg);
+      background: var(--card);
       color: var(--text);
       font-weight: 600;
       font-size: 14px;
-      box-shadow: inset 0 1px 0 rgba(255,255,255,0.4);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.3);
       cursor: pointer;
       transition: transform 0.1s ease, box-shadow 0.15s ease;
     }
-    .btn:active {
-      transform: translateY(1px);
-      box-shadow: inset 0 2px 4px rgba(0,0,0,0.08);
-    }
-    .btn.primary {
-      background: var(--accent);
-      color: #fff;
-      border-color: var(--accent);
-      box-shadow: 0 10px 20px rgba(0, 122, 255, 0.25);
-    }
-    .btn.danger {
-      color: var(--danger);
-      border-color: rgba(215, 0, 21, 0.3);
-    }
-    .btn:disabled {
-      opacity: 0.55;
-      cursor: not-allowed;
-      box-shadow: none;
-    }
-    .bottom-bar {
-      padding-top: 6px;
-    }
-    .finish-btn {
-      width: 100%;
-      padding: 15px 16px;
-      font-size: 16px;
-      border-radius: 14px;
-      border: 1px dashed var(--border);
-      background: var(--card);
-      color: var(--text);
-      cursor: pointer;
-      box-shadow: var(--shadow);
-      transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
-    }
-    .finish-btn:disabled {
-      cursor: not-allowed;
-      opacity: 0.65;
-    }
-    .finish-btn.ready {
-      border-style: solid;
-      background: var(--accent);
-      color: #fff;
-      border-color: var(--accent);
-    }
+    .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; box-shadow: 0 10px 22px rgba(0,122,255,0.22); }
+    .btn.danger { color: var(--danger); border-color: rgba(229,57,53,0.25); }
+    .btn:active { transform: translateY(1px); box-shadow: inset 0 2px 6px rgba(0,0,0,0.08); }
+    .btn:disabled { opacity: 0.6; cursor: not-allowed; box-shadow: none; }
+    .finish-btn { width: 100%; padding: 15px; border-radius: 14px; border: 1px dashed var(--border); background: var(--card); box-shadow: var(--shadow); font-size: 15px; }
+    .finish-btn.ready { background: var(--accent); border-color: var(--accent); color: #fff; }
     .toast {
       position: fixed;
       left: 50%;
       bottom: calc(20px + env(safe-area-inset-bottom));
       transform: translateX(-50%) translateY(150%);
-      background: var(--toast-bg);
-      color: var(--toast-text);
+      background: rgba(0,0,0,0.85);
+      color: #fff;
       padding: 12px 16px;
       border-radius: 12px;
       box-shadow: 0 12px 30px rgba(0,0,0,0.25);
       font-size: 14px;
       opacity: 0;
       transition: transform 0.25s ease, opacity 0.25s ease;
-      z-index: 20;
+      z-index: 30;
     }
-    .toast.show {
-      transform: translateX(-50%) translateY(0);
-      opacity: 1;
-    }
-    .full-screen-msg {
-      min-height: 100vh;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      text-align: center;
-      padding: 32px;
-      background: var(--bg);
-      color: var(--text);
-      font-size: 18px;
-      line-height: 1.6;
-    }
+    [data-theme="dark"] .toast { background: rgba(255,255,255,0.92); color: #0f1115; }
+    .toast.show { transform: translateX(-50%) translateY(0); opacity: 1; }
     .modal-backdrop {
       position: fixed;
       inset: 0;
@@ -338,40 +136,103 @@
       display: flex;
       align-items: center;
       justify-content: center;
-      z-index: 30;
+      z-index: 40;
       opacity: 0;
       pointer-events: none;
       transition: opacity 0.2s ease;
     }
     .modal-backdrop.show { opacity: 1; pointer-events: auto; }
-    .modal {
-      background: var(--card);
-      color: var(--text);
-      border-radius: 16px;
-      padding: 18px 18px 14px;
-      box-shadow: var(--shadow);
-      border: 1px solid var(--border);
-      max-width: 360px;
-      width: calc(100% - 40px);
-    }
+    .modal { background: var(--card); color: var(--text); border-radius: 16px; padding: 18px; box-shadow: var(--shadow); border: 1px solid var(--border); max-width: 360px; width: calc(100% - 40px); }
     .modal-title { font-size: 17px; font-weight: 700; margin-bottom: 8px; }
     .modal-text { font-size: 14px; color: var(--muted); margin-bottom: 14px; }
-    .modal-actions { display: flex; gap: 10px; justify-content: flex-end; }
+    .modal-actions { display: flex; gap: 10px; }
     .modal-actions .btn { flex: 1; }
+    .sheet-backdrop {
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.35);
+      display: flex;
+      align-items: flex-end;
+      justify-content: center;
+      z-index: 35;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.2s ease;
+    }
+    .sheet-backdrop.show { opacity: 1; pointer-events: auto; }
+    .sheet {
+      width: 100%;
+      max-width: 520px;
+      background: var(--card);
+      border-radius: 18px 18px 0 0;
+      box-shadow: var(--sheet-shadow);
+      padding: 12px 16px calc(18px + env(safe-area-inset-bottom));
+      transform: translateY(35%);
+      transition: transform 0.22s ease;
+    }
+    .sheet-backdrop.show .sheet { transform: translateY(0); }
+    .sheet-handle { width: 48px; height: 5px; border-radius: 999px; background: var(--border); margin: 0 auto 12px; }
+    .sheet-title { font-size: 17px; font-weight: 700; }
+    .sheet-subtitle { font-size: 13px; color: var(--muted); margin-top: 2px; }
+    .segmented { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 6px; margin: 12px 0 4px; }
+    .seg-btn { padding: 10px 12px; border-radius: 12px; border: 1px solid var(--border); background: var(--bg); color: var(--text); font-weight: 600; font-size: 14px; cursor: pointer; }
+    .seg-btn.active { background: var(--accent); color: #fff; border-color: var(--accent); box-shadow: 0 8px 16px rgba(0,122,255,0.18); }
+    .sets-list { margin: 12px 0 4px; display: flex; flex-direction: column; gap: 8px; }
+    .set-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 10px 12px;
+      border-radius: 12px;
+      border: 1px solid var(--border);
+      background: var(--bg);
+      cursor: pointer;
+    }
+    .set-row.selected { border-color: var(--accent); box-shadow: 0 8px 18px rgba(0,122,255,0.12); }
+    .set-no { font-weight: 700; }
+    .set-meta { font-size: 13px; color: var(--muted); text-align: right; }
+    .selected-label { font-size: 13px; color: var(--muted); margin-bottom: 8px; }
+    .tab-panel { display: none; }
+    .tab-panel.active { display: block; }
+    .note-area { width: 100%; min-height: 120px; padding: 12px; border-radius: 12px; border: 1px solid var(--border); background: var(--bg); color: var(--text); font-size: 15px; }
+    .note-status { font-size: 13px; color: var(--muted); margin-top: 6px; min-height: 18px; }
+    .history-block { display: flex; flex-direction: column; gap: 8px; font-size: 14px; }
+    .history-title { font-weight: 700; font-size: 15px; }
+    .history-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    .history-table th, .history-table td { text-align: left; padding: 6px 4px; }
+    .history-table th { color: var(--muted); font-weight: 600; }
+    .history-table tr:nth-child(even) { background: var(--bg); }
+    .history-note { font-size: 13px; color: var(--muted); border: 1px dashed var(--border); padding: 8px 10px; border-radius: 10px; }
+    .controls-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px,1fr)); gap: 10px; }
+    .control-block {
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 12px;
+      background: var(--bg);
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .control-block.primary { border-color: rgba(0,122,255,0.35); background: rgba(0,122,255,0.06); }
+    [data-theme="dark"] .control-block.primary { background: rgba(110,168,255,0.08); }
+    .control-head { display: flex; justify-content: space-between; align-items: center; font-size: 13px; color: var(--muted); }
+    .control-value { font-size: 28px; font-weight: 800; text-align: center; letter-spacing: -0.01em; }
+    .control-actions { display: flex; align-items: center; justify-content: center; gap: 12px; }
+    .circle-btn { width: 48px; height: 48px; border-radius: 50%; border: 1px solid var(--border); background: var(--card); font-size: 22px; font-weight: 700; cursor: pointer; box-shadow: var(--shadow); color: var(--text); }
+    .circle-btn:disabled { opacity: 0.55; cursor: not-allowed; box-shadow: none; }
+    .chips { display: flex; gap: 6px; flex-wrap: wrap; }
+    .chip { padding: 7px 10px; border-radius: 12px; border: 1px solid var(--border); background: var(--card); font-size: 13px; cursor: pointer; }
+    .chip.active { background: var(--accent); border-color: var(--accent); color: #fff; box-shadow: 0 6px 14px rgba(0,122,255,0.22); }
+    .sheet-actions { margin-top: 12px; display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 8px; }
+    .muted { color: var(--muted); }
+    .full-screen-msg { min-height: 100vh; display: flex; align-items: center; justify-content: center; text-align: center; background: var(--bg); color: var(--text); }
   </style>
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
 </head>
 <body>
-  <div id="not-telegram" class="full-screen-msg" style="display:none">Открой WebApp из Telegram. В браузере авторизация не работает.</div>
+  <div id="not-telegram" class="full-screen-msg" style="display:none; padding:32px; text-align:center;">Открой WebApp из Telegram. В браузере авторизация не работает.</div>
   <div id="app" class="app" style="display:none">
     <header class="top-bar">
-      <button class="icon-btn disabled" title="Скоро" aria-label="Меню">
-        <svg width="18" height="14" viewBox="0 0 18 14" fill="none" xmlns="http://www.w3.org/2000/svg">
-          <rect y="0" width="18" height="2.2" rx="1" fill="currentColor"/>
-          <rect y="5.9" width="18" height="2.2" rx="1" fill="currentColor"/>
-          <rect y="11.8" width="18" height="2.2" rx="1" fill="currentColor"/>
-        </svg>
-      </button>
       <div class="day-block">
         <div class="day-row">
           <select id="daySelect" class="day-select"></select>
@@ -380,22 +241,6 @@
         <div class="date-label" id="dateLabel">—</div>
       </div>
     </header>
-
-    <div class="controls">
-      <div class="control-group">
-        <div class="control-label">Шаг веса</div>
-        <div class="chip-row" id="weightSteps"></div>
-      </div>
-      <div class="control-group">
-        <div class="control-label">Шаг повт.</div>
-        <div class="chip-row" id="repsSteps"></div>
-      </div>
-      <div class="control-group">
-        <div class="control-label">Шаг секунд</div>
-        <div class="chip-row" id="secSteps"></div>
-      </div>
-      <button id="refreshBtn" class="refresh-btn">Обновить</button>
-    </div>
 
     <div id="cards" class="card-list"></div>
 
@@ -417,24 +262,64 @@
     </div>
   </div>
 
+    <div id="sheet" class="sheet-backdrop">
+      <div class="sheet" id="sheetBody">
+        <div class="sheet-handle"></div>
+        <div class="sheet-title">Редактор подходов</div>
+        <div class="sheet-subtitle" id="sheetSubtitle"></div>
+        <div class="segmented" id="editorTabs">
+          <button type="button" class="seg-btn active" data-tab="sets">Подходы</button>
+          <button type="button" class="seg-btn" data-tab="note">Заметка</button>
+          <button type="button" class="seg-btn" data-tab="history">Прошлый раз</button>
+        </div>
+
+        <div id="tabSets" class="tab-panel active">
+          <div id="setsList" class="sets-list"></div>
+          <div id="selectedLabel" class="selected-label">—</div>
+          <div id="controlsGrid" class="controls-grid"></div>
+        </div>
+
+        <div id="tabNote" class="tab-panel">
+          <textarea id="noteArea" class="note-area" placeholder="Заметка к упражнению…"></textarea>
+          <div id="noteStatus" class="note-status"></div>
+        </div>
+
+        <div id="tabHistory" class="tab-panel">
+          <div id="historyContent" class="history-block"></div>
+        </div>
+
+        <div class="sheet-actions">
+          <button id="editorAddSet" class="btn primary">+ Сет</button>
+        <button id="editorRemoveSet" class="btn danger">− Сет</button>
+        <button id="editorClose" class="btn">Готово</button>
+      </div>
+    </div>
+  </div>
+
   <script>
+    const STEP_OPTIONS = {
+      kg: [0.5, 3, 10, 25],
+      reps: [1, 5, 15],
+      sec: [1, 5, 25, 30],
+    };
+
+    const DURATION_PATTERNS = ["(сек", "удержание", "стойка", "планк"];
+
     const state = {
       initData: '',
       dayIndex: null,
       date: '',
+      dateIso: '',
       activeDays: [],
       completedDays: new Set(),
       exercises: new Map(),
-      steps: {
-        weight: 1,
-        reps: 1,
-        seconds: 5,
-      },
+      steps: { kg: 1, reps: 1, sec: 5 },
       actionQueues: new Map(),
+      contexts: new Map(),
+      editor: { open: false, ueId: null, selectedSet: null, tab: 'sets', noteTimer: null, noteStatusTimer: null },
     };
 
     let openConfirmModal = null;
-
     const tg = window.Telegram ? window.Telegram.WebApp : null;
 
     function applyTheme() {
@@ -448,28 +333,29 @@
         '--text': themeParams.text_color,
         '--muted': themeParams.hint_color,
         '--accent': themeParams.button_color,
-        '--toast-bg': scheme === 'dark' ? 'rgba(255,255,255,0.9)' : 'rgba(0,0,0,0.85)',
-        '--toast-text': scheme === 'dark' ? '#0f1115' : '#fff',
       };
-      Object.entries(map).forEach(([key, val]) => {
-        if (val) root.style.setProperty(key, val);
-      });
+      Object.entries(map).forEach(([key, val]) => { if (val) root.style.setProperty(key, val); });
     }
 
-    function setVisible(el, flag) {
-      el.style.display = flag ? '' : 'none';
-    }
+    function setVisible(el, flag) { el.style.display = flag ? '' : 'none'; }
 
     function setStatus(ok) {
       const el = document.getElementById('status');
       const text = el.querySelector('.status-text');
-      if (ok) {
-        el.classList.remove('error');
-        text.textContent = 'онлайн';
-      } else {
-        el.classList.add('error');
-        text.textContent = 'ошибка';
-      }
+      if (ok) { el.classList.remove('error'); text.textContent = 'онлайн'; }
+      else { el.classList.add('error'); text.textContent = 'ошибка'; }
+    }
+
+    function toIsoDate(humanDate) {
+      if (!humanDate) return '';
+      const parts = humanDate.split('-');
+      if (parts.length !== 3) return '';
+      const [d, m, y] = parts;
+      return `${y}-${m}-${d}`;
+    }
+
+    function getIsoDate() {
+      return state.dateIso || toIsoDate(state.date) || '';
     }
 
     function toast(message) {
@@ -485,55 +371,31 @@
       const cancelBtn = document.getElementById('cancelConfirm');
       const okBtn = document.getElementById('confirmAction');
       let handler = null;
-
-      function hide() {
-        modal.classList.remove('show');
-        handler = null;
-      }
-
+      function hide() { modal.classList.remove('show'); handler = null; }
       cancelBtn.addEventListener('click', hide);
-      modal.addEventListener('click', (e) => {
-        if (e.target === modal) hide();
-      });
-      okBtn.addEventListener('click', () => {
-        if (handler) handler();
-        hide();
-      });
-
-      return function open(fn) {
-        handler = fn;
-        modal.classList.add('show');
-      };
+      modal.addEventListener('click', (e) => { if (e.target === modal) hide(); });
+      okBtn.addEventListener('click', () => { if (handler) handler(); hide(); });
+      return function open(fn) { handler = fn; modal.classList.add('show'); };
     }
 
     async function apiFetch(path, options = {}) {
       const { silent, ...fetchOptions } = options;
       const headers = new Headers(options.headers || {});
-      if (state.initData) {
-        headers.set('X-Telegram-InitData', state.initData);
-      }
-      if (options.body && !(options.body instanceof FormData)) {
-        headers.set('Content-Type', 'application/json');
-      }
+      if (state.initData) headers.set('X-Telegram-InitData', state.initData);
+      if (options.body && !(options.body instanceof FormData)) headers.set('Content-Type', 'application/json');
       let res;
       try {
         res = await fetch(path, { ...fetchOptions, headers });
       } catch (e) {
         setStatus(false);
-        if (!silent) toast('Ошибка связи. Попробуй ещё раз.');
-        const err = new Error('Network error');
-        err.status = 0;
-        throw err;
+        if (!silent) toast('Ошибка сети. Попробуй снова.');
+        throw e;
       }
       if (!res.ok) {
         setStatus(false);
-        const msg = res.status === 401 || res.status === 403
-          ? 'Нет доступа. Открой WebApp из Telegram.'
-          : res.status >= 500
-            ? 'Сервис недоступен'
-            : 'Ошибка связи. Попробуй ещё раз.';
-        if (!silent) toast(msg);
-        const err = new Error('API error: ' + res.status);
+        const text = await res.text();
+        if (!silent) toast('Ошибка: ' + (text || res.status));
+        const err = new Error(text || 'error');
         err.status = res.status;
         throw err;
       }
@@ -541,108 +403,121 @@
       return res.json();
     }
 
-    function renderSteps() {
-      const weightSteps = [0.5, 1, 2.5, 5];
-      const repsSteps = [1, 2];
-      const secSteps = [5, 10, 30];
-      const mount = (id, steps, key) => {
-        const wrap = document.getElementById(id);
-        wrap.innerHTML = '';
-        steps.forEach((s) => {
-          const btn = document.createElement('button');
-          btn.className = 'chip' + (state.steps[key] === s ? ' active' : '');
-          btn.textContent = s.toString();
-          btn.addEventListener('click', () => {
-            state.steps[key] = s;
-            renderSteps();
-          });
-          wrap.appendChild(btn);
-        });
-      };
-      mount('weightSteps', weightSteps, 'weight');
-      mount('repsSteps', repsSteps, 'reps');
-      mount('secSteps', secSteps, 'seconds');
+    function isDurationExercise(name) {
+      const lower = (name || '').toLowerCase();
+      return DURATION_PATTERNS.some((p) => lower.includes(p));
     }
 
-    function formatDayLabel(day) {
-      const prefix = state.completedDays.has(Number(day.day_index)) ? '✅ ' : '';
-      return `${prefix}${day.label}`;
-    }
-
-    function renderDayOptions(selectedValue) {
+    function renderDayOptions(selected) {
       const select = document.getElementById('daySelect');
       select.innerHTML = '';
       state.activeDays.forEach((d) => {
         const opt = document.createElement('option');
         opt.value = d.day_index;
-        opt.textContent = formatDayLabel(d);
+        opt.textContent = `${d.day_index}. ${d.label}`;
+        if (state.completedDays.has(Number(d.day_index))) opt.textContent += ' ✓';
+        if (d.day_index === selected) opt.selected = true;
         select.appendChild(opt);
       });
-      if (selectedValue !== undefined && selectedValue !== null) {
-        select.value = selectedValue;
-      }
+      state.dayIndex = selected;
     }
 
-    function formatWeight(n) {
-      if (Number.isInteger(n)) return n.toString();
-      return parseFloat(n.toFixed(2)).toString();
-    }
-
-    function renderSetsTable(exercise, container) {
-      const sets = exercise.sets || [];
-      const table = document.createElement('table');
-      table.className = 'sets-table';
-      const thead = document.createElement('thead');
-      thead.innerHTML = '<tr><th>№</th><th>повт.</th><th>сек.</th><th>кг</th></tr>';
-      table.appendChild(thead);
-      const tbody = document.createElement('tbody');
-      if (!sets.length) {
-        const row = document.createElement('tr');
-        row.innerHTML = '<td colspan="4" style="color: var(--muted); padding: 12px 6px;">Добавь первый сет</td>';
-        tbody.appendChild(row);
-      } else {
-        sets.forEach((s, idx) => {
-          const row = document.createElement('tr');
-          if (idx === sets.length - 1) row.classList.add('last-set');
-          row.innerHTML = `<td>${s.set_no}</td><td>${s.reps}</td><td>${s.seconds}</td><td>${formatWeight(s.weight_kg)}</td>`;
-          tbody.appendChild(row);
+    function setExerciseBusy(ueId, busy) {
+      const card = document.querySelector(`[data-ueid="${ueId}"]`);
+      if (card) card.classList.toggle('busy', busy);
+      if (state.editor.ueId === ueId) {
+        document.querySelectorAll('#sheet button, #sheet .circle-btn, #sheet .chip').forEach((btn) => {
+          btn.disabled = busy;
         });
       }
-      table.appendChild(tbody);
-      container.innerHTML = '';
-      container.appendChild(table);
     }
 
-    function setExerciseBusy(ueId, isBusy) {
-      const card = document.querySelector(`[data-ueid="${ueId}"]`);
-      if (!card) return;
-      card.querySelectorAll('button.btn').forEach((b) => {
-        if (isBusy) {
-          b.dataset.prevDisabled = b.disabled ? '1' : '0';
-          b.disabled = true;
-        } else if (b.dataset.prevDisabled === '0') {
-          b.disabled = false;
-        }
-      });
+    function queueExerciseAction(ueId, actionFn) {
+      const last = state.actionQueues.get(ueId) || Promise.resolve();
+      const run = async () => {
+        setExerciseBusy(ueId, true);
+        try { await actionFn(); } finally { setExerciseBusy(ueId, false); }
+      };
+      const next = last.then(run, run);
+      state.actionQueues.set(ueId, next.catch(() => {}));
+      return next;
     }
 
-    function updateActionAvailability(exercise) {
-      const card = document.querySelector(`[data-ueid="${exercise.user_exercise_id}"]`);
-      if (!card) return;
-      const hasSets = (exercise.sets || []).length > 0;
-      card.querySelectorAll('[data-need-set]')?.forEach((btn) => {
-        btn.disabled = !hasSets;
-      });
+    function getOrCreateContext(ueId) {
+      let ctx = state.contexts.get(ueId);
+      if (!ctx) {
+        ctx = { loaded: false, loading: false, error: false, data: null, promise: null };
+        state.contexts.set(ueId, ctx);
+      }
+      return ctx;
     }
 
-    function updateFinishButton() {
-      const btn = document.getElementById('finishBtn');
-      const hasDay = !!state.dayIndex;
-      btn.disabled = !hasDay;
-      btn.classList.toggle('ready', hasDay);
+    function setNoteStatus(text, temporary = false) {
+      const status = document.getElementById('noteStatus');
+      status.textContent = text || '';
+      if (state.editor.noteStatusTimer) clearTimeout(state.editor.noteStatusTimer);
+      if (temporary) {
+        state.editor.noteStatusTimer = setTimeout(() => { status.textContent = ''; }, 2000);
+      }
     }
 
-    function renderExercise(exercise) {
+    async function ensureExerciseContext(ueId) {
+      const ctx = getOrCreateContext(ueId);
+      if (ctx.loaded && !ctx.error) return ctx.data;
+      if (ctx.loading && ctx.promise) return ctx.promise;
+      const isoDate = getIsoDate();
+      ctx.loading = true;
+      ctx.error = false;
+      ctx.promise = apiFetch(`/gymapi/day/${state.dayIndex}/exercise/${ueId}/context?date=${isoDate}`, { silent: true })
+        .then((data) => {
+          ctx.loading = false;
+          ctx.loaded = true;
+          ctx.error = false;
+          ctx.data = data;
+          renderEditor();
+          return data;
+        })
+        .catch((e) => {
+          ctx.loading = false;
+          ctx.error = true;
+          setNoteStatus('Ошибка связи');
+          throw e;
+        });
+      return ctx.promise;
+    }
+
+    async function saveExerciseNote(ueId, value) {
+      const ctx = getOrCreateContext(ueId);
+      try {
+        const data = await apiFetch(`/gymapi/day/${state.dayIndex}/exercise/${ueId}/note?date=${getIsoDate()}`, {
+          method: 'PUT',
+          body: JSON.stringify({ note: value }),
+          silent: true,
+        });
+        ctx.loaded = true;
+        ctx.error = false;
+        ctx.data = { ...(ctx.data || {}), current_note: data.current_note };
+        setNoteStatus('Сохранено ✅', true);
+      } catch (e) {
+        ctx.error = true;
+        setNoteStatus('Ошибка связи');
+        throw e;
+      }
+    }
+
+    function formatLastSet(exercise) {
+      const sets = exercise.sets || [];
+      if (!sets.length) return 'Нет подходов';
+      const last = sets[sets.length - 1];
+      if (last.seconds > 0 && last.reps === 0) return `Последний: ${last.seconds} сек`;
+      const parts = [];
+      if (last.weight_kg > 0) parts.push(`${last.weight_kg} кг`);
+      if (last.reps > 0) parts.push(`${last.reps} повт.`);
+      if (last.seconds > 0) parts.push(`${last.seconds} сек`);
+      return 'Последний: ' + (parts.join(' × ') || '0');
+    }
+
+    function renderExerciseCard(exercise) {
       const card = document.createElement('div');
       card.className = 'card';
       card.dataset.ueid = exercise.user_exercise_id;
@@ -652,79 +527,28 @@
       const title = document.createElement('div');
       title.className = 'card-title';
       title.textContent = exercise.name;
-      header.appendChild(title);
-      if (exercise.muscle_group) {
-        const pill = document.createElement('div');
-        pill.className = 'pill';
-        pill.textContent = exercise.muscle_group;
-        header.appendChild(pill);
-      }
-      card.appendChild(header);
+      const pill = document.createElement('div');
+      pill.className = 'pill';
+      pill.textContent = `${exercise.sets?.length || 0} подходов`;
+      header.append(title, pill);
 
-      const setsWrap = document.createElement('div');
-      renderSetsTable(exercise, setsWrap);
-      card.appendChild(setsWrap);
+      const summary = document.createElement('div');
+      summary.className = 'card-summary';
+      summary.textContent = formatLastSet(exercise);
 
       const actions = document.createElement('div');
-      actions.className = 'actions';
-
+      actions.className = 'card-actions';
       const addBtn = document.createElement('button');
       addBtn.className = 'btn primary';
-      addBtn.textContent = '＋ сет';
-      addBtn.addEventListener('click', () => queueExerciseAction(exercise.user_exercise_id, () => addSet(exercise.user_exercise_id)));
-      actions.appendChild(addBtn);
+      addBtn.textContent = '+ Сет';
+      addBtn.addEventListener('click', () => queueExerciseAction(exercise.user_exercise_id, () => addSet(exercise.user_exercise_id, { toastOnSave: true })));
+      const editBtn = document.createElement('button');
+      editBtn.className = 'btn';
+      editBtn.textContent = 'Редактировать';
+      editBtn.addEventListener('click', () => openEditor(exercise.user_exercise_id));
+      actions.append(addBtn, editBtn);
 
-      const removeBtn = document.createElement('button');
-      removeBtn.className = 'btn danger';
-      removeBtn.textContent = '－ сет';
-      removeBtn.dataset.needSet = '1';
-      removeBtn.addEventListener('click', () => queueExerciseAction(exercise.user_exercise_id, () => removeSet(exercise.user_exercise_id)));
-      actions.appendChild(removeBtn);
-
-      const weightMinus = document.createElement('button');
-      weightMinus.className = 'btn';
-      weightMinus.textContent = 'кг −';
-      weightMinus.dataset.needSet = '1';
-      weightMinus.addEventListener('click', () => queueExerciseAction(exercise.user_exercise_id, () => incSet(exercise.user_exercise_id, 'weight_kg', -state.steps.weight)));
-      actions.appendChild(weightMinus);
-
-      const weightPlus = document.createElement('button');
-      weightPlus.className = 'btn';
-      weightPlus.textContent = 'кг +';
-      weightPlus.dataset.needSet = '1';
-      weightPlus.addEventListener('click', () => queueExerciseAction(exercise.user_exercise_id, () => incSet(exercise.user_exercise_id, 'weight_kg', state.steps.weight)));
-      actions.appendChild(weightPlus);
-
-      const repsMinus = document.createElement('button');
-      repsMinus.className = 'btn';
-      repsMinus.textContent = 'повт −';
-      repsMinus.dataset.needSet = '1';
-      repsMinus.addEventListener('click', () => queueExerciseAction(exercise.user_exercise_id, () => incSet(exercise.user_exercise_id, 'reps', -state.steps.reps)));
-      actions.appendChild(repsMinus);
-
-      const repsPlus = document.createElement('button');
-      repsPlus.className = 'btn';
-      repsPlus.textContent = 'повт +';
-      repsPlus.dataset.needSet = '1';
-      repsPlus.addEventListener('click', () => queueExerciseAction(exercise.user_exercise_id, () => incSet(exercise.user_exercise_id, 'reps', state.steps.reps)));
-      actions.appendChild(repsPlus);
-
-      const secMinus = document.createElement('button');
-      secMinus.className = 'btn';
-      secMinus.textContent = 'сек −';
-      secMinus.dataset.needSet = '1';
-      secMinus.addEventListener('click', () => queueExerciseAction(exercise.user_exercise_id, () => incSet(exercise.user_exercise_id, 'seconds', -state.steps.seconds)));
-      actions.appendChild(secMinus);
-
-      const secPlus = document.createElement('button');
-      secPlus.className = 'btn';
-      secPlus.textContent = 'сек +';
-      secPlus.dataset.needSet = '1';
-      secPlus.addEventListener('click', () => queueExerciseAction(exercise.user_exercise_id, () => incSet(exercise.user_exercise_id, 'seconds', state.steps.seconds)));
-      actions.appendChild(secPlus);
-
-      card.appendChild(actions);
-      updateActionAvailability(exercise);
+      card.append(header, summary, actions);
       return card;
     }
 
@@ -734,61 +558,78 @@
       state.exercises = new Map();
       list.forEach((ex) => {
         state.exercises.set(ex.user_exercise_id, ex);
-        const card = renderExercise(ex);
-        container.appendChild(card);
+        container.appendChild(renderExerciseCard(ex));
       });
+    }
+
+    function updateCardSummary(ueId) {
+      const exercise = state.exercises.get(ueId);
+      const card = document.querySelector(`[data-ueid="${ueId}"]`);
+      if (!card || !exercise) return;
+      const summary = card.querySelector('.card-summary');
+      const pill = card.querySelector('.pill');
+      if (summary) summary.textContent = formatLastSet(exercise);
+      if (pill) pill.textContent = `${exercise.sets?.length || 0} подходов`;
     }
 
     function applySetsUpdate(ueId, sets) {
       const exercise = state.exercises.get(ueId);
       if (!exercise) return;
       exercise.sets = sets;
-      const card = document.querySelector(`[data-ueid="${ueId}"]`);
-      if (!card) return;
-      const setsWrap = card.querySelector('.sets-table')?.parentElement;
-      if (setsWrap) {
-        renderSetsTable(exercise, setsWrap);
-      }
-      updateActionAvailability(exercise);
-    }
-
-    function queueExerciseAction(ueId, actionFn) {
-      const last = state.actionQueues.get(ueId) || Promise.resolve();
-      const run = async () => {
-        setExerciseBusy(ueId, true);
-        try {
-          await actionFn();
-        } finally {
-          setExerciseBusy(ueId, false);
+      updateCardSummary(ueId);
+      if (state.editor.open && state.editor.ueId === ueId) {
+        const lastSet = sets[sets.length - 1];
+        if (!sets.find((s) => s.set_no === state.editor.selectedSet)) {
+          state.editor.selectedSet = lastSet ? lastSet.set_no : null;
         }
-      };
-      const next = last.then(run, run);
-      state.actionQueues.set(ueId, next.catch(() => {}));
-      return next;
+        renderEditor();
+      }
     }
 
-    async function addSet(ueId) {
-      const data = await apiFetch(`/gymapi/day/${state.dayIndex}/exercise/${ueId}/set/add`, {
-        method: 'POST',
-        body: JSON.stringify({}),
-      });
+    async function addSet(ueId, opts = {}) {
+      const data = await apiFetch(`/gymapi/day/${state.dayIndex}/exercise/${ueId}/set/add`, { method: 'POST', body: JSON.stringify({}) });
       applySetsUpdate(ueId, data.sets);
-      toast('Сохранено');
+      if (opts.selectLast !== false) {
+        const last = data.sets[data.sets.length - 1];
+        if (state.editor.ueId === ueId) state.editor.selectedSet = last?.set_no || null;
+      }
+      if (opts.toastOnSave) toast('Сохранено');
+      return data;
     }
 
     async function removeSet(ueId) {
-      const data = await apiFetch(`/gymapi/day/${state.dayIndex}/exercise/${ueId}/set/remove_last`, {
-        method: 'POST',
-        body: JSON.stringify({}),
-      });
+      const data = await apiFetch(`/gymapi/day/${state.dayIndex}/exercise/${ueId}/set/remove_last`, { method: 'POST', body: JSON.stringify({}) });
       applySetsUpdate(ueId, data.sets);
+      const last = data.sets[data.sets.length - 1];
+      if (state.editor.ueId === ueId) state.editor.selectedSet = last?.set_no || null;
       toast('Сохранено');
     }
 
+    async function ensureSetExists(ueId) {
+      const exercise = state.exercises.get(ueId);
+      if (!exercise) return null;
+      if (exercise.sets.length === 0) {
+        await addSet(ueId, { toastOnSave: false });
+      }
+      const updated = state.exercises.get(ueId);
+      const last = updated?.sets[updated.sets.length - 1];
+      return last ? last.set_no : null;
+    }
+
     async function incSet(ueId, field, delta) {
+      const exercise = state.exercises.get(ueId);
+      if (!exercise) return;
+      let targetSet = state.editor.selectedSet;
+      if (!targetSet || !exercise.sets.find((s) => s.set_no === targetSet)) {
+        targetSet = exercise.sets[exercise.sets.length - 1]?.set_no || null;
+      }
+      if (!targetSet) {
+        targetSet = await ensureSetExists(ueId);
+      }
+      if (!targetSet) return;
       const data = await apiFetch(`/gymapi/day/${state.dayIndex}/exercise/${ueId}/set/inc_last`, {
         method: 'POST',
-        body: JSON.stringify({ field, delta }),
+        body: JSON.stringify({ field, delta, set_no: targetSet }),
       });
       applySetsUpdate(ueId, data.sets);
       toast('Сохранено');
@@ -797,32 +638,27 @@
     async function completeDay() {
       if (!state.dayIndex) return;
       try {
-        const data = await apiFetch(`/gymapi/day/${state.dayIndex}/complete`, {
-          method: 'POST',
-          body: JSON.stringify({}),
-          silent: true,
-        });
+        const data = await apiFetch(`/gymapi/day/${state.dayIndex}/complete`, { method: 'POST', body: JSON.stringify({}), silent: false });
         state.completedDays = new Set((data.completed_days || []).map(Number));
         renderDayOptions(state.dayIndex);
         toast('День завершён ✅');
       } catch (e) {
-        if (e?.status === 401 || e?.status === 403) {
-          toast('Нет доступа. Открой WebApp из Telegram.');
-        } else {
-          toast('Ошибка связи. Попробуй ещё раз.');
-        }
+        if (e?.status === 401 || e?.status === 403) toast('Нет доступа. Открой WebApp из Telegram.');
+        else toast('Ошибка связи. Попробуй ещё раз.');
       }
     }
 
     async function loadSheet(dayIndex) {
       state.dayIndex = dayIndex;
+      state.contexts = new Map();
       const sheet = await apiFetch(`/gymapi/day/${dayIndex}/sheet`);
       if (sheet.completed_days) {
         state.completedDays = new Set(sheet.completed_days.map(Number));
         renderDayOptions(dayIndex);
       }
       state.date = sheet.date;
-      document.getElementById('dateLabel').textContent = sheet.date;
+      state.dateIso = toIsoDate(sheet.date);
+      document.getElementById('dateLabel').textContent = sheet.date || '';
       renderExercises(sheet.exercises || []);
       updateFinishButton();
     }
@@ -837,19 +673,44 @@
       await loadSheet(targetDay);
     }
 
+    function updateFinishButton() {
+      const btn = document.getElementById('finishBtn');
+      const completed = state.completedDays.has(Number(state.dayIndex));
+      btn.disabled = !state.dayIndex;
+      btn.classList.toggle('ready', !completed && state.dayIndex);
+      btn.textContent = completed ? 'День уже завершён' : 'Завершить день';
+    }
+
     function bindEvents() {
       document.getElementById('daySelect').addEventListener('change', (e) => {
         const dayIdx = Number(e.target.value);
         loadSheet(dayIdx).catch(console.error);
       });
-      document.getElementById('refreshBtn').addEventListener('click', () => {
-        if (state.dayIndex) loadSheet(state.dayIndex).catch(console.error);
-      });
       document.getElementById('finishBtn').addEventListener('click', () => {
         if (!state.dayIndex) return;
-        if (openConfirmModal) {
-          openConfirmModal(() => completeDay());
-        }
+        openConfirmModal?.(() => completeDay());
+      });
+      document.getElementById('editorClose').addEventListener('click', closeEditor);
+      document.getElementById('editorAddSet').addEventListener('click', () => queueExerciseAction(state.editor.ueId, () => addSet(state.editor.ueId, { toastOnSave: true })));
+      document.getElementById('editorRemoveSet').addEventListener('click', () => queueExerciseAction(state.editor.ueId, () => removeSet(state.editor.ueId)));
+      document.getElementById('sheet').addEventListener('click', (e) => { if (e.target.id === 'sheet') closeEditor(); });
+      document.querySelectorAll('#editorTabs .seg-btn').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          if (!state.editor.ueId) return;
+          const tab = btn.dataset.tab;
+          setActiveTab(tab);
+          if (tab !== 'sets') ensureExerciseContext(state.editor.ueId).catch(console.error);
+          renderEditor();
+        });
+      });
+      document.getElementById('noteArea').addEventListener('input', () => {
+        if (!state.editor.ueId) return;
+        const value = document.getElementById('noteArea').value;
+        const ctx = getOrCreateContext(state.editor.ueId);
+        ctx.data = { ...(ctx.data || {}), current_note: value };
+        if (state.editor.noteTimer) clearTimeout(state.editor.noteTimer);
+        setNoteStatus('Сохраняем…');
+        state.editor.noteTimer = setTimeout(() => saveExerciseNote(state.editor.ueId, value), 850);
       });
     }
 
@@ -867,17 +728,187 @@
       return true;
     }
 
+    function selectSet(setNo) {
+      state.editor.selectedSet = setNo;
+      renderEditor();
+    }
+
+    function renderSetsList(exercise) {
+      const list = document.getElementById('setsList');
+      list.innerHTML = '';
+      if (!exercise.sets.length) {
+        const empty = document.createElement('div');
+        empty.className = 'muted';
+        empty.textContent = 'Пока нет подходов. Добавь или измени значения кнопками ниже.';
+        list.appendChild(empty);
+        return;
+      }
+      exercise.sets.forEach((s) => {
+        const row = document.createElement('div');
+        row.className = 'set-row';
+        if (s.set_no === state.editor.selectedSet) row.classList.add('selected');
+        const left = document.createElement('div'); left.className = 'set-no'; left.textContent = `№${s.set_no}`;
+        const right = document.createElement('div'); right.className = 'set-meta'; right.textContent = `${s.weight_kg} кг · ${s.reps} повт. · ${s.seconds} сек`;
+        row.append(left, right);
+        row.addEventListener('click', () => selectSet(s.set_no));
+        list.appendChild(row);
+      });
+    }
+
+    function renderStepChips(field, container) {
+      container.innerHTML = '';
+      STEP_OPTIONS[field].forEach((val) => {
+        const chip = document.createElement('button');
+        chip.type = 'button';
+        chip.className = 'chip' + (state.steps[field] === val ? ' active' : '');
+        chip.textContent = val;
+        chip.addEventListener('click', () => { state.steps[field] = val; renderEditor(); });
+        container.appendChild(chip);
+      });
+    }
+
+    function buildControlBlock(label, field, value, primary = false) {
+      const block = document.createElement('div');
+      block.className = 'control-block' + (primary ? ' primary' : '');
+      const head = document.createElement('div'); head.className = 'control-head'; head.innerHTML = `<span>${label}</span><span>${state.steps[field]} шаг</span>`;
+      const valueEl = document.createElement('div'); valueEl.className = 'control-value'; valueEl.textContent = value;
+      const actions = document.createElement('div'); actions.className = 'control-actions';
+      const minus = document.createElement('button'); minus.className = 'circle-btn'; minus.textContent = '−'; minus.addEventListener('click', () => queueExerciseAction(state.editor.ueId, () => incSet(state.editor.ueId, field, -state.steps[field])));
+      const plus = document.createElement('button'); plus.className = 'circle-btn'; plus.textContent = '+'; plus.addEventListener('click', () => queueExerciseAction(state.editor.ueId, () => incSet(state.editor.ueId, field, state.steps[field])));
+      actions.append(minus, valueEl, plus);
+      const chips = document.createElement('div'); chips.className = 'chips'; renderStepChips(field, chips);
+      block.append(head, actions, chips);
+      return block;
+    }
+
+    function setActiveTab(tab) {
+      state.editor.tab = tab;
+      document.querySelectorAll('#editorTabs .seg-btn').forEach((btn) => {
+        btn.classList.toggle('active', btn.dataset.tab === tab);
+      });
+      document.querySelectorAll('.tab-panel').forEach((panel) => {
+        panel.classList.toggle('active', panel.id === `tab${tab.charAt(0).toUpperCase()}${tab.slice(1)}`);
+      });
+    }
+
+    function renderNoteTab(exercise) {
+      const area = document.getElementById('noteArea');
+      const ctx = getOrCreateContext(exercise.user_exercise_id);
+      if (!ctx.loaded && !ctx.loading) ensureExerciseContext(exercise.user_exercise_id);
+      if (ctx.loading) {
+        setNoteStatus('Загрузка…');
+      } else if (ctx.error) {
+        setNoteStatus('Ошибка связи');
+      } else {
+        setNoteStatus('');
+      }
+      const desired = (ctx.data?.current_note ?? '') || '';
+      if (document.activeElement !== area && area.value !== desired) {
+        area.value = desired;
+      }
+    }
+
+    function renderHistoryTab(exercise) {
+      const container = document.getElementById('historyContent');
+      container.innerHTML = '';
+      const ctx = getOrCreateContext(exercise.user_exercise_id);
+      if (!ctx.loaded && !ctx.loading) ensureExerciseContext(exercise.user_exercise_id);
+      if (ctx.loading) { container.textContent = 'Загрузка…'; return; }
+      if (ctx.error) { container.textContent = 'Ошибка связи'; return; }
+      const data = ctx.data || {};
+      const hasPrev = data.previous_date || data.previous_summary || (data.previous_sets && data.previous_sets.length);
+      const showPrevNote = data.previous_note && !data.current_note;
+      if (!hasPrev && !showPrevNote) {
+        container.textContent = 'Пока нет прошлых данных по этому упражнению.';
+        return;
+      }
+      if (hasPrev) {
+        const title = document.createElement('div');
+        title.className = 'history-title';
+        title.textContent = 'Прошлый раз';
+        container.appendChild(title);
+        if (data.previous_date || data.previous_summary) {
+          const line = document.createElement('div');
+          line.textContent = `${data.previous_date || '—'} — ${data.previous_summary || '—'}`;
+          container.appendChild(line);
+        }
+        if (data.previous_sets && data.previous_sets.length) {
+          const table = document.createElement('table');
+          table.className = 'history-table';
+          const thead = document.createElement('thead');
+          thead.innerHTML = '<tr><th>№</th><th>повт</th><th>сек</th><th>кг</th></tr>';
+          const tbody = document.createElement('tbody');
+          data.previous_sets.forEach((s) => {
+            const row = document.createElement('tr');
+            row.innerHTML = `<td>${s.set_no}</td><td>${s.reps}</td><td>${s.seconds}</td><td>${s.weight_kg}</td>`;
+            tbody.appendChild(row);
+          });
+          table.append(thead, tbody);
+          container.appendChild(table);
+        }
+      }
+      if (showPrevNote) {
+        const noteBlock = document.createElement('div');
+        noteBlock.className = 'history-note';
+        noteBlock.textContent = `Последняя заметка: ${data.previous_note}`;
+        container.appendChild(noteBlock);
+      }
+    }
+
+    function renderEditor() {
+      if (!state.editor.open) return;
+      const exercise = state.exercises.get(state.editor.ueId);
+      if (!exercise) return;
+      if (!state.editor.selectedSet && exercise.sets.length) state.editor.selectedSet = exercise.sets[exercise.sets.length - 1].set_no;
+      document.getElementById('sheet').classList.add('show');
+      document.getElementById('sheetSubtitle').textContent = exercise.name;
+      setActiveTab(state.editor.tab || 'sets');
+
+      if (state.editor.tab === 'sets') {
+        renderSetsList(exercise);
+        const selected = exercise.sets.find((s) => s.set_no === state.editor.selectedSet);
+        document.getElementById('selectedLabel').textContent = selected ? `Выбран подход №${selected.set_no}` : 'Выбери подход для редактирования';
+
+        const grid = document.getElementById('controlsGrid');
+        grid.innerHTML = '';
+        const isDuration = isDurationExercise(exercise.name);
+        const selectedRow = exercise.sets.find((s) => s.set_no === state.editor.selectedSet);
+        const repsVal = selectedRow ? selectedRow.reps : 0;
+        const secVal = selectedRow ? selectedRow.seconds : 0;
+        const kgVal = selectedRow ? selectedRow.weight_kg : 0;
+        const secBlock = buildControlBlock('Секунды', 'sec', secVal, isDuration);
+        const weightBlock = buildControlBlock('Вес (кг)', 'kg', kgVal, !isDuration);
+        const repsBlock = buildControlBlock('Повторы', 'reps', repsVal, false);
+        if (isDuration) { grid.append(secBlock, weightBlock, repsBlock); }
+        else { grid.append(weightBlock, repsBlock, secBlock); }
+      } else if (state.editor.tab === 'note') {
+        renderNoteTab(exercise);
+      } else if (state.editor.tab === 'history') {
+        renderHistoryTab(exercise);
+      }
+    }
+
+    function openEditor(ueId) {
+      state.editor = { open: true, ueId, selectedSet: null, tab: 'sets', noteTimer: null, noteStatusTimer: null };
+      setActiveTab('sets');
+      renderEditor();
+    }
+
+    function closeEditor() {
+      if (state.editor.noteTimer) clearTimeout(state.editor.noteTimer);
+      if (state.editor.noteStatusTimer) clearTimeout(state.editor.noteStatusTimer);
+      state.editor = { open: false, ueId: null, selectedSet: null, tab: 'sets', noteTimer: null, noteStatusTimer: null };
+      document.getElementById('sheet').classList.remove('show');
+      setNoteStatus('');
+      document.getElementById('noteArea').value = '';
+    }
+
     async function init() {
       const ok = initTelegram();
       if (!ok) return;
-      renderSteps();
       openConfirmModal = setupModal();
       bindEvents();
-      try {
-        await loadToday();
-      } catch (e) {
-        console.error(e);
-      }
+      try { await loadToday(); } catch (e) { console.error(e); }
     }
 
     document.addEventListener('DOMContentLoaded', init);
