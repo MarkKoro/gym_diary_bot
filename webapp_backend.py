@@ -1,5 +1,6 @@
 import os
-from datetime import UTC, datetime, date
+from datetime import UTC, datetime, date, time, timedelta
+from zoneinfo import ZoneInfo
 from fastapi import Body, Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -11,6 +12,13 @@ from telegram_webapp_auth import (
 )
 
 import db
+from db import (
+    clear_day_completions,
+    get_user_timezone,
+    list_day_completions,
+    list_user_reminders,
+    mark_day_completed,
+)
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 STATIC_DIR = os.path.join(BASE_DIR, "static", "webapp")
@@ -18,6 +26,9 @@ STATIC_DIR = os.path.join(BASE_DIR, "static", "webapp")
 app = FastAPI(title="GymDiary WebApp backend")
 
 MAX_INITDATA_AGE_SEC = 24 * 60 * 60
+
+UNSCHEDULED_COMPLETION_EXPIRY_DAYS = 5
+SCHEDULED_COMPLETION_EXPIRY_DAYS = 5
 
 # Статика (пока заглушка)
 if os.path.isdir(STATIC_DIR):
@@ -68,6 +79,83 @@ def _parse_date_param(date_str: str | None) -> date:
         return datetime.strptime(date_str, "%Y-%m-%d").date()
     except ValueError:
         raise HTTPException(status_code=400, detail="Неверный формат даты, используйте YYYY-MM-DD")
+
+
+def resolve_user_zone(tz_name: str | None) -> ZoneInfo:
+    if not tz_name:
+        return ZoneInfo("UTC")
+    try:
+        return ZoneInfo(tz_name)
+    except Exception:
+        return ZoneInfo("UTC")
+
+
+def _training_week_start(local_dt: datetime, first_dow: int):
+    offset = (local_dt.weekday() - first_dow) % 7
+    return local_dt.date() - timedelta(days=offset)
+
+
+def _parse_completion_rows(rows: list[tuple[int, str | None]]):
+    parsed = []
+    latest = None
+    for day, value in rows:
+        if not value:
+            continue
+        try:
+            dt = datetime.fromisoformat(value)
+        except ValueError:
+            continue
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=ZoneInfo("UTC"))
+        parsed.append((day, dt))
+        if latest is None or dt > latest:
+            latest = dt
+    return parsed, latest
+
+
+async def _get_primary_training_weekday(user_id: int) -> int | None:
+    reminders = await list_user_reminders(user_id)
+    first_configured = None
+    for day_no, dow, _, _ in reminders:
+        if dow is None:
+            continue
+        dow_value = int(dow)
+        if day_no == 1:
+            return dow_value
+        if first_configured is None:
+            first_configured = dow_value
+    return first_configured
+
+
+async def _should_clear_day_completions(user_id: int, latest: datetime | None) -> bool:
+    if latest is None:
+        return False
+    now = datetime.now(UTC)
+    tz_name = await get_user_timezone(user_id)
+    zone = resolve_user_zone(tz_name)
+    latest_local = latest.astimezone(zone)
+    now_local = now.astimezone(zone)
+
+    first_dow = await _get_primary_training_weekday(user_id)
+    if first_dow is not None:
+        latest_week_start = _training_week_start(latest_local, first_dow)
+        current_week_start = _training_week_start(now_local, first_dow)
+        if current_week_start > latest_week_start:
+            return True
+        return False
+
+    expiration_date = latest_local.date() + timedelta(days=UNSCHEDULED_COMPLETION_EXPIRY_DAYS)
+    expiration_local = datetime.combine(expiration_date, time(12, tzinfo=zone))
+    return now_local >= expiration_local
+
+
+async def get_active_day_completions(user_id: int) -> set[int]:
+    rows = await list_day_completions(user_id)
+    parsed, latest = _parse_completion_rows(rows)
+    if await _should_clear_day_completions(user_id, latest):
+        await clear_day_completions(user_id)
+        return set()
+    return {day for day, _ in parsed}
 
 
 async def _load_user_settings(user_id: int):
@@ -152,16 +240,11 @@ def whoami(tg: TelegramInitData = Depends(get_tg_init_data)):
 async def day_today(tg: TelegramInitData = Depends(get_tg_init_data)):
     user_id = tg.user.id
     wpw, active_days = await _load_user_settings(user_id)
-    completions = await db.list_day_completions(user_id)
+    completed = await get_active_day_completions(user_id)
     today = _today_date()
-    completed_today = {
-        int(d)
-        for d, completed_at in completions
-        if datetime.fromisoformat(completed_at).date() == today
-    }
     suggested = 1
     for d, _ in active_days:
-        if d not in completed_today:
+        if d not in completed:
             suggested = int(d)
             break
 
@@ -170,6 +253,7 @@ async def day_today(tg: TelegramInitData = Depends(get_tg_init_data)):
         "suggested_day_index": suggested,
         "workouts_per_week": wpw,
         "active_days": [{"day_index": int(d), "label": label} for d, label in active_days],
+        "completed_days": sorted(int(d) for d in completed),
     }
 
 
@@ -181,6 +265,7 @@ async def day_sheet(
 ):
     user_id = tg.user.id
     await _validate_day(user_id, day_index)
+    completed_days = await get_active_day_completions(user_id)
     target_date = _parse_date_param(date)
     iso_date = _iso_date(target_date)
     session_id = await db.get_or_create_today_session(user_id, iso_date, day_index)
@@ -206,6 +291,22 @@ async def day_sheet(
         "day_label": day_label,
         "session_id": session_id,
         "exercises": exercises,
+        "is_completed": day_index in completed_days,
+        "completed_days": sorted(int(d) for d in completed_days),
+    }
+
+
+@app.post("/day/{day_index}/complete")
+async def complete_day(day_index: int, tg: TelegramInitData = Depends(get_tg_init_data)):
+    user_id = tg.user.id
+    await _validate_day(user_id, day_index)
+    now = datetime.now(UTC).isoformat()
+    await mark_day_completed(user_id, day_index, now)
+    completed = await get_active_day_completions(user_id)
+    return {
+        "ok": True,
+        "day_index": day_index,
+        "completed_days": sorted(int(d) for d in completed),
     }
 
 
