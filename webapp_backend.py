@@ -12,6 +12,7 @@ from telegram_webapp_auth import (
 )
 
 import db
+from keyboards import MG_NAMES
 from db import (
     clear_day_completions,
     get_user_timezone,
@@ -22,6 +23,8 @@ from db import (
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 STATIC_DIR = os.path.join(BASE_DIR, "static", "webapp")
+
+MUSCLE_CODES = tuple(MG_NAMES.keys())
 
 app = FastAPI(title="GymDiary WebApp backend")
 
@@ -503,3 +506,67 @@ async def update_exercise_note(
     await db.set_exercise_note(session_id, ue_id, note_value)
 
     return {"ok": True, "current_note": note_value}
+
+
+@app.get("/muscles")
+async def list_muscles(tg: TelegramInitData = Depends(get_tg_init_data)):
+    _ = tg
+    muscles = [{"code": code, "name": name} for code, name in MG_NAMES.items()]
+    return {"ok": True, "muscles": muscles}
+
+
+@app.get("/library/exercises")
+async def list_library_exercises(
+    query: str | None = None,
+    muscle: str | None = None,
+    only_used: int | None = 1,
+    tg: TelegramInitData = Depends(get_tg_init_data),
+):
+    if only_used not in (None, 1):
+        raise HTTPException(status_code=400, detail="Параметр only_used поддерживает только значение 1")
+
+    user_id = tg.user.id
+    muscle_filter = (muscle or "").strip().lower() or None
+    rows = await db.list_user_exercises_for_mapping(user_id, query, muscle_filter)
+    return {
+        "ok": True,
+        "items": [
+            {"id": int(row[0]), "name": row[1], "muscle_group": row[2]}
+            for row in rows
+            if row
+        ],
+    }
+
+
+@app.put("/library/exercise/{exercise_id}/muscle")
+async def update_exercise_muscle_group(
+    exercise_id: int,
+    payload: dict = Body(...),
+    tg: TelegramInitData = Depends(get_tg_init_data),
+):
+    user_id = tg.user.id
+    mg_raw = (payload or {}).get("muscle_group") if isinstance(payload, dict) else None
+
+    if mg_raw is None:
+        mg_value: str | None = None
+    elif isinstance(mg_raw, str):
+        mg_value = mg_raw.strip()
+        if mg_value == "":
+            mg_value = None
+    else:
+        raise HTTPException(status_code=400, detail="Некорректная группа")
+
+    if mg_value is not None and mg_value not in MUSCLE_CODES:
+        raise HTTPException(status_code=400, detail="Некорректная группа")
+
+    async with db.connect_db() as conn:
+        cur = await conn.execute(
+            "SELECT 1 FROM user_exercises WHERE user_id=? AND exercise_id=? AND is_archived=0 LIMIT 1",
+            (user_id, exercise_id),
+        )
+        exists_row = await cur.fetchone()
+    if not exists_row:
+        raise HTTPException(status_code=404, detail="Упражнение не найдено")
+
+    await db.set_exercise_muscle_group(exercise_id, mg_value)
+    return {"ok": True, "id": exercise_id, "muscle_group": mg_value}

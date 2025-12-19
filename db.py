@@ -3293,3 +3293,38 @@ async def update_trainer_label(link_id: int, trainer_label: str | None):
             (trainer_label, link_id),
         )
         await db.commit()
+
+
+async def list_user_exercises_for_mapping(
+    user_id: int, query: str | None = None, muscle: str | None = None
+):
+    async with connect_db() as db:
+        params: list[object] = [user_id]
+        where = ["ue.user_id=?", "ue.is_archived=0"]
+        if query:
+            where.append("LOWER(e.name) LIKE ?")
+            params.append(f"%{query.lower()}%")
+        if muscle:
+            if muscle == "none":
+                where.append("(e.muscle_group IS NULL OR e.muscle_group='')")
+            else:
+                where.append("e.muscle_group=?")
+                params.append(muscle)
+        sql = (
+            "SELECT DISTINCT e.id, e.name, e.muscle_group "
+            "FROM user_exercises ue "
+            "JOIN exercises e ON e.id = ue.exercise_id "
+            f"WHERE {' AND '.join(where)} "
+            "ORDER BY e.name COLLATE NOCASE"
+        )
+        cur = await db.execute(sql, params)
+        return await cur.fetchall()
+
+
+async def set_exercise_muscle_group(exercise_id: int, muscle_group: str | None):
+    async with connect_db() as db:
+        await db.execute(
+            "UPDATE exercises SET muscle_group=? WHERE id=?",
+            (muscle_group, exercise_id),
+        )
+        await db.commit()
