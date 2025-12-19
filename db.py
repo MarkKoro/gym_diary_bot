@@ -2087,6 +2087,18 @@ async def get_day_label(user_id: int, day_index: int):
         row = await cur.fetchone()
         return row[0] if row else f"День {day_index}"
 
+
+async def get_user_exercise_info(user_exercise_id: int):
+    async with connect_db() as db:
+        cur = await db.execute(
+            "SELECT user_id, day_index FROM user_exercises WHERE id=? AND is_archived=0",
+            (user_exercise_id,),
+        )
+        row = await cur.fetchone()
+        if not row:
+            return None
+        return int(row[0]), int(row[1])
+
 async def rename_day(user_id: int, day_index: int, label: str):
     async with connect_db() as db:
         await db.execute(
@@ -2281,7 +2293,12 @@ async def fetch_exercise_sets(session_id: int, ue_id: int):
         return await cur.fetchall()
 
 async def add_set(
-    session_id: int, user_ex_id: int, reps: int = 0, seconds: int = 0, weight: float = 0.0
+    session_id: int,
+    user_ex_id: int,
+    reps: int = 0,
+    seconds: int = 0,
+    weight: float = 0.0,
+    is_warmup: bool = False,
 ):
     async with connect_db() as db:
         cur = await db.execute(
@@ -2292,11 +2309,12 @@ async def add_set(
         await db.execute(
             """
             INSERT INTO sets(session_id, user_exercise_id, set_no, reps, seconds, weight_kg, is_warmup)
-            VALUES(?,?,?,?,?,?,0)
+            VALUES(?,?,?,?,?,?,?)
             """,
-            (session_id, user_ex_id, next_no, reps, seconds, weight),
+            (session_id, user_ex_id, next_no, reps, seconds, weight, int(bool(is_warmup))),
         )
-        await _upsert_session_defaults(db, session_id, user_ex_id, reps, seconds, weight)
+        if not is_warmup:
+            await _upsert_session_defaults(db, session_id, user_ex_id, reps, seconds, weight)
         await db.commit()
 
 async def remove_last_set(user_ex_id: int, session_id: int):
