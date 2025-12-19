@@ -5,7 +5,7 @@ import secrets
 from contextlib import asynccontextmanager
 from typing import Optional, Sequence
 from settings import DB_PATH, TRIAL_DAYS, DB_POOL_SIZE
-from kb_catalog import KB_EXERCISE_NAMES
+from kb_catalog import KB_CATEGORY_DEFINITION, KB_EXERCISE_NAMES
 
 
 DEFAULT_EXERCISES: Sequence[tuple[str, str]] = [
@@ -68,6 +68,8 @@ DEFAULT_EXERCISES: Sequence[tuple[str, str]] = [
 ]
 
 KB_EXERCISES: Sequence[tuple[str, str]] = tuple((name, "kb") for name in KB_EXERCISE_NAMES)
+
+MUSCLE_CODES = ["chest", "back", "legs", "shoulders", "biceps", "triceps", "core", "cardio"]
 
 METCON_EXERCISES: Sequence[tuple[str, str]] = [
     ("Меткон — AMRAP (кастом)", "metcon"),
@@ -150,6 +152,85 @@ async def _seed_exercises(db, exercises: Sequence[tuple[str, str]], update_group
                 "UPDATE exercises SET muscle_group=? WHERE name=?",
                 (mg, name),
             )
+
+
+async def _ensure_muscle_map_schema(db):
+    await db.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS exercise_muscles(
+            exercise_id INTEGER NOT NULL,
+            muscle_code TEXT NOT NULL,
+            weight_pct REAL NOT NULL,
+            PRIMARY KEY(exercise_id, muscle_code),
+            FOREIGN KEY(exercise_id) REFERENCES exercises(id) ON DELETE CASCADE
+        );
+
+        CREATE TABLE IF NOT EXISTS user_exercise_muscles(
+            user_id INTEGER NOT NULL,
+            exercise_id INTEGER NOT NULL,
+            muscle_code TEXT NOT NULL,
+            weight_pct REAL NOT NULL,
+            PRIMARY KEY(user_id, exercise_id, muscle_code),
+            FOREIGN KEY(exercise_id) REFERENCES exercises(id) ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_exercise_muscles_exercise_id
+            ON exercise_muscles(exercise_id);
+        """
+    )
+
+
+async def _seed_exercise_muscles_defaults(db):
+    mapping: dict[str, dict[str, int]] = {}
+
+    anatomical_groups = {"chest", "back", "legs", "shoulders", "biceps", "triceps", "core"}
+    for name, group in DEFAULT_EXERCISES:
+        if group in anatomical_groups:
+            mapping[name] = {group: 100}
+
+    category_defaults: dict[str, dict[str, int]] = {
+        "kb_cat_ballistics": {"legs": 35, "back": 20, "shoulders": 15, "core": 20, "cardio": 10},
+        "kb_cat_grinds": {"shoulders": 30, "back": 20, "legs": 20, "core": 20, "biceps": 5, "triceps": 5},
+        "kb_cat_squats": {"legs": 60, "core": 20, "back": 20},
+        "kb_cat_carries": {"core": 35, "legs": 25, "shoulders": 20, "back": 20},
+        "kb_cat_core": {"core": 80, "legs": 20},
+        "kb_cat_complexes": {"legs": 30, "back": 20, "shoulders": 20, "core": 20, "biceps": 5, "triceps": 5},
+    }
+
+    for cat_code, exercise_names in KB_CATEGORY_DEFINITION:
+        distribution = category_defaults.get(cat_code.lower())
+        if not distribution:
+            continue
+        for name in exercise_names:
+            mapping[name] = distribution
+
+    for name, _ in METCON_EXERCISES:
+        mapping[name] = {"cardio": 70, "legs": 15, "core": 15}
+
+    for name, _ in WORKOUT_EXERCISES:
+        mapping[name] = {"back": 35, "biceps": 20, "triceps": 15, "shoulders": 10, "core": 10, "legs": 10}
+
+    rows_to_insert: list[tuple[int, str, int]] = []
+    for name, muscles in mapping.items():
+        cur = await db.execute("SELECT id FROM exercises WHERE name=?", (name,))
+        row = await cur.fetchone()
+        if not row:
+            continue
+        exercise_id = row[0]
+        cur = await db.execute(
+            "SELECT 1 FROM exercise_muscles WHERE exercise_id=? LIMIT 1", (exercise_id,)
+        )
+        if await cur.fetchone():
+            continue
+        rows_to_insert.extend(
+            (exercise_id, muscle_code, weight_pct) for muscle_code, weight_pct in muscles.items()
+        )
+
+    if rows_to_insert:
+        await db.executemany(
+            "INSERT INTO exercise_muscles(exercise_id, muscle_code, weight_pct) VALUES (?,?,?)",
+            rows_to_insert,
+        )
 
 # Ограничиваем число одновременных операций с базой
 _db_semaphore = asyncio.BoundedSemaphore(DB_POOL_SIZE)
@@ -738,6 +819,8 @@ async def init_db():
         await _seed_exercises(db, KB_EXERCISES)
         await _seed_exercises(db, METCON_EXERCISES, update_group=False)
         await _seed_exercises(db, WORKOUT_EXERCISES, update_group=False)
+        await _ensure_muscle_map_schema(db)
+        await _seed_exercise_muscles_defaults(db)
         await db.commit()
 
 def _generate_trainer_code_value() -> str:
