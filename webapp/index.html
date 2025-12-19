@@ -36,13 +36,58 @@
       font-family: "SF Pro Text", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
       min-height: 100vh;
     }
+    body.drawer-open { overflow: hidden; }
     .app {
       display: flex;
       flex-direction: column;
       gap: 16px;
       padding: 16px;
       padding-bottom: calc(18px + env(safe-area-inset-bottom));
+      min-height: 100vh;
     }
+    .app-header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      position: sticky;
+      top: 0;
+      z-index: 12;
+      padding: 2px 0 6px;
+      background: var(--bg);
+    }
+    .hamburger {
+      width: 44px;
+      height: 44px;
+      border-radius: 12px;
+      border: 1px solid var(--border);
+      background: var(--card);
+      display: grid;
+      place-items: center;
+      cursor: pointer;
+      box-shadow: var(--shadow);
+      padding: 10px;
+    }
+    .hamburger span {
+      display: block;
+      width: 100%;
+      height: 2px;
+      background: var(--text);
+      border-radius: 999px;
+      position: relative;
+    }
+    .hamburger span::before,
+    .hamburger span::after {
+      content: '';
+      position: absolute;
+      left: 0;
+      width: 100%;
+      height: 2px;
+      background: var(--text);
+      border-radius: 999px;
+    }
+    .hamburger span::before { top: -6px; }
+    .hamburger span::after { top: 6px; }
+    .header-title { font-size: 20px; font-weight: 800; letter-spacing: -0.02em; }
     header.top-bar {
       display: flex;
       gap: 12px;
@@ -77,6 +122,63 @@
     }
     .status .dot { width: 10px; height: 10px; border-radius: 50%; background: #34c759; }
     .status.error .dot { background: var(--danger); }
+    .drawer-backdrop {
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.4);
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.25s ease;
+      z-index: 20;
+      display: flex;
+      align-items: stretch;
+    }
+    .drawer-backdrop.show { opacity: 1; pointer-events: auto; }
+    .drawer {
+      width: 80%;
+      max-width: 320px;
+      background: var(--card);
+      box-shadow: 0 10px 40px rgba(0,0,0,0.18);
+      border-right: 1px solid var(--border);
+      transform: translateX(-100%);
+      transition: transform 0.25s ease;
+      display: flex;
+      flex-direction: column;
+    }
+    .drawer-backdrop.show .drawer { transform: translateX(0); }
+    .drawer-header {
+      padding: 16px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      border-bottom: 1px solid var(--border);
+    }
+    .drawer-title { font-size: 18px; font-weight: 800; letter-spacing: -0.02em; }
+    .close-btn {
+      width: 40px;
+      height: 40px;
+      border-radius: 12px;
+      border: 1px solid var(--border);
+      background: var(--bg);
+      cursor: pointer;
+    }
+    .drawer-menu { display: flex; flex-direction: column; padding: 10px; gap: 6px; }
+    .menu-item {
+      width: 100%;
+      text-align: left;
+      padding: 14px 16px;
+      border-radius: 12px;
+      border: 1px solid var(--border);
+      background: var(--card);
+      font-size: 15px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    .menu-item.active { border-color: var(--accent); color: var(--accent); box-shadow: 0 8px 18px rgba(0,122,255,0.12); }
+    .screens { display: flex; flex-direction: column; gap: 16px; flex: 1; }
+    .screen { display: none; flex-direction: column; gap: 16px; }
+    .screen.active { display: flex; }
     .card-list { display: flex; flex-direction: column; gap: 12px; }
     .card {
       background: var(--card);
@@ -226,27 +328,105 @@
     .sheet-actions { margin-top: 12px; display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 8px; }
     .muted { color: var(--muted); }
     .full-screen-msg { min-height: 100vh; display: flex; align-items: center; justify-content: center; text-align: center; background: var(--bg); color: var(--text); }
+    .section-title { font-size: 17px; font-weight: 800; letter-spacing: -0.01em; }
+    .subtext { color: var(--muted); font-size: 14px; }
+    .legend-card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 12px; box-shadow: var(--shadow); display: grid; gap: 8px; }
+    .legend-item { display: flex; align-items: center; gap: 10px; font-size: 14px; }
+    .legend-dot { width: 14px; height: 14px; border-radius: 50%; }
+    .search-input { width: 100%; padding: 12px 14px; border-radius: 12px; border: 1px solid var(--border); background: var(--card); color: var(--text); font-size: 15px; box-shadow: var(--shadow); }
+    .empty-state { color: var(--muted); font-size: 14px; }
+    .settings-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px,1fr)); gap: 12px; }
+    .small-label { font-size: 13px; color: var(--muted); }
   </style>
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
 </head>
 <body>
+  <div id="drawerOverlay" class="drawer-backdrop">
+    <div class="drawer">
+      <div class="drawer-header">
+        <div class="drawer-title">Навигация</div>
+        <button id="closeDrawer" class="close-btn" aria-label="Закрыть меню">✕</button>
+      </div>
+      <nav class="drawer-menu">
+        <button class="menu-item active" data-route="today">Сегодня</button>
+        <button class="menu-item" data-route="body">Моё тело</button>
+        <button class="menu-item" data-route="library">Мои упражнения</button>
+        <button class="menu-item" data-route="settings">Настройки</button>
+      </nav>
+    </div>
+  </div>
+
   <div id="not-telegram" class="full-screen-msg" style="display:none; padding:32px; text-align:center;">Открой WebApp из Telegram. В браузере авторизация не работает.</div>
   <div id="app" class="app" style="display:none">
-    <header class="top-bar">
-      <div class="day-block">
-        <div class="day-row">
-          <select id="daySelect" class="day-select"></select>
-          <div id="status" class="status"><span class="dot"></span><span class="status-text">онлайн</span></div>
-        </div>
-        <div class="date-label" id="dateLabel">—</div>
-      </div>
+    <header class="app-header">
+      <button id="menuBtn" class="hamburger" aria-label="Открыть меню"><span></span></button>
+      <div class="header-title" id="headerTitle">Сегодня</div>
     </header>
 
-    <div id="cards" class="card-list"></div>
+    <main id="screens" class="screens">
+      <section id="screen-today" class="screen active" data-route="today">
+        <header class="top-bar">
+          <div class="day-block">
+            <div class="day-row">
+              <select id="daySelect" class="day-select"></select>
+              <div id="status" class="status"><span class="dot"></span><span class="status-text">онлайн</span></div>
+            </div>
+            <div class="date-label" id="dateLabel">—</div>
+          </div>
+        </header>
 
-    <div class="bottom-bar">
-      <button id="finishBtn" class="finish-btn" disabled>Завершить день</button>
-    </div>
+        <div id="cards" class="card-list"></div>
+
+        <div class="bottom-bar">
+          <button id="finishBtn" class="finish-btn" disabled>Завершить день</button>
+        </div>
+      </section>
+
+      <section id="screen-body" class="screen" data-route="body">
+        <div class="card">
+          <div class="card-title">Моё тело</div>
+          <div class="card-summary">Скоро здесь будет карта мышц и нагрузка по группам.</div>
+          <div class="legend-card">
+            <div class="legend-item"><span class="legend-dot" style="background:#e53935"></span><span>Красное — нагружено сильнее</span></div>
+            <div class="legend-item"><span class="legend-dot" style="background:#4f8bd6"></span><span>Синее — почти не используется</span></div>
+          </div>
+        </div>
+      </section>
+
+      <section id="screen-library" class="screen" data-route="library">
+        <div class="card">
+          <div class="card-title">Мои упражнения</div>
+          <input type="search" class="search-input" placeholder="Поиск упражнения…">
+          <div class="empty-state">Скоро: группы мышц → упражнения → история и прогресс.</div>
+        </div>
+      </section>
+
+      <section id="screen-settings" class="screen" data-route="settings">
+        <div class="section-title">Настройки</div>
+        <div class="settings-grid">
+          <div class="card">
+            <div class="card-header">
+              <div>
+                <div class="card-title">Мышцы упражнений</div>
+                <div class="card-summary">Скоро: привязка упражнений к группам мышц</div>
+              </div>
+              <span class="pill">Скоро</span>
+            </div>
+            <button class="btn" disabled>Открыть</button>
+          </div>
+          <div class="card">
+            <div class="card-header">
+              <div>
+                <div class="card-title">Профиль</div>
+                <div class="card-summary">Часовой пояс, неделя тренировок — позже</div>
+              </div>
+              <span class="pill">Скоро</span>
+            </div>
+            <button class="btn" disabled>Открыть</button>
+          </div>
+        </div>
+      </section>
+    </main>
   </div>
 
   <div id="toast" class="toast"></div>
@@ -305,6 +485,13 @@
 
     const DURATION_PATTERNS = ["(сек", "удержание", "стойка", "планк"];
 
+    const ROUTE_TITLES = {
+      today: 'Сегодня',
+      body: 'Моё тело',
+      library: 'Мои упражнения',
+      settings: 'Настройки',
+    };
+
     const state = {
       initData: '',
       dayIndex: null,
@@ -317,6 +504,9 @@
       actionQueues: new Map(),
       contexts: new Map(),
       editor: { open: false, ueId: null, selectedSet: null, tab: 'sets', noteTimer: null, noteStatusTimer: null },
+      currentRoute: 'today',
+      drawerOpen: false,
+      isTelegram: false,
     };
 
     let openConfirmModal = null;
@@ -338,6 +528,74 @@
     }
 
     function setVisible(el, flag) { el.style.display = flag ? '' : 'none'; }
+
+    function setDrawer(open) {
+      state.drawerOpen = open;
+      document.getElementById('drawerOverlay').classList.toggle('show', open);
+      document.body.classList.toggle('drawer-open', open);
+    }
+
+    function closeDrawer() { setDrawer(false); }
+
+    function toggleDrawer() { setDrawer(!state.drawerOpen); }
+
+    function updateBackButton(route) {
+      if (!state.isTelegram || !tg?.BackButton) return;
+      if (route === 'today') tg.BackButton.hide();
+      else tg.BackButton.show();
+    }
+
+    function applyRoute(route) {
+      const normalized = ROUTE_TITLES[route] ? route : 'today';
+      state.currentRoute = normalized;
+      document.querySelectorAll('.screen').forEach((el) => {
+        el.classList.toggle('active', el.dataset.route === normalized);
+      });
+      document.getElementById('headerTitle').textContent = ROUTE_TITLES[normalized] || ROUTE_TITLES.today;
+      document.querySelectorAll('.menu-item').forEach((btn) => {
+        const active = btn.dataset.route === normalized;
+        btn.classList.toggle('active', active);
+        btn.setAttribute('aria-current', active ? 'page' : 'false');
+      });
+      closeDrawer();
+      updateBackButton(normalized);
+    }
+
+    function navigateTo(route, replace = false) {
+      const target = ROUTE_TITLES[route] ? route : 'today';
+      const hash = `#${target}`;
+      if (replace) {
+        location.replace(hash);
+        applyRoute(target);
+        return;
+      }
+      if (location.hash !== hash) { location.hash = hash; }
+      else { applyRoute(target); }
+    }
+
+    function handleRouteFromHash() {
+      const raw = (location.hash || '').replace('#', '') || 'today';
+      const route = ROUTE_TITLES[raw] ? raw : 'today';
+      if (route !== raw) {
+        navigateTo(route, true);
+        return;
+      }
+      applyRoute(route);
+    }
+
+    function handleBackAction() {
+      if (state.drawerOpen) { closeDrawer(); return; }
+      if (state.currentRoute !== 'today') navigateTo('today');
+    }
+
+    function setupNavigation() {
+      document.getElementById('menuBtn').addEventListener('click', toggleDrawer);
+      document.getElementById('closeDrawer').addEventListener('click', closeDrawer);
+      document.getElementById('drawerOverlay').addEventListener('click', (e) => { if (e.target.id === 'drawerOverlay') closeDrawer(); });
+      document.querySelectorAll('.menu-item').forEach((btn) => btn.addEventListener('click', () => navigateTo(btn.dataset.route)));
+      window.addEventListener('hashchange', handleRouteFromHash);
+      if (!location.hash) navigateTo('today', true); else handleRouteFromHash();
+    }
 
     function setStatus(ok) {
       const el = document.getElementById('status');
@@ -717,14 +975,18 @@
     function initTelegram() {
       if (!tg || !tg.initData) {
         setVisible(document.getElementById('not-telegram'), true);
+        setVisible(document.getElementById('app'), true);
         return false;
       }
       tg.ready();
       tg.expand();
+      state.isTelegram = true;
       state.initData = tg.initData;
       applyTheme();
       tg.onEvent?.('themeChanged', applyTheme);
+      tg.BackButton?.onClick(handleBackAction);
       setVisible(document.getElementById('app'), true);
+      updateBackButton(state.currentRoute);
       return true;
     }
 
@@ -904,10 +1166,11 @@
     }
 
     async function init() {
-      const ok = initTelegram();
-      if (!ok) return;
+      setupNavigation();
       openConfirmModal = setupModal();
       bindEvents();
+      const ok = initTelegram();
+      if (!ok) { handleRouteFromHash(); return; }
       try { await loadToday(); } catch (e) { console.error(e); }
     }
 
