@@ -40,6 +40,17 @@ MUSCLE_NAME_MAP = {
 }
 
 MAIN_MUSCLES = ("chest", "back", "legs", "shoulders", "core", "biceps", "triceps", "cardio", "other")
+ANATOMY_MUSCLE_CODES = {
+    "chest",
+    "back",
+    "legs",
+    "shoulders",
+    "core",
+    "biceps",
+    "triceps",
+    "other",
+    "cardio",
+}
 
 app = FastAPI(title="GymDiary WebApp backend")
 
@@ -621,7 +632,12 @@ async def list_library_exercises(
     return {
         "ok": True,
         "items": [
-            {"id": int(row[0]), "name": row[1], "muscle_group": row[2]}
+            {
+                "id": int(row[0]),
+                "name": row[1],
+                "muscle_group": row[2],
+                "has_user_anatomy_override": bool(row[3]) if len(row) > 3 else False,
+            }
             for row in rows
             if row
         ],
@@ -660,6 +676,137 @@ async def update_exercise_muscle_group(
 
     await db.set_exercise_muscle_group(exercise_id, mg_value)
     return {"ok": True, "id": exercise_id, "muscle_group": mg_value}
+
+
+async def _require_user_exercise(user_id: int, exercise_id: int) -> tuple[str, str | None]:
+    async with db.connect_db() as conn:
+        cur = await conn.execute(
+            """
+            SELECT e.name, e.muscle_group
+            FROM exercises e
+            JOIN user_exercises ue ON ue.exercise_id = e.id
+            WHERE ue.user_id=? AND ue.exercise_id=? AND ue.is_archived=0
+            LIMIT 1
+            """,
+            (user_id, exercise_id),
+        )
+        row = await cur.fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Упражнение не найдено")
+    return row[0], row[1]
+
+
+def _fallback_anatomy(muscle_group: str | None):
+    mg = (muscle_group or "").strip().lower()
+    if mg in db.ANATOMICAL_GROUPS:
+        return "fallback", [(mg, 100.0)]
+    if mg in {"run", "metcon", "cardio"}:
+        return "fallback", [("cardio", 100.0)]
+    return "fallback", [("other", 100.0)]
+
+
+def _format_anatomy_items(items):
+    return [
+        {
+            "muscle_code": code,
+            "name": MUSCLE_NAME_MAP.get(code, "Другое"),
+            "weight_pct": float(pct),
+        }
+        for code, pct in items
+    ]
+
+
+@app.get("/library/exercise/{exercise_id}/anatomy")
+async def get_exercise_anatomy(
+    exercise_id: int,
+    tg: TelegramInitData = Depends(get_tg_init_data),
+):
+    user_id = tg.user.id
+    name, muscle_group = await _require_user_exercise(user_id, exercise_id)
+
+    user_rows = await db.get_user_anatomy(user_id, exercise_id)
+    if user_rows:
+        source = "user"
+        items = [(row[0], float(row[1])) for row in user_rows]
+    else:
+        default_rows = await db.get_default_anatomy(exercise_id)
+        if default_rows:
+            source = "default"
+            items = [(row[0], float(row[1])) for row in default_rows]
+        else:
+            source, items = _fallback_anatomy(muscle_group)
+
+    return {
+        "ok": True,
+        "exercise_id": exercise_id,
+        "exercise_name": name,
+        "source": source,
+        "items": _format_anatomy_items(items),
+    }
+
+
+@app.put("/library/exercise/{exercise_id}/anatomy")
+async def update_exercise_anatomy(
+    exercise_id: int,
+    payload: dict = Body(...),
+    tg: TelegramInitData = Depends(get_tg_init_data),
+):
+    user_id = tg.user.id
+    name, muscle_group = await _require_user_exercise(user_id, exercise_id)
+
+    items = []
+    if isinstance(payload, dict):
+        items = payload.get("items") or []
+    if not isinstance(items, list):
+        raise HTTPException(status_code=400, detail="Некорректные данные")
+    if not 1 <= len(items) <= 4:
+        raise HTTPException(status_code=400, detail="Укажите от 1 до 4 мышц")
+
+    seen_codes: set[str] = set()
+    total = 0.0
+    normalized_items: list[dict] = []
+    for item in items:
+        if not isinstance(item, dict):
+            raise HTTPException(status_code=400, detail="Некорректные данные")
+        code = (item.get("muscle_code") or "").strip().lower()
+        pct_raw = item.get("weight_pct")
+        try:
+            pct = float(pct_raw)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="Некорректный процент")
+        if code not in ANATOMY_MUSCLE_CODES:
+            raise HTTPException(status_code=400, detail="Некорректная группа")
+        if pct <= 0:
+            raise HTTPException(status_code=400, detail="Процент должен быть больше нуля")
+        if code in seen_codes:
+            raise HTTPException(status_code=400, detail="Дубликаты не допускаются")
+        seen_codes.add(code)
+        total += pct
+        normalized_items.append({"muscle_code": code, "weight_pct": pct})
+
+    if abs(total - 100.0) > 0.5:
+        raise HTTPException(status_code=400, detail="Сумма процентов должна быть равна 100")
+
+    await db.set_user_anatomy(user_id, exercise_id, normalized_items)
+
+    return {
+        "ok": True,
+        "exercise_id": exercise_id,
+        "exercise_name": name,
+        "source": "user",
+        "items": _format_anatomy_items([(i["muscle_code"], i["weight_pct"]) for i in normalized_items]),
+    }
+
+
+@app.delete("/library/exercise/{exercise_id}/anatomy")
+async def delete_exercise_anatomy(
+    exercise_id: int,
+    tg: TelegramInitData = Depends(get_tg_init_data),
+):
+    user_id = tg.user.id
+    await _require_user_exercise(user_id, exercise_id)
+    await db.clear_user_anatomy(user_id, exercise_id)
+    return {"ok": True}
 
 
 def _resolve_range(range_code: str | None, end_date: date) -> tuple[str, date]:
