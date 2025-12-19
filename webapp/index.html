@@ -385,6 +385,12 @@
     .detail-row { display: flex; justify-content: space-between; font-size: 14px; padding: 8px 10px; border-radius: 10px; background: var(--card); border: 1px solid var(--border); }
     .detail-row-empty { color: var(--muted); padding: 6px 4px; }
     .empty-muscle { color: var(--muted); font-size: 14px; padding: 8px 10px; background: var(--bg); border-radius: 12px; border: 1px dashed var(--border); }
+    .range-actions { display: grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap: 6px; }
+    .range-btn { padding: 10px 8px; border-radius: 10px; border: 1px solid var(--border); background: var(--card); cursor: pointer; font-weight: 700; color: var(--text); }
+    .range-btn.active { border-color: var(--accent); color: var(--accent); }
+    .body-hints { display: flex; gap: 10px; flex-wrap: wrap; color: var(--muted); font-size: 13px; }
+    .body-highlights { display: flex; gap: 12px; flex-wrap: wrap; font-size: 14px; }
+    .body-tag { padding: 8px 10px; border-radius: 10px; background: var(--bg); border: 1px solid var(--border); }
   </style>
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
 </head>
@@ -431,13 +437,19 @@
       </section>
 
       <section id="screen-body" class="screen" data-route="body">
-        <div class="card">
-          <div class="card-title">Моё тело</div>
-          <div class="card-summary">Скоро здесь будет карта мышц и нагрузка по группам.</div>
-          <div class="legend-card">
-            <div class="legend-item"><span class="legend-dot" style="background:#e53935"></span><span>Красное — нагружено сильнее</span></div>
-            <div class="legend-item"><span class="legend-dot" style="background:#4f8bd6"></span><span>Синее — почти не используется</span></div>
+        <div class="card muscle-load-card" id="bodyCard">
+          <div class="card-header" style="align-items:flex-start; gap: 10px;">
+            <div>
+              <div class="card-title">Моё тело</div>
+              <div class="card-summary" id="bodyRangeLabel"></div>
+            </div>
+            <div class="range-actions" id="bodyRange"></div>
           </div>
+          <div class="body-hints">
+            <div>Карточка показывает, какие мышцы нагружались в выбранный период.</div>
+            <div>Оттенок зависит от процента нагрузки.</div>
+          </div>
+          <div id="bodyContent"></div>
         </div>
       </section>
 
@@ -576,6 +588,13 @@
 
     const BODY_MUSCLES = new Set(['chest', 'back', 'legs', 'shoulders', 'core', 'biceps', 'triceps']);
 
+    const BODY_RANGES = [
+      { code: '7d', label: '7 дней' },
+      { code: '30d', label: '30 дней' },
+      { code: '90d', label: '90 дней' },
+      { code: 'all', label: 'Всё' },
+    ];
+
     const ROUTE_TITLES = {
       today: 'Сегодня',
       body: 'Моё тело',
@@ -599,7 +618,8 @@
       currentRoute: 'today',
       drawerOpen: false,
       isTelegram: false,
-      muscleLoad: { groups: [], selectedKey: null, showAll: false, detailsOpen: true },
+      muscleLoad: { groups: [], selectedKey: null, showAll: false, detailsOpen: true, byMuscle: {}, loading: false },
+      body: { range: '30d', loading: false, data: null, selectedKey: null, showAll: false },
       muscles: {
         loaded: false,
         loading: false,
@@ -613,6 +633,7 @@
     };
 
     let openConfirmModal = null;
+    let muscleLoadTimer = null;
     const tg = window.Telegram ? window.Telegram.WebApp : null;
 
     function applyTheme() {
@@ -648,45 +669,6 @@
       if (seconds > 0 && (!weight || weight === 0)) return seconds;
       if (weight > 0 && reps > 0) return weight * reps;
       return Math.max(reps, seconds, 0);
-    }
-
-    function computeMuscleLoadData(exercisesList) {
-      const groups = new Map();
-      (exercisesList || []).forEach((ex) => {
-        const key = normalizeMuscleKey(ex.muscle_group);
-        const sets = ex.sets || [];
-        let rawExercise = 0;
-        sets.forEach((s) => { rawExercise += calcSetWork(s); });
-        if (!groups.has(key)) {
-          groups.set(key, { key, name: MUSCLE_NAMES[key] || MUSCLE_NAMES.other, raw: 0, transformed: 0, exercises: [] });
-        }
-        const group = groups.get(key);
-        group.raw += rawExercise;
-        group.exercises.push({ name: ex.name, raw: rawExercise });
-      });
-
-      const groupList = Array.from(groups.values()).map((g) => {
-        const transformed = Math.sqrt(Math.max(g.raw, 0));
-        return { ...g, transformed };
-      });
-
-      const totalTransformed = groupList.reduce((sum, g) => sum + g.transformed, 0);
-      const withPercents = groupList
-        .map((g) => {
-          const percent = totalTransformed > 0 ? (g.transformed / totalTransformed) * 100 : 0;
-          const exercises = g.exercises
-            .map((item) => {
-              const exTransformed = Math.sqrt(Math.max(item.raw, 0));
-              const share = g.transformed > 0 ? (exTransformed / g.transformed) * 100 : 0;
-              return { ...item, percent: share, transformed: exTransformed };
-            })
-            .sort((a, b) => b.percent - a.percent);
-          return { ...g, percent, exercises };
-        })
-        .filter((g) => g.raw > 0 || g.percent > 0);
-
-      withPercents.sort((a, b) => b.percent - a.percent);
-      return withPercents;
     }
 
     function percentToOpacity(percent) {
@@ -727,6 +709,12 @@
       });
       closeDrawer();
       updateBackButton(normalized);
+      if (normalized === 'body') {
+        if (!state.body.data) state.body.loading = true;
+        renderBodyRangeButtons();
+        if (!state.body.data || state.body.data?.range !== state.body.range) renderBodyContent();
+        loadBodyOverall(state.body.range).catch(console.error);
+      }
       if (normalized === 'muscles') initMuscleScreen().catch(console.error);
     }
 
@@ -1170,7 +1158,47 @@
       triggerHaptic();
     }
 
-    function buildBodySvg(highlights, selectedKey) {
+    function applyMuscleLoadData(data) {
+      const groups = (data?.muscles || []).map((m) => ({
+        key: m.code,
+        name: m.name || MUSCLE_NAMES[m.code] || MUSCLE_NAMES.other,
+        percent: Number(m.percent || 0),
+      }));
+      groups.sort((a, b) => b.percent - a.percent);
+      const selected = state.muscleLoad.selectedKey && groups.find((g) => g.key === state.muscleLoad.selectedKey);
+      const firstKey = (selected || groups[0] || {}).key || null;
+      state.muscleLoad = {
+        ...state.muscleLoad,
+        groups,
+        selectedKey: firstKey,
+        byMuscle: data?.by_muscle || {},
+        showAll: groups.length > 6 ? state.muscleLoad.showAll : false,
+        loading: false,
+      };
+      renderMuscleLoadCard();
+    }
+
+    async function loadDayMuscleLoad() {
+      if (!state.dayIndex) return;
+      state.muscleLoad.loading = true;
+      renderMuscleLoadCard();
+      try {
+        const isoDate = getIsoDate();
+        const query = isoDate ? `?date=${isoDate}` : '';
+        const data = await apiFetch(`/gymapi/body/day/${state.dayIndex}${query}`, { silent: true });
+        applyMuscleLoadData(data || {});
+      } catch (e) {
+        state.muscleLoad.loading = false;
+        renderMuscleLoadCard();
+      }
+    }
+
+    function scheduleDayMuscleLoad() {
+      if (muscleLoadTimer) clearTimeout(muscleLoadTimer);
+      muscleLoadTimer = setTimeout(() => loadDayMuscleLoad().catch(console.error), 400);
+    }
+
+    function buildBodySvg(highlights, selectedKey, onSelect = selectMuscleLoad) {
       const figure = document.createElement('div');
       figure.className = 'body-figure';
       const op = (key) => percentToOpacity(highlights[key] || 0);
@@ -1193,7 +1221,7 @@
         </svg>
       `;
       figure.querySelectorAll('.body-zone').forEach((zone) => {
-        zone.addEventListener('click', () => selectMuscleLoad(zone.dataset.key));
+        zone.addEventListener('click', () => onSelect?.(zone.dataset.key));
       });
       return figure;
     }
@@ -1220,19 +1248,20 @@
         name.className = 'card-title';
         name.textContent = `${selected.name} — ${selected.percent.toFixed(0)}%`;
         content.appendChild(name);
-        if (!selected.exercises.length) {
+        const items = state.muscleLoad.byMuscle?.[selected.key] || [];
+        if (!items.length) {
           const empty = document.createElement('div');
           empty.className = 'detail-row-empty';
           empty.textContent = 'Нет данных по этой группе';
           content.appendChild(empty);
         } else {
-          selected.exercises.forEach((ex) => {
+          items.forEach((ex) => {
             const row = document.createElement('div');
             row.className = 'detail-row';
             const left = document.createElement('div');
-            left.textContent = ex.name;
+            left.textContent = ex.exercise_name || ex.name;
             const right = document.createElement('div');
-            right.textContent = `${ex.percent.toFixed(0)}%`;
+            right.textContent = `${(ex.percent_in_muscle ?? ex.percent ?? 0).toFixed(0)}%`;
             row.append(left, right);
             content.appendChild(row);
           });
@@ -1318,6 +1347,14 @@
       card.appendChild(header);
 
       const groups = state.muscleLoad.groups || [];
+      if (state.muscleLoad.loading) {
+        const loading = document.createElement('div');
+        loading.className = 'empty-muscle';
+        loading.textContent = 'Считаем нагрузку…';
+        card.appendChild(loading);
+        return;
+      }
+
       if (!groups.length) {
         const empty = document.createElement('div');
         empty.className = 'empty-muscle';
@@ -1347,16 +1384,169 @@
       card.appendChild(renderMuscleDetails(selected));
     }
 
-    function renderMuscleLoad(exercisesList = Array.from(state.exercises.values())) {
-      const groups = computeMuscleLoadData(exercisesList);
-      const firstKey = groups.find((g) => g.key === state.muscleLoad.selectedKey)?.key || groups[0]?.key || null;
-      state.muscleLoad = {
-        ...state.muscleLoad,
-        groups,
-        selectedKey: firstKey,
-        showAll: state.muscleLoad.showAll && groups.length > 6,
+    function renderMuscleLoad() { renderMuscleLoadCard(); }
+
+    function renderBodyRangeButtons() {
+      const container = document.getElementById('bodyRange');
+      if (!container) return;
+      container.innerHTML = '';
+      BODY_RANGES.forEach((item) => {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'range-btn' + (state.body.range === item.code ? ' active' : '');
+        btn.textContent = item.label;
+        btn.addEventListener('click', () => {
+          if (state.body.range === item.code) return;
+          state.body.range = item.code;
+          loadBodyOverall(item.code).catch(console.error);
+        });
+        container.appendChild(btn);
+      });
+    }
+
+    function selectBodyMuscle(key) {
+      if (!key) return;
+      const exists = (state.body.data?.muscles || []).find((m) => m.code === key);
+      if (!exists) return;
+      state.body.selectedKey = key;
+      renderBodyContent();
+    }
+
+    function renderBodyMuscleList(muscles) {
+      const list = document.createElement('div');
+      list.className = 'muscle-list';
+      const top = muscles.slice(0, 6);
+      const rest = muscles.slice(6);
+
+      const renderRow = (group) => {
+        const row = document.createElement('div');
+        row.className = 'muscle-row' + (group.code === state.body.selectedKey ? ' selected' : '');
+        const head = document.createElement('div');
+        head.className = 'muscle-row-head';
+        const name = document.createElement('div');
+        name.textContent = group.name;
+        const percent = document.createElement('div');
+        percent.className = 'muscle-percent';
+        percent.textContent = `${group.percent.toFixed(0)}%`;
+        head.append(name, percent);
+        const progress = document.createElement('div');
+        progress.className = 'progress';
+        const fill = document.createElement('div');
+        fill.className = 'progress-fill';
+        fill.style.width = `${group.percent.toFixed(0)}%`;
+        progress.appendChild(fill);
+        row.append(head, progress);
+        row.addEventListener('click', () => selectBodyMuscle(group.code));
+        return row;
       };
-      renderMuscleLoadCard();
+
+      top.forEach((g) => list.appendChild(renderRow(g)));
+      if (rest.length) {
+        if (state.body.showAll) {
+          rest.forEach((g) => list.appendChild(renderRow(g)));
+        }
+        const toggle = document.createElement('button');
+        toggle.type = 'button';
+        toggle.className = 'toggle-btn';
+        toggle.textContent = state.body.showAll ? 'Скрыть остальные' : `Показать остальные (${rest.length})`;
+        toggle.addEventListener('click', () => {
+          state.body.showAll = !state.body.showAll;
+          renderBodyContent();
+        });
+        list.appendChild(toggle);
+      }
+      return list;
+    }
+
+    function renderBodyHighlights(muscles) {
+      const block = document.createElement('div');
+      block.className = 'body-highlights';
+      const main = (muscles || []).filter((m) => !['cardio', 'other'].includes(m.code));
+      const sorted = [...main].sort((a, b) => b.percent - a.percent);
+      const top = sorted.slice(0, 3);
+      const bottom = sorted.slice(-3);
+
+      const renderGroup = (title, items) => {
+        const tag = document.createElement('div');
+        tag.className = 'body-tag';
+        const names = items.length ? items.map((i) => `${i.name} (${i.percent.toFixed(0)}%)`).join(', ') : 'Нет данных';
+        tag.textContent = `${title}: ${names}`;
+        return tag;
+      };
+
+      block.append(renderGroup('Перегруженные', top));
+      block.append(renderGroup('Недогруженные', bottom));
+      return block;
+    }
+
+    function renderBodyContent() {
+      const container = document.getElementById('bodyContent');
+      if (!container) return;
+      container.innerHTML = '';
+      const data = state.body.data;
+      const muscles = (data?.muscles || []).map((m) => ({
+        code: m.code,
+        name: m.name || MUSCLE_NAMES[m.code] || MUSCLE_NAMES.other,
+        percent: Number(m.percent || 0),
+      }));
+      muscles.sort((a, b) => b.percent - a.percent);
+
+      if (state.body.loading) {
+        const loading = document.createElement('div');
+        loading.className = 'empty-muscle';
+        loading.textContent = 'Загружаем нагрузку по мышцам…';
+        container.appendChild(loading);
+        return;
+      }
+
+      if (!muscles.length) {
+        const empty = document.createElement('div');
+        empty.className = 'empty-muscle';
+        empty.textContent = 'Нет данных в выбранном периоде.';
+        container.appendChild(empty);
+        return;
+      }
+
+      const selected = muscles.find((m) => m.code === state.body.selectedKey) || muscles[0];
+      state.body.selectedKey = selected?.code || null;
+
+      const grid = document.createElement('div');
+      grid.className = 'muscle-load-grid';
+      const highlightMap = muscles.reduce((acc, g) => { acc[g.code] = g.percent; return acc; }, {});
+      grid.appendChild(buildBodySvg(highlightMap, state.body.selectedKey, selectBodyMuscle));
+      grid.appendChild(renderBodyMuscleList(muscles));
+
+      container.appendChild(grid);
+      container.appendChild(renderBodyHighlights(muscles));
+    }
+
+    async function loadBodyOverall(range = state.body.range) {
+      state.body.range = range;
+      state.body.loading = true;
+      state.body.data = state.body.data || null;
+      renderBodyRangeButtons();
+      document.getElementById('bodyRangeLabel').textContent = '';
+      renderBodyContent();
+      try {
+        const params = new URLSearchParams();
+        params.set('range', range);
+        const endDate = getIsoDate();
+        if (endDate) params.set('end', endDate);
+        const data = await apiFetch(`/gymapi/body/overall?${params.toString()}`, { silent: true });
+        state.body.data = data;
+        state.body.loading = false;
+        state.body.showAll = state.body.showAll && (data?.muscles?.length || 0) > 6;
+        const currentMuscles = data?.muscles || [];
+        const selectedExists = currentMuscles.find((m) => m.code === state.body.selectedKey);
+        state.body.selectedKey = selectedExists ? state.body.selectedKey : (currentMuscles[0]?.code || null);
+        const label = data?.start && data?.end ? `Период: ${data.start} — ${data.end}` : '';
+        document.getElementById('bodyRangeLabel').textContent = label;
+        renderBodyRangeButtons();
+        renderBodyContent();
+      } catch (e) {
+        state.body.loading = false;
+        renderBodyContent();
+      }
     }
 
     function updateCardSummary(ueId) {
@@ -1381,7 +1571,7 @@
         }
         renderEditor();
       }
-      renderMuscleLoad();
+      scheduleDayMuscleLoad();
     }
 
     async function addSet(ueId, opts = {}) {
@@ -1449,7 +1639,7 @@
     async function loadSheet(dayIndex) {
       state.dayIndex = dayIndex;
       state.contexts = new Map();
-      state.muscleLoad = { groups: [], selectedKey: null, showAll: false, detailsOpen: true };
+      state.muscleLoad = { groups: [], selectedKey: null, showAll: false, detailsOpen: true, byMuscle: {}, loading: true };
       const sheet = await apiFetch(`/gymapi/day/${dayIndex}/sheet`);
       if (sheet.completed_days) {
         state.completedDays = new Set(sheet.completed_days.map(Number));
@@ -1459,6 +1649,7 @@
       state.dateIso = toIsoDate(sheet.date);
       document.getElementById('dateLabel').textContent = sheet.date || '';
       renderExercises(sheet.exercises || []);
+      scheduleDayMuscleLoad();
       updateFinishButton();
     }
 

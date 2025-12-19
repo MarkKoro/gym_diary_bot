@@ -71,6 +71,8 @@ KB_EXERCISES: Sequence[tuple[str, str]] = tuple((name, "kb") for name in KB_EXER
 
 MUSCLE_CODES = ["chest", "back", "legs", "shoulders", "biceps", "triceps", "core", "cardio"]
 
+ANATOMICAL_GROUPS = {"chest", "back", "legs", "shoulders", "core", "biceps", "triceps"}
+
 METCON_EXERCISES: Sequence[tuple[str, str]] = [
     ("Меткон — AMRAP (кастом)", "metcon"),
     ("Меткон — For Time (кастом)", "metcon"),
@@ -3411,3 +3413,117 @@ async def set_exercise_muscle_group(exercise_id: int, muscle_group: str | None):
             (muscle_group, exercise_id),
         )
         await db.commit()
+
+
+async def resolve_exercise_muscles(user_id: int, exercise_ids: Sequence[int]):
+    if not exercise_ids:
+        return {}
+
+    ids = tuple({int(eid) for eid in exercise_ids if eid is not None})
+    if not ids:
+        return {}
+
+    placeholders = ",".join("?" for _ in ids)
+    result: dict[int, list[dict[str, float]]] = {}
+
+    async with connect_db() as db:
+        # User overrides
+        cur = await db.execute(
+            f"""
+            SELECT exercise_id, muscle_code, weight_pct
+            FROM user_exercise_muscles
+            WHERE user_id=? AND exercise_id IN ({placeholders})
+            """,
+            (user_id, *ids),
+        )
+        for ex_id, muscle_code, pct in await cur.fetchall():
+            result.setdefault(int(ex_id), []).append({"muscle_code": muscle_code, "weight_pct": float(pct)})
+
+        missing = [eid for eid in ids if eid not in result]
+        missing_ph = ",".join("?" for _ in missing) if missing else ""
+
+        # Exercise defaults
+        if missing:
+            cur = await db.execute(
+                f"""
+                SELECT exercise_id, muscle_code, weight_pct
+                FROM exercise_muscles
+                WHERE exercise_id IN ({missing_ph})
+                """,
+                missing,
+            )
+            for ex_id, muscle_code, pct in await cur.fetchall():
+                result.setdefault(int(ex_id), []).append({"muscle_code": muscle_code, "weight_pct": float(pct)})
+
+        # Muscle groups for fallback
+        cur = await db.execute(
+            f"SELECT id, muscle_group FROM exercises WHERE id IN ({placeholders})",
+            ids,
+        )
+        mg_map = {int(row[0]): (row[1] or "") for row in await cur.fetchall()}
+
+    for ex_id in ids:
+        if ex_id in result:
+            continue
+        mg = (mg_map.get(ex_id) or "").strip().lower()
+        if mg in ANATOMICAL_GROUPS:
+            result[ex_id] = [{"muscle_code": mg, "weight_pct": 100.0}]
+        elif mg in {"run", "metcon", "cardio"}:
+            result[ex_id] = [{"muscle_code": "cardio", "weight_pct": 100.0}]
+        else:
+            result[ex_id] = [{"muscle_code": "other", "weight_pct": 100.0}]
+
+    return result
+
+
+async def fetch_session_sets_with_exercises(user_id: int, session_id: int):
+    async with connect_db() as db:
+        cur = await db.execute(
+            """
+            SELECT st.reps, st.seconds, st.weight_kg, ue.exercise_id, e.name
+            FROM sets st
+            JOIN sessions s ON s.id = st.session_id
+            JOIN user_exercises ue ON ue.id = st.user_exercise_id
+            JOIN exercises e ON e.id = ue.exercise_id
+            WHERE st.session_id=? AND st.is_warmup=0 AND s.user_id=?
+            """,
+            (session_id, user_id),
+        )
+        rows = await cur.fetchall()
+        return [
+            {
+                "reps": int(row[0]),
+                "seconds": int(row[1]),
+                "weight_kg": float(row[2] or 0.0),
+                "exercise_id": int(row[3]),
+                "exercise_name": row[4],
+            }
+            for row in rows
+        ]
+
+
+async def fetch_sets_in_date_range(user_id: int, start_date: str, end_date: str):
+    async with connect_db() as db:
+        cur = await db.execute(
+            """
+            SELECT st.reps, st.seconds, st.weight_kg, ue.exercise_id, e.name, s.date
+            FROM sets st
+            JOIN sessions s ON s.id = st.session_id
+            JOIN user_exercises ue ON ue.id = st.user_exercise_id
+            JOIN exercises e ON e.id = ue.exercise_id
+            WHERE s.user_id=? AND s.date BETWEEN ? AND ? AND st.is_warmup=0
+            """,
+            (user_id, start_date, end_date),
+        )
+        rows = await cur.fetchall()
+        return [
+            {
+                "reps": int(row[0]),
+                "seconds": int(row[1]),
+                "weight_kg": float(row[2] or 0.0),
+                "exercise_id": int(row[3]),
+                "exercise_name": row[4],
+                "session_date": row[5],
+            }
+            for row in rows
+        ]
