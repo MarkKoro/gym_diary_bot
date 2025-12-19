@@ -1,5 +1,6 @@
 import os
 from datetime import UTC, datetime, date, time, timedelta
+from math import sqrt
 from zoneinfo import ZoneInfo
 from fastapi import Body, Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
@@ -25,6 +26,20 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 STATIC_DIR = os.path.join(BASE_DIR, "static", "webapp")
 
 MUSCLE_CODES = tuple(MG_NAMES.keys())
+
+MUSCLE_NAME_MAP = {
+    "chest": "Грудь",
+    "back": "Спина",
+    "legs": "Ноги",
+    "shoulders": "Плечи",
+    "core": "Кор / пресс",
+    "biceps": "Бицепс",
+    "triceps": "Трицепс",
+    "cardio": "Кардио",
+    "other": "Другое",
+}
+
+MAIN_MUSCLES = ("chest", "back", "legs", "shoulders", "core", "biceps", "triceps", "cardio", "other")
 
 app = FastAPI(title="GymDiary WebApp backend")
 
@@ -82,6 +97,17 @@ def _parse_date_param(date_str: str | None) -> date:
         return datetime.strptime(date_str, "%Y-%m-%d").date()
     except ValueError:
         raise HTTPException(status_code=400, detail="Неверный формат даты, используйте YYYY-MM-DD")
+
+
+def _calc_base_work(reps: int | float, seconds: int | float, weight: float | None) -> float:
+    reps_val = float(reps or 0)
+    seconds_val = float(seconds or 0)
+    weight_val = float(weight or 0)
+    if seconds_val > 0 and (weight_val == 0):
+        return seconds_val
+    if weight_val > 0 and reps_val > 0:
+        return weight_val * reps_val
+    return max(reps_val, seconds_val, 0.0)
 
 
 def resolve_user_zone(tz_name: str | None) -> ZoneInfo:
@@ -204,6 +230,70 @@ async def _resolve_user_exercise_id(user_id: int, ue_id: int, day_index: int) ->
     if not row:
         raise HTTPException(status_code=404, detail="Упражнение не найдено")
     return int(row[0])
+
+
+def _compute_muscle_load(
+    sets: list[dict],
+    mapping: dict[int, list[dict[str, float]]],
+    *,
+    include_zero_main: bool = False,
+):
+    muscle_work: dict[str, float] = {}
+    muscle_exercises: dict[str, dict[int, float]] = {}
+    exercise_names: dict[int, str] = {}
+
+    for item in sets:
+        ex_id = int(item.get("exercise_id"))
+        ex_name = item.get("exercise_name") or ""
+        exercise_names[ex_id] = ex_name
+        base = _calc_base_work(item.get("reps", 0), item.get("seconds", 0), item.get("weight_kg"))
+        if base <= 0:
+            continue
+        muscles = mapping.get(ex_id) or []
+        for m in muscles:
+            code = m.get("muscle_code") or "other"
+            pct = float(m.get("weight_pct", 0))
+            portion = base * pct / 100.0
+            muscle_work[code] = muscle_work.get(code, 0.0) + portion
+            muscle_exercises.setdefault(code, {})[ex_id] = muscle_exercises.get(code, {}).get(ex_id, 0.0) + portion
+
+    # add zeros for main muscles
+    if include_zero_main:
+        for code in MAIN_MUSCLES:
+            muscle_work.setdefault(code, 0.0)
+
+    stabilized = {code: sqrt(max(val, 0.0)) for code, val in muscle_work.items()}
+    total_stab = sum(stabilized.values())
+
+    muscles = []
+    for code, value in stabilized.items():
+        percent = (value / total_stab * 100.0) if total_stab > 0 else 0.0
+        muscles.append({
+            "code": code,
+            "name": MUSCLE_NAME_MAP.get(code, code),
+            "percent": percent,
+        })
+
+    muscles.sort(key=lambda x: x["percent"], reverse=True)
+
+    by_muscle: dict[str, list[dict]] = {}
+    for code, ex_values in muscle_exercises.items():
+        stabilized_ex = {ex_id: sqrt(max(val, 0.0)) for ex_id, val in ex_values.items()}
+        total_in_muscle = sum(stabilized_ex.values())
+        parts = []
+        for ex_id, val in stabilized_ex.items():
+            percent = (val / total_in_muscle * 100.0) if total_in_muscle > 0 else 0.0
+            parts.append(
+                {
+                    "exercise_id": ex_id,
+                    "exercise_name": exercise_names.get(ex_id, ""),
+                    "percent_in_muscle": percent,
+                }
+            )
+        parts.sort(key=lambda x: x["percent_in_muscle"], reverse=True)
+        by_muscle[code] = parts
+
+    return muscles, by_muscle
 
 
 def _format_prev_summary(data: tuple[int, int, int, float] | None) -> str | None:
@@ -570,3 +660,70 @@ async def update_exercise_muscle_group(
 
     await db.set_exercise_muscle_group(exercise_id, mg_value)
     return {"ok": True, "id": exercise_id, "muscle_group": mg_value}
+
+
+def _resolve_range(range_code: str | None, end_date: date) -> tuple[str, date]:
+    code = (range_code or "30d").lower()
+    mapping = {"7d": 6, "30d": 29, "90d": 89}
+    if code == "all":
+        return "all", date(1970, 1, 1)
+    days = mapping.get(code, 29)
+    return code if code in mapping else "30d", end_date - timedelta(days=days)
+
+
+@app.get("/body/day/{day_index}")
+async def body_day_load(
+    day_index: int,
+    date: str | None = None,
+    tg: TelegramInitData = Depends(get_tg_init_data),
+):
+    user_id = tg.user.id
+    await _validate_day(user_id, day_index)
+    target_date = _parse_date_param(date)
+    iso_date = _iso_date(target_date)
+
+    session_id = await db.get_or_create_today_session(user_id, iso_date, day_index)
+    sets = await db.fetch_session_sets_with_exercises(user_id, session_id)
+    exercise_ids = [row["exercise_id"] for row in sets]
+    mapping = await db.resolve_exercise_muscles(user_id, exercise_ids)
+    muscles, by_muscle = _compute_muscle_load(sets, mapping)
+
+    return {
+        "ok": True,
+        "date": iso_date,
+        "day_index": day_index,
+        "muscles": [m for m in muscles if m.get("percent", 0) > 0],
+        "by_muscle": by_muscle,
+    }
+
+
+@app.get("/body/overall")
+async def body_overall(
+    range: str | None = None,  # noqa: A002
+    end: str | None = None,
+    tg: TelegramInitData = Depends(get_tg_init_data),
+):
+    user_id = tg.user.id
+    end_date = _parse_date_param(end)
+    normalized_range, start_date = _resolve_range(range, end_date)
+    start_iso = _iso_date(start_date)
+    end_iso = _iso_date(end_date)
+
+    sets = await db.fetch_sets_in_date_range(user_id, start_iso, end_iso)
+    exercise_ids = [row["exercise_id"] for row in sets]
+    mapping = await db.resolve_exercise_muscles(user_id, exercise_ids)
+    muscles, _ = _compute_muscle_load(sets, mapping, include_zero_main=True)
+
+    actual_start = start_iso if normalized_range != "all" else end_iso
+    if sets:
+        dates = [row.get("session_date") for row in sets if row.get("session_date")]
+        if dates:
+            actual_start = min(dates)
+
+    return {
+        "ok": True,
+        "range": normalized_range,
+        "start": actual_start,
+        "end": end_iso,
+        "muscles": muscles,
+    }
