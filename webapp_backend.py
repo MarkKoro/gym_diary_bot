@@ -37,9 +37,29 @@ MUSCLE_NAME_MAP = {
     "triceps": "Трицепс",
     "cardio": "Кардио",
     "other": "Другое",
+    "kb": "Гиря",
+    "metcon": "Кроссфит",
+    "workout": "Воркаут",
+    "run": "Бег",
+    "none": "Не указано",
 }
 
 MAIN_MUSCLES = ("chest", "back", "legs", "shoulders", "core", "biceps", "triceps", "cardio", "other")
+LIBRARY_GROUP_ORDER = (
+    "chest",
+    "back",
+    "legs",
+    "shoulders",
+    "core",
+    "biceps",
+    "triceps",
+    "kb",
+    "metcon",
+    "workout",
+    "run",
+    "other",
+    "none",
+)
 ANATOMY_MUSCLE_CODES = {
     "chest",
     "back",
@@ -616,6 +636,53 @@ async def list_muscles(tg: TelegramInitData = Depends(get_tg_init_data)):
     return {"ok": True, "muscles": muscles}
 
 
+def _sort_groups(items: dict[str, int]):
+    def key_fn(code: str):
+        try:
+            return LIBRARY_GROUP_ORDER.index(code)
+        except ValueError:
+            return len(LIBRARY_GROUP_ORDER)
+
+    return sorted(items.items(), key=lambda kv: key_fn(kv[0]))
+
+
+@app.get("/library/groups")
+async def list_library_groups(tg: TelegramInitData = Depends(get_tg_init_data)):
+    user_id = tg.user.id
+    counters = await db.list_user_library_groups(user_id)
+    groups = []
+    for code, count in _sort_groups(counters):
+        groups.append({"code": code, "name": MUSCLE_NAME_MAP.get(code, "Не указано"), "count": int(count)})
+    return {"ok": True, "groups": groups}
+
+
+@app.get("/library/group/{code}/exercises")
+async def list_group_exercises(
+    code: str,
+    query: str | None = None,
+    tg: TelegramInitData = Depends(get_tg_init_data),
+):
+    user_id = tg.user.id
+    normalized_code = (code or "").strip().lower()
+    counters = await db.list_user_library_groups(user_id)
+    if normalized_code not in counters and normalized_code != "none":
+        raise HTTPException(status_code=404, detail="Группа не найдена")
+
+    rows = await db.list_user_group_exercises(user_id, normalized_code, query)
+    return {
+        "ok": True,
+        "items": [
+            {
+                "id": int(row[0]),
+                "name": row[1],
+                "muscle_group": row[2],
+                "has_override": bool(row[3]),
+            }
+            for row in rows
+        ],
+    }
+
+
 @app.get("/library/exercises")
 async def list_library_exercises(
     query: str | None = None,
@@ -816,6 +883,73 @@ def _resolve_range(range_code: str | None, end_date: date) -> tuple[str, date]:
         return "all", date(1970, 1, 1)
     days = mapping.get(code, 29)
     return code if code in mapping else "30d", end_date - timedelta(days=days)
+
+
+@app.get("/exercise/{exercise_id}/history")
+async def exercise_history(
+    exercise_id: int,
+    range: str | None = None,  # noqa: A002
+    tg: TelegramInitData = Depends(get_tg_init_data),
+):
+    user_id = tg.user.id
+    name, _ = await _require_user_exercise(user_id, exercise_id)
+
+    end_date = _today_date()
+    normalized_range, start_date = _resolve_range(range, end_date)
+    start_iso = None if normalized_range == "all" else _iso_date(start_date)
+    end_iso = _iso_date(end_date)
+
+    rows = await db.fetch_exercise_history_points(user_id, exercise_id, start_iso, end_iso)
+    timeline: dict[str, dict] = {}
+    for session_date, reps, seconds, weight in rows:
+        iso_date = session_date
+        if iso_date not in timeline:
+            timeline[iso_date] = {
+                "date": iso_date,
+                "top_weight": 0.0,
+                "top_reps": 0,
+                "top_seconds": 0,
+                "volume": 0.0,
+                "set_count": 0,
+            }
+        item = timeline[iso_date]
+        reps_val = int(reps or 0)
+        sec_val = int(seconds or 0)
+        weight_val = float(weight or 0.0)
+        if reps_val > 0 and weight_val > 0:
+            item["top_weight"] = max(item["top_weight"], weight_val)
+            item["volume"] += weight_val * reps_val
+        if reps_val > 0:
+            item["top_reps"] = max(item["top_reps"], reps_val)
+        if sec_val > 0:
+            item["top_seconds"] = max(item["top_seconds"], sec_val)
+        item["set_count"] += 1
+
+    points = sorted(timeline.values(), key=lambda x: x["date"])
+    last_date, last_sets = await db.fetch_last_exercise_session(user_id, exercise_id)
+    last_session = None
+    if last_date and last_sets:
+        last_session = {
+            "date": last_date,
+            "sets": [
+                {
+                    "set_no": int(row[0]),
+                    "reps": int(row[1]),
+                    "seconds": int(row[2]),
+                    "weight_kg": float(row[3] or 0.0),
+                }
+                for row in last_sets
+            ],
+        }
+
+    return {
+        "ok": True,
+        "exercise_id": exercise_id,
+        "exercise_name": name,
+        "range": normalized_range,
+        "points": points,
+        "last_session": last_session,
+    }
 
 
 @app.get("/body/day/{day_index}")

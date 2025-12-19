@@ -1497,6 +1497,116 @@ async def list_library_groups(user_id: int):
     return sorted(counters.items())
 
 
+async def list_user_library_groups(user_id: int):
+    async with connect_db() as db:
+        cur = await db.execute(
+            """
+            SELECT e.muscle_group, e.name
+            FROM user_exercises ue
+            JOIN exercises e ON e.id=ue.exercise_id
+            WHERE ue.user_id=? AND ue.is_archived=0
+            """,
+            (user_id,),
+        )
+        rows = await cur.fetchall()
+
+    counters: dict[str, int] = {}
+    for group, name in rows:
+        code = (group or "").strip().lower()
+        resolved = "metcon" if name in METCON_EXERCISE_NAMES else (code or "none")
+        counters[resolved] = counters.get(resolved, 0) + 1
+    return counters
+
+
+async def list_user_group_exercises(user_id: int, group_code: str, query: str | None = None):
+    conditions = ["ue.user_id=?", "ue.is_archived=0"]
+    params: list = [user_id]
+    if group_code == "none":
+        conditions.append("(e.muscle_group IS NULL OR TRIM(e.muscle_group)='')")
+    elif group_code == "metcon" and METCON_SHARED_NAMES:
+        placeholders = ",".join("?" for _ in METCON_SHARED_NAMES)
+        conditions.append("(e.muscle_group=? OR e.name IN (" + placeholders + "))")
+        params.append(group_code)
+        params.extend(METCON_SHARED_NAMES)
+    else:
+        conditions.append("e.muscle_group=?")
+        params.append(group_code)
+
+    if query:
+        conditions.append("LOWER(e.name) LIKE ?")
+        params.append(f"%{query.lower()}%")
+
+    where_clause = " AND ".join(conditions)
+    async with connect_db() as db:
+        cur = await db.execute(
+            f"""
+            SELECT DISTINCT e.id, e.name, e.muscle_group,
+                   EXISTS(SELECT 1 FROM user_exercise_muscles uem WHERE uem.user_id=ue.user_id AND uem.exercise_id=e.id) AS has_override
+            FROM user_exercises ue
+            JOIN exercises e ON e.id=ue.exercise_id
+            WHERE {where_clause}
+            ORDER BY e.name
+            """,
+            tuple(params),
+        )
+        return await cur.fetchall()
+
+
+async def fetch_exercise_history_points(user_id: int, exercise_id: int, start_date: str | None, end_date: str):
+    params: list = [user_id, exercise_id, end_date]
+    date_clause = ""
+    if start_date:
+        date_clause = "AND s.date>=?"
+        params.append(start_date)
+
+    async with connect_db() as db:
+        cur = await db.execute(
+            f"""
+            SELECT s.date, st.reps, st.seconds, st.weight_kg
+            FROM sets st
+            JOIN sessions s ON s.id = st.session_id
+            JOIN user_exercises ue ON ue.id = st.user_exercise_id
+            WHERE s.user_id=? AND ue.exercise_id=? AND st.is_warmup=0 AND s.date<=? {date_clause}
+            ORDER BY s.date
+            """,
+            tuple(params),
+        )
+        return await cur.fetchall()
+
+
+async def fetch_last_exercise_session(user_id: int, exercise_id: int):
+    async with connect_db() as db:
+        cur = await db.execute(
+            """
+            SELECT s.id, s.date
+            FROM sessions s
+            JOIN sets st ON st.session_id=s.id AND st.is_warmup=0
+            JOIN user_exercises ue ON ue.id=st.user_exercise_id
+            WHERE s.user_id=? AND ue.exercise_id=?
+            ORDER BY s.date DESC, st.set_no DESC
+            LIMIT 1
+            """,
+            (user_id, exercise_id),
+        )
+        row = await cur.fetchone()
+        if not row:
+            return None, None
+        session_id, session_date = row
+        cur = await db.execute(
+            """
+            SELECT set_no, reps, seconds, weight_kg
+            FROM sets
+            WHERE session_id=? AND is_warmup=0 AND user_exercise_id IN (
+                SELECT id FROM user_exercises WHERE user_id=? AND exercise_id=?
+            )
+            ORDER BY set_no
+            """,
+            (session_id, user_id, exercise_id),
+        )
+        sets = await cur.fetchall()
+        return session_date, sets
+
+
 async def list_library_exercises(user_id: int, group: str):
     async with connect_db() as db:
         if group == "metcon" and METCON_SHARED_NAMES:

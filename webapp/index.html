@@ -407,6 +407,27 @@
     .body-hints { display: flex; gap: 10px; flex-wrap: wrap; color: var(--muted); font-size: 13px; }
     .body-highlights { display: flex; gap: 12px; flex-wrap: wrap; font-size: 14px; }
     .body-tag { padding: 8px 10px; border-radius: 10px; background: var(--bg); border: 1px solid var(--border); }
+    .library-search { width: 100%; margin: 10px 0 4px; }
+    .group-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; }
+    .group-card { border: 1px solid var(--border); border-radius: 12px; background: var(--card); padding: 12px; box-shadow: var(--shadow); cursor: pointer; display: grid; gap: 6px; }
+    .group-name { font-weight: 800; letter-spacing: -0.01em; }
+    .group-count { color: var(--muted); font-size: 13px; }
+    .library-topbar { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
+    .library-back { border: none; background: none; color: var(--accent); font-weight: 700; cursor: pointer; padding: 6px 0; }
+    .list-row { display: flex; justify-content: space-between; align-items: center; padding: 12px; border-radius: 12px; border: 1px solid var(--border); background: var(--bg); }
+    .list-text { display: grid; gap: 4px; }
+    .badge { display: inline-flex; align-items: center; padding: 4px 8px; border-radius: 999px; background: rgba(0,0,0,0.05); color: var(--muted); font-size: 12px; }
+    [data-theme="dark"] .badge { background: rgba(255,255,255,0.08); }
+    .chevron { color: var(--muted); }
+    .library-empty { color: var(--muted); padding: 10px 0; }
+    .history-range { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 8px; margin: 10px 0; }
+    .range-chip { padding: 10px; border-radius: 12px; border: 1px solid var(--border); background: var(--bg); cursor: pointer; font-weight: 700; }
+    .range-chip.active { border-color: var(--accent); color: var(--accent); }
+    .chart-block { border: 1px solid var(--border); border-radius: 12px; padding: 12px; background: var(--bg); }
+    .chart-title { font-weight: 700; margin-bottom: 6px; }
+    .chart { width: 100%; height: 160px; }
+    .history-table { width: 100%; border-collapse: collapse; margin-top: 6px; }
+    .history-table th, .history-table td { border: 1px solid var(--border); padding: 6px 8px; text-align: center; }
   </style>
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
 </head>
@@ -470,10 +491,9 @@
       </section>
 
       <section id="screen-library" class="screen" data-route="library">
-        <div class="card">
+        <div class="card" id="libraryCard">
           <div class="card-title">Мои упражнения</div>
-          <input type="search" class="search-input" placeholder="Поиск упражнения…">
-          <div class="empty-state">Скоро: группы мышц → упражнения → история и прогресс.</div>
+          <div id="libraryContent"></div>
         </div>
       </section>
 
@@ -687,6 +707,17 @@
       isTelegram: false,
       muscleLoad: { groups: [], selectedKey: null, showAll: false, detailsOpen: true, byMuscle: {}, loading: false },
       body: { range: '30d', loading: false, data: null, selectedKey: null, showAll: false },
+      library: {
+        view: 'groups',
+        loading: false,
+        groups: [],
+        exercises: [],
+        selectedGroup: null,
+        query: '',
+        range: '30d',
+        history: null,
+        historyLoading: false,
+      },
       muscles: {
         loaded: false,
         loading: false,
@@ -769,6 +800,301 @@
       document.body.classList.toggle('drawer-open', open);
     }
 
+    function libraryGroupLabel(code) {
+      return MUSCLE_NAMES[code] || 'Не указано';
+    }
+
+    function renderGroupsView() {
+      const content = document.getElementById('libraryContent');
+      content.innerHTML = '';
+      const search = document.createElement('input');
+      search.type = 'search';
+      search.className = 'search-input library-search';
+      search.placeholder = 'Поиск упражнения…';
+      search.value = state.library.query;
+      search.addEventListener('input', (e) => { state.library.query = e.target.value; renderGroupsView(); });
+      content.appendChild(search);
+
+      const filtered = (state.library.groups || []).filter((g) => !state.library.query || libraryGroupLabel(g.code).toLowerCase().includes(state.library.query.toLowerCase()));
+      if (state.library.loading) {
+        const loading = document.createElement('div');
+        loading.className = 'library-empty';
+        loading.textContent = 'Загрузка…';
+        content.appendChild(loading);
+        return;
+      }
+      if (!filtered.length) {
+        const empty = document.createElement('div');
+        empty.className = 'library-empty';
+        empty.textContent = 'Нет упражнений. Добавь упражнения в дни тренировок.';
+        content.appendChild(empty);
+        return;
+      }
+      const grid = document.createElement('div');
+      grid.className = 'group-grid';
+      filtered.forEach((group) => {
+        const card = document.createElement('div');
+        card.className = 'group-card';
+        const name = document.createElement('div');
+        name.className = 'group-name';
+        name.textContent = libraryGroupLabel(group.code);
+        const count = document.createElement('div');
+        count.className = 'group-count';
+        count.textContent = `${group.count} упражнений`;
+        card.append(name, count);
+        card.addEventListener('click', () => openGroup(group));
+        grid.appendChild(card);
+      });
+      content.appendChild(grid);
+    }
+
+    function renderExercisesView() {
+      const content = document.getElementById('libraryContent');
+      content.innerHTML = '';
+      const top = document.createElement('div');
+      top.className = 'library-topbar';
+      const back = document.createElement('button');
+      back.className = 'library-back';
+      back.textContent = '← Мои упражнения';
+      back.addEventListener('click', () => { state.library.view = 'groups'; renderLibrary(); });
+      const title = document.createElement('div');
+      title.className = 'card-title';
+      title.textContent = libraryGroupLabel(state.library.selectedGroup?.code);
+      top.append(back, title);
+      content.appendChild(top);
+
+      const search = document.createElement('input');
+      search.type = 'search';
+      search.className = 'search-input library-search';
+      search.placeholder = 'Поиск упражнения…';
+      search.value = state.library.query;
+      search.addEventListener('input', (e) => { state.library.query = e.target.value; debounceLoadGroup(); });
+      content.appendChild(search);
+
+      if (state.library.loading) {
+        const loading = document.createElement('div');
+        loading.className = 'library-empty';
+        loading.textContent = 'Загрузка…';
+        content.appendChild(loading);
+        return;
+      }
+      if (!state.library.exercises.length) {
+        const empty = document.createElement('div');
+        empty.className = 'library-empty';
+        empty.textContent = 'Упражнения не найдены';
+        content.appendChild(empty);
+        return;
+      }
+      const list = document.createElement('div');
+      list.className = 'card-list';
+      state.library.exercises.forEach((ex) => {
+        const row = document.createElement('div');
+        row.className = 'list-row';
+        const text = document.createElement('div');
+        text.className = 'list-text';
+        const name = document.createElement('div');
+        name.className = 'card-title';
+        name.textContent = ex.name;
+        text.appendChild(name);
+        if (ex.has_override) {
+          const badge = document.createElement('span');
+          badge.className = 'badge';
+          badge.textContent = 'Персонально';
+          text.appendChild(badge);
+        }
+        const chevron = document.createElement('div');
+        chevron.className = 'chevron';
+        chevron.textContent = '›';
+        row.append(text, chevron);
+        row.addEventListener('click', () => openExercise(ex));
+        list.appendChild(row);
+      });
+      content.appendChild(list);
+    }
+
+    function renderHistoryDetails() {
+      const content = document.getElementById('libraryContent');
+      content.innerHTML = '';
+      const top = document.createElement('div');
+      top.className = 'library-topbar';
+      const back = document.createElement('button');
+      back.className = 'library-back';
+      back.textContent = '← Назад';
+      back.addEventListener('click', () => { state.library.view = 'list'; renderLibrary(); });
+      const title = document.createElement('div');
+      title.className = 'card-title';
+      title.textContent = state.library.history?.exercise_name || 'Упражнение';
+      top.append(back, title);
+      content.appendChild(top);
+
+      const range = document.createElement('div');
+      range.className = 'history-range';
+      [{ code: '30d', label: '30 дней' }, { code: '90d', label: '90 дней' }, { code: 'all', label: 'Всё' }].forEach((opt) => {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'range-chip' + (state.library.range === opt.code ? ' active' : '');
+        btn.textContent = opt.label;
+        btn.addEventListener('click', () => { state.library.range = opt.code; loadExerciseHistory(state.library.history.exercise_id); });
+        range.appendChild(btn);
+      });
+      content.appendChild(range);
+
+      if (state.library.historyLoading) {
+        const loading = document.createElement('div');
+        loading.className = 'library-empty';
+        loading.textContent = 'Загрузка…';
+        content.appendChild(loading);
+        return;
+      }
+      const points = state.library.history?.points || [];
+      if (!points.length) {
+        const empty = document.createElement('div');
+        empty.className = 'library-empty';
+        empty.textContent = 'Пока нет истории по этому упражнению.';
+        content.appendChild(empty);
+      } else {
+        const charts = document.createElement('div');
+        charts.className = 'card-list';
+        const weightDominant = (Math.max(...points.map((p) => Number(p.top_weight || 0))) || 0) >= (Math.max(...points.map((p) => Number(p.top_seconds || 0))) || 0);
+        const weightField = weightDominant ? 'top_weight' : 'top_seconds';
+        const weightTitle = weightDominant ? 'Топ вес' : 'Топ секунды';
+        const weightChart = document.createElement('div');
+        weightChart.className = 'chart-block';
+        weightChart.appendChild(buildChart(weightTitle, points, weightField, true));
+        charts.appendChild(weightChart);
+
+        const volChart = document.createElement('div');
+        volChart.className = 'chart-block';
+        volChart.appendChild(buildChart('Объём', points, 'volume', false));
+        charts.appendChild(volChart);
+        content.appendChild(charts);
+      }
+
+      const last = state.library.history?.last_session;
+      if (last) {
+        const block = document.createElement('div');
+        block.className = 'chart-block';
+        const title = document.createElement('div');
+        title.className = 'chart-title';
+        title.textContent = 'Последняя тренировка';
+        const date = document.createElement('div');
+        date.className = 'group-count';
+        date.textContent = last.date;
+        const table = document.createElement('table');
+        table.className = 'history-table';
+        table.innerHTML = '<tr><th>№</th><th>повт</th><th>сек</th><th>кг</th></tr>';
+        last.sets.forEach((s) => {
+          const row = document.createElement('tr');
+          row.innerHTML = `<td>${s.set_no}</td><td>${s.reps}</td><td>${s.seconds}</td><td>${s.weight_kg}</td>`;
+          table.appendChild(row);
+        });
+        block.append(title, date, table);
+        content.appendChild(block);
+      }
+    }
+
+    function buildChart(title, points, field, line = true) {
+      const wrapper = document.createElement('div');
+      const h = document.createElement('div');
+      h.className = 'chart-title';
+      h.textContent = title;
+      wrapper.appendChild(h);
+      const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      svg.setAttribute('viewBox', '0 0 300 120');
+      svg.classList.add('chart');
+      const values = points.map((p) => Number(p[field] || 0));
+      const max = Math.max(...values, 1);
+      const coords = values.map((v, idx) => {
+        const x = (idx / Math.max(points.length - 1, 1)) * 280 + 10;
+        const y = 110 - (v / max) * 90;
+        return [x, y];
+      });
+      if (line) {
+        const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+        const d = coords.map((c, i) => `${i === 0 ? 'M' : 'L'}${c[0]},${c[1]}`).join(' ');
+        path.setAttribute('d', d || '');
+        path.setAttribute('fill', 'none');
+        path.setAttribute('stroke', 'var(--accent)');
+        path.setAttribute('stroke-width', '2');
+        svg.appendChild(path);
+      } else {
+        coords.forEach((c, idx) => {
+          const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+          rect.setAttribute('x', c[0] - 10);
+          rect.setAttribute('y', c[1]);
+          rect.setAttribute('width', '16');
+          rect.setAttribute('height', 110 - c[1]);
+          rect.setAttribute('rx', '4');
+          rect.setAttribute('fill', 'var(--accent)');
+          rect.setAttribute('opacity', '0.6');
+          svg.appendChild(rect);
+        });
+      }
+      wrapper.appendChild(svg);
+      return wrapper;
+    }
+
+    function renderLibrary() {
+      if (state.library.view === 'groups') renderGroupsView();
+      else if (state.library.view === 'list') renderExercisesView();
+      else if (state.library.view === 'details') renderHistoryDetails();
+    }
+
+    async function loadLibraryGroups() {
+      state.library.loading = true;
+      renderLibrary();
+      try {
+        const data = await apiFetch('/gymapi/library/groups', { silent: true });
+        state.library.groups = data.groups || [];
+      } finally {
+        state.library.loading = false;
+        renderLibrary();
+      }
+    }
+
+    async function openGroup(group) {
+      state.library.selectedGroup = group;
+      state.library.view = 'list';
+      state.library.exercises = [];
+      state.library.query = '';
+      renderLibrary();
+      await loadGroupExercises();
+    }
+
+    let groupSearchTimer = null;
+    function debounceLoadGroup() {
+      if (groupSearchTimer) clearTimeout(groupSearchTimer);
+      groupSearchTimer = setTimeout(() => loadGroupExercises().catch(console.error), 300);
+    }
+
+    async function loadGroupExercises() {
+      if (!state.library.selectedGroup) return;
+      state.library.loading = true;
+      renderLibrary();
+      const params = new URLSearchParams();
+      if (state.library.query) params.set('query', state.library.query);
+      const data = await apiFetch(`/gymapi/library/group/${state.library.selectedGroup.code}/exercises?${params.toString()}`, { silent: true });
+      state.library.exercises = data.items || [];
+      state.library.loading = false;
+      renderLibrary();
+    }
+
+    async function openExercise(ex) {
+      state.library.view = 'details';
+      state.library.historyLoading = true;
+      renderLibrary();
+      await loadExerciseHistory(ex.id);
+    }
+
+    async function loadExerciseHistory(exerciseId) {
+      state.library.historyLoading = true;
+      renderLibrary();
+      const data = await apiFetch(`/gymapi/exercise/${exerciseId}/history?range=${state.library.range}`, { silent: true });
+      state.library.history = data;
+      state.library.historyLoading = false;
+      renderLibrary();
+    }
+
     function closeDrawer() { setDrawer(false); }
 
     function toggleDrawer() { setDrawer(!state.drawerOpen); }
@@ -799,6 +1125,10 @@
         if (!state.body.data || state.body.data?.range !== state.body.range) renderBodyContent();
         loadBodyOverall(state.body.range).catch(console.error);
       }
+      if (normalized === 'library') {
+        renderLibrary();
+        if (!state.library.groups.length) loadLibraryGroups().catch(console.error);
+      }
       if (normalized === 'muscles') initMuscleScreen().catch(console.error);
       if (normalized === 'anatomy') initAnatomyScreen().catch(console.error);
     }
@@ -827,6 +1157,10 @@
 
     function handleBackAction() {
       if (state.drawerOpen) { closeDrawer(); return; }
+      if (state.currentRoute === 'library' && state.library.view !== 'groups') {
+        if (state.library.view === 'details') { state.library.view = 'list'; renderLibrary(); return; }
+        if (state.library.view === 'list') { state.library.view = 'groups'; renderLibrary(); return; }
+      }
       if (state.currentRoute === 'muscles') navigateTo('settings');
       else if (state.currentRoute === 'anatomy') navigateTo('settings');
       else if (state.currentRoute !== 'today') navigateTo('today');
