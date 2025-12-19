@@ -3384,7 +3384,7 @@ async def list_user_exercises_for_mapping(
     user_id: int, query: str | None = None, muscle: str | None = None
 ):
     async with connect_db() as db:
-        params: list[object] = [user_id]
+        params: list[object] = [user_id, user_id]
         where = ["ue.user_id=?", "ue.is_archived=0"]
         if query:
             where.append("LOWER(e.name) LIKE ?")
@@ -3396,7 +3396,8 @@ async def list_user_exercises_for_mapping(
                 where.append("e.muscle_group=?")
                 params.append(muscle)
         sql = (
-            "SELECT DISTINCT e.id, e.name, e.muscle_group "
+            "SELECT DISTINCT e.id, e.name, e.muscle_group, "
+            "EXISTS(SELECT 1 FROM user_exercise_muscles uem WHERE uem.user_id=? AND uem.exercise_id=e.id) AS has_override "
             "FROM user_exercises ue "
             "JOIN exercises e ON e.id = ue.exercise_id "
             f"WHERE {' AND '.join(where)} "
@@ -3474,6 +3475,69 @@ async def resolve_exercise_muscles(user_id: int, exercise_ids: Sequence[int]):
             result[ex_id] = [{"muscle_code": "other", "weight_pct": 100.0}]
 
     return result
+
+
+async def get_user_anatomy(user_id: int, exercise_id: int):
+    async with connect_db() as db:
+        cur = await db.execute(
+            """
+            SELECT muscle_code, weight_pct
+            FROM user_exercise_muscles
+            WHERE user_id=? AND exercise_id=?
+            ORDER BY muscle_code
+            """,
+            (user_id, exercise_id),
+        )
+        return await cur.fetchall()
+
+
+async def get_default_anatomy(exercise_id: int):
+    async with connect_db() as db:
+        cur = await db.execute(
+            """
+            SELECT muscle_code, weight_pct
+            FROM exercise_muscles
+            WHERE exercise_id=?
+            ORDER BY muscle_code
+            """,
+            (exercise_id,),
+        )
+        return await cur.fetchall()
+
+
+async def set_user_anatomy(user_id: int, exercise_id: int, items: Sequence[dict]):
+    async with connect_db() as db:
+        await db.execute(
+            "DELETE FROM user_exercise_muscles WHERE user_id=? AND exercise_id=?",
+            (user_id, exercise_id),
+        )
+        rows = [
+            (
+                user_id,
+                exercise_id,
+                (item.get("muscle_code") or "").strip().lower(),
+                float(item.get("weight_pct") or 0),
+            )
+            for item in items
+        ]
+        if rows:
+            await db.executemany(
+                """
+                INSERT INTO user_exercise_muscles(user_id, exercise_id, muscle_code, weight_pct)
+                VALUES (?,?,?,?)
+                """,
+                rows,
+            )
+        await db.commit()
+
+
+async def clear_user_anatomy(user_id: int, exercise_id: int):
+    async with connect_db() as db:
+        await db.execute(
+            "DELETE FROM user_exercise_muscles WHERE user_id=? AND exercise_id=?",
+            (user_id, exercise_id),
+        )
+        await db.commit()
 
 
 async def fetch_session_sets_with_exercises(user_id: int, session_id: int):
