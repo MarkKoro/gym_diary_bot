@@ -4,6 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
   <title>Дневник тренировок</title>
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
   <style>
     :root {
       color-scheme: light dark;
@@ -737,7 +738,6 @@
     .fatal-actions .btn { flex: 1; min-width: 140px; }
     .btn.secondary { background: var(--tg-theme-secondary-bg-color, #f2f2f2); }
   </style>
-  <script src="https://telegram.org/js/telegram-web-app.js"></script>
 </head>
 <body>
   <div id="boot" class="boot">
@@ -4416,43 +4416,41 @@
     }
 
     async function initTelegram() {
-      const tg = await waitForTelegramInitData(3500);
+      try {
+        const tg = await waitForTelegramInitData(4000);
 
-      // Если мы НЕ в Telegram — показываем нормальное сообщение и выходим.
-      // (Это важно для открытия /gymapp/ из обычного браузера.)
-      if (!tg) {
-        state.isTelegram = false;
-        setVisible(document.getElementById('not-telegram'), true);
+        if (!tg) {
+          console.warn("Not in Telegram context — initData empty.");
+          state.isTelegram = false;
+          setVisible(document.getElementById('not-telegram'), true);
+          setVisible(document.getElementById('app'), true);
+          hideBoot();
+          return false;
+        }
+
+        state.isTelegram = true;
+        state.initData = tg.initData;
+
+        tg.ready?.();
+        tg.expand?.();
+
+        tg.BackButton?.onClick(handleBackAction);
+        tg.onEvent?.('themeChanged', applyTheme);
+
+        applyTheme();
+
+        setVisible(document.getElementById('not-telegram'), false);
         setVisible(document.getElementById('app'), true);
         hideBoot();
+
+        console.log("✅ Telegram initialized successfully");
+        return true;
+
+      } catch (err) {
+        console.error("Telegram init failed", err);
+        showFatal("InitError", err.message || "Telegram initialization failed");
         return false;
       }
-
-      // Ок, мы в Telegram
-      state.isTelegram = true;
-      state.initData = tg.initData;
-
-      // Готовность/расширение
-      try {
-        tg.ready();
-        tg.expand();
-      } catch (e) {
-        // не критично
-      }
-
-      // BackButton hook
-      try {
-        tg.BackButton?.onClick(handleBackAction);
-      } catch (e) {}
-
-      // Сразу тема (чтобы UI не мигал)
-      setThemeFromTelegram();
-
-      // Показываем UI
-      setVisible(document.getElementById('not-telegram'), false);
-      setVisible(document.getElementById('app'), true);
-      hideBoot();
-      return true;
     }
 
     function selectSet(setNo) {
@@ -4806,6 +4804,16 @@
         showFatal(err, 'init()');
       }
     })();
+  </script>
+  <script>
+    window.addEventListener("DOMContentLoaded", async () => {
+      try {
+        await init();
+      } catch (e) {
+        console.error("Init crashed:", e);
+        showFatal("InitCrash", e.message);
+      }
+    });
   </script>
 </body>
 </html>
