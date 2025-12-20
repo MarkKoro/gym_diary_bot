@@ -25,7 +25,7 @@ from db import (
 )
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-STATIC_DIR = os.path.join(BASE_DIR, "static", "webapp")
+STATIC_DIR = os.path.join(BASE_DIR, "webapp")
 
 MUSCLE_CODES = tuple(MG_NAMES.keys())
 
