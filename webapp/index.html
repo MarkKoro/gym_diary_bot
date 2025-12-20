@@ -363,6 +363,11 @@
     .list-card { padding: 12px 12px; }
     .list-row { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
     .list-text { display: flex; flex-direction: column; gap: 4px; }
+    .list-subtitle { font-size: 13px; color: var(--muted); }
+    .list-badge { display: inline-flex; align-items: center; gap: 6px; padding: 6px 10px; border-radius: 10px; background: rgba(0,0,0,0.04); color: var(--muted); font-size: 12px; }
+    [data-theme="dark"] .list-badge { background: rgba(255,255,255,0.06); }
+    .list-badge.accent { color: var(--accent); }
+    .filters-row { display: flex; flex-direction: column; gap: 10px; margin-top: 12px; }
     .tag { display: inline-flex; align-items: center; gap: 6px; padding: 6px 10px; background: rgba(0,0,0,0.04); border-radius: 999px; color: var(--muted); font-size: 13px; }
     [data-theme="dark"] .tag { background: rgba(255,255,255,0.06); }
     .small-btn { padding: 9px 11px; font-size: 13px; }
@@ -605,6 +610,15 @@
           <div class="card">
             <div class="card-header">
               <div>
+                <div class="card-title">Мои мышцы</div>
+                <div class="card-summary">Персональные доли нагрузок</div>
+              </div>
+            </div>
+            <button id="openMyMuscles" class="btn">Открыть</button>
+          </div>
+          <div class="card">
+            <div class="card-header">
+              <div>
                 <div class="card-title">Мышцы упражнений</div>
                 <div class="card-summary">Привязка упражнений к группам мышц</div>
               </div>
@@ -631,6 +645,25 @@
             <button class="btn" disabled>Открыть</button>
           </div>
         </div>
+      </section>
+
+      <section id="screen-my-muscles" class="screen" data-route="my_muscles">
+        <div class="section-header">
+          <button id="myMusclesBack" class="back-link">← Настройки</button>
+          <div class="section-title">Мои мышцы</div>
+        </div>
+        <div class="card">
+          <div class="segmented" id="myMusclesTabs">
+            <button type="button" class="seg-btn" data-mode="user">Персонально</button>
+            <button type="button" class="seg-btn active" data-mode="default">По умолчанию</button>
+          </div>
+          <div class="filters-row">
+            <input id="myMusclesSearch" type="search" class="search-input" placeholder="Поиск упражнения…">
+            <div id="myMusclesChips" class="chips scrollable"></div>
+          </div>
+        </div>
+        <div id="myMusclesStatus" class="loading" style="display:none"></div>
+        <div id="myMusclesList" class="card-list"></div>
       </section>
 
       <section id="screen-muscles" class="screen" data-route="muscles">
@@ -849,6 +882,7 @@
       body: 'Моё тело',
       library: 'Мои упражнения',
       settings: 'Настройки',
+      my_muscles: 'Мои мышцы',
       muscles: 'Мышцы упражнений',
       anatomy: 'Анатомия упражнений',
     };
@@ -886,6 +920,16 @@
         range: '30d',
         history: null,
         historyLoading: false,
+      },
+      myMuscles: {
+        loading: false,
+        loaded: false,
+        mode: 'default',
+        groups: [],
+        selectedGroup: null,
+        items: [],
+        search: '',
+        searchTimer: null,
       },
       muscles: {
         loaded: false,
@@ -1562,6 +1606,7 @@
         renderLibrary();
         if (!state.library.groups.length) loadLibraryGroups().catch(console.error);
       }
+      if (normalized === 'my_muscles') initMyMusclesScreen().catch(console.error);
       if (normalized === 'muscles') initMuscleScreen().catch(console.error);
       if (normalized === 'anatomy') initAnatomyScreen().catch(console.error);
     }
@@ -1595,7 +1640,8 @@
         if (state.library.view === 'details') { state.library.view = 'list'; renderLibrary(); return; }
         if (state.library.view === 'list') { state.library.view = 'groups'; renderLibrary(); return; }
       }
-      if (state.currentRoute === 'muscles') navigateTo('settings');
+      if (state.currentRoute === 'my_muscles') navigateTo('settings');
+      else if (state.currentRoute === 'muscles') navigateTo('settings');
       else if (state.currentRoute === 'anatomy') navigateTo('settings');
       else if (state.currentRoute !== 'today') navigateTo('today');
     }
@@ -1940,6 +1986,187 @@
       await loadMuscleExercises();
     }
 
+    function formatAnatomySummary(items = []) {
+      if (!items.length) return '—';
+      const chunks = items.slice(0, 2).map((i) => `${i.name} ${Math.round(i.weight_pct)}%`);
+      if (items.length > 2) chunks.push('…');
+      return chunks.join(' · ');
+    }
+
+    function renderMyMuscleChips() {
+      const container = document.getElementById('myMusclesChips');
+      if (!container) return;
+      container.innerHTML = '';
+      state.myMuscles.groups.forEach((group) => {
+        const chip = document.createElement('button');
+        chip.type = 'button';
+        chip.className = 'chip' + (state.myMuscles.selectedGroup?.code === group.code ? ' active' : '');
+        chip.textContent = group.name;
+        chip.addEventListener('click', () => selectMyMusclesGroup(group));
+        container.appendChild(chip);
+      });
+    }
+
+    function renderMyMusclesList() {
+      const list = document.getElementById('myMusclesList');
+      const status = document.getElementById('myMusclesStatus');
+      if (!list || !status) return;
+      list.innerHTML = '';
+      if (state.myMuscles.loading) {
+        status.textContent = 'Загрузка…';
+        setVisible(status, true);
+        return;
+      }
+      if (!state.myMuscles.items.length) {
+        if (state.myMuscles.loaded) {
+          status.textContent = state.myMuscles.mode === 'user'
+            ? 'Пока нет персональных настроек. Открой упражнение и нажми «Сохранить».'
+            : 'Упражнения не найдены';
+        } else {
+          status.textContent = 'Загрузка…';
+        }
+        setVisible(status, true);
+        return;
+      }
+      setVisible(status, false);
+
+      state.myMuscles.items.forEach((item) => {
+        const card = document.createElement('div');
+        card.className = 'card list-card';
+        const row = document.createElement('div');
+        row.className = 'list-row';
+
+        const text = document.createElement('div');
+        text.className = 'list-text';
+        const title = document.createElement('div');
+        title.className = 'card-title';
+        title.textContent = item.name;
+        const subtitle = document.createElement('div');
+        subtitle.className = 'list-subtitle';
+        subtitle.textContent = formatAnatomySummary(item.summary || []);
+        text.append(title, subtitle);
+
+        const badge = document.createElement('div');
+        badge.className = 'list-badge' + (item.has_override ? ' accent' : '');
+        if (state.myMuscles.mode === 'default' && item.has_override) badge.textContent = 'Персонально';
+        else if (state.myMuscles.mode === 'user') badge.textContent = '✓';
+        else badge.textContent = '';
+        badge.style.visibility = badge.textContent ? 'visible' : 'hidden';
+
+        row.append(text, badge);
+        card.appendChild(row);
+        card.addEventListener('click', () => openAnatomyEditor(item.id));
+        list.appendChild(card);
+      });
+    }
+
+    async function loadMyMusclesGroups() {
+      state.myMuscles.loading = true;
+      renderMyMusclesList();
+      try {
+        const data = await apiFetch('/gymapi/library/groups', { silent: true });
+        state.myMuscles.groups = data.groups || [];
+        const fallback = state.myMuscles.groups.find((g) => g.count > 0) || state.myMuscles.groups[0];
+        state.myMuscles.selectedGroup = state.myMuscles.selectedGroup || fallback || null;
+        renderMyMuscleChips();
+      } catch (e) {
+        toast('Ошибка связи');
+      } finally {
+        state.myMuscles.loading = false;
+      }
+    }
+
+    async function selectMyMusclesGroup(group) {
+      state.myMuscles.selectedGroup = group;
+      renderMyMuscleChips();
+      await loadMyMuscleExercises();
+    }
+
+    async function loadMyMuscleExercises() {
+      if (!state.myMuscles.selectedGroup) return;
+      state.myMuscles.loading = true;
+      renderMyMusclesList();
+      const params = new URLSearchParams();
+      params.set('mode', state.myMuscles.mode);
+      if (state.myMuscles.search) params.set('query', state.myMuscles.search);
+      try {
+        const data = await apiFetch(`/gymapi/library/group/${state.myMuscles.selectedGroup.code}/anatomy_summaries?${params.toString()}`, { silent: true });
+        state.myMuscles.items = data.items || [];
+        state.myMuscles.loaded = true;
+      } catch (e) {
+        if (e?.status === 401 || e?.status === 403) toast('Нет доступа. Открой WebApp из Telegram.');
+        else toast('Ошибка связи');
+      } finally {
+        state.myMuscles.loading = false;
+        renderMyMusclesList();
+      }
+    }
+
+    function scheduleMyMusclesSearch(value) {
+      state.myMuscles.search = value.trim();
+      if (state.myMuscles.searchTimer) clearTimeout(state.myMuscles.searchTimer);
+      state.myMuscles.searchTimer = setTimeout(() => loadMyMuscleExercises(), 200);
+    }
+
+    function switchMyMusclesMode(mode) {
+      if (!mode || state.myMuscles.mode === mode) return;
+      state.myMuscles.mode = mode;
+      document.querySelectorAll('#myMusclesTabs .seg-btn').forEach((btn) => {
+        btn.classList.toggle('active', btn.dataset.mode === mode);
+      });
+      loadMyMuscleExercises();
+    }
+
+    async function initMyMusclesScreen() {
+      if (!state.myMuscles.groups.length) {
+        await loadMyMusclesGroups();
+      }
+      if (!state.myMuscles.selectedGroup && state.myMuscles.groups.length) {
+        state.myMuscles.selectedGroup = state.myMuscles.groups[0];
+        renderMyMuscleChips();
+      }
+      await loadMyMuscleExercises();
+    }
+
+    function refreshMyMusclesFromEditor(source) {
+      const exId = state.anatomy.editor.exerciseId;
+      if (!exId) return;
+      const target = state.myMuscles.items.find((i) => i.id === exId);
+      if (!target) {
+        if (state.myMuscles.mode === 'user') loadMyMuscleExercises();
+        return;
+      }
+      const summary = (state.anatomy.editor.items || []).map((i) => ({
+        muscle_code: i.muscle_code,
+        name: i.name,
+        weight_pct: i.weight_pct,
+      }));
+      target.summary = summary;
+      target.source = source;
+      target.has_override = source === 'user';
+      state.myMuscles.items = [...state.myMuscles.items];
+      renderMyMusclesList();
+    }
+
+    async function refreshMyMusclesAfterReset() {
+      const exId = state.anatomy.editor.exerciseId;
+      if (!exId) return;
+      try {
+        const data = await apiFetch(`/gymapi/library/exercise/${exId}/anatomy`, { silent: true });
+        const target = state.myMuscles.items.find((i) => i.id === exId);
+        if (target) {
+          target.summary = (data.items || []).map((i) => ({ muscle_code: i.muscle_code, name: i.name, weight_pct: i.weight_pct }));
+          target.source = data.source;
+          target.has_override = data.source === 'user';
+          state.myMuscles.items = [...state.myMuscles.items];
+          renderMyMusclesList();
+        }
+        if (state.myMuscles.mode === 'user') loadMyMuscleExercises();
+      } catch (e) {
+        /* silent */
+      }
+    }
+
     function anatomySourceLabel(code) {
       if (code === 'user') return 'Персонально';
       if (code === 'default') return 'По умолчанию';
@@ -2240,6 +2467,7 @@
         state.anatomy.editor.source = 'user';
         const target = state.anatomy.items.find((i) => i.id === state.anatomy.editor.exerciseId);
         if (target) target.has_user_anatomy_override = true;
+        refreshMyMusclesFromEditor('user');
         renderAnatomyList();
         renderAnatomySheet();
         toast('Сохранено ✅');
@@ -2258,6 +2486,7 @@
         });
         const target = state.anatomy.items.find((i) => i.id === state.anatomy.editor.exerciseId);
         if (target) target.has_user_anatomy_override = false;
+        refreshMyMusclesAfterReset();
         toast('Сброшено ✅');
         closeAnatomySheet(true);
         renderAnatomyList();
@@ -3238,8 +3467,10 @@
         setNoteStatus('Сохраняем…');
         state.editor.noteTimer = setTimeout(() => saveExerciseNote(state.editor.ueId, value), 850);
       });
+      document.getElementById('openMyMuscles').addEventListener('click', () => navigateTo('my_muscles'));
       document.getElementById('openMuscles').addEventListener('click', () => navigateTo('muscles'));
       document.getElementById('openAnatomy').addEventListener('click', () => navigateTo('anatomy'));
+      document.getElementById('myMusclesBack').addEventListener('click', () => navigateTo('settings'));
       document.getElementById('musclesBack').addEventListener('click', () => navigateTo('settings'));
       document.getElementById('anatomyBack').addEventListener('click', () => navigateTo('settings'));
       document.getElementById('muscleSheet').addEventListener('click', (e) => { if (e.target.id === 'muscleSheet') closeMuscleSheet(); });
@@ -3256,6 +3487,10 @@
         state.anatomy.editor.precise = !state.anatomy.editor.precise;
         renderAnatomySheet();
       });
+      document.querySelectorAll('#myMusclesTabs .seg-btn').forEach((btn) => {
+        btn.addEventListener('click', () => switchMyMusclesMode(btn.dataset.mode));
+      });
+      document.getElementById('myMusclesSearch').addEventListener('input', (e) => scheduleMyMusclesSearch(e.target.value));
       document.getElementById('muscleSearch').addEventListener('input', (e) => scheduleMuscleSearch(e.target.value));
       document.getElementById('anatomySearch').addEventListener('input', (e) => scheduleAnatomySearch(e.target.value));
     }
