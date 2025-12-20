@@ -1,6 +1,8 @@
 import os
+from dataclasses import dataclass
 from datetime import UTC, datetime, date, time, timedelta
 from math import sqrt
+from typing import Optional
 from zoneinfo import ZoneInfo
 from fastapi import Body, Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
@@ -107,6 +109,29 @@ def get_tg_init_data(
         )
     except InitDataError as e:
         raise HTTPException(status_code=401, detail=f"Invalid initData: {e}")
+
+
+@dataclass(frozen=True)
+class AuthCtx:
+    tg_id: int
+    user_id: int
+    username: Optional[str]
+    first_name: Optional[str]
+    last_name: Optional[str]
+    auth_date: int
+
+
+async def get_auth_ctx(tg: TelegramInitData = Depends(get_tg_init_data)) -> AuthCtx:
+    internal_user_id = await db.get_or_create_user(tg.user.id, tg.user.username)
+
+    return AuthCtx(
+        tg_id=tg.user.id,
+        user_id=internal_user_id,
+        username=tg.user.username,
+        first_name=tg.user.first_name,
+        last_name=tg.user.last_name,
+        auth_date=tg.auth_date,
+    )
 
 
 def _today_date() -> date:
@@ -221,11 +246,17 @@ async def get_active_day_completions(user_id: int) -> set[int]:
 async def _load_user_settings(user_id: int):
     settings = await db.fetch_user_settings(user_id)
     if not settings:
-        raise HTTPException(status_code=404, detail="Пользователь не найден")
+        raise HTTPException(
+            status_code=400,
+            detail="Пожалуйста, открой бота и настрой количество тренировок в неделю, затем вернись в WebApp.",
+        )
     system, workouts_per_week = settings
     wpw = int(workouts_per_week) if workouts_per_week is not None else 0
     if wpw <= 0:
-        raise HTTPException(status_code=400, detail="Число тренировок в неделю не настроено")
+        raise HTTPException(
+            status_code=400,
+            detail="Пожалуйста, открой бота и настрой количество тренировок в неделю, затем вернись в WebApp.",
+        )
     active_days = await db.list_active_days(user_id)
     if not active_days:
         raise HTTPException(status_code=400, detail="Активные дни не найдены")
@@ -404,20 +435,21 @@ def api_me(tg: TelegramInitData = Depends(get_tg_init_data)):
 
 
 @app.get("/whoami")
-def whoami(tg: TelegramInitData = Depends(get_tg_init_data)):
+async def whoami(ctx: AuthCtx = Depends(get_auth_ctx)):
     return {
         "ok": True,
-        "user_id": tg.user.id,
-        "username": tg.user.username,
-        "first_name": tg.user.first_name,
-        "last_name": tg.user.last_name,
-        "auth_date": tg.auth_date,
+        "tg_id": ctx.tg_id,
+        "user_id": ctx.user_id,
+        "username": ctx.username,
+        "first_name": ctx.first_name,
+        "last_name": ctx.last_name,
+        "auth_date": ctx.auth_date,
     }
 
 
 @app.get("/day/today")
-async def day_today(tg: TelegramInitData = Depends(get_tg_init_data)):
-    user_id = tg.user.id
+async def day_today(ctx: AuthCtx = Depends(get_auth_ctx)):
+    user_id = ctx.user_id
     wpw, active_days = await _load_user_settings(user_id)
     completed = await get_active_day_completions(user_id)
     today = _today_date()
@@ -440,9 +472,9 @@ async def day_today(tg: TelegramInitData = Depends(get_tg_init_data)):
 async def day_sheet(
     day_index: int,
     date: str | None = None,
-    tg: TelegramInitData = Depends(get_tg_init_data),
+    ctx: AuthCtx = Depends(get_auth_ctx),
 ):
-    user_id = tg.user.id
+    user_id = ctx.user_id
     await _validate_day(user_id, day_index)
     completed_days = await get_active_day_completions(user_id)
     target_date = _parse_date_param(date)
@@ -476,8 +508,8 @@ async def day_sheet(
 
 
 @app.get("/catalog/search")
-async def search_catalog(query: str | None = None, tg: TelegramInitData = Depends(get_tg_init_data)):
-    _ = tg.user.id  # auth only
+async def search_catalog(query: str | None = None, ctx: AuthCtx = Depends(get_auth_ctx)):
+    _ = ctx.user_id  # auth only
     rows = await db.search_catalog_exercises(query, limit=50)
     return {
         "ok": True,
@@ -492,9 +524,9 @@ async def search_catalog(query: str | None = None, tg: TelegramInitData = Depend
 async def add_day_exercise(
     day_index: int,
     payload: dict = Body(...),
-    tg: TelegramInitData = Depends(get_tg_init_data),
+    ctx: AuthCtx = Depends(get_auth_ctx),
 ):
-    user_id = tg.user.id
+    user_id = ctx.user_id
     await _validate_day(user_id, day_index)
     ex_id_raw = payload.get("exercise_id") if isinstance(payload, dict) else None
     try:
@@ -510,9 +542,9 @@ async def add_day_exercise(
 async def create_catalog_exercise(
     payload: dict = Body(...),
     day_index: int | None = None,
-    tg: TelegramInitData = Depends(get_tg_init_data),
+    ctx: AuthCtx = Depends(get_auth_ctx),
 ):
-    user_id = tg.user.id
+    user_id = ctx.user_id
     name_raw = (payload or {}).get("name") if isinstance(payload, dict) else None
     muscle_raw = (payload or {}).get("muscle_group") if isinstance(payload, dict) else None
     if not name_raw or not str(name_raw).strip():
@@ -529,9 +561,9 @@ async def create_catalog_exercise(
 async def toggle_day_exercise(
     day_index: int,
     exercise_id: int,
-    tg: TelegramInitData = Depends(get_tg_init_data),
+    ctx: AuthCtx = Depends(get_auth_ctx),
 ):
-    user_id = tg.user.id
+    user_id = ctx.user_id
     await _validate_day(user_id, day_index)
     await _require_catalog_exercise(exercise_id)
     enabled = await db.toggle_user_exercise(user_id, day_index, exercise_id)
@@ -542,9 +574,9 @@ async def toggle_day_exercise(
 async def complete_day(
     day_index: int,
     date: str | None = None,
-    tg: TelegramInitData = Depends(get_tg_init_data),
+    ctx: AuthCtx = Depends(get_auth_ctx),
 ):
-    user_id = tg.user.id
+    user_id = ctx.user_id
     await _validate_day(user_id, day_index)
     target_date = _parse_date_param(date)
     completed_at = datetime.combine(target_date, time.min, tzinfo=UTC).isoformat()
@@ -563,9 +595,9 @@ async def add_set_fast(
     user_exercise_id: int,
     payload: dict | None = Body(default=None),
     date: str | None = None,
-    tg: TelegramInitData = Depends(get_tg_init_data),
+    ctx: AuthCtx = Depends(get_auth_ctx),
 ):
-    user_id = tg.user.id
+    user_id = ctx.user_id
     await _validate_day(user_id, day_index)
     await _ensure_user_exercise(user_id, user_exercise_id, day_index)
     target_date = _parse_date_param(date)
@@ -594,9 +626,9 @@ async def remove_last_set_fast(
     day_index: int,
     user_exercise_id: int,
     date: str | None = None,
-    tg: TelegramInitData = Depends(get_tg_init_data),
+    ctx: AuthCtx = Depends(get_auth_ctx),
 ):
-    user_id = tg.user.id
+    user_id = ctx.user_id
     await _validate_day(user_id, day_index)
     await _ensure_user_exercise(user_id, user_exercise_id, day_index)
     target_date = _parse_date_param(date)
@@ -613,9 +645,9 @@ async def inc_last_set_fast(
     user_exercise_id: int,
     payload: dict = Body(...),
     date: str | None = None,
-    tg: TelegramInitData = Depends(get_tg_init_data),
+    ctx: AuthCtx = Depends(get_auth_ctx),
 ):
-    user_id = tg.user.id
+    user_id = ctx.user_id
     await _validate_day(user_id, day_index)
     await _ensure_user_exercise(user_id, user_exercise_id, day_index)
     field = payload.get("field") if payload else None
@@ -647,9 +679,9 @@ async def exercise_context(
     day_index: int,
     ue_id: int,
     date: str | None = None,
-    tg: TelegramInitData = Depends(get_tg_init_data),
+    ctx: AuthCtx = Depends(get_auth_ctx),
 ):
-    user_id = tg.user.id
+    user_id = ctx.user_id
     await _validate_day(user_id, day_index)
     exercise_id = await _resolve_user_exercise_id(user_id, ue_id, day_index)
     target_date = _parse_date_param(date)
@@ -686,9 +718,9 @@ async def update_exercise_note(
     ue_id: int,
     payload: dict = Body(...),
     date: str | None = None,
-    tg: TelegramInitData = Depends(get_tg_init_data),
+    ctx: AuthCtx = Depends(get_auth_ctx),
 ):
-    user_id = tg.user.id
+    user_id = ctx.user_id
     await _validate_day(user_id, day_index)
     await _resolve_user_exercise_id(user_id, ue_id, day_index)
 
@@ -705,8 +737,8 @@ async def update_exercise_note(
 
 
 @app.get("/muscles")
-async def list_muscles(tg: TelegramInitData = Depends(get_tg_init_data)):
-    _ = tg
+async def list_muscles(ctx: AuthCtx = Depends(get_auth_ctx)):
+    _ = ctx
     muscles = [{"code": code, "name": name} for code, name in MG_NAMES.items()]
     return {"ok": True, "muscles": muscles}
 
@@ -722,8 +754,8 @@ def _sort_groups(items: dict[str, int]):
 
 
 @app.get("/library/groups")
-async def list_library_groups(tg: TelegramInitData = Depends(get_tg_init_data)):
-    user_id = tg.user.id
+async def list_library_groups(ctx: AuthCtx = Depends(get_auth_ctx)):
+    user_id = ctx.user_id
     counters = await db.list_user_library_groups(user_id)
     groups = []
     for code, count in _sort_groups(counters):
@@ -735,9 +767,9 @@ async def list_library_groups(tg: TelegramInitData = Depends(get_tg_init_data)):
 async def list_group_exercises(
     code: str,
     query: str | None = None,
-    tg: TelegramInitData = Depends(get_tg_init_data),
+    ctx: AuthCtx = Depends(get_auth_ctx),
 ):
-    user_id = tg.user.id
+    user_id = ctx.user_id
     normalized_code = (code or "").strip().lower()
     counters = await db.list_user_library_groups(user_id)
     if normalized_code not in counters and normalized_code != "none":
@@ -763,9 +795,9 @@ async def list_group_anatomy_summaries(
     code: str,
     query: str | None = None,
     mode: str = "default",
-    tg: TelegramInitData = Depends(get_tg_init_data),
+    ctx: AuthCtx = Depends(get_auth_ctx),
 ):
-    user_id = tg.user.id
+    user_id = ctx.user_id
     normalized_code = (code or "").strip().lower()
     normalized_mode = (mode or "default").strip().lower()
 
@@ -800,12 +832,12 @@ async def list_library_exercises(
     query: str | None = None,
     muscle: str | None = None,
     only_used: int | None = 1,
-    tg: TelegramInitData = Depends(get_tg_init_data),
+    ctx: AuthCtx = Depends(get_auth_ctx),
 ):
     if only_used not in (None, 1):
         raise HTTPException(status_code=400, detail="Параметр only_used поддерживает только значение 1")
 
-    user_id = tg.user.id
+    user_id = ctx.user_id
     muscle_filter = (muscle or "").strip().lower() or None
     rows = await db.list_user_exercises_for_mapping(user_id, query, muscle_filter)
     return {
@@ -827,9 +859,9 @@ async def list_library_exercises(
 async def update_exercise_muscle_group(
     exercise_id: int,
     payload: dict = Body(...),
-    tg: TelegramInitData = Depends(get_tg_init_data),
+    ctx: AuthCtx = Depends(get_auth_ctx),
 ):
-    user_id = tg.user.id
+    user_id = ctx.user_id
     mg_raw = (payload or {}).get("muscle_group") if isinstance(payload, dict) else None
 
     if mg_raw is None:
@@ -915,9 +947,9 @@ def _format_anatomy_summary(items):
 @app.get("/library/exercise/{exercise_id}/anatomy")
 async def get_exercise_anatomy(
     exercise_id: int,
-    tg: TelegramInitData = Depends(get_tg_init_data),
+    ctx: AuthCtx = Depends(get_auth_ctx),
 ):
-    user_id = tg.user.id
+    user_id = ctx.user_id
     name, muscle_group = await _require_user_exercise(user_id, exercise_id)
 
     source, items = await _resolve_anatomy(user_id, exercise_id, muscle_group)
@@ -935,9 +967,9 @@ async def get_exercise_anatomy(
 async def update_exercise_anatomy(
     exercise_id: int,
     payload: dict = Body(...),
-    tg: TelegramInitData = Depends(get_tg_init_data),
+    ctx: AuthCtx = Depends(get_auth_ctx),
 ):
-    user_id = tg.user.id
+    user_id = ctx.user_id
     name, muscle_group = await _require_user_exercise(user_id, exercise_id)
 
     items = []
@@ -987,9 +1019,9 @@ async def update_exercise_anatomy(
 @app.delete("/library/exercise/{exercise_id}/anatomy")
 async def delete_exercise_anatomy(
     exercise_id: int,
-    tg: TelegramInitData = Depends(get_tg_init_data),
+    ctx: AuthCtx = Depends(get_auth_ctx),
 ):
-    user_id = tg.user.id
+    user_id = ctx.user_id
     await _require_user_exercise(user_id, exercise_id)
     await db.clear_user_anatomy(user_id, exercise_id)
     return {"ok": True}
@@ -1008,9 +1040,9 @@ def _resolve_range(range_code: str | None, end_date: date) -> tuple[str, date]:
 async def exercise_history(
     exercise_id: int,
     range: str | None = None,  # noqa: A002
-    tg: TelegramInitData = Depends(get_tg_init_data),
+    ctx: AuthCtx = Depends(get_auth_ctx),
 ):
-    user_id = tg.user.id
+    user_id = ctx.user_id
     name, _ = await _require_user_exercise(user_id, exercise_id)
 
     end_date = _today_date()
@@ -1075,9 +1107,9 @@ async def exercise_history(
 async def body_day_load(
     day_index: int,
     date: str | None = None,
-    tg: TelegramInitData = Depends(get_tg_init_data),
+    ctx: AuthCtx = Depends(get_auth_ctx),
 ):
-    user_id = tg.user.id
+    user_id = ctx.user_id
     await _validate_day(user_id, day_index)
     target_date = _parse_date_param(date)
     iso_date = _iso_date(target_date)
@@ -1101,9 +1133,9 @@ async def body_day_load(
 async def body_overall(
     range: str | None = None,  # noqa: A002
     end: str | None = None,
-    tg: TelegramInitData = Depends(get_tg_init_data),
+    ctx: AuthCtx = Depends(get_auth_ctx),
 ):
-    user_id = tg.user.id
+    user_id = ctx.user_id
     end_date = _parse_date_param(end)
     normalized_range, start_date = _resolve_range(range, end_date)
     start_iso = _iso_date(start_date)
