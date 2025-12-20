@@ -36,6 +36,7 @@
       font-family: "SF Pro Text", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
       min-height: 100vh;
     }
+    .hidden { display: none !important; }
     body.drawer-open { overflow: hidden; }
     .app {
       display: flex;
@@ -73,7 +74,7 @@
       .status { padding: 8px; }
       .status .status-text { display: none; }
     }
-    .today-header { display: grid; gap: 6px; padding: 12px; border-radius: 16px; border: 1px solid var(--border); background: var(--card); box-shadow: var(--shadow); }
+    .today-header { display: grid; gap: 4px; padding: 12px; border-radius: 16px; border: 1px solid var(--border); background: var(--card); box-shadow: var(--shadow); }
     .day-line { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 10px; }
     .day-title { font-weight: 800; font-size: 17px; letter-spacing: -0.01em; display: flex; align-items: center; gap: 8px; min-width: 0; }
     .day-title .main-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -102,10 +103,10 @@
     .icon-btn:disabled { opacity: 0.55; cursor: not-allowed; box-shadow: none; }
     .icon-btn.ghost { background: transparent; box-shadow: none; }
     .icon { width: 20px; height: 20px; display: block; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
-    .day-meta { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
-    .day-subtitle { font-size: 14px; color: var(--muted); }
+    .day-meta { display: none; }
+    .day-subtitle { display: none; }
     .today-header .status { padding: 7px 10px; }
-    .day-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
+    .day-actions { display: none; }
     .drawer-backdrop {
       position: fixed;
       inset: 0;
@@ -166,6 +167,16 @@
         flex-direction: column;
         gap: 10px;
       }
+      .exercise-card { cursor: pointer; }
+      .exercise-card.busy { opacity: 0.6; pointer-events: none; }
+      .exercise-card .card-title { display: flex; align-items: center; gap: 6px; }
+      .exercise-head { display: flex; justify-content: space-between; gap: 8px; align-items: flex-start; }
+      .exercise-meta { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+      .exercise-summary { font-size: 14px; color: var(--muted); display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+      .workout-body { display: none; border-top: 1px dashed var(--border); padding-top: 10px; gap: 12px; }
+      .exercise-card.expanded .workout-body { display: grid; gap: 12px; }
+      .workout-actions { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px,1fr)); gap: 8px; align-items: center; }
+      .workout-actions .text-btn { justify-self: flex-start; padding-left: 0; }
       .card-header { display: flex; justify-content: space-between; gap: 8px; align-items: center; }
       .card-title { font-size: 16px; font-weight: 800; letter-spacing: -0.01em; }
     .pill { font-size: 12px; color: var(--muted); background: rgba(0,0,0,0.04); padding: 4px 8px; border-radius: 999px; }
@@ -590,8 +601,8 @@
           <div class="day-date" id="dateLabel">—</div>
           <div class="day-subtitle" id="daySubtitle"></div>
         </div>
-        <div class="day-actions" id="dayActions">
-          <button id="headerAddBtn" class="icon-btn small" aria-label="Добавить упражнение">＋</button>
+        <div class="day-actions hidden" id="dayActions">
+          <button id="headerAddBtn" class="icon-btn small hidden" aria-label="Добавить упражнение">＋</button>
         </div>
       </div>
     </header>
@@ -717,7 +728,7 @@
 
     <div id="timerPill" class="timer-pill"></div>
 
-    <button id="addExerciseBtn" class="fab" aria-label="Добавить упражнение">＋</button>
+    <button id="addExerciseBtn" class="fab hidden" aria-label="Добавить упражнение">＋</button>
   </div>
 
   <div id="toast" class="toast"></div>
@@ -920,6 +931,8 @@
       activeDays: [],
       completedDays: new Set(),
       exercises: new Map(),
+      todayDraft: {},
+      workout: { expanded: null },
       steps: { kg: 1, reps: 1, sec: 5 },
       actionQueues: new Map(),
       contexts: new Map(),
@@ -1309,9 +1322,8 @@
     function updateAddButtonVisibility() {
       const btn = document.getElementById('addExerciseBtn');
       const headerBtn = document.getElementById('headerAddBtn');
-      const disabled = state.currentRoute !== 'today' || !state.dayIndex;
-      if (btn) btn.classList.toggle('hidden', disabled);
-      if (headerBtn) headerBtn.disabled = disabled;
+      if (btn) btn.classList.add('hidden');
+      if (headerBtn) headerBtn.classList.add('hidden');
     }
 
     function libraryGroupLabel(code) {
@@ -2607,6 +2619,55 @@
       return `Подходы: ${count} • Последний: ${last || '—'}`;
     }
 
+    function getLastSet(exercise) {
+      const sets = exercise?.sets || [];
+      return sets.length ? sets[sets.length - 1] : null;
+    }
+
+    function deriveDraft(exercise) {
+      const last = getLastSet(exercise);
+      if (last) {
+        return {
+          weight_kg: Number(last.weight_kg || 0),
+          reps: Number(last.reps || 0),
+          seconds: Number(last.seconds || 0),
+        };
+      }
+      return { weight_kg: 0, reps: 0, seconds: 0 };
+    }
+
+    function ensureDraft(ueId) {
+      const exercise = state.exercises.get(ueId);
+      if (!exercise) return { weight_kg: 0, reps: 0, seconds: 0 };
+      if (!state.todayDraft[ueId]) {
+        state.todayDraft[ueId] = deriveDraft(exercise);
+      }
+      return state.todayDraft[ueId];
+    }
+
+    function isTimeBasedExercise(exercise) {
+      if (!exercise) return false;
+      const hasSecondsOnly = (exercise.sets || []).some((s) => Number(s.seconds || 0) > 0 && Number(s.reps || 0) === 0 && (!Number(s.weight_kg) || Number(s.weight_kg) === 0));
+      return hasSecondsOnly || isDurationExercise(exercise.name);
+    }
+
+    function updateDraft(ueId, patch) {
+      const current = ensureDraft(ueId);
+      state.todayDraft[ueId] = { ...current, ...patch };
+    }
+
+    function applyDraftFromSet(ueId, set) {
+      if (!set) {
+        updateDraft(ueId, { weight_kg: 0, reps: 0, seconds: 0 });
+        return;
+      }
+      updateDraft(ueId, {
+        weight_kg: Number(set.weight_kg || 0),
+        reps: Number(set.reps || 0),
+        seconds: Number(set.seconds || 0),
+      });
+    }
+
     function closeMenus() {
       document.querySelectorAll('.card-menu').forEach((menu) => menu.classList.remove('open'));
       state.menu.openId = null;
@@ -2622,60 +2683,164 @@
       menuEl.classList.add('open');
     }
 
+    function adjustDraftValue(ueId, field, delta) {
+      const draft = ensureDraft(ueId);
+      const next = Math.max(0, Number(draft[field] || 0) + delta);
+      const rounded = field === 'weight_kg' ? Math.round(next * 10) / 10 : Math.round(next);
+      updateDraft(ueId, { [field]: rounded });
+    }
+
+    function renderWorkoutControls(container, exercise) {
+      const ueId = exercise.user_exercise_id;
+      const draft = ensureDraft(ueId);
+      const isDuration = isTimeBasedExercise(exercise);
+      container.innerHTML = '';
+
+      const controls = document.createElement('div');
+      controls.className = 'controls-grid';
+
+      const buildBlock = (label, field, step) => {
+        const block = document.createElement('div');
+        block.className = 'control-block';
+        const head = document.createElement('div'); head.className = 'control-head'; head.textContent = label;
+        const valueEl = document.createElement('div'); valueEl.className = 'control-value'; valueEl.textContent = Number(draft[field] || 0);
+        const actions = document.createElement('div'); actions.className = 'control-actions';
+        const minus = document.createElement('button'); minus.type = 'button'; minus.className = 'circle-btn'; minus.textContent = '−';
+        minus.addEventListener('click', (ev) => { ev.stopPropagation(); adjustDraftValue(ueId, field, -step); renderWorkoutBody(ueId); });
+        const plus = document.createElement('button'); plus.type = 'button'; plus.className = 'circle-btn'; plus.textContent = '+';
+        plus.addEventListener('click', (ev) => { ev.stopPropagation(); adjustDraftValue(ueId, field, step); renderWorkoutBody(ueId); });
+        actions.append(minus, valueEl, plus);
+        block.append(head, actions);
+        return block;
+      };
+
+      if (isDuration) {
+        controls.appendChild(buildBlock('Секунды', 'seconds', 5));
+      } else {
+        controls.append(buildBlock('Вес, кг', 'weight_kg', 1), buildBlock('Повторы', 'reps', 1));
+      }
+
+      container.appendChild(controls);
+
+      const actionsRow = document.createElement('div');
+      actionsRow.className = 'workout-actions';
+      const addBtn = document.createElement('button'); addBtn.type = 'button'; addBtn.className = 'btn primary'; addBtn.textContent = '+ Подход';
+      addBtn.addEventListener('click', (ev) => { ev.stopPropagation(); handleWorkoutAdd(exercise); });
+      const removeBtn = document.createElement('button'); removeBtn.type = 'button'; removeBtn.className = 'btn'; removeBtn.textContent = '− Последний';
+      removeBtn.disabled = !(exercise.sets || []).length;
+      removeBtn.addEventListener('click', (ev) => { ev.stopPropagation(); handleWorkoutRemove(exercise); });
+      const detailsBtn = document.createElement('button'); detailsBtn.type = 'button'; detailsBtn.className = 'text-btn'; detailsBtn.textContent = 'Детали';
+      detailsBtn.addEventListener('click', (ev) => { ev.stopPropagation(); openEditor(exercise.user_exercise_id); });
+      actionsRow.append(addBtn, removeBtn, detailsBtn);
+      container.appendChild(actionsRow);
+    }
+
+    function renderWorkoutBody(ueId) {
+      const card = document.querySelector(`[data-ueid="${ueId}"]`);
+      const exercise = state.exercises.get(ueId);
+      if (!card || !exercise) return;
+      const body = card.querySelector('.workout-body');
+      if (!body) return;
+      if (state.workout.expanded !== ueId) { body.innerHTML = ''; body.style.display = 'none'; return; }
+      body.style.display = '';
+      renderWorkoutControls(body, exercise);
+    }
+
+    function toggleWorkoutCard(ueId) {
+      const next = state.workout.expanded === ueId ? null : ueId;
+      state.workout.expanded = next;
+      syncExpandedCards();
+    }
+
+    function syncExpandedCards() {
+      document.querySelectorAll('.exercise-card').forEach((card) => {
+        const ueId = Number(card.dataset.ueid);
+        const expanded = state.workout.expanded === ueId;
+        card.classList.toggle('expanded', expanded);
+        const body = card.querySelector('.workout-body');
+        if (expanded) renderWorkoutBody(ueId);
+        else if (body) { body.innerHTML = ''; body.style.display = 'none'; }
+      });
+    }
+
+    async function handleWorkoutAdd(exercise) {
+      const ueId = exercise.user_exercise_id;
+      const draft = ensureDraft(ueId);
+      const isDuration = isTimeBasedExercise(exercise);
+      const payload = isDuration
+        ? { seconds: Number(draft.seconds || 0), reps: 0, weight_kg: 0 }
+        : { weight_kg: Number(draft.weight_kg || 0), reps: Number(draft.reps || 0), seconds: Number(draft.seconds || 0) };
+      try {
+        await queueExerciseAction(ueId, async () => {
+          const data = await addSet(ueId, { payload, selectLast: false, toastOnSave: false });
+          const latest = getLastSet({ sets: data.sets || [] });
+          applyDraftFromSet(ueId, latest || payload);
+        });
+      } catch (e) {
+        toast('Ошибка связи. Попробуй ещё раз.');
+      }
+      renderWorkoutBody(ueId);
+    }
+
+    async function handleWorkoutRemove(exercise) {
+      const ueId = exercise.user_exercise_id;
+      try {
+        await queueExerciseAction(ueId, async () => {
+          const data = await removeSet(ueId, { toastOnSave: false });
+          const latest = getLastSet({ sets: data.sets || [] });
+          applyDraftFromSet(ueId, latest);
+        });
+      } catch (e) {
+        toast('Ошибка связи. Попробуй ещё раз.');
+      }
+      renderWorkoutBody(ueId);
+    }
+
     function renderExerciseCard(exercise) {
       const card = document.createElement('div');
-      card.className = 'card';
+      card.className = 'card exercise-card';
       card.dataset.ueid = exercise.user_exercise_id;
 
       const header = document.createElement('div');
-      header.className = 'card-header';
+      header.className = 'exercise-head';
       const titleWrap = document.createElement('div');
       titleWrap.className = 'card-title';
       titleWrap.textContent = exercise.name;
-      const right = document.createElement('div');
-      right.className = 'pill';
-      right.textContent = `${exercise.sets?.length || 0} подходов`;
       if (exercise.note) {
         const note = document.createElement('span');
         note.className = 'note-indicator';
         note.textContent = '📝';
         titleWrap.appendChild(note);
       }
-      const menuWrap = document.createElement('div');
-      menuWrap.style.position = 'relative';
-      const menuBtn = document.createElement('button');
-      menuBtn.type = 'button';
-      menuBtn.className = 'menu-button';
-      menuBtn.textContent = '⋯';
-      menuBtn.setAttribute('aria-label', 'Ещё действия');
-      const menu = document.createElement('div');
-      menu.className = 'card-menu';
-      const removeBtn = document.createElement('button');
-      removeBtn.type = 'button';
-      removeBtn.textContent = 'Убрать из дня';
-      removeBtn.addEventListener('click', (ev) => {
-        ev.stopPropagation();
-        archiveExercise(exercise);
-      });
-      menu.appendChild(removeBtn);
-      menuWrap.append(menuBtn, menu);
-      menuBtn.addEventListener('click', (ev) => { ev.stopPropagation(); toggleMenu(exercise.user_exercise_id, menu); });
-      header.append(titleWrap, right, menuWrap);
+      const meta = document.createElement('div');
+      meta.className = 'exercise-meta';
+      const setsPill = document.createElement('span');
+      setsPill.className = 'pill exercise-sets-pill';
+      setsPill.textContent = `Подходов: ${exercise.sets?.length || 0}`;
+      const group = formatMuscleGroup(exercise.muscle_group);
+      if (group && group !== 'Не указано') {
+        const musclePill = document.createElement('span');
+        musclePill.className = 'pill';
+        musclePill.textContent = group;
+        meta.appendChild(musclePill);
+      }
+      meta.appendChild(setsPill);
+      header.append(titleWrap, meta);
 
       const summary = document.createElement('div');
-      summary.className = 'card-summary';
-      summary.textContent = `${formatMuscleGroup(exercise.muscle_group)} • ${buildExerciseSummary(exercise)}`;
+      summary.className = 'exercise-summary';
+      summary.textContent = buildExerciseSummary(exercise);
 
-      const actions = document.createElement('div');
-      actions.className = 'card-actions';
-      const openBtn = document.createElement('button');
-      openBtn.className = 'primary-link';
-      openBtn.textContent = 'Открыть';
-      openBtn.addEventListener('click', (ev) => { ev.stopPropagation(); openEditor(exercise.user_exercise_id); });
-      actions.append(openBtn);
+      const workoutBody = document.createElement('div');
+      workoutBody.className = 'workout-body';
+      workoutBody.addEventListener('click', (e) => e.stopPropagation());
 
-      card.append(header, summary, actions);
-      card.addEventListener('click', () => openEditor(exercise.user_exercise_id));
+      card.append(header, summary, workoutBody);
+      const toggle = () => toggleWorkoutCard(exercise.user_exercise_id);
+      card.addEventListener('click', toggle);
+      header.addEventListener('click', (ev) => { ev.stopPropagation(); toggle(); });
+      summary.addEventListener('click', (ev) => { ev.stopPropagation(); toggle(); });
+
       return card;
     }
 
@@ -2688,6 +2853,7 @@
         state.exercises.set(ex.user_exercise_id, ex);
         container.appendChild(renderExerciseCard(ex));
       });
+      syncExpandedCards();
       renderMuscleLoad();
     }
 
@@ -3305,16 +3471,17 @@
       const exercise = state.exercises.get(ueId);
       const card = document.querySelector(`[data-ueid="${ueId}"]`);
       if (!card || !exercise) return;
-      const summary = card.querySelector('.card-summary');
-      const pill = card.querySelector('.pill');
+      const summary = card.querySelector('.exercise-summary');
+      const pill = card.querySelector('.exercise-sets-pill');
       if (summary) summary.textContent = buildExerciseSummary(exercise);
-      if (pill) pill.textContent = `${exercise.sets?.length || 0} подходов`;
+      if (pill) pill.textContent = `Подходов: ${exercise.sets?.length || 0}`;
     }
 
     function applySetsUpdate(ueId, sets) {
       const exercise = state.exercises.get(ueId);
       if (!exercise) return;
       exercise.sets = sets;
+      applyDraftFromSet(ueId, getLastSet(exercise));
       updateCardSummary(ueId);
       if (state.editor.open && state.editor.ueId === ueId) {
         const lastSet = sets[sets.length - 1];
@@ -3323,6 +3490,7 @@
         }
         renderEditor();
       }
+      if (state.workout.expanded === ueId) renderWorkoutBody(ueId);
       scheduleDayMuscleLoad();
       updateFinishButton();
     }
@@ -3344,13 +3512,14 @@
       return data;
     }
 
-    async function removeSet(ueId) {
+    async function removeSet(ueId, opts = {}) {
       triggerHaptic();
       const data = await apiFetch(`/gymapi/day/${state.dayIndex}/exercise/${ueId}/set/remove_last`, { method: 'POST', body: JSON.stringify({}) });
       applySetsUpdate(ueId, data.sets);
       const last = data.sets[data.sets.length - 1];
       if (state.editor.ueId === ueId) state.editor.selectedSet = last?.set_no || null;
-      toast('Сохранено');
+      if (opts.toastOnSave !== false) toast('Сохранено');
+      return data;
     }
 
     async function ensureSetExists(ueId) {
@@ -3403,8 +3572,14 @@
     async function loadSheet(dayIndex) {
       const shell = document.getElementById('todayShell');
       shell?.classList.add('switching');
+      const prevDay = state.dayIndex;
       try {
+        const dayChanged = prevDay !== dayIndex;
         state.dayIndex = dayIndex;
+        if (dayChanged) {
+          state.workout.expanded = null;
+          state.todayDraft = {};
+        }
         state.contexts = new Map();
         state.muscleLoad = { groups: [], selectedKey: null, showAll: false, detailsOpen: true, byMuscle: {}, loading: true };
         const sheet = await apiFetch(`/gymapi/day/${dayIndex}/sheet`);
@@ -3546,9 +3721,10 @@
     }
 
     function renderDayHeader() {
-      document.getElementById('dayTitle').textContent = state.dayLabel || 'Тренировка';
-      document.getElementById('daySubtitle').textContent = state.daySubtitle || '';
-      document.getElementById('dateLabel').textContent = state.date || '';
+      const combined = state.daySubtitle ? `${state.dayLabel} / ${state.daySubtitle}` : (state.dayLabel || 'Тренировка');
+      document.getElementById('dayTitle').textContent = combined;
+      document.getElementById('daySubtitle').textContent = '';
+      document.getElementById('dateLabel').textContent = '';
       const completed = state.completedDays.has(Number(state.dayIndex));
       const badge = document.getElementById('dayCompletedBadge');
       badge.style.display = completed ? '' : 'none';
