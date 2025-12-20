@@ -463,6 +463,21 @@
       .exercise-row { display: flex; flex-direction: column; gap: 10px; }
       .primary-link { padding: 10px 14px; border-radius: 12px; background: var(--accent); color: #fff; border: none; font-weight: 700; box-shadow: 0 8px 18px rgba(0,122,255,0.18); cursor: pointer; }
       .primary-link:active { transform: translateY(1px); }
+      .fab { position: fixed; right: 16px; bottom: calc(110px + env(safe-area-inset-bottom)); width: 54px; height: 54px; border-radius: 50%; border: none; background: var(--accent); color: #fff; font-size: 28px; font-weight: 800; box-shadow: 0 14px 28px rgba(0,122,255,0.28); cursor: pointer; z-index: 14; display: grid; place-items: center; }
+      .fab.hidden { display: none; }
+      .card.removing { overflow: hidden; transition: opacity 0.2s ease, transform 0.2s ease, max-height 0.22s ease, margin 0.22s ease, padding 0.22s ease; opacity: 0; transform: translateY(-6px); max-height: 0; margin: 0; padding: 0; }
+      .menu-button { width: 36px; height: 36px; border-radius: 10px; border: 1px solid var(--border); background: var(--bg); color: var(--text); cursor: pointer; display: grid; place-items: center; }
+      .card-menu { position: absolute; top: 44px; right: 0; background: var(--card); border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow); padding: 6px; display: none; min-width: 160px; z-index: 5; }
+      .card-menu.open { display: block; }
+      .card-menu button { width: 100%; text-align: left; background: none; border: none; padding: 10px 12px; border-radius: 10px; cursor: pointer; font-weight: 700; color: var(--text); }
+      .card-menu button:hover { background: rgba(0,0,0,0.05); }
+      [data-theme="dark"] .card-menu button:hover { background: rgba(255,255,255,0.08); }
+      .result-list { display: flex; flex-direction: column; gap: 10px; margin-top: 10px; }
+      .result-item { padding: 12px; border-radius: 12px; border: 1px solid var(--border); background: var(--bg); display: grid; gap: 4px; cursor: pointer; }
+      .result-name { font-weight: 800; letter-spacing: -0.01em; }
+      .result-meta { color: var(--muted); font-size: 13px; }
+      .add-sheet-footer { margin-top: 12px; }
+      .muted-small { color: var(--muted); font-size: 13px; }
     .history-table { width: 100%; border-collapse: collapse; margin-top: 6px; }
     .history-table th, .history-table td { border: 1px solid var(--border); padding: 6px 8px; text-align: center; }
   </style>
@@ -609,6 +624,8 @@
         <div id="anatomyList" class="card-list"></div>
       </section>
     </main>
+
+    <button id="addExerciseBtn" class="fab" aria-label="Добавить упражнение">＋</button>
   </div>
 
   <div id="toast" class="toast"></div>
@@ -629,6 +646,20 @@
       <div class="sheet-handle"></div>
       <div class="day-sheet-title">Выбери тренировочный день</div>
       <div id="dayOptions" class="card-list"></div>
+    </div>
+  </div>
+
+  <div id="addExerciseSheet" class="sheet-backdrop">
+    <div class="sheet">
+      <div class="sheet-handle"></div>
+      <div class="sheet-title">Добавить упражнение</div>
+      <input id="addSearch" type="search" class="search-input" placeholder="Поиск…">
+      <div id="addResults" class="result-list"></div>
+      <div id="addEmpty" class="muted-small" style="display:none; margin-top:8px;">Ничего не найдено.</div>
+      <div id="addCreateWrap" class="add-sheet-footer" style="display:none;">
+        <button id="addCreateBtn" class="btn primary" type="button"></button>
+        <div class="muted-small">Будет добавлено в выбранный день.</div>
+      </div>
     </div>
   </div>
 
@@ -773,6 +804,7 @@
       isTelegram: false,
       muscleLoad: { groups: [], selectedKey: null, showAll: false, detailsOpen: true, byMuscle: {}, loading: false },
       body: { range: '30d', loading: false, data: null, selectedKey: null, showAll: false },
+      addExercise: { open: false, query: '', items: [], loading: false, timer: null },
       library: {
         view: 'groups',
         loading: false,
@@ -811,6 +843,7 @@
           precise: false,
         },
       },
+      menu: { openId: null },
     };
 
     let openConfirmModal = null;
@@ -843,6 +876,11 @@
       return 'other';
     }
 
+    function formatMuscleGroup(value) {
+      const key = normalizeMuscleKey(value);
+      return MUSCLE_NAMES[key] || 'Не указано';
+    }
+
     function calcSetWork(set) {
       const reps = Number(set?.reps || 0);
       const seconds = Number(set?.seconds || 0);
@@ -864,6 +902,12 @@
       state.drawerOpen = open;
       document.getElementById('drawerOverlay').classList.toggle('show', open);
       document.body.classList.toggle('drawer-open', open);
+    }
+
+    function updateAddButtonVisibility() {
+      const btn = document.getElementById('addExerciseBtn');
+      if (!btn) return;
+      btn.classList.toggle('hidden', state.currentRoute !== 'today' || !state.dayIndex);
     }
 
     function libraryGroupLabel(code) {
@@ -1180,6 +1224,8 @@
       document.getElementById('headerTitle').textContent = ROUTE_TITLES[normalized] || ROUTE_TITLES.today;
       setVisible(document.getElementById('todayHeader'), normalized === 'today');
       setVisible(document.getElementById('completeBar'), normalized === 'today');
+      updateAddButtonVisibility();
+      if (normalized !== 'today') closeAddExerciseSheet();
       document.querySelectorAll('.menu-item').forEach((btn) => {
         const active = btn.dataset.route === normalized;
         btn.classList.toggle('active', active);
@@ -1968,6 +2014,21 @@
       return `Подходы: ${count} • Последний: ${last || '—'}`;
     }
 
+    function closeMenus() {
+      document.querySelectorAll('.card-menu').forEach((menu) => menu.classList.remove('open'));
+      state.menu.openId = null;
+    }
+
+    function toggleMenu(ueId, menuEl) {
+      if (state.menu.openId === ueId) {
+        closeMenus();
+        return;
+      }
+      closeMenus();
+      state.menu.openId = ueId;
+      menuEl.classList.add('open');
+    }
+
     function renderExerciseCard(exercise) {
       const card = document.createElement('div');
       card.className = 'card';
@@ -1987,11 +2048,30 @@
         note.textContent = '📝';
         titleWrap.appendChild(note);
       }
-      header.append(titleWrap, right);
+      const menuWrap = document.createElement('div');
+      menuWrap.style.position = 'relative';
+      const menuBtn = document.createElement('button');
+      menuBtn.type = 'button';
+      menuBtn.className = 'menu-button';
+      menuBtn.textContent = '⋯';
+      menuBtn.setAttribute('aria-label', 'Ещё действия');
+      const menu = document.createElement('div');
+      menu.className = 'card-menu';
+      const removeBtn = document.createElement('button');
+      removeBtn.type = 'button';
+      removeBtn.textContent = 'Убрать из дня';
+      removeBtn.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        archiveExercise(exercise);
+      });
+      menu.appendChild(removeBtn);
+      menuWrap.append(menuBtn, menu);
+      menuBtn.addEventListener('click', (ev) => { ev.stopPropagation(); toggleMenu(exercise.user_exercise_id, menu); });
+      header.append(titleWrap, right, menuWrap);
 
       const summary = document.createElement('div');
       summary.className = 'card-summary';
-      summary.textContent = buildExerciseSummary(exercise);
+      summary.textContent = `${formatMuscleGroup(exercise.muscle_group)} • ${buildExerciseSummary(exercise)}`;
 
       const actions = document.createElement('div');
       actions.className = 'card-actions';
@@ -2009,12 +2089,44 @@
     function renderExercises(list) {
       const container = document.getElementById('cards');
       container.innerHTML = '';
+      closeMenus();
       state.exercises = new Map();
       list.forEach((ex) => {
         state.exercises.set(ex.user_exercise_id, ex);
         container.appendChild(renderExerciseCard(ex));
       });
       renderMuscleLoad();
+    }
+
+    function removeExerciseFromState(ueId, card) {
+      state.exercises.delete(ueId);
+      if (card) {
+        card.style.maxHeight = `${card.offsetHeight}px`;
+        requestAnimationFrame(() => {
+          card.classList.add('removing');
+          setTimeout(() => card.remove(), 240);
+        });
+      }
+      updateFinishButton();
+      scheduleDayMuscleLoad();
+    }
+
+    async function archiveExercise(exercise) {
+      if (!state.dayIndex) return;
+      const card = document.querySelector(`.card[data-ueid="${exercise.user_exercise_id}"]`);
+      closeMenus();
+      try {
+        const data = await apiFetch(`/gymapi/day/${state.dayIndex}/exercise/${exercise.exercise_id}/toggle`, { method: 'POST' });
+        const enabled = !!data?.enabled;
+        if (!enabled) {
+          removeExerciseFromState(exercise.user_exercise_id, card);
+          toast('Убрано из дня');
+        } else {
+          toast('Добавлено ✅');
+        }
+      } catch (e) {
+        toast('Ошибка связи');
+      }
     }
 
     function selectMuscleLoad(key) {
@@ -2534,6 +2646,7 @@
         state.date = sheet.date;
         state.dateIso = toIsoDate(sheet.date);
         renderDayHeader();
+        updateAddButtonVisibility();
         renderExercises(sheet.exercises || []);
         scheduleDayMuscleLoad();
         updateFinishButton();
@@ -2550,6 +2663,110 @@
       renderDayOptions(targetDay);
       state.date = info.date || '';
       await loadSheet(targetDay);
+    }
+
+    function renderAddExerciseSheet() {
+      const { items, query, loading } = state.addExercise;
+      const results = document.getElementById('addResults');
+      results.innerHTML = '';
+      (items || []).forEach((item) => {
+        const row = document.createElement('div');
+        row.className = 'result-item';
+        const name = document.createElement('div'); name.className = 'result-name'; name.textContent = item.name;
+        const meta = document.createElement('div'); meta.className = 'result-meta'; meta.textContent = formatMuscleGroup(item.muscle_group);
+        row.append(name, meta);
+        row.addEventListener('click', () => handleAddExerciseSelect(item.id));
+        results.appendChild(row);
+      });
+      const trimmed = (query || '').trim();
+      const empty = document.getElementById('addEmpty');
+      const showEmpty = loading || !(items || []).length;
+      empty.textContent = loading ? 'Ищем…' : 'Ничего не найдено.';
+      empty.style.display = showEmpty ? '' : 'none';
+
+      const createWrap = document.getElementById('addCreateWrap');
+      const showCreate = !loading && trimmed.length > 0 && !(items || []).length;
+      createWrap.style.display = showCreate ? '' : 'none';
+      if (showCreate) {
+        const btn = document.getElementById('addCreateBtn');
+        btn.textContent = `Создать упражнение «${trimmed}»`;
+      }
+    }
+
+    function scheduleAddSearch(value) {
+      state.addExercise.query = value;
+      if (state.addExercise.timer) clearTimeout(state.addExercise.timer);
+      state.addExercise.timer = setTimeout(() => loadAddSearch(value).catch(console.error), 220);
+      renderAddExerciseSheet();
+    }
+
+    async function loadAddSearch(value) {
+      state.addExercise.loading = true;
+      renderAddExerciseSheet();
+      try {
+        const params = new URLSearchParams();
+        if (value !== undefined && value !== null) params.set('query', value.trim());
+        const suffix = params.toString() ? `?${params.toString()}` : '';
+        const data = await apiFetch(`/gymapi/catalog/search${suffix}`, { silent: true });
+        state.addExercise.items = data.items || [];
+      } catch (e) {
+        state.addExercise.items = [];
+      } finally {
+        state.addExercise.loading = false;
+        renderAddExerciseSheet();
+      }
+    }
+
+    async function handleAddExerciseSelect(exerciseId) {
+      if (!state.dayIndex) return;
+      try {
+        await apiFetch(`/gymapi/day/${state.dayIndex}/exercise`, {
+          method: 'POST',
+          body: JSON.stringify({ exercise_id: exerciseId }),
+        });
+        closeAddExerciseSheet();
+        await loadSheet(state.dayIndex);
+        toast('Добавлено ✅');
+      } catch (e) {
+        toast('Ошибка связи');
+      }
+    }
+
+    async function handleCreateExercise() {
+      const name = (state.addExercise.query || '').trim();
+      if (!name || !state.dayIndex) return;
+      try {
+        const params = new URLSearchParams({ day_index: String(state.dayIndex) });
+        await apiFetch(`/gymapi/catalog/exercise?${params.toString()}`, {
+          method: 'POST',
+          body: JSON.stringify({ name }),
+        });
+        closeAddExerciseSheet();
+        await loadSheet(state.dayIndex);
+        toast('Добавлено ✅');
+      } catch (e) {
+        toast('Ошибка связи');
+      }
+    }
+
+    function openAddExerciseSheet() {
+      if (state.addExercise.timer) clearTimeout(state.addExercise.timer);
+      state.addExercise = { ...state.addExercise, open: true, query: '', items: [], loading: false, timer: null };
+      const sheet = document.getElementById('addExerciseSheet');
+      const input = document.getElementById('addSearch');
+      if (input) input.value = '';
+      sheet.classList.add('show');
+      renderAddExerciseSheet();
+      loadAddSearch('').catch(console.error);
+      setTimeout(() => input?.focus(), 120);
+    }
+
+    function closeAddExerciseSheet() {
+      state.addExercise.open = false;
+      if (state.addExercise.timer) clearTimeout(state.addExercise.timer);
+      state.addExercise.timer = null;
+      const sheet = document.getElementById('addExerciseSheet');
+      sheet.classList.remove('show');
     }
 
     function getTotalSetsToday() {
@@ -2583,10 +2800,14 @@
       document.getElementById('dayCenter').addEventListener('click', openDayPicker);
       document.getElementById('openDayPicker').addEventListener('click', openDayPicker);
       document.getElementById('daySheet').addEventListener('click', (e) => { if (e.target.id === 'daySheet') closeDayPicker(); });
+      document.getElementById('addExerciseSheet').addEventListener('click', (e) => { if (e.target.id === 'addExerciseSheet') closeAddExerciseSheet(); });
       document.getElementById('finishBtn').addEventListener('click', () => {
         if (!state.dayIndex) return;
         openConfirmModal?.(() => completeDay(), 'Завершить день?', 'Ты больше не будешь добавлять подходы в этот день?');
       });
+      document.getElementById('addExerciseBtn').addEventListener('click', () => { if (state.dayIndex) openAddExerciseSheet(); });
+      document.getElementById('addSearch').addEventListener('input', (e) => scheduleAddSearch(e.target.value));
+      document.getElementById('addCreateBtn').addEventListener('click', handleCreateExercise);
       document.getElementById('editorClose').addEventListener('click', closeEditor);
       document.getElementById('editorAddSet').addEventListener('click', () => queueExerciseAction(state.editor.ueId, () => addSet(state.editor.ueId, { toastOnSave: true })));
       document.getElementById('editorRemoveSet').addEventListener('click', () => queueExerciseAction(state.editor.ueId, () => removeSet(state.editor.ueId)));
@@ -2620,6 +2841,9 @@
       document.getElementById('anatomySave').addEventListener('click', saveAnatomy);
       document.getElementById('anatomyReset').addEventListener('click', resetAnatomy);
       document.getElementById('anatomyAdd').addEventListener('click', addAnatomyRow);
+      document.addEventListener('click', (e) => {
+        if (!e.target.closest('.card-menu') && !e.target.closest('.menu-button')) closeMenus();
+      });
       document.getElementById('anatomyStepToggle').addEventListener('click', () => {
         state.anatomy.editor.precise = !state.anatomy.editor.precise;
         renderAnatomySheet();

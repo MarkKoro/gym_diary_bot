@@ -263,6 +263,13 @@ async def _resolve_user_exercise_id(user_id: int, ue_id: int, day_index: int) ->
     return int(row[0])
 
 
+async def _require_catalog_exercise(exercise_id: int) -> tuple[str, str | None]:
+    info = await db.get_exercise_details(exercise_id)
+    if not info:
+        raise HTTPException(status_code=404, detail="Упражнение не найдено")
+    return info
+
+
 def _compute_muscle_load(
     sets: list[dict],
     mapping: dict[int, list[dict[str, float]]],
@@ -466,6 +473,69 @@ async def day_sheet(
         "is_completed": day_index in completed_days,
         "completed_days": sorted(int(d) for d in completed_days),
     }
+
+
+@app.get("/catalog/search")
+async def search_catalog(query: str | None = None, tg: TelegramInitData = Depends(get_tg_init_data)):
+    _ = tg.user.id  # auth only
+    rows = await db.search_catalog_exercises(query, limit=50)
+    return {
+        "ok": True,
+        "items": [
+            {"id": ex_id, "name": name, "muscle_group": muscle}
+            for ex_id, name, muscle in rows
+        ],
+    }
+
+
+@app.post("/day/{day_index}/exercise")
+async def add_day_exercise(
+    day_index: int,
+    payload: dict = Body(...),
+    tg: TelegramInitData = Depends(get_tg_init_data),
+):
+    user_id = tg.user.id
+    await _validate_day(user_id, day_index)
+    ex_id_raw = payload.get("exercise_id") if isinstance(payload, dict) else None
+    try:
+        ex_id = int(ex_id_raw)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Некорректный идентификатор упражнения")
+    await _require_catalog_exercise(ex_id)
+    await db.add_user_exercise(user_id, day_index, ex_id)
+    return {"ok": True}
+
+
+@app.post("/catalog/exercise")
+async def create_catalog_exercise(
+    payload: dict = Body(...),
+    day_index: int | None = None,
+    tg: TelegramInitData = Depends(get_tg_init_data),
+):
+    user_id = tg.user.id
+    name_raw = (payload or {}).get("name") if isinstance(payload, dict) else None
+    muscle_raw = (payload or {}).get("muscle_group") if isinstance(payload, dict) else None
+    if not name_raw or not str(name_raw).strip():
+        raise HTTPException(status_code=400, detail="Название обязательно")
+    if day_index is None:
+        raise HTTPException(status_code=400, detail="День обязателен")
+    await _validate_day(user_id, int(day_index))
+    exercise_id = await db.create_catalog_exercise(str(name_raw).strip(), muscle_raw if isinstance(muscle_raw, str) else None)
+    await db.add_user_exercise(user_id, int(day_index), exercise_id)
+    return {"ok": True, "exercise_id": exercise_id}
+
+
+@app.post("/day/{day_index}/exercise/{exercise_id}/toggle")
+async def toggle_day_exercise(
+    day_index: int,
+    exercise_id: int,
+    tg: TelegramInitData = Depends(get_tg_init_data),
+):
+    user_id = tg.user.id
+    await _validate_day(user_id, day_index)
+    await _require_catalog_exercise(exercise_id)
+    enabled = await db.toggle_user_exercise(user_id, day_index, exercise_id)
+    return {"ok": True, "enabled": bool(enabled)}
 
 
 @app.post("/day/{day_index}/complete")
