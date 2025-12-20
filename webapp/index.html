@@ -288,6 +288,19 @@
     .segmented { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 6px; margin: 12px 0 4px; }
     .seg-btn { padding: 10px 12px; border-radius: 12px; border: 1px solid var(--border); background: var(--bg); color: var(--text); font-weight: 600; font-size: 14px; cursor: pointer; }
     .seg-btn.active { background: var(--accent); color: #fff; border-color: var(--accent); box-shadow: 0 8px 16px rgba(0,122,255,0.18); }
+    .quick-panel { margin: 12px 0 4px; border: 1px solid var(--border); border-radius: 14px; background: var(--bg); padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; }
+    .quick-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+    .quick-title { font-weight: 800; font-size: 15px; letter-spacing: -0.01em; }
+    .quick-last { font-size: 13px; color: var(--muted); }
+    .quick-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+    .quick-btn { padding: 10px 12px; font-size: 14px; }
+    .quick-secondary { display: flex; gap: 8px; flex-wrap: wrap; }
+    .text-btn { border: none; background: transparent; color: var(--accent); font-weight: 700; padding: 6px 8px; border-radius: 10px; cursor: pointer; font-size: 13px; }
+    .text-btn:active { opacity: 0.7; }
+    .quick-inline-inputs { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .quick-input { width: 94px; padding: 10px 10px; border-radius: 12px; border: 1px solid var(--border); background: var(--card); color: var(--text); font-size: 14px; }
+    .quick-toggle { padding: 6px 10px; border-radius: 12px; border: 1px solid var(--border); background: var(--card); font-size: 12px; color: var(--muted); cursor: pointer; }
+    .quick-toggle.active { border-color: var(--accent); color: var(--accent); background: rgba(0,122,255,0.08); }
     .sets-list { margin: 12px 0 4px; display: flex; flex-direction: column; gap: 8px; }
     .set-row {
       display: flex;
@@ -299,6 +312,7 @@
       background: var(--bg);
       cursor: pointer;
     }
+    .set-row.flash { animation: setFlash 0.6s ease; border-color: var(--accent); }
     .set-row.selected { border-color: var(--accent); box-shadow: 0 8px 18px rgba(0,122,255,0.12); }
     .set-no { font-weight: 700; }
     .set-meta { font-size: 13px; color: var(--muted); text-align: right; }
@@ -336,6 +350,7 @@
     .chip.active { background: var(--accent); border-color: var(--accent); color: #fff; box-shadow: 0 6px 14px rgba(0,122,255,0.22); }
     .chips.scrollable { overflow-x: auto; flex-wrap: nowrap; padding-bottom: 4px; }
     .chip.text { background: transparent; }
+    @keyframes setFlash { from { background: rgba(0,122,255,0.12); } to { background: var(--bg); } }
     .section-header { display: flex; align-items: center; gap: 10px; }
     .back-link { border: none; background: none; color: var(--accent); font-weight: 700; font-size: 14px; cursor: pointer; padding: 8px 10px; border-radius: 12px; }
     .back-link:hover { background: rgba(0,0,0,0.04); }
@@ -658,6 +673,7 @@
         </div>
 
         <div id="tabSets" class="tab-panel active">
+          <div id="quickPanel" class="quick-panel"></div>
           <div id="setsList" class="sets-list"></div>
           <div id="selectedLabel" class="selected-label">—</div>
           <div id="controlsGrid" class="controls-grid"></div>
@@ -749,7 +765,9 @@
       steps: { kg: 1, reps: 1, sec: 5 },
       actionQueues: new Map(),
       contexts: new Map(),
-      editor: { open: false, ueId: null, selectedSet: null, tab: 'sets', noteTimer: null, noteStatusTimer: null },
+      quickModes: new Map(),
+      quickInputs: new Map(),
+      editor: { open: false, ueId: null, selectedSet: null, tab: 'sets', noteTimer: null, noteStatusTimer: null, flashSet: null, flashTimer: null, scrollTarget: null },
       currentRoute: 'today',
       drawerOpen: false,
       isTelegram: false,
@@ -2426,17 +2444,24 @@
     }
 
     async function addSet(ueId, opts = {}) {
-      const data = await apiFetch(`/gymapi/day/${state.dayIndex}/exercise/${ueId}/set/add`, { method: 'POST', body: JSON.stringify({}) });
+      triggerHaptic();
+      const payload = opts.payload || {};
+      const data = await apiFetch(`/gymapi/day/${state.dayIndex}/exercise/${ueId}/set/add`, { method: 'POST', body: JSON.stringify(payload) });
       applySetsUpdate(ueId, data.sets);
+      const last = data.sets[data.sets.length - 1];
       if (opts.selectLast !== false) {
-        const last = data.sets[data.sets.length - 1];
         if (state.editor.ueId === ueId) state.editor.selectedSet = last?.set_no || null;
+      }
+      if (state.editor.ueId === ueId && last) {
+        state.editor.scrollTarget = last.set_no;
+        setFlashSet(last.set_no);
       }
       if (opts.toastOnSave) toast('Сохранено');
       return data;
     }
 
     async function removeSet(ueId) {
+      triggerHaptic();
       const data = await apiFetch(`/gymapi/day/${state.dayIndex}/exercise/${ueId}/set/remove_last`, { method: 'POST', body: JSON.stringify({}) });
       applySetsUpdate(ueId, data.sets);
       const last = data.sets[data.sets.length - 1];
@@ -2628,6 +2653,128 @@
       renderEditor();
     }
 
+    function setFlashSet(setNo) {
+      if (state.editor.flashTimer) clearTimeout(state.editor.flashTimer);
+      state.editor.flashSet = setNo || null;
+      if (setNo && state.editor.open) {
+        renderEditor();
+        state.editor.flashTimer = setTimeout(() => {
+          state.editor.flashSet = null;
+          if (state.editor.open) renderEditor();
+        }, 600);
+      }
+    }
+
+    function scrollSetIntoView(setNo) {
+      if (!setNo) return;
+      const row = document.querySelector(`.set-row[data-set-no="${setNo}"]`);
+      if (row) row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+
+    function getQuickInputs(ueId) {
+      const cached = state.quickInputs.get(ueId);
+      if (cached) return cached;
+      const fresh = { kg: '', reps: '', sec: '' };
+      state.quickInputs.set(ueId, fresh);
+      return fresh;
+    }
+
+    function setQuickInputs(ueId, patch) {
+      const current = getQuickInputs(ueId);
+      state.quickInputs.set(ueId, { ...current, ...patch });
+    }
+
+    function resolveQuickMode(exercise) {
+      const saved = state.quickModes.get(exercise.user_exercise_id);
+      if (saved) return saved;
+      const hasSeconds = exercise.sets.some((s) => Number(s.seconds || 0) > 0);
+      const mode = hasSeconds || isDurationExercise(exercise.name) ? 'sec' : 'kg';
+      state.quickModes.set(exercise.user_exercise_id, mode);
+      return mode;
+    }
+
+    function formatLastSetLabel(set) {
+      if (!set) return 'Пока нет подходов';
+      const secondsOnly = Number(set.seconds || 0) > 0 && Number(set.reps || 0) === 0 && (!Number(set.weight_kg) || Number(set.weight_kg) === 0);
+      if (secondsOnly) return `Последний: ${Number(set.seconds || 0)} сек`;
+      return `Последний: ${Number(set.weight_kg || 0)} кг × ${Number(set.reps || 0)}`;
+    }
+
+    function renderQuickPanel(exercise) {
+      const panel = document.getElementById('quickPanel');
+      if (!panel) return;
+      panel.innerHTML = '';
+      const header = document.createElement('div'); header.className = 'quick-head';
+      const title = document.createElement('div'); title.className = 'quick-title'; title.textContent = 'Быстрый ввод';
+      header.appendChild(title);
+
+      const lastSet = exercise.sets[exercise.sets.length - 1];
+      const mode = resolveQuickMode(exercise);
+      const lastText = document.createElement('div'); lastText.className = 'quick-last'; lastText.textContent = formatLastSetLabel(lastSet);
+
+      const body = document.createElement('div'); body.className = 'quick-row';
+
+      if (exercise.sets.length) {
+        const addSame = document.createElement('button');
+        addSame.type = 'button';
+        addSame.className = 'btn primary quick-btn';
+        addSame.textContent = 'Добавить такой же';
+        addSame.addEventListener('click', () => queueExerciseAction(exercise.user_exercise_id, async () => {
+          await addSet(exercise.user_exercise_id, { toastOnSave: true });
+        }));
+        body.appendChild(addSame);
+
+        const secondary = document.createElement('div'); secondary.className = 'quick-secondary';
+        const editBtn = document.createElement('button'); editBtn.type = 'button'; editBtn.className = 'text-btn'; editBtn.textContent = 'Правка последнего';
+        editBtn.addEventListener('click', () => {
+          if (!lastSet) return;
+          state.editor.selectedSet = lastSet.set_no;
+          renderEditor();
+          setTimeout(() => {
+            scrollSetIntoView(lastSet.set_no);
+            document.getElementById('controlsGrid')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          }, 50);
+        });
+
+        const removeBtn = document.createElement('button'); removeBtn.type = 'button'; removeBtn.className = 'text-btn'; removeBtn.textContent = 'Удалить последний';
+        removeBtn.addEventListener('click', () => queueExerciseAction(exercise.user_exercise_id, () => removeSet(exercise.user_exercise_id)));
+        secondary.append(editBtn, removeBtn);
+        panel.append(header, lastText, body, secondary);
+      } else {
+        const inputs = getQuickInputs(exercise.user_exercise_id);
+        const toggleRow = document.createElement('div'); toggleRow.className = 'quick-secondary';
+        const kgChip = document.createElement('button'); kgChip.type = 'button'; kgChip.className = 'quick-toggle' + (mode === 'kg' ? ' active' : ''); kgChip.textContent = 'Кг×повт';
+        const secChip = document.createElement('button'); secChip.type = 'button'; secChip.className = 'quick-toggle' + (mode === 'sec' ? ' active' : ''); secChip.textContent = 'Сек';
+        kgChip.addEventListener('click', () => { state.quickModes.set(exercise.user_exercise_id, 'kg'); renderQuickPanel(exercise); });
+        secChip.addEventListener('click', () => { state.quickModes.set(exercise.user_exercise_id, 'sec'); renderQuickPanel(exercise); });
+        toggleRow.append(kgChip, secChip);
+
+        const addBtn = document.createElement('button'); addBtn.type = 'button'; addBtn.className = 'btn primary quick-btn'; addBtn.textContent = 'Добавить';
+        addBtn.addEventListener('click', () => queueExerciseAction(exercise.user_exercise_id, async () => {
+          const payload = mode === 'kg'
+            ? { weight_kg: Number(inputs.kg || 0), reps: Number(inputs.reps || 0) }
+            : { seconds: Number(inputs.sec || 0), reps: 0, weight_kg: 0 };
+          await addSet(exercise.user_exercise_id, { payload, toastOnSave: true });
+        }));
+
+        if (mode === 'kg') {
+          const inline = document.createElement('div'); inline.className = 'quick-inline-inputs';
+          const kg = document.createElement('input'); kg.type = 'number'; kg.inputMode = 'decimal'; kg.placeholder = 'кг'; kg.className = 'quick-input'; kg.value = inputs.kg;
+          kg.addEventListener('input', (e) => setQuickInputs(exercise.user_exercise_id, { kg: e.target.value }));
+          const reps = document.createElement('input'); reps.type = 'number'; reps.inputMode = 'numeric'; reps.placeholder = 'повт'; reps.className = 'quick-input'; reps.value = inputs.reps;
+          reps.addEventListener('input', (e) => setQuickInputs(exercise.user_exercise_id, { reps: e.target.value }));
+          inline.append(kg, reps, addBtn);
+          panel.append(header, lastText, toggleRow, inline);
+        } else {
+          const inline = document.createElement('div'); inline.className = 'quick-inline-inputs';
+          const sec = document.createElement('input'); sec.type = 'number'; sec.inputMode = 'numeric'; sec.placeholder = 'сек'; sec.className = 'quick-input'; sec.value = inputs.sec;
+          sec.addEventListener('input', (e) => setQuickInputs(exercise.user_exercise_id, { sec: e.target.value }));
+          inline.append(sec, addBtn);
+          panel.append(header, lastText, toggleRow, inline);
+        }
+      }
+    }
+
     function renderSetsList(exercise) {
       const list = document.getElementById('setsList');
       list.innerHTML = '';
@@ -2641,6 +2788,8 @@
       exercise.sets.forEach((s) => {
         const row = document.createElement('div');
         row.className = 'set-row';
+        row.dataset.setNo = s.set_no;
+        if (s.set_no === state.editor.flashSet) row.classList.add('flash');
         if (s.set_no === state.editor.selectedSet) row.classList.add('selected');
         const left = document.createElement('div'); left.className = 'set-no'; left.textContent = `№${s.set_no}`;
         const right = document.createElement('div'); right.className = 'set-meta'; right.textContent = `${s.weight_kg} кг · ${s.reps} повт. · ${s.seconds} сек`;
@@ -2760,9 +2909,15 @@
       setActiveTab(state.editor.tab || 'sets');
 
       if (state.editor.tab === 'sets') {
+        renderQuickPanel(exercise);
         renderSetsList(exercise);
         const selected = exercise.sets.find((s) => s.set_no === state.editor.selectedSet);
         document.getElementById('selectedLabel').textContent = selected ? `Выбран подход №${selected.set_no}` : 'Выбери подход для редактирования';
+
+        if (state.editor.scrollTarget) {
+          setTimeout(() => scrollSetIntoView(state.editor.scrollTarget), 60);
+          state.editor.scrollTarget = null;
+        }
 
         const grid = document.getElementById('controlsGrid');
         grid.innerHTML = '';
@@ -2785,7 +2940,7 @@
 
     function openEditor(ueId) {
       triggerHaptic();
-      state.editor = { open: true, ueId, selectedSet: null, tab: 'sets', noteTimer: null, noteStatusTimer: null };
+      state.editor = { open: true, ueId, selectedSet: null, tab: 'sets', noteTimer: null, noteStatusTimer: null, flashSet: null, flashTimer: null, scrollTarget: null };
       setActiveTab('sets');
       renderEditor();
     }
@@ -2793,7 +2948,8 @@
     function closeEditor() {
       if (state.editor.noteTimer) clearTimeout(state.editor.noteTimer);
       if (state.editor.noteStatusTimer) clearTimeout(state.editor.noteStatusTimer);
-      state.editor = { open: false, ueId: null, selectedSet: null, tab: 'sets', noteTimer: null, noteStatusTimer: null };
+      if (state.editor.flashTimer) clearTimeout(state.editor.flashTimer);
+      state.editor = { open: false, ueId: null, selectedSet: null, tab: 'sets', noteTimer: null, noteStatusTimer: null, flashSet: null, flashTimer: null, scrollTarget: null };
       document.getElementById('sheet').classList.remove('show');
       setNoteStatus('');
       document.getElementById('noteArea').value = '';
