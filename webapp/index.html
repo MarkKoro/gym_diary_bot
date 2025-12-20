@@ -2,7 +2,7 @@
 <html lang="ru">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
   <title>Дневник тренировок</title>
   <style>
     :root {
@@ -28,7 +28,17 @@
       --shadow: 0 8px 24px rgba(0,0,0,0.35);
       --sheet-shadow: 0 -16px 32px rgba(0,0,0,0.55);
     }
+    html, body {
+      touch-action: manipulation;
+      -webkit-text-size-adjust: 100%;
+    }
+    button, .btn, .icon-btn, .stepper button, .control-value, .sheet-handle, .pill, .seg-btn {
+      touch-action: manipulation;
+      -webkit-tap-highlight-color: transparent;
+    }
     * { box-sizing: border-box; }
+    body { user-select: none; -webkit-user-select: none; }
+    input, textarea { user-select: text; -webkit-user-select: text; }
     body {
       margin: 0;
       background: var(--bg);
@@ -199,28 +209,50 @@
     .btn.danger { color: var(--danger); border-color: rgba(229,57,53,0.25); }
     .btn:active { transform: translateY(1px); box-shadow: inset 0 2px 6px rgba(0,0,0,0.08); }
     .btn:disabled { opacity: 0.6; cursor: not-allowed; box-shadow: none; }
-      .bottom-action {
+      .finish-fab-wrap{
         position: fixed;
-        left: 0;
-        right: 0;
-        bottom: 0;
-        z-index: 15;
-        padding: 10px 16px calc(12px + env(safe-area-inset-bottom));
-        background: linear-gradient(180deg, rgba(0,0,0,0) 0%, var(--bg) 45%);
+        right: 14px;
+        bottom: calc(14px + env(safe-area-inset-bottom));
+        z-index: 50;
       }
-      .bottom-card {
+
+      .finish-fab{
+        width: 54px;
+        height: 54px;
         border-radius: 18px;
-        border: 1px solid var(--border);
-        background: var(--card);
-        box-shadow: var(--shadow);
-        padding: 12px;
-        display: grid;
-        gap: 6px;
+        border: 1px solid rgba(255,255,255,0.12);
+        background: var(--tg-theme-link-color, #3b82f6);
+        color: white;
+        font-size: 22px;
+        display:flex;
+        align-items:center;
+        justify-content:center;
+        box-shadow: 0 10px 30px rgba(0,0,0,0.35);
       }
-      .finish-btn { width: 100%; padding: 15px; border-radius: 14px; border: 1px solid var(--border); background: var(--card); box-shadow: inset 0 1px 0 rgba(255,255,255,0.2); font-size: 15px; font-weight: 700; color: var(--text); cursor: pointer; }
-      .finish-btn.ready { background: var(--accent); border-color: var(--accent); color: #fff; box-shadow: 0 10px 26px rgba(0,122,255,0.22); }
-      .finish-btn:disabled { opacity: 0.65; cursor: not-allowed; box-shadow: none; }
-      .finish-note { font-size: 13px; color: var(--muted); text-align: center; }
+
+      .finish-fab[disabled]{
+        opacity: 0.45;
+      }
+
+      .finish-popover{
+        position: absolute;
+        right: 0;
+        bottom: 64px;
+        min-width: 220px;
+        padding: 12px;
+        border-radius: 16px;
+        background: rgba(20,25,35,0.95);
+        border: 1px solid rgba(255,255,255,0.10);
+        box-shadow: 0 16px 45px rgba(0,0,0,0.45);
+        display: none;
+      }
+
+      .finish-popover.show{ display:block; }
+
+      .finish-popover-title{
+        font-weight: 700;
+        margin-bottom: 10px;
+      }
     .toast {
       position: fixed;
       left: 50%;
@@ -280,7 +312,7 @@
       transition: transform 0.22s ease;
     }
     .sheet-backdrop.show .sheet { transform: translateY(0); }
-    .sheet-handle { width: 48px; height: 5px; border-radius: 999px; background: var(--border); margin: 0 auto 12px; }
+    .sheet-handle { width: 48px; height: 5px; border-radius: 999px; background: var(--border); margin: 0 auto 12px; cursor: pointer; }
     .sheet-title { font-size: 17px; font-weight: 700; }
     .sheet-subtitle { font-size: 13px; color: var(--muted); margin-top: 2px; }
     .segmented { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 6px; margin: 12px 0 4px; }
@@ -339,7 +371,18 @@
     .control-block.primary { border-color: rgba(0,122,255,0.35); background: rgba(0,122,255,0.06); }
     [data-theme="dark"] .control-block.primary { background: rgba(110,168,255,0.08); }
     .control-head { display: flex; justify-content: space-between; align-items: center; font-size: 13px; color: var(--muted); }
-    .control-value { font-size: 28px; font-weight: 800; text-align: center; letter-spacing: -0.01em; }
+    .control-value { font-size: 28px; font-weight: 800; text-align: center; letter-spacing: -0.01em; cursor: pointer; }
+    .inline-num-input{
+      width: 100%;
+      height: 40px;
+      border-radius: 12px;
+      border: 1px solid rgba(255,255,255,0.14);
+      background: rgba(255,255,255,0.06);
+      color: var(--tg-theme-text-color, #fff);
+      text-align: center;
+      font-size: 16px;
+      outline: none;
+    }
     .control-actions { display: flex; align-items: center; justify-content: center; gap: 12px; }
     .circle-btn { width: 48px; height: 48px; border-radius: 50%; border: 1px solid var(--border); background: var(--card); font-size: 22px; font-weight: 700; cursor: pointer; box-shadow: var(--shadow); color: var(--text); }
     .circle-btn:disabled { opacity: 0.55; cursor: not-allowed; box-shadow: none; }
@@ -612,10 +655,12 @@
         <div id="todayShell" class="today-shell">
           <div id="cards" class="card-list"></div>
         </div>
-        <div class="bottom-action" id="completeBar">
-          <div class="bottom-card">
-            <button id="finishBtn" class="finish-btn" disabled>Завершить день</button>
-            <div class="finish-note" id="finishNote">Можно завершить в конце — данные сохраняются автоматически</div>
+        <div class="finish-fab-wrap" id="finishFabWrap">
+          <button class="finish-fab" id="finishFab" type="button" aria-label="Завершить день">🏁</button>
+
+          <div class="finish-popover" id="finishPopover" role="dialog" aria-hidden="true">
+            <div class="finish-popover-title" id="finishPopoverTitle">Завершить день</div>
+            <button class="btn primary" id="finishBtn" type="button">Завершить день</button>
           </div>
         </div>
       </section>
@@ -885,6 +930,10 @@
       { code: 'cardio', name: 'Кардио' },
       { code: 'other', name: 'Другое' },
     ];
+
+    document.addEventListener('dblclick', (e) => {
+      e.preventDefault();
+    }, { passive: false });
 
     const MUSCLE_NAMES = {
       chest: 'Грудь',
@@ -2686,8 +2735,66 @@
     function adjustDraftValue(ueId, field, delta) {
       const draft = ensureDraft(ueId);
       const next = Math.max(0, Number(draft[field] || 0) + delta);
+      setDraftValue(ueId, field, next);
+    }
+
+    function setDraftValue(ueId, field, value) {
+      const next = Math.max(0, Number(value) || 0);
       const rounded = field === 'weight_kg' ? Math.round(next * 10) / 10 : Math.round(next);
       updateDraft(ueId, { [field]: rounded });
+      return rounded;
+    }
+
+    function beginInlineNumberEdit(containerEl, {
+      value,
+      min = 0,
+      max = 9999,
+      step = 1,
+      decimals = 0,
+      inputMode = 'numeric',
+      onCommit,
+    }) {
+      if (!containerEl) return;
+      const prevText = containerEl.textContent;
+
+      const input = document.createElement('input');
+      input.type = 'number';
+      input.inputMode = inputMode;
+      input.step = String(step);
+      input.min = String(min);
+      input.max = String(max);
+      input.value = (value ?? 0);
+
+      input.className = 'inline-num-input';
+      containerEl.textContent = '';
+      containerEl.appendChild(input);
+
+      const commit = () => {
+        let v = Number(input.value);
+        if (Number.isNaN(v)) v = Number(value || 0);
+        v = Math.min(max, Math.max(min, v));
+        const k = Math.pow(10, decimals);
+        v = Math.round(v * k) / k;
+
+        containerEl.textContent = prevText; // will be re-rendered anyway
+        onCommit?.(v);
+      };
+
+      const cancel = () => {
+        containerEl.textContent = prevText;
+      };
+
+      input.addEventListener('click', (e) => e.stopPropagation());
+      input.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') commit();
+        if (e.key === 'Escape') cancel();
+      });
+      input.addEventListener('blur', commit);
+
+      setTimeout(() => {
+        input.focus();
+        input.select();
+      }, 0);
     }
 
     function renderWorkoutControls(container, exercise) {
@@ -2703,7 +2810,26 @@
         const block = document.createElement('div');
         block.className = 'control-block';
         const head = document.createElement('div'); head.className = 'control-head'; head.textContent = label;
-        const valueEl = document.createElement('div'); valueEl.className = 'control-value'; valueEl.textContent = Number(draft[field] || 0);
+        const valueEl = document.createElement('div'); valueEl.className = 'control-value'; const currentVal = Number(draft[field] || 0); valueEl.textContent = currentVal;
+        valueEl.style.cursor = 'text';
+        valueEl.addEventListener('click', (e) => {
+          e.stopPropagation();
+          const opts = {
+            min: 0,
+            max: field === 'weight_kg' ? 500 : (field === 'seconds' ? 3600 : 200),
+            step: field === 'weight_kg' ? 0.5 : (field === 'seconds' ? 5 : 1),
+            decimals: field === 'weight_kg' ? 1 : 0,
+            inputMode: field === 'weight_kg' ? 'decimal' : 'numeric',
+          };
+          beginInlineNumberEdit(valueEl, {
+            value: currentVal,
+            ...opts,
+            onCommit: (next) => {
+              setDraftValue(ueId, field, next);
+              renderWorkoutBody(ueId);
+            },
+          });
+        });
         const actions = document.createElement('div'); actions.className = 'control-actions';
         const minus = document.createElement('button'); minus.type = 'button'; minus.className = 'circle-btn'; minus.textContent = '−';
         minus.addEventListener('click', (ev) => { ev.stopPropagation(); adjustDraftValue(ueId, field, -step); renderWorkoutBody(ueId); });
@@ -3552,6 +3678,30 @@
       toast('Сохранено');
     }
 
+    async function setSelectedSetValue(field, value) {
+      const exercise = state.exercises.get(state.editor.ueId);
+      if (!exercise) return;
+      let selected = exercise.sets.find((s) => s.set_no === state.editor.selectedSet) || null;
+      if (!selected) {
+        const ensured = await ensureSetExists(state.editor.ueId);
+        if (!ensured) return;
+        state.editor.selectedSet = ensured;
+        const updated = state.exercises.get(state.editor.ueId);
+        selected = updated?.sets.find((s) => s.set_no === ensured) || null;
+      }
+      if (!selected) return;
+
+      const current = field === 'kg' ? Number(selected.weight_kg || 0)
+        : field === 'reps' ? Number(selected.reps || 0)
+          : Number(selected.seconds || 0);
+      const normalized = field === 'kg'
+        ? Math.round(Math.max(0, Number(value) || 0) * 10) / 10
+        : Math.max(0, Math.round(Number(value) || 0));
+      const delta = normalized - current;
+      if (delta === 0) { renderEditor(); return; }
+      await incSet(state.editor.ueId, field, delta);
+    }
+
     async function completeDay() {
       if (!state.dayIndex) return;
       try {
@@ -3561,6 +3711,7 @@
         renderDayOptions(state.dayIndex);
         renderDayHeader();
         updateFinishButton();
+        closeFinishPopover();
         triggerHaptic();
         toast('День завершён ✅');
       } catch (e) {
@@ -3732,14 +3883,37 @@
 
     function updateFinishButton() {
       const btn = document.getElementById('finishBtn');
+      const fab = document.getElementById('finishFab');
       const completed = state.completedDays.has(Number(state.dayIndex));
       const hasSets = getTotalSetsToday() > 0;
       const ready = !!state.dayIndex && hasSets && !completed;
       btn.disabled = !ready;
-      btn.classList.toggle('ready', ready);
       btn.textContent = completed ? 'День завершён' : 'Завершить день';
-      document.getElementById('finishNote').textContent = completed ? 'День отмечен как завершён.' : 'Можно завершить в конце — данные сохраняются автоматически';
+
+      if (fab) {
+        fab.disabled = !ready;
+        fab.textContent = completed ? '✅' : '🏁';
+      }
+
       document.getElementById('dayCompletedBadge').style.display = completed ? '' : 'none';
+    }
+
+    function closeFinishPopover() {
+      const pop = document.getElementById('finishPopover');
+      if (!pop) return;
+      pop.classList.remove('show');
+      pop.setAttribute('aria-hidden', 'true');
+    }
+
+    function toggleFinishPopover() {
+      const pop = document.getElementById('finishPopover');
+      if (!pop) return;
+      const willOpen = !pop.classList.contains('show');
+      if (willOpen) {
+        pop.classList.add('show');
+        pop.setAttribute('aria-hidden', 'false');
+        try { tg?.HapticFeedback?.impactOccurred?.('light'); } catch (e){}
+      } else closeFinishPopover();
     }
 
     function bindEvents() {
@@ -3749,10 +3923,16 @@
       document.getElementById('openDayPicker').addEventListener('click', openDayPicker);
       document.getElementById('daySheet').addEventListener('click', (e) => { if (e.target.id === 'daySheet') closeDayPicker(); });
       document.getElementById('addExerciseSheet').addEventListener('click', (e) => { if (e.target.id === 'addExerciseSheet') closeAddExerciseSheet(); });
+      const fab = document.getElementById('finishFab');
+      const pop = document.getElementById('finishPopover');
       document.getElementById('finishBtn').addEventListener('click', () => {
         if (!state.dayIndex) return;
+        closeFinishPopover();
         openConfirmModal?.(() => completeDay(), 'Завершить день?', 'Ты больше не будешь добавлять подходы в этот день?');
       });
+      fab.addEventListener('click', (e) => { e.stopPropagation(); toggleFinishPopover(); });
+      document.addEventListener('click', () => closeFinishPopover());
+      pop.addEventListener('click', (e) => e.stopPropagation());
       document.getElementById('addExerciseBtn').addEventListener('click', () => { if (state.dayIndex) openAddExerciseSheet(); });
       document.getElementById('headerAddBtn').addEventListener('click', () => { if (state.dayIndex) openAddExerciseSheet(); });
       document.getElementById('timerHeaderBtn').addEventListener('click', openTimerSheet);
@@ -3768,6 +3948,23 @@
       document.getElementById('editorAddSet').addEventListener('click', () => queueExerciseAction(state.editor.ueId, () => addSet(state.editor.ueId, { toastOnSave: true })));
       document.getElementById('editorRemoveSet').addEventListener('click', () => queueExerciseAction(state.editor.ueId, () => removeSet(state.editor.ueId)));
       document.getElementById('sheet').addEventListener('click', (e) => { if (e.target.id === 'sheet') closeEditor(); });
+      document.querySelectorAll('.sheet-handle').forEach((handle) => {
+        handle.addEventListener('click', (e) => {
+          e.stopPropagation();
+          const backdrop = handle.closest('.sheet-backdrop');
+          if (!backdrop) return;
+
+          switch (backdrop.id) {
+            case 'daySheet': closeDayPicker(); break;
+            case 'timerSheet': closeTimerSheet(); break;
+            case 'sheet': closeEditor(); break;
+            case 'muscleSheet': closeMuscleSheet(); break;
+            case 'anatomySheet': closeAnatomySheet(); break;
+            case 'addExerciseSheet': closeAddExerciseSheet(); break;
+            default: backdrop.classList.remove('show'); backdrop.classList.remove('open'); break;
+          }
+        });
+      });
       document.querySelectorAll('#editorTabs .seg-btn').forEach((btn) => {
         btn.addEventListener('click', () => {
           if (!state.editor.ueId) return;
@@ -4002,6 +4199,25 @@
       block.className = 'control-block' + (primary ? ' primary' : '');
       const head = document.createElement('div'); head.className = 'control-head'; head.innerHTML = `<span>${label}</span><span>${state.steps[field]} шаг</span>`;
       const valueEl = document.createElement('div'); valueEl.className = 'control-value'; valueEl.textContent = value;
+      valueEl.style.cursor = 'text';
+      valueEl.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const current = Number(value || 0);
+
+        beginInlineNumberEdit(valueEl, {
+          value: current,
+          min: 0,
+          max: field === 'kg' ? 500 : (field === 'sec' ? 3600 : 200),
+          step: field === 'kg' ? 0.5 : (field === 'sec' ? 5 : 1),
+          decimals: field === 'kg' ? 1 : 0,
+          inputMode: field === 'kg' ? 'decimal' : 'numeric',
+          onCommit: (next) => {
+            const delta = next - current;
+            if (!delta) { renderEditor(); return; }
+            queueExerciseAction(state.editor.ueId, () => incSet(state.editor.ueId, field, delta)).catch(console.error);
+          }
+        });
+      });
       const actions = document.createElement('div'); actions.className = 'control-actions';
       const minus = document.createElement('button'); minus.className = 'circle-btn'; minus.textContent = '−'; minus.addEventListener('click', () => queueExerciseAction(state.editor.ueId, () => incSet(state.editor.ueId, field, -state.steps[field])));
       const plus = document.createElement('button'); plus.className = 'circle-btn'; plus.textContent = '+'; plus.addEventListener('click', () => queueExerciseAction(state.editor.ueId, () => incSet(state.editor.ueId, field, state.steps[field])));
