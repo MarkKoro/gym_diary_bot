@@ -1259,9 +1259,16 @@
 
     let openConfirmModal = null;
     let muscleLoadTimer = null;
-    const tg = window.Telegram ? window.Telegram.WebApp : null;
+    function getTg() {
+      return (window.Telegram && window.Telegram.WebApp) ? window.Telegram.WebApp : null;
+    }
+
+    function sleep(ms) {
+      return new Promise(resolve => setTimeout(resolve, ms));
+    }
 
     function applyTheme() {
+      const tg = getTg();
       const scheme = tg?.colorScheme;
       const themeParams = tg?.themeParams || {};
       const root = document.documentElement;
@@ -1278,6 +1285,7 @@
 
     function setThemeFromTelegram() {
       applyTheme();
+      const tg = getTg();
       tg?.onEvent?.('themeChanged', applyTheme);
     }
 
@@ -1971,6 +1979,7 @@
     function toggleDrawer() { triggerHaptic(); setDrawer(!state.drawerOpen); }
 
     function updateBackButton(route) {
+      const tg = getTg();
       if (!state.isTelegram || !tg?.BackButton) return;
       if (route === 'today') tg.BackButton.hide();
       else tg.BackButton.show();
@@ -4293,6 +4302,7 @@
     }
 
     function toggleFinishPopover() {
+      const tg = getTg();
       const pop = document.getElementById('finishPopover');
       if (!pop) return;
       const willOpen = !pop.classList.contains('show');
@@ -4392,22 +4402,56 @@
       document.getElementById('anatomySearch').addEventListener('input', (e) => scheduleAnatomySearch(e.target.value));
     }
 
+    async function waitForTelegramInitData(timeoutMs = 3000) {
+      const t0 = Date.now();
+      while (Date.now() - t0 < timeoutMs) {
+        const tg = getTg();
+        const initData = tg?.initData;
+        if (typeof initData === "string" && initData.length > 0) {
+          return tg;
+        }
+        await sleep(50);
+      }
+      return null;
+    }
+
     async function initTelegram() {
-      if (!tg || !tg.initData) {
+      const tg = await waitForTelegramInitData(3500);
+
+      // Если мы НЕ в Telegram — показываем нормальное сообщение и выходим.
+      // (Это важно для открытия /gymapp/ из обычного браузера.)
+      if (!tg) {
+        state.isTelegram = false;
         setVisible(document.getElementById('not-telegram'), true);
         setVisible(document.getElementById('app'), true);
         hideBoot();
         return false;
       }
-      tg.ready();
-      tg.expand();
-      tg.MainButton?.hide?.();
-      tg.MainButton?.offClick?.();
+
+      // Ок, мы в Telegram
       state.isTelegram = true;
       state.initData = tg.initData;
-      tg.BackButton?.onClick(handleBackAction);
+
+      // Готовность/расширение
+      try {
+        tg.ready();
+        tg.expand();
+      } catch (e) {
+        // не критично
+      }
+
+      // BackButton hook
+      try {
+        tg.BackButton?.onClick(handleBackAction);
+      } catch (e) {}
+
+      // Сразу тема (чтобы UI не мигал)
+      setThemeFromTelegram();
+
+      // Показываем UI
+      setVisible(document.getElementById('not-telegram'), false);
       setVisible(document.getElementById('app'), true);
-      updateBackButton(state.currentRoute);
+      hideBoot();
       return true;
     }
 
@@ -4743,7 +4787,7 @@
       bindEvents();
       bindTimer();
       if (!state.isTelegram) { handleRouteFromHash(); return; }
-      try { await loadToday(); } catch (e) { console.error(e); }
+      await loadToday();
     }
 
     window.BODY_MUSCLES = window.BODY_MUSCLES || {
