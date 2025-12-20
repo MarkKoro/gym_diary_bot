@@ -408,11 +408,23 @@
     .muscle-load-header { display: flex; flex-direction: column; gap: 2px; }
     .muscle-load-hint { color: var(--muted); font-size: 13px; }
     .muscle-load-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr); gap: 12px; align-items: stretch; }
-    .body-figure { background: var(--bg); border: 1px solid var(--border); border-radius: 12px; padding: 8px; display: grid; place-items: center; }
+    .body-card { gap: 12px; }
+    .body-header { display: flex; justify-content: space-between; gap: 10px; align-items: flex-start; flex-wrap: wrap; }
+    .body-subtitle { color: var(--muted); font-size: 13px; }
+    .range-actions { display: grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap: 6px; background: var(--bg); padding: 4px; border-radius: 12px; border: 1px solid var(--border); }
+    .range-btn { padding: 10px 8px; border-radius: 10px; border: 1px solid transparent; background: transparent; cursor: pointer; font-weight: 700; color: var(--text); }
+    .range-btn.active { border-color: var(--accent); color: var(--accent); background: rgba(0,122,255,0.08); box-shadow: 0 8px 16px rgba(0,122,255,0.15); }
+    [data-theme="dark"] .range-btn.active { background: rgba(110,168,255,0.12); }
+    .body-layout { display: grid; gap: 14px; }
+    .body-heat { display: grid; gap: 8px; justify-items: center; padding: 10px; border: 1px solid var(--border); border-radius: 14px; background: var(--bg); }
+    .body-figure { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 10px; display: grid; place-items: center; box-shadow: var(--shadow); }
     .body-svg { width: 100%; max-width: 240px; height: auto; }
     .body-outline { fill: none; stroke: var(--muted); stroke-width: 2; opacity: 0.5; }
-    .body-zone { cursor: pointer; transition: opacity 0.18s ease, transform 0.1s ease; transform-origin: center; }
-    .body-zone:hover, .body-zone.active { opacity: 0.92; transform: scale(1.01); }
+    .body-zone { cursor: pointer; transition: opacity 0.18s ease, transform 0.1s ease, filter 0.12s ease; transform-origin: center; }
+    .body-zone:hover, .body-zone.active { opacity: 0.95; transform: scale(1.02); filter: drop-shadow(0 0 6px rgba(0,0,0,0.18)); }
+    .heat-legend { width: 100%; display: grid; gap: 6px; text-align: center; }
+    .legend-label { font-size: 12px; color: var(--muted); }
+    .legend-bar { width: 100%; height: 8px; border-radius: 999px; background: linear-gradient(90deg, rgba(0,122,255,0.1), rgba(0,122,255,0.9)); box-shadow: inset 0 1px 0 rgba(255,255,255,0.2); }
     .muscle-list { display: flex; flex-direction: column; gap: 8px; }
     .muscle-row { padding: 10px 12px; border: 1px solid var(--border); border-radius: 12px; background: var(--bg); display: grid; gap: 6px; cursor: pointer; transition: border-color 0.16s ease, box-shadow 0.16s ease, background 0.16s ease; }
     .muscle-row:hover { border-color: var(--accent); }
@@ -424,6 +436,14 @@
     [data-theme="dark"] .progress { background: rgba(255,255,255,0.08); }
     .progress-fill { height: 100%; border-radius: inherit; background: var(--accent); transition: width 0.25s ease; }
     .toggle-btn { border: none; background: none; color: var(--accent); font-weight: 700; cursor: pointer; padding: 4px 6px; font-size: 14px; }
+    .insights-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; }
+    .insight-card { border: 1px solid var(--border); border-radius: 12px; padding: 10px 12px; background: var(--bg); display: grid; gap: 8px; }
+    .insight-title { font-weight: 800; font-size: 14px; letter-spacing: -0.01em; }
+    .insight-list { display: grid; gap: 6px; }
+    .insight-row { display: flex; justify-content: space-between; align-items: center; font-size: 14px; }
+    .body-empty, .body-loading { color: var(--muted); font-size: 14px; padding: 12px; text-align: center; border-radius: 12px; border: 1px dashed var(--border); background: var(--bg); }
+    .body-full-list { border: 1px solid var(--border); border-radius: 12px; background: var(--bg); padding: 10px 12px; display: grid; gap: 8px; }
+    .body-toggle { align-self: center; }
     .muscle-details { border: 1px solid var(--border); border-radius: 12px; padding: 10px 12px; background: var(--bg); }
     .details-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; cursor: pointer; font-weight: 700; }
     .details-content { margin-top: 8px; display: grid; gap: 6px; }
@@ -562,19 +582,13 @@
       </section>
 
       <section id="screen-body" class="screen" data-route="body">
-        <div class="card muscle-load-card" id="bodyCard">
-          <div class="card-header" style="align-items:flex-start; gap: 10px;">
-            <div>
-              <div class="card-title">Моё тело</div>
-              <div class="card-summary" id="bodyRangeLabel"></div>
-            </div>
+        <div class="card muscle-load-card body-card" id="bodyCard">
+          <div class="body-header">
+            <div class="card-title">Моё тело</div>
             <div class="range-actions" id="bodyRange"></div>
           </div>
-          <div class="body-hints">
-            <div>Карточка показывает, какие мышцы нагружались в выбранный период.</div>
-            <div>Оттенок зависит от процента нагрузки.</div>
-          </div>
-          <div id="bodyContent"></div>
+          <div class="body-subtitle" id="bodyRangeLabel"></div>
+          <div id="bodyContent" class="body-layout"></div>
         </div>
       </section>
 
@@ -859,7 +873,7 @@
       drawerOpen: false,
       isTelegram: false,
       muscleLoad: { groups: [], selectedKey: null, showAll: false, detailsOpen: true, byMuscle: {}, loading: false },
-      body: { range: '30d', loading: false, data: null, selectedKey: null, showAll: false },
+      body: { range: '30d', loading: false, data: null, selectedKey: null, showAll: false, cache: {} },
       addExercise: { open: false, query: '', items: [], loading: false, timer: null },
       timer: { running: false, endTs: null, remainingMs: 0, interval: null, open: false, audioCtx: null },
       library: {
@@ -926,6 +940,32 @@
       try { tg?.HapticFeedback?.impactOccurred?.('light'); } catch (e) { /* noop */ }
     }
 
+    function colorWithAlpha(color, alpha = 1) {
+      const safeAlpha = Math.min(Math.max(alpha, 0), 1);
+      const hexMatch = (color || '').trim().match(/^#([0-9a-f]{3}|[0-9a-f]{6})$/i);
+      if (hexMatch) {
+        const hex = hexMatch[1];
+        const normalized = hex.length === 3 ? hex.split('').map((c) => c + c).join('') : hex;
+        const intVal = parseInt(normalized, 16);
+        const r = (intVal >> 16) & 255;
+        const g = (intVal >> 8) & 255;
+        const b = intVal & 255;
+        return `rgba(${r}, ${g}, ${b}, ${safeAlpha})`;
+      }
+      const rgbMatch = (color || '').match(/rgb\s*\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})\s*\)/i);
+      if (rgbMatch) {
+        const [, r, g, b] = rgbMatch;
+        return `rgba(${r}, ${g}, ${b}, ${safeAlpha})`;
+      }
+      return color || `rgba(0,122,255,${safeAlpha})`;
+    }
+
+    function getTodayIsoLocal() {
+      const now = new Date();
+      const local = new Date(now.getTime() - now.getTimezoneOffset() * 60000);
+      return local.toISOString().slice(0, 10);
+    }
+
     function normalizeMuscleKey(value) {
       const key = (value || '').toString().trim().toLowerCase();
       if (!key) return 'none';
@@ -948,9 +988,10 @@
     }
 
     function percentToOpacity(percent) {
-      if (percent <= 0) return 0.08;
-      const clamped = Math.min(Math.max(percent, 0), 100);
-      return 0.15 + (0.85 - 0.15) * (clamped / 100);
+      const base = 0.08;
+      const clamped = Math.min(Math.max(percent || 0, 0), 100);
+      const value = base + (clamped / 100) * 0.85;
+      return Math.min(0.93, Math.max(base, value));
     }
 
     function setVisible(el, flag) { el.style.display = flag ? '' : 'none'; }
@@ -2457,26 +2498,33 @@
       muscleLoadTimer = setTimeout(() => loadDayMuscleLoad().catch(console.error), 400);
     }
 
-    function buildBodySvg(highlights, selectedKey, onSelect = selectMuscleLoad) {
+    function buildBodySvg(highlights, selectedKey, onSelect = selectMuscleLoad, options = {}) {
       const figure = document.createElement('div');
       figure.className = 'body-figure';
-      const op = (key) => percentToOpacity(highlights[key] || 0);
+      const accent = options.accent || 'var(--accent)';
+      const armsValue = Number.isFinite(options.armsValue) ? options.armsValue : ((highlights?.biceps || 0) + (highlights?.triceps || 0)) / 2;
+      const op = (key) => {
+        if (options.averageArms && (key === 'biceps' || key === 'triceps')) {
+          return percentToOpacity(armsValue || 0);
+        }
+        return percentToOpacity(highlights?.[key] || 0);
+      };
       figure.innerHTML = `
         <svg class="body-svg" viewBox="0 0 140 240" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
           <path class="body-outline" d="M70 18c7 0 14 5 14 12v12c0 4 3 7 7 8 11 3 19 14 19 25v18c0 10-4 20-11 27-3 3-5 7-5 12v41c0 9-5 17-12 21l-10 6c-1 1-3 1-4 0l-10-6c-7-4-12-12-12-21v-41c0-5-2-9-5-12-7-7-11-17-11-27v-18c0-11 8-22 19-25 4-1 7-4 7-8V30c0-7 7-12 14-12Z" />
-          <rect class="body-zone ${selectedKey === 'shoulders' ? 'active' : ''}" data-key="shoulders" x="28" y="46" width="28" height="18" rx="10" fill="var(--accent)" opacity="${op('shoulders')}" />
-          <rect class="body-zone ${selectedKey === 'shoulders' ? 'active' : ''}" data-key="shoulders" x="84" y="46" width="28" height="18" rx="10" fill="var(--accent)" opacity="${op('shoulders')}" />
-          <rect class="body-zone ${selectedKey === 'chest' ? 'active' : ''}" data-key="chest" x="46" y="64" width="48" height="26" rx="12" fill="var(--accent)" opacity="${op('chest')}" />
-          <rect class="body-zone ${selectedKey === 'back' ? 'active' : ''}" data-key="back" x="50" y="60" width="40" height="60" rx="16" fill="var(--accent)" opacity="${op('back')}" />
-          <rect class="body-zone ${selectedKey === 'core' ? 'active' : ''}" data-key="core" x="52" y="94" width="36" height="32" rx="12" fill="var(--accent)" opacity="${op('core')}" />
-          <rect class="body-zone ${selectedKey === 'biceps' ? 'active' : ''}" data-key="biceps" x="22" y="70" width="18" height="34" rx="9" fill="var(--accent)" opacity="${op('biceps')}" />
-          <rect class="body-zone ${selectedKey === 'biceps' ? 'active' : ''}" data-key="biceps" x="100" y="70" width="18" height="34" rx="9" fill="var(--accent)" opacity="${op('biceps')}" />
-          <rect class="body-zone ${selectedKey === 'triceps' ? 'active' : ''}" data-key="triceps" x="22" y="106" width="18" height="34" rx="9" fill="var(--accent)" opacity="${op('triceps')}" />
-          <rect class="body-zone ${selectedKey === 'triceps' ? 'active' : ''}" data-key="triceps" x="100" y="106" width="18" height="34" rx="9" fill="var(--accent)" opacity="${op('triceps')}" />
-          <rect class="body-zone ${selectedKey === 'legs' ? 'active' : ''}" data-key="legs" x="48" y="132" width="16" height="74" rx="10" fill="var(--accent)" opacity="${op('legs')}" />
-          <rect class="body-zone ${selectedKey === 'legs' ? 'active' : ''}" data-key="legs" x="76" y="132" width="16" height="74" rx="10" fill="var(--accent)" opacity="${op('legs')}" />
-          <rect class="body-zone ${selectedKey === 'legs' ? 'active' : ''}" data-key="legs" x="52" y="206" width="16" height="20" rx="8" fill="var(--accent)" opacity="${op('legs')}" />
-          <rect class="body-zone ${selectedKey === 'legs' ? 'active' : ''}" data-key="legs" x="72" y="206" width="16" height="20" rx="8" fill="var(--accent)" opacity="${op('legs')}" />
+          <rect class="body-zone ${selectedKey === 'shoulders' ? 'active' : ''}" data-key="shoulders" x="28" y="46" width="28" height="18" rx="10" fill="${accent}" opacity="${op('shoulders')}" />
+          <rect class="body-zone ${selectedKey === 'shoulders' ? 'active' : ''}" data-key="shoulders" x="84" y="46" width="28" height="18" rx="10" fill="${accent}" opacity="${op('shoulders')}" />
+          <rect class="body-zone ${selectedKey === 'chest' ? 'active' : ''}" data-key="chest" x="46" y="64" width="48" height="26" rx="12" fill="${accent}" opacity="${op('chest')}" />
+          <rect class="body-zone ${selectedKey === 'back' ? 'active' : ''}" data-key="back" x="50" y="60" width="40" height="60" rx="16" fill="${accent}" opacity="${op('back')}" />
+          <rect class="body-zone ${selectedKey === 'core' ? 'active' : ''}" data-key="core" x="52" y="94" width="36" height="32" rx="12" fill="${accent}" opacity="${op('core')}" />
+          <rect class="body-zone ${selectedKey === 'biceps' ? 'active' : ''}" data-key="biceps" x="22" y="70" width="18" height="34" rx="9" fill="${accent}" opacity="${op('biceps')}" />
+          <rect class="body-zone ${selectedKey === 'biceps' ? 'active' : ''}" data-key="biceps" x="100" y="70" width="18" height="34" rx="9" fill="${accent}" opacity="${op('biceps')}" />
+          <rect class="body-zone ${selectedKey === 'triceps' ? 'active' : ''}" data-key="triceps" x="22" y="106" width="18" height="34" rx="9" fill="${accent}" opacity="${op('triceps')}" />
+          <rect class="body-zone ${selectedKey === 'triceps' ? 'active' : ''}" data-key="triceps" x="100" y="106" width="18" height="34" rx="9" fill="${accent}" opacity="${op('triceps')}" />
+          <rect class="body-zone ${selectedKey === 'legs' ? 'active' : ''}" data-key="legs" x="48" y="132" width="16" height="74" rx="10" fill="${accent}" opacity="${op('legs')}" />
+          <rect class="body-zone ${selectedKey === 'legs' ? 'active' : ''}" data-key="legs" x="76" y="132" width="16" height="74" rx="10" fill="${accent}" opacity="${op('legs')}" />
+          <rect class="body-zone ${selectedKey === 'legs' ? 'active' : ''}" data-key="legs" x="52" y="206" width="16" height="20" rx="8" fill="${accent}" opacity="${op('legs')}" />
+          <rect class="body-zone ${selectedKey === 'legs' ? 'active' : ''}" data-key="legs" x="72" y="206" width="16" height="20" rx="8" fill="${accent}" opacity="${op('legs')}" />
         </svg>
       `;
       figure.querySelectorAll('.body-zone').forEach((zone) => {
@@ -2652,10 +2700,13 @@
       BODY_RANGES.forEach((item) => {
         const btn = document.createElement('button');
         btn.type = 'button';
-        btn.className = 'range-btn' + (state.body.range === item.code ? ' active' : '');
+        const active = state.body.range === item.code;
+        btn.className = 'range-btn' + (active ? ' active' : '');
         btn.textContent = item.label;
+        btn.setAttribute('aria-pressed', active ? 'true' : 'false');
         btn.addEventListener('click', () => {
           if (state.body.range === item.code) return;
+          triggerHaptic();
           state.body.range = item.code;
           loadBodyOverall(item.code).catch(console.error);
         });
@@ -2665,19 +2716,96 @@
 
     function selectBodyMuscle(key) {
       if (!key) return;
-      const exists = (state.body.data?.muscles || []).find((m) => m.code === key);
+      const exists = normalizeBodyMuscles(state.body.data?.muscles || []).find((m) => m.code === key);
       if (!exists) return;
+      triggerHaptic();
       state.body.selectedKey = key;
       renderBodyContent();
     }
 
-    function renderBodyMuscleList(muscles) {
-      const list = document.createElement('div');
-      list.className = 'muscle-list';
-      const top = muscles.slice(0, 6);
-      const rest = muscles.slice(6);
+    function normalizeBodyMuscles(raw = []) {
+      const map = new Map();
+      (raw || []).forEach((m) => {
+        const key = normalizeMuscleKey(m.code || m.name);
+        const percent = Number(m.percent || 0);
+        map.set(key, { code: key, name: m.name || MUSCLE_NAMES[key] || MUSCLE_NAMES.other, percent });
+      });
+      ['chest', 'back', 'legs', 'shoulders', 'core', 'biceps', 'triceps'].forEach((code) => {
+        if (!map.has(code)) map.set(code, { code, name: MUSCLE_NAMES[code], percent: 0 });
+      });
+      ['cardio', 'other'].forEach((code) => {
+        if (map.has(code)) return;
+        map.set(code, { code, name: MUSCLE_NAMES[code] || code, percent: 0 });
+      });
+      return Array.from(map.values());
+    }
 
-      const renderRow = (group) => {
+    function renderBodyHeatmap(muscles) {
+      const wrap = document.createElement('div');
+      wrap.className = 'body-heat';
+      const highlights = muscles.reduce((acc, m) => { acc[m.code] = m.percent || 0; return acc; }, {});
+      const arms = ((highlights.biceps || 0) + (highlights.triceps || 0)) / 2;
+      const accent = getComputedStyle(document.documentElement).getPropertyValue('--accent');
+      wrap.appendChild(buildBodySvg({ ...highlights, biceps: arms, triceps: arms }, state.body.selectedKey, selectBodyMuscle, { averageArms: true, armsValue: arms, accent }));
+      const legend = document.createElement('div');
+      legend.className = 'heat-legend';
+      const bar = document.createElement('div');
+      bar.className = 'legend-bar';
+      bar.style.background = `linear-gradient(90deg, ${colorWithAlpha(accent, 0.1)}, ${colorWithAlpha(accent, 0.9)})`;
+      const label = document.createElement('div');
+      label.className = 'legend-label';
+      label.textContent = 'Слабее → Сильнее';
+      legend.append(bar, label);
+      wrap.appendChild(legend);
+      return wrap;
+    }
+
+    function renderBodyInsights(muscles) {
+      const block = document.createElement('div');
+      block.className = 'insights-grid';
+      const main = (muscles || []).filter((m) => BODY_MUSCLES.has(m.code));
+      const desc = [...main].sort((a, b) => b.percent - a.percent);
+      const asc = [...main].sort((a, b) => a.percent - b.percent);
+      const top = desc.slice(0, 4);
+      const bottom = asc.slice(0, 4);
+
+      const buildCard = (title, items) => {
+        const card = document.createElement('div');
+        card.className = 'insight-card';
+        const head = document.createElement('div');
+        head.className = 'insight-title';
+        head.textContent = title;
+        const list = document.createElement('div');
+        list.className = 'insight-list';
+        if (!items.length) {
+          const empty = document.createElement('div');
+          empty.className = 'body-empty';
+          empty.textContent = 'Нет данных';
+          list.appendChild(empty);
+        } else {
+          items.forEach((item) => {
+            const row = document.createElement('div');
+            row.className = 'insight-row';
+            row.textContent = `${item.name} — ${item.percent.toFixed(0)}%`;
+            list.appendChild(row);
+          });
+        }
+        card.append(head, list);
+        return card;
+      };
+
+      block.append(buildCard('Больше всего нагружено', top));
+      block.append(buildCard('Почти не используется', bottom));
+      return block;
+    }
+
+    function renderBodyFullList(muscles) {
+      const container = document.createElement('div');
+      container.className = 'body-full-list';
+      const sorted = [...muscles].sort((a, b) => b.percent - a.percent);
+      const visible = state.body.showAll ? sorted : sorted.slice(0, 6);
+
+      visible.forEach((group) => {
         const row = document.createElement('div');
         row.className = 'muscle-row' + (group.code === state.body.selectedKey ? ' selected' : '');
         const head = document.createElement('div');
@@ -2692,50 +2820,38 @@
         progress.className = 'progress';
         const fill = document.createElement('div');
         fill.className = 'progress-fill';
-        fill.style.width = `${group.percent.toFixed(0)}%`;
+        const width = Math.min(100, Math.max(group.percent, 0));
+        fill.style.width = `${width}%`;
         progress.appendChild(fill);
         row.append(head, progress);
         row.addEventListener('click', () => selectBodyMuscle(group.code));
-        return row;
-      };
+        container.appendChild(row);
+      });
 
-      top.forEach((g) => list.appendChild(renderRow(g)));
-      if (rest.length) {
-        if (state.body.showAll) {
-          rest.forEach((g) => list.appendChild(renderRow(g)));
-        }
+      if (sorted.length > visible.length) {
         const toggle = document.createElement('button');
         toggle.type = 'button';
-        toggle.className = 'toggle-btn';
-        toggle.textContent = state.body.showAll ? 'Скрыть остальные' : `Показать остальные (${rest.length})`;
+        toggle.className = 'toggle-btn body-toggle';
+        toggle.textContent = `Показать все мышцы (${sorted.length})`;
         toggle.addEventListener('click', () => {
-          state.body.showAll = !state.body.showAll;
+          triggerHaptic();
+          state.body.showAll = true;
           renderBodyContent();
         });
-        list.appendChild(toggle);
+        container.appendChild(toggle);
+      } else if (sorted.length > 6) {
+        const toggle = document.createElement('button');
+        toggle.type = 'button';
+        toggle.className = 'toggle-btn body-toggle';
+        toggle.textContent = 'Скрыть';
+        toggle.addEventListener('click', () => {
+          triggerHaptic();
+          state.body.showAll = false;
+          renderBodyContent();
+        });
+        container.appendChild(toggle);
       }
-      return list;
-    }
-
-    function renderBodyHighlights(muscles) {
-      const block = document.createElement('div');
-      block.className = 'body-highlights';
-      const main = (muscles || []).filter((m) => !['cardio', 'other'].includes(m.code));
-      const sorted = [...main].sort((a, b) => b.percent - a.percent);
-      const top = sorted.slice(0, 3);
-      const bottom = sorted.slice(-3);
-
-      const renderGroup = (title, items) => {
-        const tag = document.createElement('div');
-        tag.className = 'body-tag';
-        const names = items.length ? items.map((i) => `${i.name} (${i.percent.toFixed(0)}%)`).join(', ') : 'Нет данных';
-        tag.textContent = `${title}: ${names}`;
-        return tag;
-      };
-
-      block.append(renderGroup('Перегруженные', top));
-      block.append(renderGroup('Недогруженные', bottom));
-      return block;
+      return container;
     }
 
     function renderBodyContent() {
@@ -2743,44 +2859,49 @@
       if (!container) return;
       container.innerHTML = '';
       const data = state.body.data;
-      const muscles = (data?.muscles || []).map((m) => ({
-        code: m.code,
-        name: m.name || MUSCLE_NAMES[m.code] || MUSCLE_NAMES.other,
-        percent: Number(m.percent || 0),
-      }));
-      muscles.sort((a, b) => b.percent - a.percent);
+      const muscles = normalizeBodyMuscles(data?.muscles || []);
+      const total = muscles.reduce((acc, m) => acc + (m.percent || 0), 0);
 
       if (state.body.loading) {
         const loading = document.createElement('div');
-        loading.className = 'empty-muscle';
-        loading.textContent = 'Загружаем нагрузку по мышцам…';
+        loading.className = 'body-loading';
+        loading.textContent = 'Загрузка…';
         container.appendChild(loading);
         return;
       }
 
-      if (!muscles.length) {
+      if (!muscles.length || total === 0) {
         const empty = document.createElement('div');
-        empty.className = 'empty-muscle';
-        empty.textContent = 'Нет данных в выбранном периоде.';
+        empty.className = 'body-empty';
+        empty.textContent = 'Пока нет данных тренировок — тело появится после первых подходов.';
         container.appendChild(empty);
         return;
       }
 
-      const selected = muscles.find((m) => m.code === state.body.selectedKey) || muscles[0];
-      state.body.selectedKey = selected?.code || null;
+      const selected = muscles.find((m) => m.code === state.body.selectedKey);
+      const mainSorted = muscles.filter((m) => BODY_MUSCLES.has(m.code)).sort((a, b) => b.percent - a.percent);
+      const fallback = selected || mainSorted[0] || muscles[0];
+      state.body.selectedKey = fallback?.code || null;
 
-      const grid = document.createElement('div');
-      grid.className = 'muscle-load-grid';
-      const highlightMap = muscles.reduce((acc, g) => { acc[g.code] = g.percent; return acc; }, {});
-      grid.appendChild(buildBodySvg(highlightMap, state.body.selectedKey, selectBodyMuscle));
-      grid.appendChild(renderBodyMuscleList(muscles));
-
-      container.appendChild(grid);
-      container.appendChild(renderBodyHighlights(muscles));
+      container.appendChild(renderBodyHeatmap(muscles));
+      container.appendChild(renderBodyInsights(mainSorted));
+      container.appendChild(renderBodyFullList(muscles));
     }
 
     async function loadBodyOverall(range = state.body.range) {
       state.body.range = range;
+      const endDate = getTodayIsoLocal();
+      const cached = state.body.cache[range];
+      if (cached && cached.end === endDate) {
+        state.body.data = cached.data;
+        state.body.loading = false;
+        state.body.showAll = state.body.showAll && (cached.data?.muscles?.length || 0) > 6;
+        document.getElementById('bodyRangeLabel').textContent = cached.label || '';
+        renderBodyRangeButtons();
+        renderBodyContent();
+        return;
+      }
+
       state.body.loading = true;
       state.body.data = state.body.data || null;
       renderBodyRangeButtons();
@@ -2789,7 +2910,6 @@
       try {
         const params = new URLSearchParams();
         params.set('range', range);
-        const endDate = getIsoDate();
         if (endDate) params.set('end', endDate);
         const data = await apiFetch(`/gymapi/body/overall?${params.toString()}`, { silent: true });
         state.body.data = data;
@@ -2800,6 +2920,7 @@
         state.body.selectedKey = selectedExists ? state.body.selectedKey : (currentMuscles[0]?.code || null);
         const label = data?.start && data?.end ? `Период: ${data.start} — ${data.end}` : '';
         document.getElementById('bodyRangeLabel').textContent = label;
+        state.body.cache[range] = { end: endDate, data, label };
         renderBodyRangeButtons();
         renderBodyContent();
       } catch (e) {
