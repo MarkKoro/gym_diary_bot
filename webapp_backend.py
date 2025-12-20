@@ -758,6 +758,43 @@ async def list_group_exercises(
     }
 
 
+@app.get("/library/group/{code}/anatomy_summaries")
+async def list_group_anatomy_summaries(
+    code: str,
+    query: str | None = None,
+    mode: str = "default",
+    tg: TelegramInitData = Depends(get_tg_init_data),
+):
+    user_id = tg.user.id
+    normalized_code = (code or "").strip().lower()
+    normalized_mode = (mode or "default").strip().lower()
+
+    if normalized_mode not in {"default", "user"}:
+        raise HTTPException(status_code=400, detail="Некорректный режим")
+
+    counters = await db.list_user_library_groups(user_id)
+    if normalized_code not in counters and normalized_code != "none":
+        raise HTTPException(status_code=404, detail="Группа не найдена")
+
+    rows = await db.list_user_group_exercises(user_id, normalized_code, query)
+    items: list[dict] = []
+    for ex_id, name, muscle_group, has_override in rows:
+        source, resolved_items = await _resolve_anatomy(user_id, int(ex_id), muscle_group)
+        if normalized_mode == "user" and source != "user":
+            continue
+        items.append(
+            {
+                "id": int(ex_id),
+                "name": name,
+                "has_override": bool(has_override),
+                "source": source,
+                "summary": _format_anatomy_summary(resolved_items),
+            }
+        )
+
+    return {"ok": True, "items": items}
+
+
 @app.get("/library/exercises")
 async def list_library_exercises(
     query: str | None = None,
@@ -847,6 +884,18 @@ def _fallback_anatomy(muscle_group: str | None):
     return "fallback", [("other", 100.0)]
 
 
+async def _resolve_anatomy(user_id: int, exercise_id: int, muscle_group: str | None):
+    user_rows = await db.get_user_anatomy(user_id, exercise_id)
+    if user_rows:
+        return "user", [(row[0], float(row[1])) for row in user_rows]
+
+    default_rows = await db.get_default_anatomy(exercise_id)
+    if default_rows:
+        return "default", [(row[0], float(row[1])) for row in default_rows]
+
+    return _fallback_anatomy(muscle_group)
+
+
 def _format_anatomy_items(items):
     return [
         {
@@ -858,6 +907,11 @@ def _format_anatomy_items(items):
     ]
 
 
+def _format_anatomy_summary(items):
+    sorted_items = sorted(items, key=lambda pair: float(pair[1]), reverse=True)
+    return _format_anatomy_items(sorted_items[:4])
+
+
 @app.get("/library/exercise/{exercise_id}/anatomy")
 async def get_exercise_anatomy(
     exercise_id: int,
@@ -866,17 +920,7 @@ async def get_exercise_anatomy(
     user_id = tg.user.id
     name, muscle_group = await _require_user_exercise(user_id, exercise_id)
 
-    user_rows = await db.get_user_anatomy(user_id, exercise_id)
-    if user_rows:
-        source = "user"
-        items = [(row[0], float(row[1])) for row in user_rows]
-    else:
-        default_rows = await db.get_default_anatomy(exercise_id)
-        if default_rows:
-            source = "default"
-            items = [(row[0], float(row[1])) for row in default_rows]
-        else:
-            source, items = _fallback_anatomy(muscle_group)
+    source, items = await _resolve_anatomy(user_id, exercise_id, muscle_group)
 
     return {
         "ok": True,
