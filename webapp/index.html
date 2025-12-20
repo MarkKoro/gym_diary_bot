@@ -11,7 +11,7 @@
       --card: #ffffff;
       --text: #0f1115;
       --muted: #6b7280;
-      --accent: #007aff;
+      --accent: var(--tg-theme-link-color, #2ea6ff);
       --border: #e5e7eb;
       --danger: #e53935;
       --radius: 14px;
@@ -23,7 +23,7 @@
       --card: #181b22;
       --text: #f4f5f8;
       --muted: #a5acba;
-      --accent: #6ea8ff;
+      --accent: var(--tg-theme-link-color, #6ea8ff);
       --border: #262b34;
       --shadow: 0 8px 24px rgba(0,0,0,0.35);
       --sheet-shadow: 0 -16px 32px rgba(0,0,0,0.55);
@@ -421,15 +421,21 @@
     .range-btn.active { border-color: var(--accent); color: var(--accent); background: rgba(0,122,255,0.08); box-shadow: 0 8px 16px rgba(0,122,255,0.15); }
     [data-theme="dark"] .range-btn.active { background: rgba(110,168,255,0.12); }
     .body-layout { display: grid; gap: 14px; }
-    .body-heat { display: grid; gap: 8px; justify-items: center; padding: 10px; border: 1px solid var(--border); border-radius: 14px; background: var(--bg); }
-    .body-figure { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 10px; display: grid; place-items: center; box-shadow: var(--shadow); }
-    .body-svg { width: 100%; max-width: 240px; height: auto; }
-    .body-outline { fill: none; stroke: var(--muted); stroke-width: 2; opacity: 0.5; }
-    .body-zone { cursor: pointer; transition: opacity 0.18s ease, transform 0.1s ease, filter 0.12s ease; transform-origin: center; }
-    .body-zone:hover, .body-zone.active { opacity: 0.95; transform: scale(1.02); filter: drop-shadow(0 0 6px rgba(0,0,0,0.18)); }
-    .heat-legend { width: 100%; display: grid; gap: 6px; text-align: center; }
+    .body-map { display: grid; gap: 8px; justify-items: center; padding: 10px; border: 1px solid var(--border); border-radius: 14px; background: var(--bg); }
+    .body-map-figure { background: var(--card); border: 1px solid var(--border); border-radius: 14px; padding: 12px; display: grid; place-items: center; box-shadow: var(--shadow); width: 100%; }
+    .body-map-svg { width: 100%; max-width: 260px; height: auto; overflow: visible; }
+    .body-silhouette { fill: none; stroke: color-mix(in srgb, var(--muted) 70%, transparent); stroke-width: 2; opacity: 0.65; }
+    .body-shadow { fill: color-mix(in srgb, var(--accent) 6%, transparent); }
+    .body-zone { cursor: pointer; transition: opacity 180ms ease, transform 180ms ease, stroke 180ms ease; transform-origin: center; }
+    .body-zone:hover { opacity: 1; transform: scale(1.01); }
+    .body-zone.selected { stroke: var(--accent); stroke-width: 1.5; transform: scale(1.01); }
+    .body-legend { width: 100%; display: grid; gap: 4px; text-align: center; }
     .legend-label { font-size: 12px; color: var(--muted); }
-    .legend-bar { width: 100%; height: 8px; border-radius: 999px; background: linear-gradient(90deg, rgba(0,122,255,0.1), rgba(0,122,255,0.9)); box-shadow: inset 0 1px 0 rgba(255,255,255,0.2); }
+    .legend-bar { width: 100%; height: 8px; border-radius: 999px; background: linear-gradient(90deg, color-mix(in srgb, var(--accent) 10%, transparent), color-mix(in srgb, var(--accent) 90%, transparent)); box-shadow: inset 0 1px 0 rgba(255,255,255,0.25); }
+    .body-view-toggle { display: inline-flex; gap: 6px; padding: 4px; border-radius: 12px; border: 1px solid var(--border); background: var(--card); }
+    .body-view-chip { border: none; background: transparent; padding: 6px 10px; border-radius: 10px; font-weight: 700; color: var(--muted); cursor: pointer; }
+    .body-view-chip.active { background: rgba(0,0,0,0.04); color: var(--text); border: 1px solid var(--border); }
+    [data-theme="dark"] .body-view-chip.active { background: rgba(255,255,255,0.06); }
     .muscle-list { display: flex; flex-direction: column; gap: 8px; }
     .muscle-row { padding: 10px 12px; border: 1px solid var(--border); border-radius: 12px; background: var(--bg); display: grid; gap: 6px; cursor: pointer; transition: border-color 0.16s ease, box-shadow 0.16s ease, background 0.16s ease; }
     .muscle-row:hover { border-color: var(--accent); }
@@ -975,7 +981,7 @@
         '--card': themeParams.secondary_bg_color,
         '--text': themeParams.text_color,
         '--muted': themeParams.hint_color,
-        '--accent': themeParams.button_color,
+        '--accent': themeParams.link_color || themeParams.button_color,
       };
       Object.entries(map).forEach(([key, val]) => { if (val) root.style.setProperty(key, val); });
     }
@@ -1017,6 +1023,22 @@
       return 'other';
     }
 
+    function normalizePercents(raw) {
+      const base = { chest: 0, back: 0, legs: 0, shoulders: 0, core: 0, biceps: 0, triceps: 0 };
+      if (Array.isArray(raw)) {
+        raw.forEach((item) => {
+          const key = normalizeMuscleKey(item.code || item.name || item.key);
+          if (base[key] !== undefined) base[key] = Number(item.percent ?? item.value ?? 0) || 0;
+        });
+      } else if (raw && typeof raw === 'object') {
+        Object.entries(raw).forEach(([key, value]) => {
+          const safeKey = normalizeMuscleKey(key);
+          if (base[safeKey] !== undefined) base[safeKey] = Number(value ?? 0) || 0;
+        });
+      }
+      return base;
+    }
+
     function formatMuscleGroup(value) {
       const key = normalizeMuscleKey(value);
       return MUSCLE_NAMES[key] || 'Не указано';
@@ -1032,10 +1054,11 @@
     }
 
     function percentToOpacity(percent) {
-      const base = 0.08;
-      const clamped = Math.min(Math.max(percent || 0, 0), 100);
-      const value = base + (clamped / 100) * 0.85;
-      return Math.min(0.93, Math.max(base, value));
+      const safe = Number.isFinite(percent) ? percent : 0;
+      if (safe === 0) return 0.06;
+      const clamped = Math.min(Math.max(safe, 0), 100);
+      const value = 0.10 + (clamped / 100) * 0.85;
+      return Math.min(0.95, Math.max(0.10, value));
     }
 
     function setVisible(el, flag) { el.style.display = flag ? '' : 'none'; }
@@ -2727,39 +2750,152 @@
       muscleLoadTimer = setTimeout(() => loadDayMuscleLoad().catch(console.error), 400);
     }
 
-    function buildBodySvg(highlights, selectedKey, onSelect = selectMuscleLoad, options = {}) {
-      const figure = document.createElement('div');
-      figure.className = 'body-figure';
-      const accent = options.accent || 'var(--accent)';
-      const armsValue = Number.isFinite(options.armsValue) ? options.armsValue : ((highlights?.biceps || 0) + (highlights?.triceps || 0)) / 2;
-      const op = (key) => {
-        if (options.averageArms && (key === 'biceps' || key === 'triceps')) {
-          return percentToOpacity(armsValue || 0);
-        }
-        return percentToOpacity(highlights?.[key] || 0);
+    function BodyMap({ data = {}, selectedMuscle = null, onSelect, mode = 'today' }) {
+      const svgNS = 'http://www.w3.org/2000/svg';
+      const percents = normalizePercents(data);
+      const accent = getComputedStyle(document.documentElement).getPropertyValue('--accent') || 'var(--accent)';
+      const container = document.createElement('div');
+      container.className = `body-map body-map-${mode}`;
+      let side = 'front';
+
+      const silhouettePath = 'M70 18c8 0 15 6 15 14v14c0 5 3 9 8 10 12 4 21 15 21 28v16c0 12-5 24-13 32-3 3-5 7-5 11v48c0 12-6 23-16 29l-10 6c-2 1-4 1-6 0l-10-6c-10-6-16-17-16-29v-48c0-4-2-8-5-11-8-8-13-20-13-32v-16c0-13 9-24 21-28 5-1 8-5 8-10V32c0-8 7-14 15-14Z';
+
+      const zones = {
+        front: [
+          { key: 'shoulders', d: 'M40 44c-4 6-5 15-1 20s12 8 22 9h18c10-1 17-4 22-9s3-14-1-20c-5-6-16-8-30-8s-25 2-30 8Z' },
+          { key: 'chest', d: 'M46 66c-2 8-1 18 3 24 5 7 11 10 21 10s16-3 21-10c4-6 5-16 3-24-4-6-13-10-24-10s-20 4-24 10Z' },
+          { key: 'core', d: 'M52 96c-2 11 0 25 4 34 4 9 8 12 14 12s10-3 14-12c4-9 6-23 4-34-5-7-12-10-18-10s-13 3-18 10Z' },
+          { key: 'arms', d: [
+            'M30 66c-6 12-6 32 0 48 4 12 10 22 16 22 4 0 6-8 6-20 0-9-1-19-3-30-2-9-2-18-1-26-6-2-12-1-18 6Z',
+            'M110 66c6 12 6 32 0 48-4 12-10 22-16 22-4 0-6-8-6-20 0-9 1-19 3-30 2-9 2-18 1-26 6-2 12-1 18 6Z',
+          ] },
+          { key: 'legs', d: [
+            'M54 138c-3 18-3 42 0 62 2 14 6 22 12 22s10-8 12-22c3-20 3-44 0-62-3-10-5-16-12-16s-9 6-12 16Z',
+            'M70 138c-3 18-3 42 0 62 2 14 6 22 12 22s10-8 12-22c3-20 3-44 0-62-3-10-5-16-12-16s-9 6-12 16Z',
+          ] },
+          { key: 'back', d: 'M48 70c-1 12 1 28 8 38 5 8 10 12 14 13 4-1 9-5 14-13 7-10 9-26 8-38-5-8-15-14-22-14s-17 6-22 14Z' },
+        ],
+        back: [
+          { key: 'shoulders', d: 'M40 44c-4 6-5 15-1 20s12 8 22 9h18c10-1 17-4 22-9s3-14-1-20c-5-6-16-8-30-8s-25 2-30 8Z' },
+          { key: 'back', d: 'M44 62c-4 14-4 32 4 46 6 12 14 20 22 20s16-8 22-20c8-14 8-32 4-46-6-8-16-14-26-14s-20 6-26 14Z' },
+          { key: 'core', d: 'M50 112c-1 10 1 20 4 28 4 8 9 12 16 12s12-4 16-12c3-8 5-18 4-28-4-6-12-10-20-10s-16 4-20 10Z' },
+          { key: 'arms', d: [
+            'M28 70c-5 14-5 32 0 48 4 12 10 22 16 22 4 0 6-8 6-20 0-10-2-24-4-34-2-12-1-22 2-30-6-2-14 2-20 14Z',
+            'M112 70c5 14 5 32 0 48-4 12-10 22-16 22-4 0-6-8-6-20 0-10 2-24 4-34 2-12 1-22-2-30 6-2 14 2 20 14Z',
+          ] },
+          { key: 'legs', d: [
+            'M54 140c-3 18-3 42 0 62 2 14 6 22 12 22s10-8 12-22c3-20 3-44 0-62-3-10-5-16-12-16s-9 6-12 16Z',
+            'M70 140c-3 18-3 42 0 62 2 14 6 22 12 22s10-8 12-22c3-20 3-44 0-62-3-10-5-16-12-16s-9 6-12 16Z',
+          ] },
+          { key: 'chest', d: 'M50 64c-2 12 0 22 6 30 6 8 10 12 14 13 4-1 8-5 14-13 6-8 8-18 6-30-5-6-12-10-20-10s-15 4-20 10Z' },
+        ],
       };
-      figure.innerHTML = `
-        <svg class="body-svg" viewBox="0 0 140 240" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-          <path class="body-outline" d="M70 18c7 0 14 5 14 12v12c0 4 3 7 7 8 11 3 19 14 19 25v18c0 10-4 20-11 27-3 3-5 7-5 12v41c0 9-5 17-12 21l-10 6c-1 1-3 1-4 0l-10-6c-7-4-12-12-12-21v-41c0-5-2-9-5-12-7-7-11-17-11-27v-18c0-11 8-22 19-25 4-1 7-4 7-8V30c0-7 7-12 14-12Z" />
-          <rect class="body-zone ${selectedKey === 'shoulders' ? 'active' : ''}" data-key="shoulders" x="28" y="46" width="28" height="18" rx="10" fill="${accent}" opacity="${op('shoulders')}" />
-          <rect class="body-zone ${selectedKey === 'shoulders' ? 'active' : ''}" data-key="shoulders" x="84" y="46" width="28" height="18" rx="10" fill="${accent}" opacity="${op('shoulders')}" />
-          <rect class="body-zone ${selectedKey === 'chest' ? 'active' : ''}" data-key="chest" x="46" y="64" width="48" height="26" rx="12" fill="${accent}" opacity="${op('chest')}" />
-          <rect class="body-zone ${selectedKey === 'back' ? 'active' : ''}" data-key="back" x="50" y="60" width="40" height="60" rx="16" fill="${accent}" opacity="${op('back')}" />
-          <rect class="body-zone ${selectedKey === 'core' ? 'active' : ''}" data-key="core" x="52" y="94" width="36" height="32" rx="12" fill="${accent}" opacity="${op('core')}" />
-          <rect class="body-zone ${selectedKey === 'biceps' ? 'active' : ''}" data-key="biceps" x="22" y="70" width="18" height="34" rx="9" fill="${accent}" opacity="${op('biceps')}" />
-          <rect class="body-zone ${selectedKey === 'biceps' ? 'active' : ''}" data-key="biceps" x="100" y="70" width="18" height="34" rx="9" fill="${accent}" opacity="${op('biceps')}" />
-          <rect class="body-zone ${selectedKey === 'triceps' ? 'active' : ''}" data-key="triceps" x="22" y="106" width="18" height="34" rx="9" fill="${accent}" opacity="${op('triceps')}" />
-          <rect class="body-zone ${selectedKey === 'triceps' ? 'active' : ''}" data-key="triceps" x="100" y="106" width="18" height="34" rx="9" fill="${accent}" opacity="${op('triceps')}" />
-          <rect class="body-zone ${selectedKey === 'legs' ? 'active' : ''}" data-key="legs" x="48" y="132" width="16" height="74" rx="10" fill="${accent}" opacity="${op('legs')}" />
-          <rect class="body-zone ${selectedKey === 'legs' ? 'active' : ''}" data-key="legs" x="76" y="132" width="16" height="74" rx="10" fill="${accent}" opacity="${op('legs')}" />
-          <rect class="body-zone ${selectedKey === 'legs' ? 'active' : ''}" data-key="legs" x="52" y="206" width="16" height="20" rx="8" fill="${accent}" opacity="${op('legs')}" />
-          <rect class="body-zone ${selectedKey === 'legs' ? 'active' : ''}" data-key="legs" x="72" y="206" width="16" height="20" rx="8" fill="${accent}" opacity="${op('legs')}" />
-        </svg>
-      `;
-      figure.querySelectorAll('.body-zone').forEach((zone) => {
-        zone.addEventListener('click', () => onSelect?.(zone.dataset.key));
+
+      const figure = document.createElement('div');
+      figure.className = 'body-map-figure';
+
+      const legend = document.createElement('div');
+      legend.className = 'body-legend';
+      const bar = document.createElement('div');
+      bar.className = 'legend-bar';
+      bar.style.background = `linear-gradient(90deg, ${colorWithAlpha(accent, 0.1)}, ${colorWithAlpha(accent, 0.9)})`;
+      const label = document.createElement('div');
+      label.className = 'legend-label';
+      label.textContent = 'Слабее — сильнее';
+      legend.append(bar, label);
+
+      const toggle = document.createElement('div');
+      toggle.className = 'body-view-toggle';
+      const frontBtn = document.createElement('button');
+      frontBtn.type = 'button';
+      frontBtn.className = 'body-view-chip active';
+      frontBtn.textContent = 'Спереди';
+      const backBtn = document.createElement('button');
+      backBtn.type = 'button';
+      backBtn.className = 'body-view-chip';
+      backBtn.textContent = 'Сзади';
+      toggle.append(frontBtn, backBtn);
+
+      const armsValue = () => ((percents.biceps || 0) + (percents.triceps || 0)) / 2;
+      const resolveArmSelect = () => {
+        const diff = Math.abs((percents.biceps || 0) - (percents.triceps || 0));
+        if (diff > 7) return (percents.biceps || 0) >= (percents.triceps || 0) ? 'biceps' : 'triceps';
+        return 'biceps';
+      };
+
+      const isSelected = (key) => {
+        if (key === 'arms') return selectedMuscle === 'biceps' || selectedMuscle === 'triceps';
+        return selectedMuscle === key;
+      };
+
+      const zoneOpacity = (key) => {
+        const value = key === 'arms' ? armsValue() : percents[key] || 0;
+        const boosted = percentToOpacity(value);
+        return Math.min(0.95, boosted + (isSelected(key) ? 0.08 : 0));
+      };
+
+      const handleSelect = (key) => {
+        let code = key;
+        if (key === 'arms') code = resolveArmSelect();
+        triggerHaptic();
+        onSelect?.(code);
+      };
+
+      const renderSvg = () => {
+        const svg = document.createElementNS(svgNS, 'svg');
+        svg.setAttribute('class', 'body-map-svg');
+        svg.setAttribute('viewBox', '0 0 140 240');
+        const shadow = document.createElementNS(svgNS, 'path');
+        shadow.setAttribute('class', 'body-shadow');
+        shadow.setAttribute('d', silhouettePath);
+        svg.appendChild(shadow);
+        zones[side].forEach((zone) => {
+          const paths = Array.isArray(zone.d) ? zone.d : [zone.d];
+          paths.forEach((d) => {
+            const path = document.createElementNS(svgNS, 'path');
+            path.setAttribute('d', d);
+            path.setAttribute('fill', accent.trim() || 'var(--accent)');
+            path.setAttribute('opacity', zoneOpacity(zone.key));
+            path.dataset.key = zone.key;
+            path.classList.add('body-zone');
+            if (isSelected(zone.key)) path.classList.add('selected');
+            path.addEventListener('click', () => handleSelect(zone.key));
+            svg.appendChild(path);
+          });
+        });
+        const outline = document.createElementNS(svgNS, 'path');
+        outline.setAttribute('class', 'body-silhouette');
+        outline.setAttribute('d', silhouettePath);
+        svg.appendChild(outline);
+        return svg;
+      };
+
+      const renderFigure = () => {
+        figure.innerHTML = '';
+        figure.appendChild(renderSvg());
+      };
+
+      frontBtn.addEventListener('click', () => {
+        if (side === 'front') return;
+        side = 'front';
+        frontBtn.classList.add('active');
+        backBtn.classList.remove('active');
+        renderFigure();
+        triggerHaptic();
       });
-      return figure;
+
+      backBtn.addEventListener('click', () => {
+        if (side === 'back') return;
+        side = 'back';
+        backBtn.classList.add('active');
+        frontBtn.classList.remove('active');
+        renderFigure();
+        triggerHaptic();
+      });
+
+      renderFigure();
+      container.append(toggle, figure, legend);
+      return container;
     }
 
     function renderMuscleDetails(selected) {
@@ -2910,7 +3046,7 @@
         return acc;
       }, {});
 
-      const body = buildBodySvg(highlightMap, selected?.key);
+      const body = BodyMap({ data: highlightMap, selectedMuscle: state.muscleLoad.selectedKey, onSelect: selectMuscleLoad, mode: 'today' });
       grid.appendChild(body);
 
       const list = renderMuscleList(groups);
@@ -2970,23 +3106,9 @@
     }
 
     function renderBodyHeatmap(muscles) {
-      const wrap = document.createElement('div');
-      wrap.className = 'body-heat';
       const highlights = muscles.reduce((acc, m) => { acc[m.code] = m.percent || 0; return acc; }, {});
-      const arms = ((highlights.biceps || 0) + (highlights.triceps || 0)) / 2;
-      const accent = getComputedStyle(document.documentElement).getPropertyValue('--accent');
-      wrap.appendChild(buildBodySvg({ ...highlights, biceps: arms, triceps: arms }, state.body.selectedKey, selectBodyMuscle, { averageArms: true, armsValue: arms, accent }));
-      const legend = document.createElement('div');
-      legend.className = 'heat-legend';
-      const bar = document.createElement('div');
-      bar.className = 'legend-bar';
-      bar.style.background = `linear-gradient(90deg, ${colorWithAlpha(accent, 0.1)}, ${colorWithAlpha(accent, 0.9)})`;
-      const label = document.createElement('div');
-      label.className = 'legend-label';
-      label.textContent = 'Слабее → Сильнее';
-      legend.append(bar, label);
-      wrap.appendChild(legend);
-      return wrap;
+      const data = normalizePercents(highlights);
+      return BodyMap({ data, selectedMuscle: state.body.selectedKey, onSelect: selectBodyMuscle, mode: 'overall' });
     }
 
     function renderBodyInsights(muscles) {
