@@ -108,9 +108,14 @@
     .ghost-btn { width: 40px; height: 40px; border-radius: 12px; border: 1px solid var(--border); background: var(--card); display: grid; place-items: center; cursor: pointer; transition: transform 0.1s ease, box-shadow 0.18s ease; box-shadow: var(--shadow); color: var(--text); }
     .ghost-btn:active { transform: translateY(1px); }
     .day-picker-btn { width: 44px; height: 44px; }
+    .icon-btn { width: 40px; height: 40px; border-radius: 12px; border: 1px solid var(--border); background: var(--card); display: grid; place-items: center; cursor: pointer; box-shadow: var(--shadow); font-size: 18px; color: var(--text); transition: transform 0.1s ease, box-shadow 0.15s ease; }
+    .icon-btn.small { width: 38px; height: 38px; font-size: 16px; }
+    .icon-btn:active { transform: translateY(1px); }
+    .icon-btn:disabled { opacity: 0.55; cursor: not-allowed; box-shadow: none; }
     .day-meta { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
     .day-subtitle { font-size: 14px; color: var(--muted); }
     .today-header .status { padding: 7px 10px; }
+    .day-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
     .drawer-backdrop {
       position: fixed;
       inset: 0;
@@ -446,10 +451,21 @@
     .library-empty { color: var(--muted); padding: 10px 0; }
     .history-range { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 8px; margin: 10px 0; }
     .range-chip { padding: 10px; border-radius: 12px; border: 1px solid var(--border); background: var(--bg); cursor: pointer; font-weight: 700; }
-    .range-chip.active { border-color: var(--accent); color: var(--accent); }
-    .chart-block { border: 1px solid var(--border); border-radius: 12px; padding: 12px; background: var(--bg); }
-      .chart-title { font-weight: 700; margin-bottom: 6px; }
-      .chart { width: 100%; height: 160px; }
+      .range-chip.active { border-color: var(--accent); color: var(--accent); }
+      .chart-block { border: 1px solid var(--border); border-radius: 12px; padding: 12px; background: var(--bg); }
+        .chart-title { font-weight: 700; margin-bottom: 6px; }
+        .chart { width: 100%; height: 160px; }
+      .timer-pill { position: fixed; left: 16px; right: 16px; bottom: calc(180px + env(safe-area-inset-bottom)); z-index: 15; display: none; align-items: center; justify-content: space-between; padding: 12px 14px; border-radius: 14px; border: 1px solid var(--border); background: var(--card); box-shadow: var(--shadow); font-weight: 700; font-size: 14px; color: var(--text); cursor: pointer; }
+      .timer-pill .timer-meta { display: flex; align-items: center; gap: 10px; }
+      .timer-pill .label { color: var(--muted); font-weight: 600; font-size: 13px; }
+      .timer-pill .pill-action { font-size: 15px; color: var(--accent); }
+      .timer-display { font-size: 36px; font-weight: 800; margin: 6px 0 2px; letter-spacing: 0.04em; text-align: center; }
+      .timer-grid { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 10px; margin: 10px 0 8px; }
+      .timer-field { display: grid; gap: 6px; font-weight: 700; font-size: 14px; }
+      .timer-input { width: 100%; padding: 12px; border-radius: 12px; border: 1px solid var(--border); background: var(--bg); color: var(--text); font-size: 16px; font-weight: 700; text-align: center; }
+      .timer-chips { margin: 6px 0 4px; }
+      .timer-hint { font-size: 13px; color: var(--muted); text-align: center; margin: 6px 0 10px; }
+      .timer-actions { grid-template-columns: repeat(2, minmax(0,1fr)); }
       .day-sheet .sheet { max-width: 520px; }
       .day-sheet-title { font-size: 17px; font-weight: 800; margin-bottom: 10px; }
       .day-option { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 12px; border-radius: 12px; border: 1px solid var(--border); background: var(--bg); cursor: pointer; }
@@ -524,6 +540,10 @@
         <div class="day-meta">
           <div class="day-date" id="dateLabel">—</div>
           <div class="day-subtitle" id="daySubtitle"></div>
+        </div>
+        <div class="day-actions" id="dayActions">
+          <button id="timerHeaderBtn" class="icon-btn small" aria-label="Открыть таймер">🕒</button>
+          <button id="headerAddBtn" class="icon-btn small" aria-label="Добавить упражнение">＋</button>
         </div>
       </div>
     </header>
@@ -625,6 +645,8 @@
       </section>
     </main>
 
+    <div id="timerPill" class="timer-pill"></div>
+
     <button id="addExerciseBtn" class="fab" aria-label="Добавить упражнение">＋</button>
   </div>
 
@@ -646,6 +668,36 @@
       <div class="sheet-handle"></div>
       <div class="day-sheet-title">Выбери тренировочный день</div>
       <div id="dayOptions" class="card-list"></div>
+    </div>
+  </div>
+
+  <div id="timerSheet" class="sheet-backdrop">
+    <div class="sheet">
+      <div class="sheet-handle"></div>
+      <div class="sheet-title">Таймер</div>
+      <div class="timer-display" id="timerDisplay">00:00</div>
+      <div class="timer-grid">
+        <label class="timer-field">
+          <span>Минуты</span>
+          <input id="timerMinutes" class="timer-input" type="number" min="0" max="60" inputmode="numeric" value="0">
+        </label>
+        <label class="timer-field">
+          <span>Секунды</span>
+          <input id="timerSeconds" class="timer-input" type="number" min="0" max="59" inputmode="numeric" value="0">
+        </label>
+      </div>
+      <div class="chips timer-chips">
+        <button type="button" class="chip timer-chip" data-min="0" data-sec="30">0:30</button>
+        <button type="button" class="chip timer-chip" data-min="1" data-sec="0">1:00</button>
+        <button type="button" class="chip timer-chip" data-min="1" data-sec="30">1:30</button>
+        <button type="button" class="chip timer-chip" data-min="2" data-sec="0">2:00</button>
+        <button type="button" class="chip timer-chip" data-min="3" data-sec="0">3:00</button>
+      </div>
+      <div class="timer-hint">Максимум 60 минут</div>
+      <div class="sheet-actions timer-actions">
+        <button id="timerStartPause" class="btn primary" type="button">Старт</button>
+        <button id="timerReset" class="btn" type="button">Сброс</button>
+      </div>
     </div>
   </div>
 
@@ -736,6 +788,10 @@
 
     const DURATION_PATTERNS = ["(сек", "удержание", "стойка", "планк"];
 
+    const TIMER_MAX_MS = 60 * 60 * 1000;
+    const TIMER_STORAGE_KEY = 'restTimerState';
+    const TIMER_TICK_MS = 200;
+
     const MUSCLE_ORDER = ['all', 'none', 'chest', 'back', 'legs', 'shoulders', 'core', 'biceps', 'triceps', 'kb', 'metcon', 'workout', 'run', 'other'];
     const ANATOMY_OPTIONS = [
       { code: 'chest', name: 'Грудь' },
@@ -805,6 +861,7 @@
       muscleLoad: { groups: [], selectedKey: null, showAll: false, detailsOpen: true, byMuscle: {}, loading: false },
       body: { range: '30d', loading: false, data: null, selectedKey: null, showAll: false },
       addExercise: { open: false, query: '', items: [], loading: false, timer: null },
+      timer: { running: false, endTs: null, remainingMs: 0, interval: null, open: false, audioCtx: null },
       library: {
         view: 'groups',
         loading: false,
@@ -898,6 +955,225 @@
 
     function setVisible(el, flag) { el.style.display = flag ? '' : 'none'; }
 
+    function formatTimer(ms) {
+      const totalSeconds = Math.max(0, Math.floor(ms / 1000));
+      const minutes = Math.floor(totalSeconds / 60);
+      const seconds = totalSeconds % 60;
+      return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+    }
+
+    function clampDuration(minutes, seconds) {
+      const safeMinutes = Math.max(0, Math.min(60, Number.isFinite(minutes) ? minutes : 0));
+      const safeSeconds = Math.max(0, Math.min(59, Number.isFinite(seconds) ? seconds : 0));
+      let totalSeconds = safeMinutes * 60 + safeSeconds;
+      const maxSeconds = Math.floor(TIMER_MAX_MS / 1000);
+      if (totalSeconds > maxSeconds) totalSeconds = maxSeconds;
+      const finalMinutes = Math.floor(totalSeconds / 60);
+      const finalSeconds = totalSeconds % 60;
+      return { minutes: finalMinutes, seconds: finalSeconds, ms: totalSeconds * 1000 };
+    }
+
+    function persistTimerState() {
+      try {
+        sessionStorage.setItem(TIMER_STORAGE_KEY, JSON.stringify({
+          running: state.timer.running,
+          endTs: state.timer.endTs,
+          remainingMs: state.timer.remainingMs,
+        }));
+      } catch (e) { /* noop */ }
+    }
+
+    function restoreTimerState() {
+      try {
+        const raw = sessionStorage.getItem(TIMER_STORAGE_KEY);
+        if (!raw) return;
+        const parsed = JSON.parse(raw);
+        const remaining = parsed.endTs ? Math.max(parsed.endTs - Date.now(), 0) : (parsed.remainingMs || 0);
+        state.timer.remainingMs = remaining;
+        if (parsed.running && remaining > 0) {
+          state.timer.running = true;
+          state.timer.endTs = Date.now() + remaining;
+          startTimerInterval();
+        }
+      } catch (e) { /* noop */ }
+    }
+
+    function setTimerInputs(minutes, seconds) {
+      const minsInput = document.getElementById('timerMinutes');
+      const secsInput = document.getElementById('timerSeconds');
+      minsInput.value = minutes;
+      secsInput.value = seconds;
+    }
+
+    function syncInputsWithRemaining() {
+      const totalSeconds = Math.max(0, Math.floor(state.timer.remainingMs / 1000));
+      const minutes = Math.floor(totalSeconds / 60);
+      const seconds = totalSeconds % 60;
+      setTimerInputs(minutes, seconds);
+    }
+
+    function readInputsToState() {
+      const minutes = Number(document.getElementById('timerMinutes').value || 0);
+      const seconds = Number(document.getElementById('timerSeconds').value || 0);
+      const clamped = clampDuration(minutes, seconds);
+      setTimerInputs(clamped.minutes, clamped.seconds);
+      state.timer.remainingMs = clamped.ms;
+      persistTimerState();
+      updateTimerUI();
+    }
+
+    function clearTimerInterval() {
+      if (state.timer.interval) clearInterval(state.timer.interval);
+      state.timer.interval = null;
+    }
+
+    function startTimerInterval() {
+      clearTimerInterval();
+      state.timer.interval = setInterval(handleTimerTick, TIMER_TICK_MS);
+    }
+
+    function ensureAudioCtx() {
+      if (state.timer.audioCtx) return state.timer.audioCtx;
+      const AudioCtx = window.AudioContext || window.webkitAudioContext;
+      if (!AudioCtx) return null;
+      state.timer.audioCtx = new AudioCtx();
+      return state.timer.audioCtx;
+    }
+
+    async function primeAudio() {
+      const ctx = ensureAudioCtx();
+      if (!ctx) return;
+      try { await ctx.resume(); } catch (e) { /* noop */ }
+    }
+
+    function playFinishBeep() {
+      const ctx = ensureAudioCtx();
+      if (!ctx) return;
+      const now = ctx.currentTime + 0.02;
+      const duration = 0.2;
+      const gap = 0.15;
+      for (let i = 0; i < 3; i += 1) {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = 'sine';
+        osc.frequency.value = 880;
+        gain.gain.setValueAtTime(0.001, now + i * (duration + gap));
+        gain.gain.linearRampToValueAtTime(0.2, now + i * (duration + gap) + 0.02);
+        gain.gain.linearRampToValueAtTime(0.001, now + i * (duration + gap) + duration);
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start(now + i * (duration + gap));
+        osc.stop(now + i * (duration + gap) + duration);
+      }
+    }
+
+    function triggerFinishHaptic() {
+      try { tg?.HapticFeedback?.notificationOccurred?.('success'); } catch (e) { /* noop */ }
+    }
+
+    function finishTimer() {
+      clearTimerInterval();
+      state.timer.running = false;
+      state.timer.endTs = null;
+      state.timer.remainingMs = 0;
+      updateTimerUI();
+      persistTimerState();
+      playFinishBeep();
+      triggerFinishHaptic();
+      toast('Время вышло ⏱️');
+    }
+
+    function handleTimerTick() {
+      if (!state.timer.running || !state.timer.endTs) return;
+      const remaining = Math.max(state.timer.endTs - Date.now(), 0);
+      state.timer.remainingMs = remaining;
+      updateTimerUI();
+      if (remaining <= 0) finishTimer();
+    }
+
+    function startTimer(totalMs) {
+      const ms = totalMs || state.timer.remainingMs;
+      if (!ms || ms <= 0) { toast('Укажи время больше нуля'); return; }
+      state.timer.running = true;
+      state.timer.endTs = Date.now() + ms;
+      state.timer.remainingMs = ms;
+      primeAudio();
+      startTimerInterval();
+      updateTimerUI();
+      persistTimerState();
+    }
+
+    function pauseTimer() {
+      if (!state.timer.running) return;
+      clearTimerInterval();
+      state.timer.remainingMs = Math.max(state.timer.endTs - Date.now(), 0);
+      state.timer.running = false;
+      state.timer.endTs = null;
+      updateTimerUI();
+      persistTimerState();
+    }
+
+    function resetTimer() {
+      clearTimerInterval();
+      state.timer.running = false;
+      state.timer.endTs = null;
+      state.timer.remainingMs = 0;
+      syncInputsWithRemaining();
+      updateTimerUI();
+      persistTimerState();
+    }
+
+    function updateTimerUI() {
+      const display = document.getElementById('timerDisplay');
+      const pill = document.getElementById('timerPill');
+      const startBtn = document.getElementById('timerStartPause');
+      const resetBtn = document.getElementById('timerReset');
+      const minsInput = document.getElementById('timerMinutes');
+      const secsInput = document.getElementById('timerSeconds');
+      const nowRemaining = state.timer.running && state.timer.endTs ? Math.max(state.timer.endTs - Date.now(), 0) : state.timer.remainingMs;
+      if (!state.timer.running) state.timer.remainingMs = nowRemaining;
+      const formatted = formatTimer(nowRemaining);
+      if (display) display.textContent = formatted;
+      if (startBtn) startBtn.textContent = state.timer.running ? 'Пауза' : 'Старт';
+      if (resetBtn) resetBtn.disabled = nowRemaining <= 0 && !state.timer.running;
+      if (minsInput) minsInput.disabled = state.timer.running;
+      if (secsInput) secsInput.disabled = state.timer.running;
+      if (pill) {
+        if (nowRemaining > 0) {
+          pill.innerHTML = `<div class="timer-meta"><span class="label">Таймер</span><span>${formatted}</span></div><div class="pill-action">Открыть</div>`;
+          pill.style.display = 'flex';
+        } else {
+          pill.style.display = 'none';
+        }
+      }
+    }
+
+    function openTimerSheet() {
+      state.timer.open = true;
+      syncInputsWithRemaining();
+      updateTimerUI();
+      document.getElementById('timerSheet').classList.add('show');
+    }
+
+    function closeTimerSheet() {
+      state.timer.open = false;
+      document.getElementById('timerSheet').classList.remove('show');
+    }
+
+    function toggleTimer() {
+      if (state.timer.running) pauseTimer();
+      else startTimer();
+    }
+
+    function applyTimerPreset(minutes, seconds) {
+      if (state.timer.running) pauseTimer();
+      const clamped = clampDuration(minutes, seconds);
+      state.timer.remainingMs = clamped.ms;
+      setTimerInputs(clamped.minutes, clamped.seconds);
+      updateTimerUI();
+      persistTimerState();
+    }
+
     function setDrawer(open) {
       state.drawerOpen = open;
       document.getElementById('drawerOverlay').classList.toggle('show', open);
@@ -906,8 +1182,10 @@
 
     function updateAddButtonVisibility() {
       const btn = document.getElementById('addExerciseBtn');
-      if (!btn) return;
-      btn.classList.toggle('hidden', state.currentRoute !== 'today' || !state.dayIndex);
+      const headerBtn = document.getElementById('headerAddBtn');
+      const disabled = state.currentRoute !== 'today' || !state.dayIndex;
+      if (btn) btn.classList.toggle('hidden', disabled);
+      if (headerBtn) headerBtn.disabled = disabled;
     }
 
     function libraryGroupLabel(code) {
@@ -1270,6 +1548,7 @@
     }
 
     function handleBackAction() {
+      if (state.timer.open) { closeTimerSheet(); return; }
       if (state.drawerOpen) { closeDrawer(); return; }
       if (state.currentRoute === 'library' && state.library.view !== 'groups') {
         if (state.library.view === 'details') { state.library.view = 'list'; renderLibrary(); return; }
@@ -2806,8 +3085,16 @@
         openConfirmModal?.(() => completeDay(), 'Завершить день?', 'Ты больше не будешь добавлять подходы в этот день?');
       });
       document.getElementById('addExerciseBtn').addEventListener('click', () => { if (state.dayIndex) openAddExerciseSheet(); });
+      document.getElementById('headerAddBtn').addEventListener('click', () => { if (state.dayIndex) openAddExerciseSheet(); });
+      document.getElementById('timerHeaderBtn').addEventListener('click', openTimerSheet);
+      document.getElementById('timerPill').addEventListener('click', openTimerSheet);
       document.getElementById('addSearch').addEventListener('input', (e) => scheduleAddSearch(e.target.value));
       document.getElementById('addCreateBtn').addEventListener('click', handleCreateExercise);
+      document.getElementById('timerSheet').addEventListener('click', (e) => { if (e.target.id === 'timerSheet') closeTimerSheet(); });
+      document.getElementById('timerStartPause').addEventListener('click', toggleTimer);
+      document.getElementById('timerReset').addEventListener('click', resetTimer);
+      ['timerMinutes', 'timerSeconds'].forEach((id) => document.getElementById(id).addEventListener('input', readInputsToState));
+      document.querySelectorAll('.timer-chip').forEach((chip) => chip.addEventListener('click', () => applyTimerPreset(Number(chip.dataset.min), Number(chip.dataset.sec))));
       document.getElementById('editorClose').addEventListener('click', closeEditor);
       document.getElementById('editorAddSet').addEventListener('click', () => queueExerciseAction(state.editor.ueId, () => addSet(state.editor.ueId, { toastOnSave: true })));
       document.getElementById('editorRemoveSet').addEventListener('click', () => queueExerciseAction(state.editor.ueId, () => removeSet(state.editor.ueId)));
@@ -3183,6 +3470,9 @@
       setupNavigation();
       openConfirmModal = setupModal();
       bindEvents();
+      restoreTimerState();
+      syncInputsWithRemaining();
+      updateTimerUI();
       const ok = initTelegram();
       if (!ok) { handleRouteFromHash(); return; }
       try { await loadToday(); } catch (e) { console.error(e); }
