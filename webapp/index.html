@@ -1159,6 +1159,12 @@
 
     const BODY_MUSCLES = new Set(['chest', 'back', 'legs', 'shoulders', 'core', 'biceps', 'triceps']);
 
+    function html(strings, ...values) {
+      const template = document.createElement('template');
+      template.innerHTML = strings.reduce((acc, chunk, i) => acc + chunk + (values[i] ?? ''), '');
+      return template.content.firstElementChild;
+    }
+
     const BODY_RANGES = [
       { code: '7d', label: '7 дней' },
       { code: '30d', label: '30 дней' },
@@ -1268,6 +1274,11 @@
         '--accent': themeParams.link_color || themeParams.button_color,
       };
       Object.entries(map).forEach(([key, val]) => { if (val) root.style.setProperty(key, val); });
+    }
+
+    function setThemeFromTelegram() {
+      applyTheme();
+      tg?.onEvent?.('themeChanged', applyTheme);
     }
 
     function triggerHaptic() {
@@ -3351,6 +3362,10 @@
 
     
     function BodyMap({ data, selectedMuscle, onSelect, mode }) {
+      if (!data || typeof data !== 'object') {
+        console.warn('BodyMap: empty data, skipping render');
+        return html`<div class="bodymap-placeholder">Нет данных</div>`;
+      }
       const container = document.createElement('div');
       container.className = 'body-map';
 
@@ -4377,7 +4392,7 @@
       document.getElementById('anatomySearch').addEventListener('input', (e) => scheduleAnatomySearch(e.target.value));
     }
 
-    function initTelegram() {
+    async function initTelegram() {
       if (!tg || !tg.initData) {
         setVisible(document.getElementById('not-telegram'), true);
         setVisible(document.getElementById('app'), true);
@@ -4390,8 +4405,6 @@
       tg.MainButton?.offClick?.();
       state.isTelegram = true;
       state.initData = tg.initData;
-      applyTheme();
-      tg.onEvent?.('themeChanged', applyTheme);
       tg.BackButton?.onClick(handleBackAction);
       setVisible(document.getElementById('app'), true);
       updateBackButton(state.currentRoute);
@@ -4729,22 +4742,26 @@
       openConfirmModal = setupModal();
       bindEvents();
       bindTimer();
-      const ok = initTelegram();
-      if (!ok) { handleRouteFromHash(); return; }
+      if (!state.isTelegram) { handleRouteFromHash(); return; }
       try { await loadToday(); } catch (e) { console.error(e); }
     }
 
-    document.addEventListener('DOMContentLoaded', () => {
-      (async () => {
-        try {
-          showBoot();
-          await init();
-          hideBoot();
-        } catch (e) {
-          showFatal(e, 'init()');
-        }
-      })();
-    });
+    window.BODY_MUSCLES = window.BODY_MUSCLES || {
+      chest: 0, back: 0, legs: 0, shoulders: 0, core: 0, biceps: 0, triceps: 0,
+    };
+
+    (async () => {
+      try {
+        showBoot('Подготовка интерфейса...');
+        await initTelegram(); // инициализация Telegram WebApp API
+        setThemeFromTelegram();
+        await init();         // загрузка данных, построение UI
+        hideBoot();
+      } catch (err) {
+        console.error(err);
+        showFatal(err, 'init()');
+      }
+    })();
   </script>
 </body>
 </html>
