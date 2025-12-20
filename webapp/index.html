@@ -42,18 +42,24 @@
       flex-direction: column;
       gap: 16px;
       padding: 16px;
-      padding-bottom: calc(18px + env(safe-area-inset-bottom));
+      padding-bottom: calc(140px + env(safe-area-inset-bottom));
       min-height: 100vh;
     }
     .app-header {
-      display: flex;
-      align-items: center;
-      gap: 12px;
       position: sticky;
       top: 0;
-      z-index: 12;
-      padding: 2px 0 6px;
+      z-index: 16;
       background: var(--bg);
+      padding: 6px 0 8px;
+      display: grid;
+      gap: 10px;
+      backdrop-filter: blur(8px);
+    }
+    .header-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
     }
     .hamburger {
       width: 44px;
@@ -88,40 +94,23 @@
     .hamburger span::before { top: -6px; }
     .hamburger span::after { top: 6px; }
     .header-title { font-size: 20px; font-weight: 800; letter-spacing: -0.02em; }
-    header.top-bar {
-      display: flex;
-      gap: 12px;
-      align-items: center;
-      justify-content: space-between;
-    }
-    .day-block { flex: 1; min-width: 0; }
-    .day-row { display: flex; gap: 8px; align-items: center; }
-    .day-select {
-      flex: 1;
-      padding: 10px 12px;
-      border-radius: 12px;
-      border: 1px solid var(--border);
-      background: var(--card);
-      color: var(--text);
-      font-size: 15px;
-      box-shadow: var(--shadow);
-    }
-    .date-label { font-size: 13px; color: var(--muted); margin-top: 4px; }
-    .status {
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-      padding: 8px 12px;
-      border-radius: 12px;
-      background: var(--card);
-      border: 1px solid var(--border);
-      color: var(--muted);
-      font-size: 13px;
-      box-shadow: var(--shadow);
-      white-space: nowrap;
-    }
+    .status { display: inline-flex; align-items: center; gap: 6px; padding: 8px 12px; border-radius: 12px; background: var(--card); border: 1px solid var(--border); color: var(--muted); font-size: 13px; box-shadow: var(--shadow); white-space: nowrap; }
     .status .dot { width: 10px; height: 10px; border-radius: 50%; background: #34c759; }
     .status.error .dot { background: var(--danger); }
+    .today-header { display: grid; gap: 6px; padding: 12px; border-radius: 16px; border: 1px solid var(--border); background: var(--card); box-shadow: var(--shadow); }
+    .day-line { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 10px; }
+    .day-title { font-weight: 800; font-size: 17px; letter-spacing: -0.01em; display: flex; align-items: center; gap: 8px; min-width: 0; }
+    .day-title .main-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .day-date { color: var(--muted); font-size: 13px; }
+    .day-badge { padding: 6px 10px; border-radius: 999px; background: rgba(52,199,89,0.12); color: #1c8c4d; font-weight: 700; font-size: 12px; }
+    [data-theme="dark"] .day-badge { background: rgba(76,217,100,0.15); color: #9be9b7; }
+    .day-nav { display: inline-flex; align-items: center; gap: 6px; }
+    .ghost-btn { width: 40px; height: 40px; border-radius: 12px; border: 1px solid var(--border); background: var(--card); display: grid; place-items: center; cursor: pointer; transition: transform 0.1s ease, box-shadow 0.18s ease; box-shadow: var(--shadow); color: var(--text); }
+    .ghost-btn:active { transform: translateY(1px); }
+    .day-picker-btn { width: 44px; height: 44px; }
+    .day-meta { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+    .day-subtitle { font-size: 14px; color: var(--muted); }
+    .today-header .status { padding: 7px 10px; }
     .drawer-backdrop {
       position: fixed;
       inset: 0;
@@ -180,22 +169,22 @@
     .screen { display: none; flex-direction: column; gap: 16px; }
     .screen.active { display: flex; }
     .card-list { display: flex; flex-direction: column; gap: 12px; }
-    .card {
-      background: var(--card);
-      border-radius: var(--radius);
-      padding: 14px;
-      box-shadow: var(--shadow);
-      border: 1px solid var(--border);
-      display: flex;
-      flex-direction: column;
-      gap: 10px;
-    }
-    .card-header { display: flex; justify-content: space-between; gap: 8px; align-items: center; }
-    .card-title { font-size: 16px; font-weight: 700; letter-spacing: -0.01em; }
+      .card {
+        background: var(--card);
+        border-radius: var(--radius);
+        padding: 14px;
+        box-shadow: var(--shadow);
+        border: 1px solid var(--border);
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+      .card-header { display: flex; justify-content: space-between; gap: 8px; align-items: center; }
+      .card-title { font-size: 16px; font-weight: 800; letter-spacing: -0.01em; }
     .pill { font-size: 12px; color: var(--muted); background: rgba(0,0,0,0.04); padding: 4px 8px; border-radius: 999px; }
     [data-theme="dark"] .pill { background: rgba(255,255,255,0.05); }
     .card-summary { font-size: 14px; color: var(--muted); }
-    .card-actions { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 10px; }
+      .card-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
     .btn {
       padding: 12px 14px;
       border-radius: 12px;
@@ -212,8 +201,28 @@
     .btn.danger { color: var(--danger); border-color: rgba(229,57,53,0.25); }
     .btn:active { transform: translateY(1px); box-shadow: inset 0 2px 6px rgba(0,0,0,0.08); }
     .btn:disabled { opacity: 0.6; cursor: not-allowed; box-shadow: none; }
-    .finish-btn { width: 100%; padding: 15px; border-radius: 14px; border: 1px dashed var(--border); background: var(--card); box-shadow: var(--shadow); font-size: 15px; }
-    .finish-btn.ready { background: var(--accent); border-color: var(--accent); color: #fff; }
+      .bottom-action {
+        position: fixed;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        z-index: 15;
+        padding: 10px 16px calc(12px + env(safe-area-inset-bottom));
+        background: linear-gradient(180deg, rgba(0,0,0,0) 0%, var(--bg) 45%);
+      }
+      .bottom-card {
+        border-radius: 18px;
+        border: 1px solid var(--border);
+        background: var(--card);
+        box-shadow: var(--shadow);
+        padding: 12px;
+        display: grid;
+        gap: 6px;
+      }
+      .finish-btn { width: 100%; padding: 15px; border-radius: 14px; border: 1px solid var(--border); background: var(--card); box-shadow: inset 0 1px 0 rgba(255,255,255,0.2); font-size: 15px; font-weight: 700; color: var(--text); cursor: pointer; }
+      .finish-btn.ready { background: var(--accent); border-color: var(--accent); color: #fff; box-shadow: 0 10px 26px rgba(0,122,255,0.22); }
+      .finish-btn:disabled { opacity: 0.65; cursor: not-allowed; box-shadow: none; }
+      .finish-note { font-size: 13px; color: var(--muted); text-align: center; }
     .toast {
       position: fixed;
       left: 50%;
@@ -355,9 +364,9 @@
     .legend-card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 12px; box-shadow: var(--shadow); display: grid; gap: 8px; }
     .legend-item { display: flex; align-items: center; gap: 10px; font-size: 14px; }
     .legend-dot { width: 14px; height: 14px; border-radius: 50%; }
-    .search-input { width: 100%; padding: 12px 14px; border-radius: 12px; border: 1px solid var(--border); background: var(--card); color: var(--text); font-size: 15px; box-shadow: var(--shadow); }
-    .empty-state { color: var(--muted); font-size: 14px; }
-    .settings-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px,1fr)); gap: 12px; }
+      .search-input { width: 100%; padding: 12px 14px; border-radius: 12px; border: 1px solid var(--border); background: var(--card); color: var(--text); font-size: 15px; box-shadow: var(--shadow); }
+      .empty-state { color: var(--muted); font-size: 14px; }
+      .settings-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px,1fr)); gap: 12px; }
     .anatomy-list { display: flex; flex-direction: column; gap: 10px; }
     .anatomy-row { display: grid; grid-template-columns: minmax(0,1fr) 130px; gap: 10px; align-items: center; padding: 10px 12px; border-radius: 12px; border: 1px solid var(--border); background: var(--bg); }
     .anatomy-controls { display: flex; align-items: center; gap: 8px; justify-content: flex-end; }
@@ -424,8 +433,21 @@
     .range-chip { padding: 10px; border-radius: 12px; border: 1px solid var(--border); background: var(--bg); cursor: pointer; font-weight: 700; }
     .range-chip.active { border-color: var(--accent); color: var(--accent); }
     .chart-block { border: 1px solid var(--border); border-radius: 12px; padding: 12px; background: var(--bg); }
-    .chart-title { font-weight: 700; margin-bottom: 6px; }
-    .chart { width: 100%; height: 160px; }
+      .chart-title { font-weight: 700; margin-bottom: 6px; }
+      .chart { width: 100%; height: 160px; }
+      .day-sheet .sheet { max-width: 520px; }
+      .day-sheet-title { font-size: 17px; font-weight: 800; margin-bottom: 10px; }
+      .day-option { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 12px; border-radius: 12px; border: 1px solid var(--border); background: var(--bg); cursor: pointer; }
+      .day-option.active { border-color: var(--accent); box-shadow: 0 8px 18px rgba(0,122,255,0.15); }
+      .day-option .labels { display: grid; gap: 4px; }
+      .day-option .title { font-weight: 700; }
+      .day-option .subtitle { color: var(--muted); font-size: 13px; }
+      .today-shell { display: flex; flex-direction: column; gap: 14px; transition: opacity 0.18s ease, transform 0.18s ease; }
+      .today-shell.switching { opacity: 0.3; transform: translateY(6px); }
+      .note-indicator { font-size: 18px; }
+      .exercise-row { display: flex; flex-direction: column; gap: 10px; }
+      .primary-link { padding: 10px 14px; border-radius: 12px; background: var(--accent); color: #fff; border: none; font-weight: 700; box-shadow: 0 8px 18px rgba(0,122,255,0.18); cursor: pointer; }
+      .primary-link:active { transform: translateY(1px); }
     .history-table { width: 100%; border-collapse: collapse; margin-top: 6px; }
     .history-table th, .history-table td { border: 1px solid var(--border); padding: 6px 8px; text-align: center; }
   </style>
@@ -450,26 +472,42 @@
   <div id="not-telegram" class="full-screen-msg" style="display:none; padding:32px; text-align:center;">Открой WebApp из Telegram. В браузере авторизация не работает.</div>
   <div id="app" class="app" style="display:none">
     <header class="app-header">
-      <button id="menuBtn" class="hamburger" aria-label="Открыть меню"><span></span></button>
-      <div class="header-title" id="headerTitle">Сегодня</div>
+      <div class="header-row">
+        <button id="menuBtn" class="hamburger" aria-label="Открыть меню"><span></span></button>
+        <div class="header-title" id="headerTitle">Сегодня</div>
+        <div id="status" class="status"><span class="dot"></span><span class="status-text">онлайн</span></div>
+      </div>
+      <div id="todayHeader" class="today-header">
+        <div class="day-line">
+          <div class="day-nav">
+            <button id="dayPrev" class="ghost-btn" aria-label="Предыдущий день">‹</button>
+          </div>
+          <button id="dayCenter" class="day-title" aria-label="Выбрать день">
+            <span class="main-label" id="dayTitle">—</span>
+            <span id="dayCompletedBadge" class="day-badge" style="display:none">Завершён</span>
+          </button>
+          <div class="day-nav">
+            <button id="dayNext" class="ghost-btn" aria-label="Следующий день">›</button>
+            <button id="openDayPicker" class="ghost-btn day-picker-btn" aria-label="Открыть выбор дня">📅</button>
+          </div>
+        </div>
+        <div class="day-meta">
+          <div class="day-date" id="dateLabel">—</div>
+          <div class="day-subtitle" id="daySubtitle"></div>
+        </div>
+      </div>
     </header>
 
     <main id="screens" class="screens">
       <section id="screen-today" class="screen active" data-route="today">
-        <header class="top-bar">
-          <div class="day-block">
-            <div class="day-row">
-              <select id="daySelect" class="day-select"></select>
-              <div id="status" class="status"><span class="dot"></span><span class="status-text">онлайн</span></div>
-            </div>
-            <div class="date-label" id="dateLabel">—</div>
+        <div id="todayShell" class="today-shell">
+          <div id="cards" class="card-list"></div>
+        </div>
+        <div class="bottom-action" id="completeBar">
+          <div class="bottom-card">
+            <button id="finishBtn" class="finish-btn" disabled>Завершить день</button>
+            <div class="finish-note" id="finishNote">Можно завершить в конце — данные сохраняются автоматически</div>
           </div>
-        </header>
-
-        <div id="cards" class="card-list"></div>
-
-        <div class="bottom-bar">
-          <button id="finishBtn" class="finish-btn" disabled>Завершить день</button>
         </div>
       </section>
 
@@ -562,12 +600,20 @@
 
   <div id="confirmModal" class="modal-backdrop">
     <div class="modal">
-      <div class="modal-title">Завершить тренировочный день?</div>
-      <div class="modal-text">Отметим день как завершённый. Можно продолжать редактировать сеты позже.</div>
+      <div class="modal-title" id="confirmTitle">Завершить тренировочный день?</div>
+      <div class="modal-text" id="confirmText">Отметим день как завершённый. Можно продолжать редактировать сеты позже.</div>
       <div class="modal-actions">
         <button id="cancelConfirm" class="btn">Отмена</button>
         <button id="confirmAction" class="btn primary">Завершить</button>
       </div>
+    </div>
+  </div>
+
+  <div id="daySheet" class="sheet-backdrop day-sheet">
+    <div class="sheet">
+      <div class="sheet-handle"></div>
+      <div class="day-sheet-title">Выбери тренировочный день</div>
+      <div id="dayOptions" class="card-list"></div>
     </div>
   </div>
 
@@ -695,6 +741,8 @@
       dayIndex: null,
       date: '',
       dateIso: '',
+      dayLabel: '',
+      daySubtitle: '',
       activeDays: [],
       completedDays: new Set(),
       exercises: new Map(),
@@ -1112,6 +1160,8 @@
         el.classList.toggle('active', el.dataset.route === normalized);
       });
       document.getElementById('headerTitle').textContent = ROUTE_TITLES[normalized] || ROUTE_TITLES.today;
+      setVisible(document.getElementById('todayHeader'), normalized === 'today');
+      setVisible(document.getElementById('completeBar'), normalized === 'today');
       document.querySelectorAll('.menu-item').forEach((btn) => {
         const active = btn.dataset.route === normalized;
         btn.classList.toggle('active', active);
@@ -1206,12 +1256,19 @@
       const modal = document.getElementById('confirmModal');
       const cancelBtn = document.getElementById('cancelConfirm');
       const okBtn = document.getElementById('confirmAction');
+      const titleEl = document.getElementById('confirmTitle');
+      const textEl = document.getElementById('confirmText');
       let handler = null;
       function hide() { modal.classList.remove('show'); handler = null; }
       cancelBtn.addEventListener('click', hide);
       modal.addEventListener('click', (e) => { if (e.target === modal) hide(); });
       okBtn.addEventListener('click', () => { if (handler) handler(); hide(); });
-      return function open(fn) { handler = fn; modal.classList.add('show'); };
+      return function open(fn, title, text) {
+        handler = fn;
+        if (title) titleEl.textContent = title;
+        if (text) textEl.textContent = text;
+        modal.classList.add('show');
+      };
     }
 
     async function apiFetch(path, options = {}) {
@@ -1245,17 +1302,49 @@
     }
 
     function renderDayOptions(selected) {
-      const select = document.getElementById('daySelect');
-      select.innerHTML = '';
-      state.activeDays.forEach((d) => {
-        const opt = document.createElement('option');
-        opt.value = d.day_index;
-        opt.textContent = `${d.day_index}. ${d.label}`;
-        if (state.completedDays.has(Number(d.day_index))) opt.textContent += ' ✓';
-        if (d.day_index === selected) opt.selected = true;
-        select.appendChild(opt);
-      });
+      const container = document.getElementById('dayOptions');
+      container.innerHTML = '';
       state.dayIndex = selected;
+      state.activeDays.forEach((d) => {
+        const option = document.createElement('button');
+        option.type = 'button';
+        option.className = 'day-option' + (d.day_index === selected ? ' active' : '');
+        const labels = document.createElement('div');
+        labels.className = 'labels';
+        const title = document.createElement('div');
+        title.className = 'title';
+        title.textContent = `${d.day_index}. ${d.label}`;
+        labels.appendChild(title);
+        if (d.subtitle) {
+          const subtitle = document.createElement('div');
+          subtitle.className = 'subtitle';
+          subtitle.textContent = d.subtitle;
+          labels.appendChild(subtitle);
+        }
+        const badge = document.createElement('div');
+        badge.className = 'pill';
+        badge.textContent = state.completedDays.has(Number(d.day_index)) ? 'Завершён' : 'Активный';
+        option.append(labels, badge);
+        option.addEventListener('click', () => {
+          closeDayPicker();
+          if (d.day_index !== state.dayIndex) loadSheet(d.day_index).catch(console.error);
+        });
+        container.appendChild(option);
+      });
+    }
+
+    function openDayPicker() { document.getElementById('daySheet').classList.add('show'); }
+    function closeDayPicker() { document.getElementById('daySheet').classList.remove('show'); }
+
+    function shiftDay(step) {
+      if (!state.activeDays.length) return;
+      const currentIdx = state.activeDays.findIndex((d) => Number(d.day_index) === Number(state.dayIndex));
+      const nextIdx = (currentIdx + step + state.activeDays.length) % state.activeDays.length;
+      const next = state.activeDays[nextIdx];
+      if (next) {
+        triggerHaptic();
+        loadSheet(next.day_index).catch(console.error);
+      }
     }
 
     function setExerciseBusy(ueId, busy) {
@@ -1844,14 +1933,21 @@
 
     function formatLastSet(exercise) {
       const sets = exercise.sets || [];
-      if (!sets.length) return 'Нет подходов';
+      if (!sets.length) return '';
       const last = sets[sets.length - 1];
-      if (last.seconds > 0 && last.reps === 0) return `Последний: ${last.seconds} сек`;
+      if (last.seconds > 0 && last.reps === 0) return `${last.seconds} сек`;
       const parts = [];
       if (last.weight_kg > 0) parts.push(`${last.weight_kg} кг`);
       if (last.reps > 0) parts.push(`${last.reps} повт.`);
       if (last.seconds > 0) parts.push(`${last.seconds} сек`);
-      return 'Последний: ' + (parts.join(' × ') || '0');
+      return parts.join(' × ') || '0';
+    }
+
+    function buildExerciseSummary(exercise) {
+      const count = exercise.sets?.length || 0;
+      if (!count) return 'Подходов пока нет';
+      const last = formatLastSet(exercise);
+      return `Подходы: ${count} • Последний: ${last || '—'}`;
     }
 
     function renderExerciseCard(exercise) {
@@ -1861,31 +1957,34 @@
 
       const header = document.createElement('div');
       header.className = 'card-header';
-      const title = document.createElement('div');
-      title.className = 'card-title';
-      title.textContent = exercise.name;
-      const pill = document.createElement('div');
-      pill.className = 'pill';
-      pill.textContent = `${exercise.sets?.length || 0} подходов`;
-      header.append(title, pill);
+      const titleWrap = document.createElement('div');
+      titleWrap.className = 'card-title';
+      titleWrap.textContent = exercise.name;
+      const right = document.createElement('div');
+      right.className = 'pill';
+      right.textContent = `${exercise.sets?.length || 0} подходов`;
+      if (exercise.note) {
+        const note = document.createElement('span');
+        note.className = 'note-indicator';
+        note.textContent = '📝';
+        titleWrap.appendChild(note);
+      }
+      header.append(titleWrap, right);
 
       const summary = document.createElement('div');
       summary.className = 'card-summary';
-      summary.textContent = formatLastSet(exercise);
+      summary.textContent = buildExerciseSummary(exercise);
 
       const actions = document.createElement('div');
       actions.className = 'card-actions';
-      const addBtn = document.createElement('button');
-      addBtn.className = 'btn primary';
-      addBtn.textContent = '+ Сет';
-      addBtn.addEventListener('click', () => queueExerciseAction(exercise.user_exercise_id, () => addSet(exercise.user_exercise_id, { toastOnSave: true })));
-      const editBtn = document.createElement('button');
-      editBtn.className = 'btn';
-      editBtn.textContent = 'Редактировать';
-      editBtn.addEventListener('click', () => openEditor(exercise.user_exercise_id));
-      actions.append(addBtn, editBtn);
+      const openBtn = document.createElement('button');
+      openBtn.className = 'primary-link';
+      openBtn.textContent = 'Открыть';
+      openBtn.addEventListener('click', (ev) => { ev.stopPropagation(); openEditor(exercise.user_exercise_id); });
+      actions.append(openBtn);
 
       card.append(header, summary, actions);
+      card.addEventListener('click', () => openEditor(exercise.user_exercise_id));
       return card;
     }
 
@@ -2306,7 +2405,7 @@
       if (!card || !exercise) return;
       const summary = card.querySelector('.card-summary');
       const pill = card.querySelector('.pill');
-      if (summary) summary.textContent = formatLastSet(exercise);
+      if (summary) summary.textContent = buildExerciseSummary(exercise);
       if (pill) pill.textContent = `${exercise.sets?.length || 0} подходов`;
     }
 
@@ -2323,6 +2422,7 @@
         renderEditor();
       }
       scheduleDayMuscleLoad();
+      updateFinishButton();
     }
 
     async function addSet(ueId, opts = {}) {
@@ -2377,9 +2477,13 @@
     async function completeDay() {
       if (!state.dayIndex) return;
       try {
-        const data = await apiFetch(`/gymapi/day/${state.dayIndex}/complete`, { method: 'POST', body: JSON.stringify({}), silent: false });
+        const query = state.dateIso ? `?date=${state.dateIso}` : '';
+        const data = await apiFetch(`/gymapi/day/${state.dayIndex}/complete${query}`, { method: 'POST', body: JSON.stringify({}), silent: false });
         state.completedDays = new Set((data.completed_days || []).map(Number));
         renderDayOptions(state.dayIndex);
+        renderDayHeader();
+        updateFinishButton();
+        triggerHaptic();
         toast('День завершён ✅');
       } catch (e) {
         if (e?.status === 401 || e?.status === 403) toast('Нет доступа. Открой WebApp из Telegram.');
@@ -2388,20 +2492,29 @@
     }
 
     async function loadSheet(dayIndex) {
-      state.dayIndex = dayIndex;
-      state.contexts = new Map();
-      state.muscleLoad = { groups: [], selectedKey: null, showAll: false, detailsOpen: true, byMuscle: {}, loading: true };
-      const sheet = await apiFetch(`/gymapi/day/${dayIndex}/sheet`);
-      if (sheet.completed_days) {
-        state.completedDays = new Set(sheet.completed_days.map(Number));
-        renderDayOptions(dayIndex);
+      const shell = document.getElementById('todayShell');
+      shell?.classList.add('switching');
+      try {
+        state.dayIndex = dayIndex;
+        state.contexts = new Map();
+        state.muscleLoad = { groups: [], selectedKey: null, showAll: false, detailsOpen: true, byMuscle: {}, loading: true };
+        const sheet = await apiFetch(`/gymapi/day/${dayIndex}/sheet`);
+        if (sheet.completed_days) {
+          state.completedDays = new Set(sheet.completed_days.map(Number));
+          renderDayOptions(dayIndex);
+        }
+        const active = state.activeDays.find((d) => Number(d.day_index) === Number(dayIndex));
+        state.dayLabel = sheet.day_label || active?.label || `День ${dayIndex}`;
+        state.daySubtitle = active?.subtitle || (dayIndex ? `День ${dayIndex}` : '');
+        state.date = sheet.date;
+        state.dateIso = toIsoDate(sheet.date);
+        renderDayHeader();
+        renderExercises(sheet.exercises || []);
+        scheduleDayMuscleLoad();
+        updateFinishButton();
+      } finally {
+        setTimeout(() => shell?.classList.remove('switching'), 180);
       }
-      state.date = sheet.date;
-      state.dateIso = toIsoDate(sheet.date);
-      document.getElementById('dateLabel').textContent = sheet.date || '';
-      renderExercises(sheet.exercises || []);
-      scheduleDayMuscleLoad();
-      updateFinishButton();
     }
 
     async function loadToday() {
@@ -2410,26 +2523,44 @@
       state.completedDays = new Set((info.completed_days || []).map(Number));
       const targetDay = info.suggested_day_index || (state.activeDays[0]?.day_index);
       renderDayOptions(targetDay);
-      document.getElementById('dateLabel').textContent = info.date || '';
+      state.date = info.date || '';
       await loadSheet(targetDay);
+    }
+
+    function getTotalSetsToday() {
+      return Array.from(state.exercises.values()).reduce((acc, ex) => acc + (ex.sets?.length || 0), 0);
+    }
+
+    function renderDayHeader() {
+      document.getElementById('dayTitle').textContent = state.dayLabel || 'Тренировка';
+      document.getElementById('daySubtitle').textContent = state.daySubtitle || '';
+      document.getElementById('dateLabel').textContent = state.date || '';
+      const completed = state.completedDays.has(Number(state.dayIndex));
+      const badge = document.getElementById('dayCompletedBadge');
+      badge.style.display = completed ? '' : 'none';
     }
 
     function updateFinishButton() {
       const btn = document.getElementById('finishBtn');
       const completed = state.completedDays.has(Number(state.dayIndex));
-      btn.disabled = !state.dayIndex;
-      btn.classList.toggle('ready', !completed && state.dayIndex);
-      btn.textContent = completed ? 'День уже завершён' : 'Завершить день';
+      const hasSets = getTotalSetsToday() > 0;
+      const ready = !!state.dayIndex && hasSets && !completed;
+      btn.disabled = !ready;
+      btn.classList.toggle('ready', ready);
+      btn.textContent = completed ? 'День завершён' : 'Завершить день';
+      document.getElementById('finishNote').textContent = completed ? 'День отмечен как завершён.' : 'Можно завершить в конце — данные сохраняются автоматически';
+      document.getElementById('dayCompletedBadge').style.display = completed ? '' : 'none';
     }
 
     function bindEvents() {
-      document.getElementById('daySelect').addEventListener('change', (e) => {
-        const dayIdx = Number(e.target.value);
-        loadSheet(dayIdx).catch(console.error);
-      });
+      document.getElementById('dayPrev').addEventListener('click', () => shiftDay(-1));
+      document.getElementById('dayNext').addEventListener('click', () => shiftDay(1));
+      document.getElementById('dayCenter').addEventListener('click', openDayPicker);
+      document.getElementById('openDayPicker').addEventListener('click', openDayPicker);
+      document.getElementById('daySheet').addEventListener('click', (e) => { if (e.target.id === 'daySheet') closeDayPicker(); });
       document.getElementById('finishBtn').addEventListener('click', () => {
         if (!state.dayIndex) return;
-        openConfirmModal?.(() => completeDay());
+        openConfirmModal?.(() => completeDay(), 'Завершить день?', 'Ты больше не будешь добавлять подходы в этот день?');
       });
       document.getElementById('editorClose').addEventListener('click', closeEditor);
       document.getElementById('editorAddSet').addEventListener('click', () => queueExerciseAction(state.editor.ueId, () => addSet(state.editor.ueId, { toastOnSave: true })));
@@ -2480,6 +2611,8 @@
       }
       tg.ready();
       tg.expand();
+      tg.MainButton?.hide?.();
+      tg.MainButton?.offClick?.();
       state.isTelegram = true;
       state.initData = tg.initData;
       applyTheme();
@@ -2651,6 +2784,7 @@
     }
 
     function openEditor(ueId) {
+      triggerHaptic();
       state.editor = { open: true, ueId, selectedSet: null, tab: 'sets', noteTimer: null, noteStatusTimer: null };
       setActiveTab('sets');
       renderEditor();

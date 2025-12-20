@@ -469,11 +469,16 @@ async def day_sheet(
 
 
 @app.post("/day/{day_index}/complete")
-async def complete_day(day_index: int, tg: TelegramInitData = Depends(get_tg_init_data)):
+async def complete_day(
+    day_index: int,
+    date: str | None = None,
+    tg: TelegramInitData = Depends(get_tg_init_data),
+):
     user_id = tg.user.id
     await _validate_day(user_id, day_index)
-    now = datetime.now(UTC).isoformat()
-    await mark_day_completed(user_id, day_index, now)
+    target_date = _parse_date_param(date)
+    completed_at = datetime.combine(target_date, time.min, tzinfo=UTC).isoformat()
+    await mark_day_completed(user_id, day_index, completed_at)
     completed = await get_active_day_completions(user_id)
     return {
         "ok": True,
