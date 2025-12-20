@@ -182,6 +182,49 @@ async def _ensure_muscle_map_schema(db):
     )
 
 
+async def search_catalog_exercises(query: str | None, limit: int = 50):
+    pattern = f"%{(query or '').strip().lower()}%"
+    async with connect_db() as db:
+        base_query = (
+            """
+            SELECT e.id, e.name, e.muscle_group, COALESCE(u.cnt, 0) AS usage_count
+            FROM exercises e
+            LEFT JOIN (
+                SELECT exercise_id, COUNT(*) AS cnt
+                FROM user_exercises
+                GROUP BY exercise_id
+            ) u ON u.exercise_id = e.id
+            {where_clause}
+            ORDER BY usage_count DESC, e.name ASC
+            LIMIT ?
+            """
+        )
+        if query and query.strip():
+            cur = await db.execute(base_query.format(where_clause="WHERE LOWER(e.name) LIKE ?"), (pattern, limit))
+        else:
+            cur = await db.execute(base_query.format(where_clause=""), (limit,))
+        rows = await cur.fetchall()
+        return [(int(r[0]), r[1], r[2]) for r in rows if r]
+
+
+async def create_catalog_exercise(name: str, muscle_group: str | None = None) -> int:
+    normalized_mg = muscle_group.strip().lower() if muscle_group else None
+    async with connect_db() as db:
+        cur = await db.execute(
+            "INSERT OR IGNORE INTO exercises(name, muscle_group) VALUES(?, ?)",
+            (name, normalized_mg),
+        )
+        if cur.rowcount == 0:
+            cur = await db.execute("SELECT id FROM exercises WHERE name=?", (name,))
+            row = await cur.fetchone()
+        else:
+            row = (cur.lastrowid,)
+        await db.commit()
+        if not row:
+            raise ValueError("Не удалось создать упражнение")
+        return int(row[0])
+
+
 async def _seed_exercise_muscles_defaults(db):
     mapping: dict[str, dict[str, int]] = {}
 
