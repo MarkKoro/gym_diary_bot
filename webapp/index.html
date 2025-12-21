@@ -326,11 +326,13 @@
     .quick-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
     .quick-title { font-weight: 800; font-size: 15px; letter-spacing: -0.01em; }
     .quick-last { font-size: 13px; color: var(--muted); }
-    .quick-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-    .quick-btn { padding: 10px 12px; font-size: 14px; }
-    .quick-secondary { display: flex; gap: 8px; flex-wrap: wrap; }
-    .text-btn { border: none; background: transparent; color: var(--accent); font-weight: 700; padding: 6px 8px; border-radius: 10px; cursor: pointer; font-size: 13px; }
-    .text-btn:active { opacity: 0.7; }
+      .quick-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+      .quick-btn { padding: 10px 12px; font-size: 14px; }
+      .quick-secondary { display: flex; gap: 8px; flex-wrap: wrap; }
+      .text-btn { border: none; background: transparent; color: var(--accent); font-weight: 700; padding: 6px 8px; border-radius: 10px; cursor: pointer; font-size: 13px; }
+      .text-btn:active { opacity: 0.7; }
+      .outline-btn { border: 1px solid var(--border); background: var(--bg); color: var(--text); font-weight: 700; padding: 10px 12px; border-radius: 12px; display: inline-flex; align-items: center; gap: 8px; box-shadow: var(--shadow); cursor: pointer; }
+      .outline-btn:active { transform: translateY(1px); opacity: 0.9; }
     .quick-inline-inputs { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
     .quick-input { width: 94px; padding: 10px 10px; border-radius: 12px; border: 1px solid var(--border); background: var(--card); color: var(--text); font-size: 14px; }
     .quick-toggle { padding: 6px 10px; border-radius: 12px; border: 1px solid var(--border); background: var(--card); font-size: 12px; color: var(--muted); cursor: pointer; }
@@ -375,7 +377,7 @@
     .control-block.primary { border-color: rgba(0,122,255,0.35); background: rgba(0,122,255,0.06); }
     [data-theme="dark"] .control-block.primary { background: rgba(110,168,255,0.08); }
     .control-head { display: flex; justify-content: space-between; align-items: center; font-size: 13px; color: var(--muted); }
-    .control-value { font-size: 28px; font-weight: 800; text-align: center; letter-spacing: -0.01em; cursor: pointer; }
+    .control-value { font-size: 28px; font-weight: 800; text-align: center; letter-spacing: -0.01em; cursor: pointer; padding: 10px 12px; border-radius: 12px; border: 1px solid var(--border); background: var(--card); box-shadow: inset 0 1px 0 rgba(255,255,255,0.04); }
     .inline-num-input{
       width: 100%;
       height: 40px;
@@ -387,14 +389,10 @@
       font-size: 16px;
       outline: none;
     }
-    .control-actions { display: flex; align-items: center; justify-content: center; gap: 12px; }
+    .control-actions { display: flex; align-items: center; justify-content: center; gap: 16px; }
     .circle-btn { width: 48px; height: 48px; border-radius: 50%; border: 1px solid var(--border); background: var(--card); font-size: 22px; font-weight: 700; cursor: pointer; box-shadow: var(--shadow); color: var(--text); }
     .circle-btn:disabled { opacity: 0.55; cursor: not-allowed; box-shadow: none; }
-    .chips { display: flex; gap: 6px; flex-wrap: wrap; }
-    .chip { padding: 7px 10px; border-radius: 12px; border: 1px solid var(--border); background: var(--card); font-size: 13px; cursor: pointer; }
-    .chip.active { background: var(--accent); border-color: var(--accent); color: #fff; box-shadow: 0 6px 14px rgba(0,122,255,0.22); }
-    .chips.scrollable { overflow-x: auto; flex-wrap: nowrap; padding-bottom: 4px; }
-    .chip.text { background: transparent; }
+    .chips { display: none; }
     @keyframes setFlash { from { background: rgba(0,122,255,0.12); } to { background: var(--bg); } }
     .section-header { display: flex; align-items: center; gap: 10px; }
     .back-link { border: none; background: none; color: var(--accent); font-weight: 700; font-size: 14px; cursor: pointer; padding: 8px 10px; border-radius: 12px; }
@@ -591,6 +589,9 @@
         display:grid;
         place-items:center;
       }
+
+      #timerSheet{ transition: opacity 0.15s ease; }
+      #timerSheet .sheet{ transition: transform 0.16s ease; }
 
       .timer-finish-flash{
         animation: timerFlash 900ms ease-in-out 1;
@@ -982,20 +983,14 @@
         </div>
 
         <div class="sheet-actions">
-          <button id="editorAddSet" class="btn primary">+ Сет</button>
-        <button id="editorRemoveSet" class="btn danger">− Сет</button>
+          <button id="editorAddSet" class="btn primary">Добавить подход</button>
+        <button id="editorRemoveSet" class="btn">Удалить подход</button>
         <button id="editorClose" class="btn">Готово</button>
       </div>
     </div>
   </div>
 
   <script>
-    const STEP_OPTIONS = {
-      kg: [0.5, 3, 10, 25],
-      reps: [1, 5, 15],
-      sec: [1, 5, 25, 30],
-    };
-
     const DURATION_PATTERNS = ["(сек", "удержание", "стойка", "планк"];
 
     const TIMER_MAX_SEC = 600;
@@ -1058,7 +1053,6 @@
       exercises: new Map(),
       todayDraft: {},
       workout: { expanded: null },
-      steps: { kg: 1, reps: 1, sec: 5 },
       actionQueues: new Map(),
       contexts: new Map(),
       quickModes: new Map(),
@@ -1321,6 +1315,7 @@
       preset: 30,
       intervalId: null,
       finished: false,
+      endAt: null,
     };
 
     function clampTimer(sec){
@@ -1352,9 +1347,18 @@
       document.getElementById('timerSecVal').textContent = String(s);
     }
 
+    function refreshRemainingFromEnd(){
+      if (!timerState.running || !timerState.endAt) return timerState.remaining;
+      const msLeft = timerState.endAt - Date.now();
+      const next = clampTimer(Math.max(0, Math.ceil(msLeft / 1000)));
+      timerState.remaining = next;
+      return next;
+    }
+
     function renderTimerUI(){
       const pill = document.getElementById('timerPill');
       const pillTime = document.getElementById('timerPillTime');
+      if (timerState.running) refreshRemainingFromEnd();
       pillTime.textContent = fmtMMSS(timerState.remaining);
 
       // show pill if running or remaining != preset or finished
@@ -1365,10 +1369,16 @@
       const startBtn = document.getElementById('timerStartBtn');
       const stopBtn = document.getElementById('timerStopBtn');
       const repeatBtn = document.getElementById('timerRepeatBtn');
+      const pillPauseBtn = document.getElementById('timerPillPause');
 
       startBtn.textContent = timerState.running ? 'Пауза' : (timerState.finished ? 'Старт' : 'Старт');
       stopBtn.disabled = !show;
       repeatBtn.disabled = timerState.preset <= 0;
+      if (pillPauseBtn){
+        if (timerState.finished && !timerState.running){ pillPauseBtn.textContent = '↻'; pillPauseBtn.title = 'Перезапуск'; }
+        else if (timerState.running){ pillPauseBtn.textContent = '⏸'; pillPauseBtn.title = 'Пауза'; }
+        else { pillPauseBtn.textContent = '▶'; pillPauseBtn.title = 'Старт'; }
+      }
 
       // Keep UI values updated when not running
       if (!timerState.running) setTimerUIFromPreset();
@@ -1410,6 +1420,7 @@
       clearInterval(timerState.intervalId);
       timerState.intervalId = null;
       timerState.remaining = 0;
+      timerState.endAt = null;
       renderTimerUI();
 
       const pill = document.getElementById('timerPill');
@@ -1423,7 +1434,7 @@
 
     function timerTick(){
       if (!timerState.running) return;
-      timerState.remaining = clampTimer(timerState.remaining - 1);
+      refreshRemainingFromEnd();
       if (timerState.remaining <= 0){
         timerFinish();
       } else {
@@ -1431,12 +1442,15 @@
       }
     }
 
-    function timerStartPause(){
+    function timerStartPause(opts = {}){
+      const { closeSheet = false } = opts;
       if (timerState.running){
         // pause
+        refreshRemainingFromEnd();
         timerState.running = false;
         clearInterval(timerState.intervalId);
         timerState.intervalId = null;
+        timerState.endAt = null;
         renderTimerUI();
         return;
       }
@@ -1446,9 +1460,11 @@
       if (timerState.preset <= 0) timerState.preset = timerState.remaining;
 
       timerState.running = true;
+      timerState.endAt = Date.now() + (timerState.remaining * 1000);
       renderTimerUI();
       clearInterval(timerState.intervalId);
       timerState.intervalId = setInterval(timerTick, 1000);
+      if (closeSheet) closeTimerSheet();
     }
 
     function timerStop(){
@@ -1457,6 +1473,7 @@
       clearInterval(timerState.intervalId);
       timerState.intervalId = null;
       timerState.remaining = clampTimer(timerState.preset);
+      timerState.endAt = null;
       renderTimerUI();
     }
 
@@ -1466,6 +1483,7 @@
       clearInterval(timerState.intervalId);
       timerState.intervalId = null;
       timerState.remaining = clampTimer(timerState.preset);
+      timerState.endAt = null;
       timerStartPause();
     }
 
@@ -1530,17 +1548,37 @@
       });
 
       // actions
-      document.getElementById('timerStartBtn').addEventListener('click', timerStartPause);
+      document.getElementById('timerStartBtn').addEventListener('click', () => timerStartPause({ closeSheet: true }));
       document.getElementById('timerStopBtn').addEventListener('click', timerStop);
       document.getElementById('timerRepeatBtn').addEventListener('click', timerRepeat);
 
       // pill actions
       const pill = document.getElementById('timerPill');
-      document.getElementById('timerPillPause').addEventListener('click', (e)=>{ e.stopPropagation(); timerStartPause(); });
+      document.getElementById('timerPillPause').addEventListener('click', (e)=>{ e.stopPropagation(); timerState.finished ? timerRepeat() : timerStartPause(); });
       document.getElementById('timerPillStop').addEventListener('click', (e)=>{ e.stopPropagation(); timerStop(); });
 
       // tap pill opens sheet
       pill.addEventListener('click', (e)=>{ e.stopPropagation(); openTimerSheet(); });
+
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible') {
+          if (timerState.running) {
+            refreshRemainingFromEnd();
+            if (timerState.remaining <= 0) timerFinish();
+            else renderTimerUI();
+          } else if (timerState.finished && timerState.remaining <= 0) {
+            renderTimerUI();
+          }
+        }
+      });
+
+      window.addEventListener('focus', () => {
+        if (timerState.running) {
+          refreshRemainingFromEnd();
+          if (timerState.remaining <= 0) timerFinish();
+          else renderTimerUI();
+        }
+      });
 
       renderTimerUI();
     }
@@ -2202,15 +2240,43 @@
       return sets.length ? sets[sets.length - 1] : null;
     }
 
+    function getCachedLastValues(ueId) {
+      try {
+        const raw = localStorage.getItem(`gd_last_vals_${ueId}`);
+        if (!raw) return null;
+        const parsed = JSON.parse(raw);
+        return {
+          weight_kg: Number(parsed.weight_kg || 0),
+          reps: Number(parsed.reps || 0),
+          seconds: Number(parsed.seconds || 0),
+        };
+      } catch (_) { return null; }
+    }
+
+    function saveCachedLastValues(ueId, values) {
+      try {
+        const payload = {
+          weight_kg: Number(values.weight_kg || 0),
+          reps: Number(values.reps || 0),
+          seconds: Number(values.seconds || 0),
+        };
+        localStorage.setItem(`gd_last_vals_${ueId}`, JSON.stringify(payload));
+      } catch (_) {}
+    }
+
     function deriveDraft(exercise) {
       const last = getLastSet(exercise);
       if (last) {
-        return {
+        const values = {
           weight_kg: Number(last.weight_kg || 0),
           reps: Number(last.reps || 0),
           seconds: Number(last.seconds || 0),
         };
+        saveCachedLastValues(exercise.user_exercise_id, values);
+        return values;
       }
+      const cached = getCachedLastValues(exercise.user_exercise_id);
+      if (cached) return cached;
       return { weight_kg: 0, reps: 0, seconds: 0 };
     }
 
@@ -2236,14 +2302,17 @@
 
     function applyDraftFromSet(ueId, set) {
       if (!set) {
-        updateDraft(ueId, { weight_kg: 0, reps: 0, seconds: 0 });
+        const cached = getCachedLastValues(ueId) || ensureDraft(ueId);
+        updateDraft(ueId, cached);
         return;
       }
-      updateDraft(ueId, {
+      const values = {
         weight_kg: Number(set.weight_kg || 0),
         reps: Number(set.reps || 0),
         seconds: Number(set.seconds || 0),
-      });
+      };
+      updateDraft(ueId, values);
+      saveCachedLastValues(ueId, values);
     }
 
     function closeMenus() {
@@ -2270,7 +2339,9 @@
     function setDraftValue(ueId, field, value) {
       const next = Math.max(0, Number(value) || 0);
       const rounded = field === 'weight_kg' ? Math.round(next * 10) / 10 : Math.round(next);
-      updateDraft(ueId, { [field]: rounded });
+      const draft = { ...ensureDraft(ueId), [field]: rounded };
+      updateDraft(ueId, draft);
+      saveCachedLastValues(ueId, draft);
       return rounded;
     }
 
@@ -2293,6 +2364,7 @@
       input.min = String(min);
       input.max = String(max);
       input.value = (value ?? 0);
+      if (inputMode === 'numeric') input.pattern = '[0-9]*';
 
       input.className = 'inline-num-input';
       containerEl.textContent = '';
@@ -2335,18 +2407,20 @@
       const controls = document.createElement('div');
       controls.className = 'controls-grid';
 
-      const buildBlock = (label, field, step) => {
+      const buildBlock = (label, field) => {
         const block = document.createElement('div');
         block.className = 'control-block';
         const head = document.createElement('div'); head.className = 'control-head'; head.textContent = label;
         const valueEl = document.createElement('div'); valueEl.className = 'control-value'; const currentVal = Number(draft[field] || 0); valueEl.textContent = currentVal;
+        valueEl.tabIndex = 0;
+        valueEl.setAttribute('role', 'button');
         valueEl.style.cursor = 'text';
         valueEl.addEventListener('click', (e) => {
           e.stopPropagation();
           const opts = {
             min: 0,
             max: field === 'weight_kg' ? 500 : (field === 'seconds' ? 3600 : 200),
-            step: field === 'weight_kg' ? 0.5 : (field === 'seconds' ? 5 : 1),
+            step: 1,
             decimals: field === 'weight_kg' ? 1 : 0,
             inputMode: field === 'weight_kg' ? 'decimal' : 'numeric',
           };
@@ -2361,30 +2435,30 @@
         });
         const actions = document.createElement('div'); actions.className = 'control-actions';
         const minus = document.createElement('button'); minus.type = 'button'; minus.className = 'circle-btn'; minus.textContent = '−';
-        minus.addEventListener('click', (ev) => { ev.stopPropagation(); adjustDraftValue(ueId, field, -step); renderWorkoutBody(ueId); });
+        minus.addEventListener('click', (ev) => { ev.stopPropagation(); adjustDraftValue(ueId, field, -1); renderWorkoutBody(ueId); });
         const plus = document.createElement('button'); plus.type = 'button'; plus.className = 'circle-btn'; plus.textContent = '+';
-        plus.addEventListener('click', (ev) => { ev.stopPropagation(); adjustDraftValue(ueId, field, step); renderWorkoutBody(ueId); });
+        plus.addEventListener('click', (ev) => { ev.stopPropagation(); adjustDraftValue(ueId, field, 1); renderWorkoutBody(ueId); });
         actions.append(minus, valueEl, plus);
         block.append(head, actions);
         return block;
       };
 
       if (isDuration) {
-        controls.appendChild(buildBlock('Секунды', 'seconds', 5));
+        controls.appendChild(buildBlock('Секунды', 'seconds'));
       } else {
-        controls.append(buildBlock('Вес, кг', 'weight_kg', 1), buildBlock('Повторы', 'reps', 1));
+        controls.append(buildBlock('Вес, кг', 'weight_kg'), buildBlock('Повторы', 'reps'));
       }
 
       container.appendChild(controls);
 
       const actionsRow = document.createElement('div');
       actionsRow.className = 'workout-actions';
-      const addBtn = document.createElement('button'); addBtn.type = 'button'; addBtn.className = 'btn primary'; addBtn.textContent = '+ Подход';
+      const addBtn = document.createElement('button'); addBtn.type = 'button'; addBtn.className = 'btn primary'; addBtn.textContent = 'Добавить подход';
       addBtn.addEventListener('click', (ev) => { ev.stopPropagation(); handleWorkoutAdd(exercise); });
-      const removeBtn = document.createElement('button'); removeBtn.type = 'button'; removeBtn.className = 'btn'; removeBtn.textContent = '− Последний';
+      const removeBtn = document.createElement('button'); removeBtn.type = 'button'; removeBtn.className = 'btn'; removeBtn.textContent = 'Удалить подход';
       removeBtn.disabled = !(exercise.sets || []).length;
       removeBtn.addEventListener('click', (ev) => { ev.stopPropagation(); handleWorkoutRemove(exercise); });
-      const detailsBtn = document.createElement('button'); detailsBtn.type = 'button'; detailsBtn.className = 'text-btn'; detailsBtn.textContent = 'Детали';
+      const detailsBtn = document.createElement('button'); detailsBtn.type = 'button'; detailsBtn.className = 'outline-btn'; detailsBtn.textContent = 'ℹ️ Детали';
       detailsBtn.addEventListener('click', (ev) => { ev.stopPropagation(); openEditor(exercise.user_exercise_id); });
       actionsRow.append(addBtn, removeBtn, detailsBtn);
       container.appendChild(actionsRow);
@@ -2568,7 +2642,8 @@
       updateCardSummary(ueId);
       if (state.editor.open && state.editor.ueId === ueId) {
         const lastSet = sets[sets.length - 1];
-        if (!sets.find((s) => s.set_no === state.editor.selectedSet)) {
+        const hasSelected = sets.find((s) => s.set_no === state.editor.selectedSet);
+        if (!hasSelected && state.editor.selectedSet !== null) {
           state.editor.selectedSet = lastSet ? lastSet.set_no : null;
         }
         renderEditor();
@@ -2579,19 +2654,32 @@
 
     async function addSet(ueId, opts = {}) {
       triggerHaptic();
-      const payload = opts.payload || {};
-      const data = await apiFetch(`/gymapi/day/${state.dayIndex}/exercise/${ueId}/set/add`, { method: 'POST', body: JSON.stringify(payload) });
-      applySetsUpdate(ueId, data.sets);
-      const last = data.sets[data.sets.length - 1];
-      if (opts.selectLast !== false) {
-        if (state.editor.ueId === ueId) state.editor.selectedSet = last?.set_no || null;
+      const payload = opts.payload || { ...ensureDraft(ueId) };
+      const exercise = state.exercises.get(ueId);
+      const prevSets = exercise ? [...exercise.sets] : null;
+      const optimisticNo = (prevSets?.[prevSets.length - 1]?.set_no || 0) + 1;
+      if (exercise) {
+        const optimistic = { set_no: optimisticNo, weight_kg: Number(payload.weight_kg || 0), reps: Number(payload.reps || 0), seconds: Number(payload.seconds || 0) };
+        applySetsUpdate(ueId, [...prevSets, optimistic]);
+        state.editor.selectedSet = null;
       }
-      if (state.editor.ueId === ueId && last) {
-        state.editor.scrollTarget = last.set_no;
-        setFlashSet(last.set_no);
+      try {
+        const data = await apiFetch(`/gymapi/day/${state.dayIndex}/exercise/${ueId}/set/add`, { method: 'POST', body: JSON.stringify(payload) });
+        applySetsUpdate(ueId, data.sets);
+        const last = data.sets[data.sets.length - 1];
+        if (opts.selectLast !== false) {
+          if (state.editor.ueId === ueId) state.editor.selectedSet = null;
+        }
+        if (state.editor.ueId === ueId && last) {
+          state.editor.scrollTarget = last.set_no;
+          setFlashSet(last.set_no);
+        }
+        if (opts.toastOnSave) toast('Сохранено');
+        return data;
+      } catch (e) {
+        if (prevSets) applySetsUpdate(ueId, prevSets);
+        throw e;
       }
-      if (opts.toastOnSave) toast('Сохранено');
-      return data;
     }
 
     async function removeSet(ueId, opts = {}) {
@@ -3121,13 +3209,6 @@
     function renderSetsList(exercise) {
       const list = document.getElementById('setsList');
       list.innerHTML = '';
-      if (!exercise.sets.length) {
-        const empty = document.createElement('div');
-        empty.className = 'muted';
-        empty.textContent = 'Пока нет подходов. Добавь или измени значения кнопками ниже.';
-        list.appendChild(empty);
-        return;
-      }
       exercise.sets.forEach((s) => {
         const row = document.createElement('div');
         row.className = 'set-row';
@@ -3142,23 +3223,13 @@
       });
     }
 
-    function renderStepChips(field, container) {
-      container.innerHTML = '';
-      STEP_OPTIONS[field].forEach((val) => {
-        const chip = document.createElement('button');
-        chip.type = 'button';
-        chip.className = 'chip' + (state.steps[field] === val ? ' active' : '');
-        chip.textContent = val;
-        chip.addEventListener('click', () => { state.steps[field] = val; renderEditor(); });
-        container.appendChild(chip);
-      });
-    }
-
     function buildControlBlock(label, field, value, primary = false) {
       const block = document.createElement('div');
       block.className = 'control-block' + (primary ? ' primary' : '');
-      const head = document.createElement('div'); head.className = 'control-head'; head.innerHTML = `<span>${label}</span><span>${state.steps[field]} шаг</span>`;
+      const head = document.createElement('div'); head.className = 'control-head'; head.innerHTML = `<span>${label}</span>`;
       const valueEl = document.createElement('div'); valueEl.className = 'control-value'; valueEl.textContent = value;
+      valueEl.tabIndex = 0;
+      valueEl.setAttribute('role', 'button');
       valueEl.style.cursor = 'text';
       valueEl.addEventListener('click', (e) => {
         e.stopPropagation();
@@ -3168,7 +3239,7 @@
           value: current,
           min: 0,
           max: field === 'kg' ? 500 : (field === 'sec' ? 3600 : 200),
-          step: field === 'kg' ? 0.5 : (field === 'sec' ? 5 : 1),
+          step: 1,
           decimals: field === 'kg' ? 1 : 0,
           inputMode: field === 'kg' ? 'decimal' : 'numeric',
           onCommit: (next) => {
@@ -3179,11 +3250,10 @@
         });
       });
       const actions = document.createElement('div'); actions.className = 'control-actions';
-      const minus = document.createElement('button'); minus.className = 'circle-btn'; minus.textContent = '−'; minus.addEventListener('click', () => queueExerciseAction(state.editor.ueId, () => incSet(state.editor.ueId, field, -state.steps[field])));
-      const plus = document.createElement('button'); plus.className = 'circle-btn'; plus.textContent = '+'; plus.addEventListener('click', () => queueExerciseAction(state.editor.ueId, () => incSet(state.editor.ueId, field, state.steps[field])));
+      const minus = document.createElement('button'); minus.className = 'circle-btn'; minus.textContent = '−'; minus.addEventListener('click', () => queueExerciseAction(state.editor.ueId, () => incSet(state.editor.ueId, field, -1)));
+      const plus = document.createElement('button'); plus.className = 'circle-btn'; plus.textContent = '+'; plus.addEventListener('click', () => queueExerciseAction(state.editor.ueId, () => incSet(state.editor.ueId, field, 1)));
       actions.append(minus, valueEl, plus);
-      const chips = document.createElement('div'); chips.className = 'chips'; renderStepChips(field, chips);
-      block.append(head, actions, chips);
+      block.append(head, actions);
       return block;
     }
 
@@ -3265,7 +3335,6 @@
       if (!state.editor.open) return;
       const exercise = state.exercises.get(state.editor.ueId);
       if (!exercise) return;
-      if (!state.editor.selectedSet && exercise.sets.length) state.editor.selectedSet = exercise.sets[exercise.sets.length - 1].set_no;
       document.getElementById('sheet').classList.add('show');
       document.getElementById('sheetSubtitle').textContent = exercise.name;
       setActiveTab(state.editor.tab || 'sets');
@@ -3274,7 +3343,11 @@
         renderQuickPanel(exercise);
         renderSetsList(exercise);
         const selected = exercise.sets.find((s) => s.set_no === state.editor.selectedSet);
-        document.getElementById('selectedLabel').textContent = selected ? `Выбран подход №${selected.set_no}` : 'Выбери подход для редактирования';
+        const nextNo = (exercise.sets[exercise.sets.length - 1]?.set_no || 0) + 1;
+        const labelText = exercise.sets.length === 0 ? 'Подход 1:' : (selected ? `Подход ${selected.set_no}:` : `Подход ${nextNo}:`);
+        document.getElementById('selectedLabel').textContent = labelText;
+        const removeBtn = document.getElementById('editorRemoveSet');
+        if (removeBtn) removeBtn.disabled = exercise.sets.length === 0;
 
         if (state.editor.scrollTarget) {
           setTimeout(() => scrollSetIntoView(state.editor.scrollTarget), 60);
@@ -3285,9 +3358,10 @@
         grid.innerHTML = '';
         const isDuration = isDurationExercise(exercise.name);
         const selectedRow = exercise.sets.find((s) => s.set_no === state.editor.selectedSet);
-        const repsVal = selectedRow ? selectedRow.reps : 0;
-        const secVal = selectedRow ? selectedRow.seconds : 0;
-        const kgVal = selectedRow ? selectedRow.weight_kg : 0;
+        const fallback = selectedRow || exercise.sets[exercise.sets.length - 1] || ensureDraft(exercise.user_exercise_id);
+        const repsVal = fallback ? Number(fallback.reps || 0) : 0;
+        const secVal = fallback ? Number(fallback.seconds || 0) : 0;
+        const kgVal = fallback ? Number(fallback.weight_kg || 0) : 0;
         const secBlock = buildControlBlock('Секунды', 'sec', secVal, isDuration);
         const weightBlock = buildControlBlock('Вес (кг)', 'kg', kgVal, !isDuration);
         const repsBlock = buildControlBlock('Повторы', 'reps', repsVal, false);
