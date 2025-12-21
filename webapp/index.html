@@ -1983,23 +1983,37 @@
     }
 
     async function apiFetch(path, options = {}) {
-      const { silent, fetchOptions } = options;
+      const { silent = false, fetchOptions = null, timeoutMs = 15000, ...direct } = options || {};
 
-      const headers = new Headers(options.headers || {});
-      if (state.initData) {
-        headers.set('X-Telegram-InitData', state.initData);
-      }
-      if (options.body && !(options.body instanceof FormData)) {
-        headers.set('Content-Type', 'application/json');
+      // Merge headers from both layers
+      const headers = new Headers();
+      const h1 = fetchOptions?.headers;
+      const h2 = direct?.headers;
+      if (h1) new Headers(h1).forEach((v, k) => headers.set(k, v));
+      if (h2) new Headers(h2).forEach((v, k) => headers.set(k, v));
+      if (direct && 'headers' in direct) delete direct.headers;
+
+      if (state.initData) headers.set('X-Telegram-InitData', state.initData);
+
+      // Merge init (direct overrides fetchOptions)
+      const init = { ...(fetchOptions || {}), ...(direct || {}), headers };
+
+      // Auto method default
+      if (!init.method) init.method = init.body ? 'POST' : 'GET';
+
+      // JSON body handling (but do not break FormData)
+      if (init.body !== undefined && init.body !== null && !(init.body instanceof FormData)) {
+        if (typeof init.body === 'object') init.body = JSON.stringify(init.body);
+        if (!headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
       }
 
       const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(new Error('timeout')), 12000);
-      const url = path.startsWith('/gymapi') ? path : (path.startsWith('/') ? `/gymapi${path}` : path);
+      init.signal = controller.signal;
+      const timeout = setTimeout(() => controller.abort(new Error('timeout')), timeoutMs);
 
       let res;
       try {
-        res = await fetch(url, { ...(fetchOptions || {}), headers, signal: controller.signal });
+        res = await fetch(path, init);
       } catch (e) {
         setStatus('error');
         if (!silent) showErrorOverlay('Сеть недоступна. Попробуйте снова.');
