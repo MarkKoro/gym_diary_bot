@@ -1084,7 +1084,6 @@
     };
 
     let openConfirmModal = null;
-    let muscleLoadTimer = null;
     function getTg() {
       return (window.Telegram && window.Telegram.WebApp) ? window.Telegram.WebApp : null;
     }
@@ -2496,7 +2495,6 @@
         container.appendChild(renderExerciseCard(ex));
       });
       syncExpandedCards();
-      renderMuscleLoad();
     }
 
     function removeExerciseFromState(ueId, card) {
@@ -2509,7 +2507,6 @@
         });
       }
       updateFinishButton();
-      scheduleDayMuscleLoad();
     }
 
     async function archiveExercise(exercise) {
@@ -2530,449 +2527,11 @@
       }
     }
 
-    function selectMuscleLoad(key) {
-      if (!key) return;
-      const exists = state.muscleLoad.groups.find((g) => g.key === key);
-      if (!exists) return;
-      state.muscleLoad.selectedKey = key;
-      renderMuscleLoadCard();
-      triggerHaptic();
-    }
-
-    function applyMuscleLoadData(data) {
-      const groups = (data?.muscles || []).map((m) => ({
-        key: m.code,
-        name: m.name || MUSCLE_NAMES[m.code] || MUSCLE_NAMES.other,
-        percent: Number(m.percent || 0),
-      }));
-      groups.sort((a, b) => b.percent - a.percent);
-      const selected = state.muscleLoad.selectedKey && groups.find((g) => g.key === state.muscleLoad.selectedKey);
-      const firstKey = (selected || groups[0] || {}).key || null;
-      state.muscleLoad = {
-        ...state.muscleLoad,
-        groups,
-        selectedKey: firstKey,
-        byMuscle: data?.by_muscle || {},
-        showAll: groups.length > 6 ? state.muscleLoad.showAll : false,
-        loading: false,
-      };
-      renderMuscleLoadCard();
-    }
-
-    async function loadDayMuscleLoad() {
-      if (!state.dayIndex) return;
-      state.muscleLoad.loading = true;
-      renderMuscleLoadCard();
-      try {
-        const isoDate = getIsoDate();
-        const query = isoDate ? `?date=${isoDate}` : '';
-        const data = await apiFetch(`/gymapi/body/day/${state.dayIndex}${query}`, { silent: true });
-        applyMuscleLoadData(data || {});
-      } catch (e) {
-        state.muscleLoad.loading = false;
-        renderMuscleLoadCard();
-      }
-    }
-
-    function scheduleDayMuscleLoad() {
-      if (muscleLoadTimer) clearTimeout(muscleLoadTimer);
-      muscleLoadTimer = setTimeout(() => loadDayMuscleLoad().catch(console.error), 400);
-    }
-
-    
-    function BodyMap({ data, selectedMuscle, onSelect, mode }) {
-      if (!data || typeof data !== 'object') {
-        console.warn('BodyMap: empty data, skipping render');
-        return html`<div class="bodymap-placeholder">Нет данных</div>`;
-      }
-      const container = document.createElement('div');
-      container.className = 'body-map';
-
-      const percents = normalizePercents(data || {});
-      const accent = (getComputedStyle(document.documentElement).getPropertyValue('--accent') || '#6EA8FF').trim();
-      const heatKeys = ['chest', 'back', 'legs', 'shoulders', 'core', 'biceps', 'triceps'];
-      const maxP = Math.max(...heatKeys.map((k) => Math.max(0, Number(percents[k]) || 0)), 0);
-
-      const lerp = (a, b, t) => Math.round(a + (b - a) * t);
-      const heatColor = (key) => {
-        const p = Math.max(0, Number(percents[key]) || 0);
-        const t = maxP ? Math.max(0, Math.min(1, p / maxP)) : 0;
-        const cold = [64, 156, 255];
-        const hot = [255, 92, 92];
-        const r = lerp(cold[0], hot[0], t);
-        const g = lerp(cold[1], hot[1], t);
-        const b = lerp(cold[2], hot[2], t);
-        const alpha = 0.12 + 0.78 * t;
-        return `rgba(${r}, ${g}, ${b}, ${alpha.toFixed(3)})`;
-      };
-
-      const triggerHaptic = () => {
-        try { window.Telegram?.WebApp?.HapticFeedback?.impactOccurred?.('light'); } catch (_) {}
-      };
-
-      const isSelected = (key) => selectedMuscle === key;
-      const uid = `bm${Math.random().toString(36).slice(2, 8)}`;
-
-      const GEO = {
-        front: {
-          outline: `
-            M100 58
-            C90 58 82 64 80 74
-            C78 84 72 92 62 98
-            C50 106 44 122 44 142
-            C44 160 50 176 60 188
-            C65 194 68 202 68 210
-            L68 236
-            C68 252 60 272 56 288
-            C52 304 60 316 72 316
-            C82 316 90 304 94 292
-            C96 284 100 276 100 268
-            C100 276 104 284 106 292
-            C110 304 118 316 128 316
-            C140 316 148 304 144 288
-            C140 272 132 252 132 236
-            L132 210
-            C132 202 135 194 140 188
-            C150 176 156 160 156 142
-            C156 122 150 106 138 98
-            C128 92 122 84 120 74
-            C118 64 110 58 100 58
-            Z
-          `,
-          head: { cx: 100, cy: 34, r: 18 },
-          zones: [
-            { key: 'shoulders', mirror: true, ds: ['M64 78 C54 78 48 86 48 98 C48 112 58 120 70 118 C82 116 90 106 88 94 C86 84 74 78 64 78 Z'] },
-            { key: 'shoulders', mirror: false, ds: ['M86 60 C90 54 98 52 104 54 C112 56 116 64 114 70 C112 78 104 82 98 80 C90 78 82 68 86 60 Z'] },
-            { key: 'chest', mirror: true, ds: ['M76 106 C64 102 56 90 60 78 C64 68 78 62 92 66 C102 70 106 84 100 96 C94 108 86 110 76 106 Z'] },
-            { key: 'core', mirror: false, ds: ['M88 118 C82 132 82 150 88 166 C92 178 96 186 100 190 C104 186 108 178 112 166 C118 150 118 132 112 118 C108 106 104 102 100 102 C96 102 92 106 88 118 Z'] },
-            { key: 'biceps', mirror: true, ds: ['M46 122 C42 110 48 96 60 92 C70 88 82 94 84 108 C86 122 78 138 64 142 C52 144 48 134 46 122 Z'] },
-            { key: 'triceps', mirror: true, ds: ['M52 146 C46 140 44 132 44 124 C44 114 50 106 58 106 C66 106 74 114 74 124 C74 136 66 150 56 150 C54 150 53 148 52 146 Z'] },
-            { key: 'legs', mirror: true, ds: ['M76 182 C62 186 58 206 58 228 C58 248 66 262 78 262 C90 262 98 244 98 224 C98 202 94 178 76 182 Z'] },
-            { key: 'legs', mirror: true, ds: ['M78 254 C68 258 64 274 64 292 C64 306 72 314 80 312 C90 310 96 298 96 286 C96 274 92 248 78 254 Z'] },
-          ],
-          contours: [
-            'M100 86 C92 86 86 90 84 96',
-            'M100 86 C108 86 114 90 116 96',
-            'M92 128 C96 140 96 152 92 162',
-            'M108 128 C104 140 104 152 108 162',
-            'M90 188 C90 204 90 218 94 234',
-            'M110 188 C110 204 110 218 106 234',
-            'M76 202 C72 210 72 220 74 230',
-            'M124 202 C128 210 128 220 126 230',
-            'M86 264 C86 276 84 288 82 298',
-            'M114 264 C114 276 116 288 118 298',
-            'M100 114 L100 186',
-            'M88 144 L112 144',
-            'M84 160 L116 160',
-            'M80 176 L120 176',
-            'M78 208 L122 208'
-          ],
-        },
-        back: {
-          outline: `
-            M100 58
-            C90 58 82 64 80 74
-            C78 84 72 92 62 98
-            C50 106 44 124 44 144
-            C44 162 50 180 62 194
-            C68 202 70 210 70 220
-            L70 238
-            C70 254 64 270 60 286
-            C56 302 62 316 74 316
-            C84 316 94 304 98 292
-            C100 284 100 276 100 270
-            C100 276 100 284 102 292
-            C106 304 116 316 126 316
-            C138 316 144 302 140 286
-            C136 270 130 254 130 238
-            L130 220
-            C130 210 132 202 138 194
-            C150 180 156 162 156 144
-            C156 124 150 106 138 98
-            C128 92 122 84 120 74
-            C118 64 110 58 100 58
-            Z
-          `,
-          head: { cx: 100, cy: 34, r: 18 },
-          zones: [
-            { key: 'shoulders', mirror: true, ds: ['M64 82 C54 84 48 94 50 108 C52 122 64 130 76 126 C88 122 96 110 94 98 C92 86 74 80 64 82 Z'] },
-            { key: 'shoulders', mirror: false, ds: ['M84 60 C90 54 98 52 104 54 C112 56 118 64 116 72 C114 80 104 84 96 82 C88 80 80 68 84 60 Z'] },
-            { key: 'back', mirror: false, ds: ['M74 94 C82 80 92 74 100 74 C108 74 118 80 126 94 C136 112 130 134 116 146 C110 152 104 156 100 156 C96 156 90 152 84 146 C70 134 64 112 74 94 Z'] },
-            { key: 'back', mirror: true, ds: ['M72 148 C64 140 60 126 64 116 C68 106 80 104 86 112 C92 120 94 138 90 150 C86 162 78 160 72 148 Z'] },
-            { key: 'triceps', mirror: true, ds: ['M50 120 C48 108 54 96 66 94 C76 92 86 102 88 118 C90 134 80 152 66 154 C54 156 52 136 50 120 Z'] },
-            { key: 'biceps', mirror: true, ds: ['M56 152 C50 146 48 138 48 130 C48 122 54 116 62 116 C70 116 78 124 78 134 C78 146 70 158 60 158 C58 158 57 156 56 152 Z'] },
-            { key: 'legs', mirror: true, ds: ['M76 186 C62 190 58 210 58 232 C58 254 68 266 80 266 C92 266 100 248 100 226 C100 204 94 182 76 186 Z'] },
-            { key: 'legs', mirror: true, ds: ['M78 258 C68 262 64 278 64 296 C64 308 72 316 82 314 C92 312 98 300 98 288 C98 274 94 252 78 258 Z'] },
-            { key: 'back', mirror: false, ds: ['M88 170 C88 186 94 202 100 214 C106 202 112 186 112 170 C112 158 108 152 100 152 C92 152 88 158 88 170 Z'] },
-          ],
-          contours: [
-            'M100 90 C94 90 90 96 88 104',
-            'M100 90 C106 90 110 96 112 104',
-            'M90 130 C94 140 94 150 90 160',
-            'M110 130 C106 140 106 150 110 160',
-            'M100 156 L100 222',
-            'M82 182 C82 194 84 206 88 218',
-            'M118 182 C118 194 116 206 112 218',
-            'M76 206 C74 214 74 224 76 236',
-            'M124 206 C126 214 126 224 124 236',
-            'M86 266 C86 280 84 292 82 302',
-            'M114 266 C114 280 116 292 118 302'
-          ],
-        },
-      };
-
-      let side = 'front';
-
-      const figure = document.createElement('div');
-      figure.className = 'body-map-figure';
-
-      const legend = document.createElement('div');
-      legend.className = 'body-legend';
-      const bar = document.createElement('div');
-      bar.className = 'legend-bar';
-      bar.style.background = 'linear-gradient(90deg, rgb(64,156,255), rgb(255,156,120), rgb(255,92,92))';
-      const label = document.createElement('div');
-      label.className = 'legend-label';
-      label.textContent = 'Слабее — сильнее';
-      legend.append(bar, label);
-
-      const toggle = document.createElement('div');
-      toggle.className = 'body-view-toggle';
-      const frontBtn = document.createElement('button');
-      frontBtn.type = 'button';
-      frontBtn.className = 'body-view-chip active';
-      frontBtn.textContent = 'Спереди';
-      const backBtn = document.createElement('button');
-      backBtn.type = 'button';
-      backBtn.className = 'body-view-chip';
-      backBtn.textContent = 'Сзади';
-      toggle.append(frontBtn, backBtn);
-
-      const buildZonePaths = (zone, transform) => {
-        const ds = zone.ds || (zone.d ? [zone.d] : []);
-        return ds
-          .map((d) => {
-            const selected = isSelected(zone.key);
-            const stroke = selected ? accent : 'rgba(0,0,0,0.18)';
-            const strokeWidth = selected ? 1.6 : 0.8;
-            return `<path class="body-zone ${selected ? 'selected' : ''}" data-key="${zone.key}" d="${d}"${transform ? ` transform="${transform}"` : ''} fill="${heatColor(zone.key)}" stroke="${stroke}" stroke-width="${strokeWidth}"></path>`;
-          })
-          .join('');
-      };
-
-      const buildSvgMarkup = (view) => {
-        const { outline, zones, contours, head } = GEO[view];
-        const skinId = `${uid}-skin`;
-        const glowId = `${uid}-glow`;
-        const shadowId = `${uid}-shadow`;
-
-        const zoneMarkup = zones
-          .map((z) => {
-            const base = buildZonePaths(z);
-            if (z.mirror) {
-              const mirror = buildZonePaths(z, 'translate(200 0) scale(-1 1)');
-              return base + mirror;
-            }
-            return base;
-          })
-          .join('\n');
-
-        const contourMarkup = (contours || []).map((d) => `<path class="bm-contour" d="${d}"></path>`).join('');
-
-        return `
-      <svg class="body-map-svg bm-v3" viewBox="0 0 200 320" xmlns="http://www.w3.org/2000/svg">
-        <defs>
-          <linearGradient id="${skinId}" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stop-color="rgba(255,255,255,0.22)" />
-            <stop offset="35%" stop-color="rgba(255,255,255,0.10)" />
-            <stop offset="70%" stop-color="rgba(0,0,0,0.08)" />
-            <stop offset="100%" stop-color="rgba(0,0,0,0.18)" />
-          </linearGradient>
-          <radialGradient id="${glowId}" cx="50%" cy="32%" r="70%">
-            <stop offset="0%" stop-color="rgba(255,255,255,0.35)" />
-            <stop offset="60%" stop-color="rgba(255,255,255,0.10)" />
-            <stop offset="100%" stop-color="rgba(255,255,255,0)" />
-          </radialGradient>
-          <filter id="${shadowId}" x="-20%" y="-20%" width="140%" height="140%">
-            <feDropShadow dx="0" dy="10" stdDeviation="10" flood-color="rgba(0,0,0,0.28)" flood-opacity="1" />
-          </filter>
-        </defs>
-
-        <g filter="url(#${shadowId})">
-          ${head ? `<circle class="bm-head" cx="${head.cx}" cy="${head.cy}" r="${head.r}"></circle>` : ''}
-          <path class="bm-skin" d="${outline}" fill="url(#${skinId})"></path>
-          <path class="bm-highlight" d="${outline}" fill="url(#${glowId})"></path>
-        </g>
-
-        <g class="bm-zones">
-          ${zoneMarkup}
-        </g>
-
-        <g class="bm-contours">
-          ${contourMarkup}
-        </g>
-
-        <path class="bm-outline" d="${outline}"></path>
-      </svg>
-    `;
-      };
-
-      const renderFigure = () => {
-        figure.innerHTML = '';
-        figure.appendChild(toggle);
-
-        const wrap = document.createElement('div');
-        wrap.className = 'body-svg-wrap';
-
-        wrap.innerHTML = buildSvgMarkup(side);
-        figure.appendChild(wrap);
-
-        const svg = wrap.querySelector('svg');
-        svg.querySelectorAll('.body-zone').forEach((el) => {
-          el.addEventListener('click', (e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            const key = el.getAttribute('data-key');
-            triggerHaptic();
-            onSelect?.(key);
-          });
-        });
-      };
-
-      frontBtn.addEventListener('click', () => {
-        if (side === 'front') return;
-        side = 'front';
-        frontBtn.classList.add('active');
-        backBtn.classList.remove('active');
-        renderFigure();
-        triggerHaptic();
-      });
-
-      backBtn.addEventListener('click', () => {
-        if (side === 'back') return;
-        side = 'back';
-        backBtn.classList.add('active');
-        frontBtn.classList.remove('active');
-        renderFigure();
-        triggerHaptic();
-      });
-
-      renderFigure();
-      container.append(figure, legend);
-      return container;
-    }
-
-    function renderMuscleList(groups) {
-      const list = document.createElement('div');
-      list.className = 'muscle-list';
-      const top = groups.slice(0, 6);
-      const rest = groups.slice(6);
-
-      const renderRow = (group) => {
-        const row = document.createElement('div');
-        row.className = 'muscle-row' + (group.key === state.muscleLoad.selectedKey ? ' selected' : '');
-        const head = document.createElement('div');
-        head.className = 'muscle-row-head';
-        const name = document.createElement('div');
-        name.textContent = group.name;
-        const percent = document.createElement('div');
-        percent.className = 'muscle-percent';
-        percent.textContent = `${group.percent.toFixed(0)}%`;
-        head.append(name, percent);
-        const progress = document.createElement('div');
-        progress.className = 'progress';
-        const fill = document.createElement('div');
-        fill.className = 'progress-fill';
-        fill.style.width = `${group.percent.toFixed(0)}%`;
-        progress.appendChild(fill);
-        row.append(head, progress);
-        row.addEventListener('click', () => selectMuscleLoad(group.key));
-        return row;
-      };
-
-      top.forEach((g) => list.appendChild(renderRow(g)));
-
-      if (rest.length) {
-        if (state.muscleLoad.showAll) {
-          rest.forEach((g) => list.appendChild(renderRow(g)));
-        }
-        const toggle = document.createElement('button');
-        toggle.type = 'button';
-        toggle.className = 'toggle-btn';
-        toggle.textContent = state.muscleLoad.showAll ? 'Скрыть остальные' : `Показать остальные (${rest.length})`;
-        toggle.addEventListener('click', () => {
-          state.muscleLoad.showAll = !state.muscleLoad.showAll;
-          renderMuscleLoadCard();
-        });
-        list.appendChild(toggle);
-      }
-      return list;
-    }
-
-    function getMuscleLoadCard() {
-      const container = document.getElementById('cards');
-      let card = document.getElementById('muscleLoadCard');
-      if (!card) {
-        card = document.createElement('div');
-        card.id = 'muscleLoadCard';
-        card.className = 'card muscle-load-card';
-        container.appendChild(card);
-      } else if (!card.parentElement) {
-        container.appendChild(card);
-      }
-      return card;
-    }
-
     function renderMuscleLoadCard() {
-      const card = getMuscleLoadCard();
-      card.innerHTML = '';
-      const header = document.createElement('div');
-      header.className = 'muscle-load-header';
-      const title = document.createElement('div');
-      title.className = 'card-title';
-      title.textContent = 'Нагрузка по мышцам (сегодня)';
-      const hint = document.createElement('div');
-      hint.className = 'muscle-load-hint';
-      hint.textContent = 'Проценты считаются по объёму сетов';
-      header.append(title, hint);
-      card.appendChild(header);
-
-      const groups = state.muscleLoad.groups || [];
-      if (state.muscleLoad.loading) {
-        const loading = document.createElement('div');
-        loading.className = 'empty-muscle';
-        loading.textContent = 'Считаем нагрузку…';
-        card.appendChild(loading);
-        return;
+      const card = document.getElementById('muscleLoadCard');
+      if (card?.parentNode) {
+        card.parentNode.removeChild(card);
       }
-
-      if (!groups.length) {
-        const empty = document.createElement('div');
-        empty.className = 'empty-muscle';
-        empty.textContent = 'Пока нет данных по сетам — нагрузка появится после первых подходов.';
-        card.appendChild(empty);
-        return;
-      }
-
-      const selected = groups.find((g) => g.key === state.muscleLoad.selectedKey) || groups[0];
-      if (!state.muscleLoad.selectedKey && selected) state.muscleLoad.selectedKey = selected.key;
-
-      const grid = document.createElement('div');
-      grid.className = 'muscle-load-grid';
-
-      const highlightMap = groups.reduce((acc, g) => {
-        acc[g.key] = g.percent;
-        return acc;
-      }, {});
-
-      const body = BodyMap({ data: highlightMap, selectedMuscle: state.muscleLoad.selectedKey, onSelect: selectMuscleLoad, mode: 'today' });
-      grid.appendChild(body);
-
-      const list = renderMuscleList(groups);
-      grid.appendChild(list);
-
-      card.appendChild(grid);
-      card.appendChild(renderMuscleDetails(selected));
     }
 
     function renderMuscleLoad() { renderMuscleLoadCard(); }
@@ -3001,7 +2560,6 @@
         renderEditor();
       }
       if (state.workout.expanded === ueId) renderWorkoutBody(ueId);
-      scheduleDayMuscleLoad();
       updateFinishButton();
     }
 
@@ -3116,7 +2674,6 @@
           state.todayDraft = {};
         }
         state.contexts = new Map();
-        state.muscleLoad = { groups: [], selectedKey: null, showAll: false, detailsOpen: true, byMuscle: {}, loading: true };
         const sheet = await apiFetch(`/gymapi/day/${dayIndex}/sheet`);
         if (sheet.completed_days) {
           state.completedDays = new Set(sheet.completed_days.map(Number));
@@ -3130,7 +2687,6 @@
         renderDayHeader();
         updateAddButtonVisibility();
         renderExercises(sheet.exercises || []);
-        scheduleDayMuscleLoad();
         updateFinishButton();
       } finally {
         setTimeout(() => shell?.classList.remove('switching'), 180);
@@ -3266,12 +2822,15 @@
 
     function renderDayHeader() {
       const combined = state.daySubtitle ? `${state.dayLabel} / ${state.daySubtitle}` : (state.dayLabel || 'Тренировка');
-      document.getElementById('dayTitle').textContent = combined;
-      document.getElementById('daySubtitle').textContent = '';
-      document.getElementById('dateLabel').textContent = '';
+      const title = document.getElementById('dayTitle');
+      if (title) title.textContent = combined;
+      const subtitle = document.getElementById('daySubtitle');
+      if (subtitle) subtitle.textContent = '';
+      const dateLabel = document.getElementById('dateLabel');
+      if (dateLabel) dateLabel.textContent = '';
       const completed = state.completedDays.has(Number(state.dayIndex));
       const badge = document.getElementById('dayCompletedBadge');
-      badge.style.display = completed ? '' : 'none';
+      if (badge) badge.style.display = completed ? '' : 'none';
     }
 
     function updateFinishButton() {
@@ -3288,7 +2847,8 @@
         fab.textContent = completed ? '✅' : '🏁';
       }
 
-      document.getElementById('dayCompletedBadge').style.display = completed ? '' : 'none';
+      const badge = document.getElementById('dayCompletedBadge');
+      if (badge) badge.style.display = completed ? '' : 'none';
     }
 
     function closeFinishPopover() {
@@ -3738,9 +3298,11 @@
       if (state.editor.noteStatusTimer) clearTimeout(state.editor.noteStatusTimer);
       if (state.editor.flashTimer) clearTimeout(state.editor.flashTimer);
       state.editor = { open: false, ueId: null, selectedSet: null, tab: 'sets', noteTimer: null, noteStatusTimer: null, flashSet: null, flashTimer: null, scrollTarget: null };
-      document.getElementById('sheet').classList.remove('show');
+      const sheet = document.getElementById('sheet');
+      if (sheet) sheet.classList.remove('show');
       setNoteStatus('');
-      document.getElementById('noteArea').value = '';
+      const noteArea = document.getElementById('noteArea');
+      if (noteArea) noteArea.value = '';
     }
 
     async function init() {
@@ -3771,9 +3333,10 @@
 
     async function boot() {
       setStatus('booting');
-      showBoot('Подготовка интерфейса...');
+      showBoot('Загрузка...');
       try {
-        setVisible(document.getElementById('app'), true);
+        const app = document.getElementById('app');
+        setVisible(app, true);
         const ok = await initTelegram();
         setThemeFromTelegram();
 
@@ -3800,15 +3363,7 @@
     }
 
     document.addEventListener('DOMContentLoaded', () => {
-      (async () => {
-        try {
-          await initTelegram();
-          await init();
-        } catch (err) {
-          console.error('Bootstrap error:', err);
-          showFatal(err, 'bootstrap');
-        }
-      })();
+      boot().catch((err) => showFatal(err, 'boot()'));
     });
   </script>
 </body>
