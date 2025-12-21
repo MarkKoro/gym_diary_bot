@@ -2398,6 +2398,28 @@
       }, 0);
     }
 
+    function attachInlineNumberHandler(el, getOptions) {
+      if (!el || typeof getOptions !== 'function') return;
+
+      const startEdit = () => {
+        const opts = getOptions();
+        beginInlineNumberEdit(el, opts);
+      };
+
+      el.addEventListener('pointerdown', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        startEdit();
+      });
+
+      el.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          startEdit();
+        }
+      });
+    }
+
     function renderWorkoutControls(container, exercise) {
       const ueId = exercise.user_exercise_id;
       const draft = ensureDraft(ueId);
@@ -2415,24 +2437,18 @@
         valueEl.tabIndex = 0;
         valueEl.setAttribute('role', 'button');
         valueEl.style.cursor = 'text';
-        valueEl.addEventListener('click', (e) => {
-          e.stopPropagation();
-          const opts = {
-            min: 0,
-            max: field === 'weight_kg' ? 500 : (field === 'seconds' ? 3600 : 200),
-            step: 1,
-            decimals: field === 'weight_kg' ? 1 : 0,
-            inputMode: field === 'weight_kg' ? 'decimal' : 'numeric',
-          };
-          beginInlineNumberEdit(valueEl, {
-            value: currentVal,
-            ...opts,
-            onCommit: (next) => {
-              setDraftValue(ueId, field, next);
-              renderWorkoutBody(ueId);
-            },
-          });
-        });
+        attachInlineNumberHandler(valueEl, () => ({
+          value: Number(draft[field] || 0),
+          min: 0,
+          max: field === 'weight_kg' ? 500 : (field === 'seconds' ? 3600 : 200),
+          step: 1,
+          decimals: field === 'weight_kg' ? 1 : 0,
+          inputMode: field === 'weight_kg' ? 'decimal' : 'numeric',
+          onCommit: (next) => {
+            setDraftValue(ueId, field, next);
+            renderWorkoutBody(ueId);
+          },
+        }));
         const actions = document.createElement('div'); actions.className = 'control-actions';
         const minus = document.createElement('button'); minus.type = 'button'; minus.className = 'circle-btn'; minus.textContent = '−';
         minus.addEventListener('click', (ev) => { ev.stopPropagation(); adjustDraftValue(ueId, field, -1); renderWorkoutBody(ueId); });
@@ -2758,6 +2774,11 @@
         closeFinishPopover();
         triggerHaptic();
         toast('День завершён ✅');
+        try {
+          const tg = getTg();
+          // Small delay to ensure toast/haptics are noticeable before closing
+          setTimeout(() => tg?.close?.(), 120);
+        } catch (_) {}
       } catch (e) {
         if (e?.status === 401 || e?.status === 403) toast('Нет доступа. Открой WebApp из Telegram.');
         else toast('Ошибка связи. Попробуй ещё раз.');
@@ -3231,11 +3252,9 @@
       valueEl.tabIndex = 0;
       valueEl.setAttribute('role', 'button');
       valueEl.style.cursor = 'text';
-      valueEl.addEventListener('click', (e) => {
-        e.stopPropagation();
+      attachInlineNumberHandler(valueEl, () => {
         const current = Number(value || 0);
-
-        beginInlineNumberEdit(valueEl, {
+        return {
           value: current,
           min: 0,
           max: field === 'kg' ? 500 : (field === 'sec' ? 3600 : 200),
@@ -3247,7 +3266,7 @@
             if (!delta) { renderEditor(); return; }
             queueExerciseAction(state.editor.ueId, () => incSet(state.editor.ueId, field, delta)).catch(console.error);
           }
-        });
+        };
       });
       const actions = document.createElement('div'); actions.className = 'control-actions';
       const minus = document.createElement('button'); minus.className = 'circle-btn'; minus.textContent = '−'; minus.addEventListener('click', () => queueExerciseAction(state.editor.ueId, () => incSet(state.editor.ueId, field, -1)));
