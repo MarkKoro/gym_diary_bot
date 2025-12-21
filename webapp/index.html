@@ -8,24 +8,24 @@
   <style>
     :root {
       color-scheme: light dark;
-      --bg: #f6f7fb;
-      --card: #ffffff;
-      --text: #0f1115;
-      --muted: #6b7280;
+      --bg: var(--tg-theme-bg-color, #0b1220);
+      --card: var(--tg-theme-secondary-bg-color, #121b2d);
+      --text: var(--tg-theme-text-color, #e7eefc);
+      --muted: var(--tg-theme-hint-color, #9cabd5);
       --accent: var(--tg-theme-link-color, #2ea6ff);
-      --border: #e5e7eb;
+      --border: color-mix(in srgb, var(--text) 8%, transparent);
       --danger: #e53935;
       --radius: 14px;
-      --shadow: 0 10px 30px rgba(0,0,0,0.08);
-      --sheet-shadow: 0 -12px 30px rgba(0,0,0,0.22);
+      --shadow: 0 10px 30px rgba(0,0,0,0.22);
+      --sheet-shadow: 0 -12px 30px rgba(0,0,0,0.28);
     }
     [data-theme="dark"] {
-      --bg: #0f1115;
-      --card: #181b22;
-      --text: #f4f5f8;
-      --muted: #a5acba;
+      --bg: var(--tg-theme-bg-color, #0b1220);
+      --card: var(--tg-theme-secondary-bg-color, #121b2d);
+      --text: var(--tg-theme-text-color, #e7eefc);
+      --muted: var(--tg-theme-hint-color, #9cabd5);
       --accent: var(--tg-theme-link-color, #6ea8ff);
-      --border: #262b34;
+      --border: color-mix(in srgb, var(--text) 12%, transparent);
       --shadow: 0 8px 24px rgba(0,0,0,0.35);
       --sheet-shadow: 0 -16px 32px rgba(0,0,0,0.55);
     }
@@ -78,7 +78,8 @@
     .header-title { font-size: 20px; font-weight: 800; letter-spacing: -0.02em; }
     .header-title { justify-self: center; text-align: center; }
     .status { display: inline-flex; align-items: center; gap: 6px; padding: 8px 12px; border-radius: 12px; background: var(--card); border: 1px solid var(--border); color: var(--muted); font-size: 13px; box-shadow: var(--shadow); white-space: nowrap; }
-    .status .dot { width: 10px; height: 10px; border-radius: 50%; background: #34c759; }
+    .status .dot { width: 10px; height: 10px; border-radius: 50%; background: #9ca3af; box-shadow: 0 0 0 2px color-mix(in srgb, var(--bg) 70%, transparent); }
+    .status.ready .dot { background: #34c759; }
     .status.error .dot { background: var(--danger); }
     .status .status-text { color: var(--muted); }
     @media (max-width: 420px) {
@@ -271,6 +272,8 @@
     }
     [data-theme="dark"] .toast { background: rgba(255,255,255,0.92); color: #0f1115; }
     .toast.show { transform: translateX(-50%) translateY(0); opacity: 1; }
+    .error-overlay { position: fixed; top: 12px; right: 12px; max-width: min(360px, 90vw); background: rgba(0,0,0,0.8); color: #fff; padding: 10px 12px; border-radius: 12px; box-shadow: 0 10px 30px rgba(0,0,0,0.35); font-size: 13px; line-height: 1.4; z-index: 60; display: none; }
+    [data-theme="dark"] .error-overlay { background: rgba(255,255,255,0.1); color: #e7eefc; }
     .modal-backdrop {
       position: fixed;
       inset: 0;
@@ -797,7 +800,7 @@
               <circle cx="12" cy="13" r="7"></circle>
             </svg>
           </button>
-          <div id="status" class="status"><span class="dot"></span><span class="status-text">онлайн</span></div>
+          <div id="status" class="status booting"><span class="dot"></span><span class="status-text">загрузка</span></div>
         </div>
       </div>
       <div id="todayHeader" class="today-header">
@@ -974,6 +977,7 @@
   </div>
 
   <div id="toast" class="toast"></div>
+  <div id="errorOverlay" class="error-overlay" role="status"></div>
 
   <div id="confirmModal" class="modal-backdrop">
     <div class="modal">
@@ -1433,6 +1437,16 @@
       const text = `Где упало: ${where}\n\n${normalized}\n\nUA: ${navigator.userAgent}\nURL: ${location.href}`;
       if (fatalText) fatalText.textContent = text;
       console.error(err);
+    }
+
+    function showErrorOverlay(message) {
+      const overlay = document.getElementById('errorOverlay');
+      if (!overlay) return;
+      const text = normalizeError(message || 'Ошибка').split('\n').slice(0, 2).join(' ').slice(0, 280);
+      overlay.textContent = text || 'Ошибка';
+      overlay.style.display = 'block';
+      clearTimeout(overlay._hideTimer);
+      overlay._hideTimer = setTimeout(() => { overlay.style.display = 'none'; }, 6500);
     }
 
     async function copyFatalText() {
@@ -2091,11 +2105,18 @@
       if (!location.hash) navigateTo('today', true); else handleRouteFromHash();
     }
 
-    function setStatus(ok) {
+    function setStatus(mode) {
       const el = document.getElementById('status');
+      if (!el) return;
       const text = el.querySelector('.status-text');
-      if (ok) { el.classList.remove('error'); text.textContent = 'онлайн'; }
-      else { el.classList.add('error'); text.textContent = 'ошибка'; }
+      const status = typeof mode === 'boolean' ? (mode ? 'ready' : 'error') : (mode || 'booting');
+      el.classList.remove('ready', 'error', 'booting');
+      el.classList.add(status);
+      if (text) {
+        if (status === 'ready') text.textContent = 'онлайн';
+        else if (status === 'error') text.textContent = 'ошибка';
+        else text.textContent = 'загрузка';
+      }
     }
 
     function toIsoDate(humanDate) {
@@ -2142,33 +2163,38 @@
 
       const headers = new Headers(options.headers || {});
       if (state.initData) {
-        // ставим ОБА заголовка — чтобы было как в “рабочем” вебаппе и без сюрпризов на бэке
         headers.set('X-Telegram-InitData', state.initData);
-        headers.set('X-Tg-Init-Data', state.initData);
       }
       if (options.body && !(options.body instanceof FormData)) {
         headers.set('Content-Type', 'application/json');
       }
 
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(new Error('timeout')), 12000);
+      const url = path.startsWith('/gymapi') ? path : (path.startsWith('/') ? `/gymapi${path}` : path);
+
       let res;
       try {
-        res = await fetch(path, { ...(fetchOptions || {}), headers });
+        res = await fetch(url, { ...(fetchOptions || {}), headers, signal: controller.signal });
       } catch (e) {
-        setStatus(false);
-        if (!silent) toast('Ошибка сети. Попробуй снова.');
+        setStatus('error');
+        if (!silent) showErrorOverlay('Сеть недоступна. Попробуйте снова.');
         throw e;
+      } finally {
+        clearTimeout(timeout);
       }
 
       if (!res.ok) {
-        setStatus(false);
+        setStatus('error');
         const text = await res.text();
-        if (!silent) toast('Ошибка: ' + (text || res.status));
+        const snippet = (text || '').slice(0, 140);
+        if (!silent) showErrorOverlay(`Ошибка: ${res.status} ${snippet}`.trim());
         const err = new Error(text || 'error');
         err.status = res.status;
         throw err;
       }
 
-      setStatus(true);
+      setStatus('ready');
       return res.json();
     }
 
@@ -4188,13 +4214,22 @@
     }
 
     async function loadToday() {
-      const info = await apiFetch('/gymapi/day/today');
-      state.activeDays = info.active_days || [];
-      state.completedDays = new Set((info.completed_days || []).map(Number));
-      const targetDay = info.suggested_day_index || (state.activeDays[0]?.day_index);
-      renderDayOptions(targetDay);
-      state.date = info.date || '';
-      await loadSheet(targetDay);
+      try {
+        const info = await apiFetch('/gymapi/day/today');
+        state.activeDays = info.active_days || [];
+        state.completedDays = new Set((info.completed_days || []).map(Number));
+        const targetDay = info.suggested_day_index || (state.activeDays[0]?.day_index);
+        renderDayOptions(targetDay);
+        state.date = info.date || '';
+        await loadSheet(targetDay);
+        setStatus('ready');
+      } catch (e) {
+        const status = e?.status ? ` (HTTP ${e.status})` : '';
+        const text = normalizeError(e).split('\n')[0].slice(0, 140);
+        showErrorOverlay(`Не удалось загрузить данные дня${status}. ${text}`);
+        setStatus('error');
+        throw e;
+      }
     }
 
     function renderAddExerciseSheet() {
@@ -4441,35 +4476,24 @@
     }
 
     async function initTelegram() {
-      // Диагностика: если этот запрос появляется в access.log — JS точно стартует
       fetch("/gymapi/health", { cache: "no-store" }).catch(() => {});
 
-      const { tg, initData } = await waitTelegramInitData(2000);
-
-      state.tg = tg;
-      state.initData = initData || "";
-      state.isTelegram = !!(tg && state.initData);
-
-      if (!state.isTelegram) {
-        const el = document.getElementById("not-telegram");
-        if (el) el.style.display = "flex";
-        setVisible(document.getElementById('app'), true);
-        hideBoot();
-        return false;
+      const tg = getTg();
+      if (tg) {
+        try { tg.ready(); } catch {}
+        try { tg.expand(); } catch {}
       }
 
-      try { tg.ready(); } catch {}
-      try { tg.expand(); } catch {}
+      const initData = (typeof tg?.initData === 'string') ? tg.initData.trim() : '';
+      state.tg = tg;
+      state.initData = initData;
+      state.isTelegram = !!(tg && initData);
 
       tg?.BackButton?.onClick(handleBackAction);
       tg?.onEvent?.('themeChanged', applyTheme);
       applyTheme();
 
-      setVisible(document.getElementById('not-telegram'), false);
-      setVisible(document.getElementById('app'), true);
-      hideBoot();
-
-      return true;
+      return state.isTelegram;
     }
 
     function selectSet(setNo) {
@@ -4811,28 +4835,50 @@
       chest: 0, back: 0, legs: 0, shoulders: 0, core: 0, biceps: 0, triceps: 0,
     };
 
-    (async () => {
+    window.addEventListener('error', (event) => {
+      const msg = event?.message || event?.error?.message || normalizeError(event.error || event);
+      showErrorOverlay(`Ошибка: ${msg}`);
+      console.error(event.error || event.message || event);
+    });
+
+    window.addEventListener('unhandledrejection', (event) => {
+      const reason = event?.reason || event;
+      const msg = reason?.message || normalizeError(reason);
+      showErrorOverlay(`Критическая ошибка: ${msg}`);
+      console.error(event);
+    });
+
+    async function boot() {
+      setStatus('booting');
+      showBoot('Подготовка интерфейса...');
       try {
-        showBoot('Подготовка интерфейса...');
-        await initTelegram(); // инициализация Telegram WebApp API
+        setVisible(document.getElementById('app'), true);
+        const ok = await initTelegram();
         setThemeFromTelegram();
-        await init();         // загрузка данных, построение UI
-        hideBoot();
+
+        if (!ok) {
+          const el = document.getElementById('not-telegram');
+          if (el) el.style.display = 'flex';
+          showErrorOverlay('Откройте приложение внутри Telegram');
+          setStatus('error');
+        } else {
+          setVisible(document.getElementById('not-telegram'), false);
+        }
+
+        await init();
+
+        if (ok) setStatus('ready');
       } catch (err) {
         console.error(err);
-        showFatal(err, 'init()');
+        showFatal(err, 'boot()');
+        showErrorOverlay('Произошла ошибка запуска');
+        setStatus('error');
+      } finally {
+        hideBoot();
       }
-    })();
-  </script>
-  <script>
-    window.addEventListener("DOMContentLoaded", async () => {
-      try {
-        await init();
-      } catch (e) {
-        console.error("Init crashed:", e);
-        showFatal("InitCrash", e.message);
-      }
-    });
+    }
+
+    window.addEventListener('DOMContentLoaded', boot);
   </script>
 </body>
 </html>
