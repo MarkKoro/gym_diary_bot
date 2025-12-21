@@ -25,6 +25,7 @@ from telegram import (
     Message,
     LabeledPrice,
     CopyTextButton,
+    WebAppInfo,
 )
 from telegram.constants import ParseMode
 from telegram.error import (
@@ -13068,7 +13069,11 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     )
                     kb = InlineKeyboardMarkup(
                         [
-                            [InlineKeyboardButton("Открыть WebApp", url=WEBAPP_URL)],
+                            [
+                                InlineKeyboardButton(
+                                    "Открыть WebApp", web_app=WebAppInfo(WEBAPP_URL)
+                                )
+                            ],
                             [InlineKeyboardButton("Открыть в боте", callback_data=f"ex:view:{day}:{ue_id}:bot")],
                             [InlineKeyboardButton("Назад", callback_data=f"day:group:{day}:{resolved_group}")],
                         ]
