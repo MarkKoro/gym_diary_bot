@@ -1263,6 +1263,33 @@
       return (window.Telegram && window.Telegram.WebApp) ? window.Telegram.WebApp : null;
     }
 
+    function getInitDataFromHash() {
+      // Telegram часто кладёт данные в hash как tgWebAppData=...
+      const raw = (location.hash || "").replace(/^#/, "");
+      if (!raw) return "";
+      const params = new URLSearchParams(raw);
+      const tgd = params.get("tgWebAppData");
+      if (!tgd) return "";
+      try {
+        return decodeURIComponent(tgd);
+      } catch {
+        return tgd;
+      }
+    }
+
+    async function waitTelegramInitData(timeoutMs = 2000) {
+      const t0 = Date.now();
+      while (Date.now() - t0 < timeoutMs) {
+        const tg = window.Telegram?.WebApp || null;
+        const initData = (tg?.initData && tg.initData.length > 0) ? tg.initData : getInitDataFromHash();
+        if (tg && initData && initData.length > 0) return { tg, initData };
+        await new Promise(r => setTimeout(r, 50));
+      }
+      const tg = window.Telegram?.WebApp || null;
+      const initData = (tg?.initData && tg.initData.length > 0) ? tg.initData : getInitDataFromHash();
+      return { tg, initData };
+    }
+
     function sleep(ms) {
       return new Promise(resolve => setTimeout(resolve, ms));
     }
@@ -4402,55 +4429,36 @@
       document.getElementById('anatomySearch').addEventListener('input', (e) => scheduleAnatomySearch(e.target.value));
     }
 
-    async function waitForTelegramInitData(timeoutMs = 3000) {
-      const t0 = Date.now();
-      while (Date.now() - t0 < timeoutMs) {
-        const tg = getTg();
-        const initData = tg?.initData;
-        if (typeof initData === "string" && initData.length > 0) {
-          return tg;
-        }
-        await sleep(50);
-      }
-      return null;
-    }
-
     async function initTelegram() {
-      try {
-        const tg = await waitForTelegramInitData(4000);
+      // Диагностика: если этот запрос появляется в access.log — JS точно стартует
+      fetch("/gymapi/health", { cache: "no-store" }).catch(() => {});
 
-        if (!tg) {
-          console.warn("Not in Telegram context — initData empty.");
-          state.isTelegram = false;
-          setVisible(document.getElementById('not-telegram'), true);
-          setVisible(document.getElementById('app'), true);
-          hideBoot();
-          return false;
-        }
+      const { tg, initData } = await waitTelegramInitData(2000);
 
-        state.isTelegram = true;
-        state.initData = tg.initData;
+      state.tg = tg;
+      state.initData = initData || "";
+      state.isTelegram = !!(tg && state.initData);
 
-        tg.ready?.();
-        tg.expand?.();
-
-        tg.BackButton?.onClick(handleBackAction);
-        tg.onEvent?.('themeChanged', applyTheme);
-
-        applyTheme();
-
-        setVisible(document.getElementById('not-telegram'), false);
+      if (!state.isTelegram) {
+        const el = document.getElementById("not-telegram");
+        if (el) el.style.display = "flex";
         setVisible(document.getElementById('app'), true);
         hideBoot();
-
-        console.log("✅ Telegram initialized successfully");
-        return true;
-
-      } catch (err) {
-        console.error("Telegram init failed", err);
-        showFatal("InitError", err.message || "Telegram initialization failed");
         return false;
       }
+
+      try { tg.ready(); } catch {}
+      try { tg.expand(); } catch {}
+
+      tg?.BackButton?.onClick(handleBackAction);
+      tg?.onEvent?.('themeChanged', applyTheme);
+      applyTheme();
+
+      setVisible(document.getElementById('not-telegram'), false);
+      setVisible(document.getElementById('app'), true);
+      hideBoot();
+
+      return true;
     }
 
     function selectSet(setNo) {
