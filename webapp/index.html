@@ -538,7 +538,21 @@
     .group-name { font-weight: 800; letter-spacing: -0.01em; }
     .group-count { color: var(--muted); font-size: 13px; }
     .library-topbar { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
-    .library-back { border: none; background: none; color: var(--accent); font-weight: 700; cursor: pointer; padding: 6px 0; }
+    .library-back {
+      border: 1px solid var(--border);
+      background: var(--card);
+      color: var(--text);
+      font-weight: 800;
+      cursor: pointer;
+      padding: 10px 14px;
+      border-radius: 999px;
+      box-shadow: var(--shadow);
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 14px;
+    }
+    .library-back:hover { border-color: var(--accent); color: var(--accent); }
     .list-row { display: flex; justify-content: space-between; align-items: center; padding: 12px; border-radius: 12px; border: 1px solid var(--border); background: var(--bg); }
     .list-text { display: grid; gap: 4px; }
     .badge { display: inline-flex; align-items: center; padding: 4px 8px; border-radius: 999px; background: rgba(0,0,0,0.05); color: var(--muted); font-size: 12px; }
@@ -549,8 +563,39 @@
     .range-chip { padding: 10px; border-radius: 12px; border: 1px solid var(--border); background: var(--bg); cursor: pointer; font-weight: 700; }
       .range-chip.active { border-color: var(--accent); color: var(--accent); }
       .chart-block { border: 1px solid var(--border); border-radius: 12px; padding: 12px; background: var(--bg); }
-        .chart-title { font-weight: 700; margin-bottom: 6px; }
-        .chart { width: 100%; height: 160px; }
+      .chart-title { font-weight: 700; margin-bottom: 6px; }
+      .chart { width: 100%; height: 160px; }
+    .chart-wrapper { position: relative; }
+    .chart-tooltip {
+      position: absolute;
+      background: color-mix(in srgb, var(--card) 88%, transparent);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 8px 10px;
+      font-size: 12px;
+      box-shadow: var(--shadow);
+      transform: translate(-50%, -110%);
+      pointer-events: none;
+      white-space: nowrap;
+      z-index: 4;
+      opacity: 0;
+      transition: opacity 0.1s ease;
+    }
+    .chart-tooltip.show { opacity: 1; }
+    .chart-point { fill: var(--accent); stroke: var(--bg); stroke-width: 2; }
+    .empty-day {
+      border: 1px dashed var(--border);
+      border-radius: 16px;
+      padding: 16px;
+      background: color-mix(in srgb, var(--card) 75%, transparent);
+      display: grid;
+      gap: 10px;
+      align-items: center;
+      text-align: left;
+      box-shadow: var(--shadow);
+    }
+    .empty-day-title { font-weight: 800; font-size: 16px; }
+    .empty-day-text { color: var(--muted); font-size: 14px; line-height: 1.4; }
       .timer-pill{
         position: fixed;
         top: calc(12px + env(safe-area-inset-top));
@@ -1029,6 +1074,7 @@
     };
 
     const BODY_MUSCLES = new Set(['chest', 'back', 'legs', 'shoulders', 'core', 'biceps', 'triceps']);
+    const BOT_USERNAME = 'progressottestbot';
 
     function html(strings, ...values) {
       const template = document.createElement('template');
@@ -1073,6 +1119,9 @@
         range: '30d',
         history: null,
         historyLoading: false,
+        historyCache: {},
+        currentExerciseId: null,
+        currentExerciseName: '',
       },
       menu: { openId: null },
     };
@@ -1651,7 +1700,7 @@
       top.className = 'library-topbar';
       const back = document.createElement('button');
       back.className = 'library-back';
-      back.textContent = '← Мои упражнения';
+      back.textContent = '← К списку упражнений';
       back.addEventListener('click', () => { state.library.view = 'groups'; renderLibrary(); });
       const title = document.createElement('div');
       title.className = 'card-title';
@@ -1715,11 +1764,11 @@
       top.className = 'library-topbar';
       const back = document.createElement('button');
       back.className = 'library-back';
-      back.textContent = '← Назад';
+      back.textContent = '← К списку упражнений';
       back.addEventListener('click', () => { state.library.view = 'list'; renderLibrary(); });
       const title = document.createElement('div');
       title.className = 'card-title';
-      title.textContent = state.library.history?.exercise_name || 'Упражнение';
+      title.textContent = state.library.history?.exercise_name || state.library.currentExerciseName || 'Упражнение';
       top.append(back, title);
       content.appendChild(top);
 
@@ -1730,7 +1779,14 @@
         btn.type = 'button';
         btn.className = 'range-chip' + (state.library.range === opt.code ? ' active' : '');
         btn.textContent = opt.label;
-        btn.addEventListener('click', () => { state.library.range = opt.code; loadExerciseHistory(state.library.history.exercise_id); });
+        btn.addEventListener('click', async () => {
+          if (state.library.range === opt.code && state.library.historyLoading) return;
+          state.library.range = opt.code;
+          state.library.historyLoading = true;
+          renderLibrary();
+          const targetId = state.library.history?.exercise_id || state.library.currentExerciseId;
+          if (targetId) await loadExerciseHistory(targetId);
+        });
         range.appendChild(btn);
       });
       content.appendChild(range);
@@ -1791,6 +1847,7 @@
 
     function buildChart(title, points, field, line = true) {
       const wrapper = document.createElement('div');
+      wrapper.className = 'chart-wrapper';
       const h = document.createElement('div');
       h.className = 'chart-title';
       h.textContent = title;
@@ -1814,7 +1871,7 @@
         path.setAttribute('stroke-width', '2');
         svg.appendChild(path);
       } else {
-        coords.forEach((c, idx) => {
+        coords.forEach((c) => {
           const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
           rect.setAttribute('x', c[0] - 10);
           rect.setAttribute('y', c[1]);
@@ -1826,6 +1883,57 @@
           svg.appendChild(rect);
         });
       }
+
+      const tooltip = document.createElement('div');
+      tooltip.className = 'chart-tooltip';
+      wrapper.appendChild(tooltip);
+
+      const showTooltip = (idx) => {
+        const point = points[idx];
+        const [x, y] = coords[idx];
+        const val = Number(point[field] || 0);
+        const labelDate = (point.date || '').split('-').reverse().join('.') || point.day || '';
+        let label = `${title}: ${val}`;
+        if (field === 'volume') label = `Объём: ${val}`;
+        if (field === 'top_weight') label = `Вес: ${val} кг${point.top_reps ? ` × ${point.top_reps}` : ''}`;
+        if (field === 'top_seconds') label = `Секунды: ${val}`;
+        tooltip.textContent = `${labelDate || 'Дата неизвестна'} — ${label}`;
+        tooltip.style.left = `${(x / 300) * 100}%`;
+        tooltip.style.top = `${(y / 120) * 100}%`;
+        tooltip.classList.add('show');
+        toast(`${tooltip.textContent}`);
+      };
+
+      const hideTooltip = () => tooltip.classList.remove('show');
+
+      const handlePointSelection = (evt) => {
+        const rect = svg.getBoundingClientRect();
+        const relativeX = Math.max(0, Math.min(rect.width, evt.clientX - rect.left));
+        const viewX = (relativeX / rect.width) * 300;
+        let nearest = 0;
+        let best = Infinity;
+        coords.forEach((c, idx) => {
+          const diff = Math.abs(c[0] - viewX);
+          if (diff < best) { best = diff; nearest = idx; }
+        });
+        showTooltip(nearest);
+      };
+
+      coords.forEach((c, idx) => {
+        const dot = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+        dot.setAttribute('cx', c[0]);
+        dot.setAttribute('cy', c[1]);
+        dot.setAttribute('r', '4.5');
+        dot.setAttribute('class', 'chart-point');
+        dot.addEventListener('pointerup', handlePointSelection);
+        dot.addEventListener('click', handlePointSelection);
+        svg.appendChild(dot);
+      });
+
+      svg.addEventListener('pointerup', handlePointSelection);
+      svg.addEventListener('click', handlePointSelection);
+      svg.addEventListener('mouseleave', hideTooltip);
+
       wrapper.appendChild(svg);
       return wrapper;
     }
@@ -1878,17 +1986,78 @@
     async function openExercise(ex) {
       state.library.view = 'details';
       state.library.historyLoading = true;
+      state.library.currentExerciseId = ex.id;
+      state.library.currentExerciseName = ex.name;
       renderLibrary();
       await loadExerciseHistory(ex.id);
+    }
+
+    function filterHistoryPoints(points, rangeCode) {
+      if (!Array.isArray(points) || !points.length) return [];
+      const days = rangeCode === 'all' ? null : (rangeCode === '90d' ? 90 : 30);
+      if (!days) return points;
+      const cutoff = new Date();
+      cutoff.setHours(0, 0, 0, 0);
+      cutoff.setDate(cutoff.getDate() - days + 1);
+      return points.filter((p) => {
+        const dt = new Date(p.date || p.day || p.day_label || p.ts || 0);
+        if (Number.isNaN(dt.getTime())) {
+          const parts = String(p.date || '').split('-');
+          if (parts.length === 3) {
+            const [y, m, d] = parts.map(Number);
+            const alt = new Date(y, m - 1, d);
+            return !Number.isNaN(alt.getTime()) && alt >= cutoff;
+          }
+          return false;
+        }
+        return dt >= cutoff;
+      });
+    }
+
+    async function ensureHistoryCache(exerciseId) {
+      const cache = state.library.historyCache[exerciseId] || { ranges: {}, all: null };
+      if (!cache.all) {
+        try {
+          cache.all = await apiFetch(`/gymapi/exercise/${exerciseId}/history?range=all`, { silent: true });
+          cache.ranges = cache.ranges || {};
+        } catch (e) {
+          cache.all = null;
+        }
+        state.library.historyCache[exerciseId] = cache;
+      }
+      return cache;
     }
 
     async function loadExerciseHistory(exerciseId) {
       state.library.historyLoading = true;
       renderLibrary();
-      const data = await apiFetch(`/gymapi/exercise/${exerciseId}/history?range=${state.library.range}`, { silent: true });
-      state.library.history = data;
-      state.library.historyLoading = false;
-      renderLibrary();
+      const range = state.library.range;
+      const cache = state.library.historyCache[exerciseId] || { ranges: {}, all: null };
+      try {
+        const data = await apiFetch(`/gymapi/exercise/${exerciseId}/history?range=${range}`, { silent: true });
+        cache.ranges = cache.ranges || {};
+        cache.ranges[range] = data;
+        if (range === 'all') cache.all = data;
+        state.library.historyCache[exerciseId] = cache;
+        let finalHistory = data;
+        const hasPoints = Array.isArray(data?.points) && data.points.length;
+        if (range !== 'all' && cache.all) {
+          finalHistory = { ...data, points: filterHistoryPoints(cache.all.points || data.points || [], range) };
+        }
+        if (!hasPoints && range !== 'all') {
+          const fallbackCache = await ensureHistoryCache(exerciseId);
+          if (fallbackCache?.all?.points?.length) {
+            finalHistory = { ...fallbackCache.all, points: filterHistoryPoints(fallbackCache.all.points, range) };
+          }
+        }
+        state.library.history = { ...finalHistory, exercise_id: exerciseId };
+      } catch (e) {
+        state.library.history = cache.ranges?.[range] || null;
+        throw e;
+      } finally {
+        state.library.historyLoading = false;
+        renderLibrary();
+      }
     }
 
     function closeDrawer() { setDrawer(false); }
@@ -2364,7 +2533,8 @@
       input.min = String(min);
       input.max = String(max);
       input.value = (value ?? 0);
-      if (inputMode === 'numeric') input.pattern = '[0-9]*';
+      input.pattern = '[0-9]*';
+      input.enterKeyHint = 'done';
 
       input.className = 'inline-num-input';
       containerEl.textContent = '';
@@ -2392,10 +2562,8 @@
       });
       input.addEventListener('blur', commit);
 
-      setTimeout(() => {
-        input.focus();
-        input.select();
-      }, 0);
+      input.focus({ preventScroll: true });
+      input.select();
     }
 
     function attachInlineNumberHandler(el, getOptions) {
@@ -2407,6 +2575,12 @@
       };
 
       el.addEventListener('pointerdown', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        startEdit();
+      });
+
+      el.addEventListener('click', (e) => {
         e.preventDefault();
         e.stopPropagation();
         startEdit();
@@ -2594,6 +2768,32 @@
       container.innerHTML = '';
       closeMenus();
       state.exercises = new Map();
+      if (!list.length) {
+        const empty = document.createElement('div');
+        empty.className = 'empty-day';
+        const title = document.createElement('div');
+        title.className = 'empty-day-title';
+        title.textContent = 'Упражнения добавляются в боте';
+        const text = document.createElement('div');
+        text.className = 'empty-day-text';
+        text.textContent = 'В приложении удобно смотреть дневник и править подходы. Добавь упражнения в Telegram-боте — выбери день, и мы откроем нужное место.';
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'btn primary';
+        btn.textContent = 'Добавить упражнения в боте';
+        btn.addEventListener('click', () => {
+          const tg = getTg();
+          const dateIso = state.dateIso || getIsoDate();
+          const link = `https://t.me/${BOT_USERNAME}?start=day_${dateIso}`;
+          if (tg?.openTelegramLink) tg.openTelegramLink(link);
+          else window.location.href = link;
+          tg?.close?.();
+          // TODO: ensure bot understands day_YYYY-MM-DD payload
+        });
+        empty.append(title, text, btn);
+        container.appendChild(empty);
+        return;
+      }
       list.forEach((ex) => {
         state.exercises.set(ex.user_exercise_id, ex);
         container.appendChild(renderExerciseCard(ex));
