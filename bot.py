@@ -259,6 +259,8 @@ logging.basicConfig(
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("telegram").setLevel(logging.INFO)
 
+WEBAPP_URL = "https://telegrambotsforeveryone.duckdns.org/gymapp/"
+
 user_locks = defaultdict(asyncio.Lock)
 logger = logging.getLogger(__name__)
 last_messages: dict[int, int] = {}
@@ -13057,6 +13059,22 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await show_screen(q, context, view.text, kb, target_user_id)
                 return
             if action == "view":
+                if not is_library and (len(parts) < 5 or parts[4] != "bot"):
+                    ex_id, ex_name, ex_group = await get_exercise_info(ue_id)
+                    resolved_group = resolve_group(ex_name, ex_group)
+                    prompt_text = (
+                        "Внимание! Записывать свою тренировку внутри WebApp намного удобнее, "
+                        "поэтому мы предлагаем вам делать это там."
+                    )
+                    kb = InlineKeyboardMarkup(
+                        [
+                            [InlineKeyboardButton("Открыть WebApp", url=WEBAPP_URL)],
+                            [InlineKeyboardButton("Открыть в боте", callback_data=f"ex:view:{day}:{ue_id}:bot")],
+                            [InlineKeyboardButton("Назад", callback_data=f"day:group:{day}:{resolved_group}")],
+                        ]
+                    )
+                    await show_screen(q, context, prompt_text, kb, target_user_id)
+                    return
                 view = await render_exercise_view(
                     target_user_id, day, ue_id, selected, prefs=prefs
                 )
