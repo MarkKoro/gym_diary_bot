@@ -1267,30 +1267,46 @@
       return (window.Telegram && window.Telegram.WebApp) ? window.Telegram.WebApp : null;
     }
 
-    function getInitDataFromHash() {
-      // Telegram часто кладёт данные в hash как tgWebAppData=...
-      const raw = (location.hash || "").replace(/^#/, "");
-      if (!raw) return "";
-      const params = new URLSearchParams(raw);
-      const tgd = params.get("tgWebAppData");
-      if (!tgd) return "";
+    function getInitDataFromUrl() {
+      // Telegram can pass tgWebAppData in search OR hash depending on platform/version
       try {
-        return decodeURIComponent(tgd);
-      } catch {
-        return tgd;
-      }
+        const qs = new URLSearchParams(window.location.search || '');
+        const v = qs.get('tgWebAppData') || qs.get('initData');
+        if (v) return v;
+      } catch (_) {}
+
+      try {
+        const rawHash = (window.location.hash || '').replace(/^#/, '');
+        const hs = new URLSearchParams(rawHash);
+        const v = hs.get('tgWebAppData') || hs.get('initData');
+        if (v) return v;
+      } catch (_) {}
+
+      return '';
     }
 
-    async function waitTelegramInitData(timeoutMs = 2000) {
-      const t0 = Date.now();
-      while (Date.now() - t0 < timeoutMs) {
-        const tg = window.Telegram?.WebApp || null;
-        const initData = (tg?.initData && tg.initData.length > 0) ? tg.initData : getInitDataFromHash();
-        if (tg && initData && initData.length > 0) return { tg, initData };
-        await new Promise(r => setTimeout(r, 50));
+    async function waitTelegramInitData(timeoutMs = 15000) {
+      const start = Date.now();
+
+      while (Date.now() - start < timeoutMs) {
+        const tg = getTg();
+        let initData = '';
+
+        if (tg && typeof tg.initData === 'string') initData = tg.initData || '';
+        if (!initData) initData = getInitDataFromUrl();
+
+        // If we have both tg + initData, we're good
+        if (tg && initData) return { tg, initData };
+
+        // If tg exists but initData is still empty, give it time (Telegram can populate it late)
+        await sleep(150);
       }
-      const tg = window.Telegram?.WebApp || null;
-      const initData = (tg?.initData && tg.initData.length > 0) ? tg.initData : getInitDataFromHash();
+
+      // Final attempt
+      const tg = getTg();
+      let initData = (tg && typeof tg.initData === 'string') ? (tg.initData || '') : '';
+      if (!initData) initData = getInitDataFromUrl();
+
       return { tg, initData };
     }
 
@@ -4476,24 +4492,46 @@
     }
 
     async function initTelegram() {
-      fetch("/gymapi/health", { cache: "no-store" }).catch(() => {});
+      // Try to detect Telegram context + initData
+      const { tg, initData } = await waitTelegramInitData(15000);
 
-      const tg = getTg();
+      state.tg = tg || null;
+      state.initData = initData || '';
+      state.isTelegram = !!tg;
+
+      // Apply Telegram UI hooks if available
       if (tg) {
-        try { tg.ready(); } catch {}
-        try { tg.expand(); } catch {}
+        try { tg.ready(); } catch (_) {}
+        try { tg.expand(); } catch (_) {}
+        try { tg.disableVerticalSwipes?.(); } catch (_) {}
       }
 
-      const initData = (typeof tg?.initData === 'string') ? tg.initData.trim() : '';
-      state.tg = tg;
-      state.initData = initData;
-      state.isTelegram = !!(tg && initData);
+      // Extract user id if possible (not a substitute for initData signature, but useful)
+      const unsafeUserId = tg?.initDataUnsafe?.user?.id ?? null;
+      if (unsafeUserId) state.userId = unsafeUserId;
 
-      tg?.BackButton?.onClick(handleBackAction);
-      tg?.onEvent?.('themeChanged', applyTheme);
-      applyTheme();
+      // Quick health ping via our API prefix (so it goes through nginx /gymapi/)
+      try {
+        await apiFetch('/gymapi/health', { silent: true });
+      } catch (_) {}
 
-      return state.isTelegram;
+      // If opened inside Telegram but initData is empty -> show an on-screen fatal with diagnostics
+      // (Otherwise the app silently does nothing and you keep getting a blank "Сегодня")
+      if (tg && !state.initData) {
+        const dbg = {
+          hasTelegram: !!window.Telegram,
+          hasWebApp: !!(window.Telegram && window.Telegram.WebApp),
+          initDataLen: 0,
+          search: window.location.search || '',
+          hash: (window.location.hash || '').slice(0, 300),
+          ua: navigator.userAgent,
+        };
+        showFatal(new Error('Telegram WebApp detected, but initData is EMPTY. Debug: ' + JSON.stringify(dbg)), 'initTelegram');
+        return false;
+      }
+
+      // If not in Telegram at all — keep current behavior (works in browser mode)
+      return !!tg;
     }
 
     function selectSet(setNo) {
@@ -4878,7 +4916,17 @@
       }
     }
 
-    window.addEventListener('DOMContentLoaded', boot);
+    document.addEventListener('DOMContentLoaded', () => {
+      (async () => {
+        try {
+          await initTelegram();
+          await init();
+        } catch (err) {
+          console.error('Bootstrap error:', err);
+          showFatal(err, 'bootstrap');
+        }
+      })();
+    });
   </script>
 </body>
 </html>
