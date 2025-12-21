@@ -2385,16 +2385,21 @@
       }
     }
 
+    function formatSetDetail(set) {
+      if (!set) return '';
+      if (set.seconds > 0 && set.reps === 0 && set.weight_kg === 0) return `${set.seconds} сек`;
+      const parts = [];
+      if (set.weight_kg > 0) parts.push(`${set.weight_kg} кг`);
+      if (set.reps > 0) parts.push(`${set.reps} повт.`);
+      if (set.seconds > 0) parts.push(`${set.seconds} сек`);
+      return parts.join(' × ') || '0';
+    }
+
     function formatLastSet(exercise) {
       const sets = exercise.sets || [];
       if (!sets.length) return '';
       const last = sets[sets.length - 1];
-      if (last.seconds > 0 && last.reps === 0) return `${last.seconds} сек`;
-      const parts = [];
-      if (last.weight_kg > 0) parts.push(`${last.weight_kg} кг`);
-      if (last.reps > 0) parts.push(`${last.reps} повт.`);
-      if (last.seconds > 0) parts.push(`${last.seconds} сек`);
-      return parts.join(' × ') || '0';
+      return formatSetDetail(last);
     }
 
     function buildExerciseSummary(exercise) {
@@ -2402,6 +2407,16 @@
       if (!count) return 'Подходов пока нет';
       const last = formatLastSet(exercise);
       return `Подходы: ${count} • Последний: ${last || '—'}`;
+    }
+
+    function buildExpandedExerciseSummary(exercise) {
+      const sets = exercise.sets || [];
+      if (!sets.length) return 'Подходов пока нет';
+      return sets.map((set, idx) => {
+        const number = set.set_no || idx + 1;
+        const label = formatSetDetail(set) || '—';
+        return `Подход ${number}: ${label}`;
+      }).join(' • ');
     }
 
     function getLastSet(exercise) {
@@ -2679,6 +2694,7 @@
         const body = card.querySelector('.workout-body');
         if (expanded) renderWorkoutBody(ueId);
         else if (body) { body.innerHTML = ''; body.style.display = 'none'; }
+        updateCardSummary(ueId);
       });
     }
 
@@ -2846,7 +2862,8 @@
       if (!card || !exercise) return;
       const summary = card.querySelector('.exercise-summary');
       const pill = card.querySelector('.exercise-sets-pill');
-      if (summary) summary.textContent = buildExerciseSummary(exercise);
+      const expanded = card.classList.contains('expanded');
+      if (summary) summary.textContent = expanded ? buildExpandedExerciseSummary(exercise) : buildExerciseSummary(exercise);
       if (pill) pill.textContent = `Подходов: ${exercise.sets?.length || 0}`;
     }
 
@@ -3172,6 +3189,13 @@
 
       const badge = document.getElementById('dayCompletedBadge');
       if (badge) badge.style.display = completed ? '' : 'none';
+    }
+
+    function setFinishFabVisible(visible) {
+      const wrap = document.getElementById('finishFabWrap');
+      if (!wrap) return;
+      wrap.classList.toggle('hidden', !visible);
+      if (!visible) closeFinishPopover();
     }
 
     function closeFinishPopover() {
@@ -3598,6 +3622,7 @@
       state.editor = { open: true, ueId, selectedSet: null, tab: 'sets', noteTimer: null, noteStatusTimer: null, flashSet: null, flashTimer: null, scrollTarget: null };
       setActiveTab('sets');
       renderEditor();
+      setFinishFabVisible(false);
     }
 
     function closeEditor() {
@@ -3610,6 +3635,7 @@
       setNoteStatus('');
       const noteArea = document.getElementById('noteArea');
       if (noteArea) noteArea.value = '';
+      setFinishFabVisible(true);
     }
 
     async function init() {
