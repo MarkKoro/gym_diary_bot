@@ -432,12 +432,18 @@
     .control-actions { display: flex; align-items: center; justify-content: center; gap: 16px; }
     .circle-btn { width: 48px; height: 48px; border-radius: 50%; border: 1px solid var(--border); background: var(--card); font-size: 22px; font-weight: 700; cursor: pointer; box-shadow: var(--shadow); color: var(--text); }
     .circle-btn:disabled { opacity: 0.55; cursor: not-allowed; box-shadow: none; }
+    .control-block.manual-input { gap: 6px; }
+    .control-input-wrap { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 12px; background: var(--card); }
+    .control-input { width: 100%; border: none; background: transparent; color: var(--text); font-size: 18px; font-weight: 700; outline: none; }
+    .control-hint { font-size: 12px; color: var(--muted); margin-left: auto; }
+    .control-suffix { color: var(--muted); font-size: 13px; font-weight: 700; }
+    .running-manual-grid { grid-template-columns: repeat(auto-fit, minmax(150px,1fr)); }
     .chips { display: none; }
     .running-meta { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
     .running-badge { padding: 6px 10px; border-radius: 12px; border: 1px solid var(--border); background: color-mix(in srgb, var(--card) 84%, var(--border)); font-weight: 700; }
     .running-pace { font-size: 13px; color: var(--muted); }
     .running-history { display: grid; gap: 8px; }
-    .running-history-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; padding: 10px; border-radius: 10px; border: 1px solid var(--border); background: color-mix(in srgb, var(--card) 90%, transparent); }
+    .running-history-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 8px; padding: 10px; border-radius: 10px; border: 1px solid var(--border); background: color-mix(in srgb, var(--card) 90%, transparent); }
     .running-history-row .label { color: var(--muted); font-size: 12px; }
     .running-history-row .value { font-weight: 700; }
     @keyframes setFlash { from { background: rgba(0,122,255,0.12); } to { background: var(--bg); } }
@@ -2566,11 +2572,13 @@
         const distance = Number(running.distance_km || running.distance || 0);
         const duration = Number(running.duration_sec || running.duration || 0);
         const calories = Number(running.calories || 0);
+        const heartRate = Number(running.heart_rate || 0);
         const pace = running.pace_text || formatPaceValue(duration > 0 && distance > 0 ? duration / distance : null);
         const distanceLabel = distance ? `${distance.toFixed(2)} км` : '—';
         const durationLabel = duration ? formatDurationValue(duration) : '—';
         const parts = [`Дистанция: ${distanceLabel}`, `Время: ${durationLabel}`, `Темп: ${pace} мин/км`];
         if (calories > 0) parts.push(`${calories} ккал`);
+        if (heartRate > 0) parts.push(`Пульс: ${heartRate} уд/мин`);
         return parts.join(' • ');
       }
       const count = exercise.sets?.length || 0;
@@ -2674,13 +2682,14 @@
 
     function ensureRunningDraft(ueId) {
       const exercise = state.exercises.get(ueId);
-      if (!exercise) return { distance_km: 0, duration_sec: 0, calories: 0 };
+      if (!exercise) return { distance_km: 0, duration_sec: 0, calories: 0, heart_rate: 0 };
       if (!state.runningDraft[ueId]) {
         const running = exercise.running || {};
         state.runningDraft[ueId] = {
           distance_km: Number(running.distance_km || running.distance || 0),
           duration_sec: Number(running.duration_sec || running.duration || 0),
           calories: Number(running.calories || 0),
+          heart_rate: Number(running.heart_rate || 0),
         };
       }
       return state.runningDraft[ueId];
@@ -2688,7 +2697,11 @@
 
     function setRunningDraftValue(ueId, field, value) {
       const draft = ensureRunningDraft(ueId);
-      const safe = field === 'distance_km' ? Math.max(0, Math.round(Number(value || 0) * 1000) / 1000) : Math.max(0, Math.round(Number(value || 0)));
+      const num = Number(value);
+      const raw = Number.isFinite(num) ? num : 0;
+      const safe = field === 'distance_km'
+        ? Math.max(0, Math.round(raw * 1000) / 1000)
+        : Math.max(0, Math.min(Math.round(raw), field === 'heart_rate' ? 260 : Number.MAX_SAFE_INTEGER));
       state.runningDraft[ueId] = { ...draft, [field]: safe };
       return safe;
     }
@@ -2743,6 +2756,7 @@
         distance_km: Number(running?.distance_km || running?.distance || 0),
         duration_sec: Number(running?.duration_sec || running?.duration || 0),
         calories: Number(running?.calories || 0),
+        heart_rate: Number(running?.heart_rate || 0),
       };
       updateCardSummary(ueId);
       if (state.workout.expanded === ueId) renderExerciseBody(ueId);
@@ -2906,53 +2920,104 @@
       const durationBadge = document.createElement('span');
       durationBadge.className = 'running-badge';
       durationBadge.textContent = `Время: ${formatDurationValue(draft.duration_sec)}`;
+      const caloriesVal = Number(draft.calories || 0);
+      const pulseVal = Number(draft.heart_rate || 0);
       const paceText = document.createElement('span');
       paceText.className = 'running-pace';
       paceText.textContent = `Темп: ${paceLabel} мин/км`;
-      meta.append(distanceBadge, durationBadge, paceText);
+      const caloriesBadge = document.createElement('span');
+      caloriesBadge.className = 'running-badge';
+      caloriesBadge.textContent = `Калории: ${caloriesVal ? `${caloriesVal} ккал` : '—'}`;
+      const pulseBadge = document.createElement('span');
+      pulseBadge.className = 'running-badge';
+      pulseBadge.textContent = `Пульс: ${pulseVal ? `${pulseVal} уд/мин` : '—'}`;
+      meta.append(distanceBadge, durationBadge, caloriesBadge, pulseBadge, paceText);
       container.appendChild(meta);
 
       const controls = document.createElement('div');
-      controls.className = 'controls-grid';
-      const buildBlock = (label, field, opts = {}) => {
+      controls.className = 'controls-grid running-manual-grid';
+
+      const createInputBlock = (label, value, onChange, opts = {}) => {
         const block = document.createElement('div');
-        block.className = 'control-block';
-        const head = document.createElement('div'); head.className = 'control-head'; head.textContent = label;
-        const valueEl = document.createElement('div'); valueEl.className = 'control-value';
-        if (field === 'duration_sec') valueEl.textContent = formatDurationValue(draft.duration_sec);
-        else valueEl.textContent = field === 'distance_km' ? draft.distance_km.toFixed(2) : Number(draft[field] || 0);
-        valueEl.tabIndex = 0;
-        valueEl.setAttribute('role', 'button');
-        valueEl.style.cursor = 'text';
-        attachInlineNumberHandler(valueEl, () => {
-          const current = field === 'duration_sec' ? Number(draft.duration_sec || 0) : Number(draft[field] || 0);
-          return {
-            value: field === 'distance_km' ? current : current,
-            min: 0,
-            max: field === 'distance_km' ? 200 : (field === 'duration_sec' ? 24 * 3600 : 20000),
-            step: opts.step ?? 1,
-            decimals: field === 'distance_km' ? 2 : 0,
-            inputMode: field === 'distance_km' ? 'decimal' : 'numeric',
-            onCommit: (next) => {
-              const normalized = field === 'distance_km' ? next : (field === 'duration_sec' ? parseDurationInput(next) : next);
-              setRunningDraftValue(ueId, field, normalized);
-              renderRunningBody(ueId);
-            },
-          };
-        });
-        const actions = document.createElement('div'); actions.className = 'control-actions';
-        const minus = document.createElement('button'); minus.type = 'button'; minus.className = 'circle-btn'; minus.textContent = '−';
-        minus.addEventListener('click', (ev) => { ev.stopPropagation(); adjustRunningDraft(ueId, field, -(opts.step || 1)); renderRunningBody(ueId); });
-        const plus = document.createElement('button'); plus.type = 'button'; plus.className = 'circle-btn'; plus.textContent = '+'; plus.addEventListener('click', (ev) => { ev.stopPropagation(); adjustRunningDraft(ueId, field, opts.step || 1); renderRunningBody(ueId); });
-        actions.append(minus, valueEl, plus);
-        block.append(head, actions);
+        block.className = 'control-block manual-input';
+        const head = document.createElement('div');
+        head.className = 'control-head';
+        const labelSpan = document.createElement('span'); labelSpan.textContent = label;
+        head.append(labelSpan);
+        if (opts.hint) {
+          const hint = document.createElement('span');
+          hint.className = 'control-hint';
+          hint.textContent = opts.hint;
+          head.append(hint);
+        }
+        const wrap = document.createElement('div');
+        wrap.className = 'control-input-wrap';
+        const input = document.createElement('input');
+        input.type = 'number';
+        input.className = 'control-input';
+        input.inputMode = opts.inputMode || 'decimal';
+        if (opts.step) input.step = String(opts.step);
+        if (opts.min !== undefined) input.min = String(opts.min);
+        if (opts.max !== undefined) input.max = String(opts.max);
+        input.value = value;
+        input.addEventListener('click', (ev) => ev.stopPropagation());
+        input.addEventListener('input', (ev) => onChange(ev.target.value));
+        input.addEventListener('blur', (ev) => onChange(ev.target.value));
+        wrap.appendChild(input);
+        if (opts.suffix) {
+          const suffix = document.createElement('span');
+          suffix.className = 'control-suffix';
+          suffix.textContent = opts.suffix;
+          wrap.appendChild(suffix);
+        }
+        block.append(head, wrap);
         return block;
       };
 
+      const distanceMeters = Math.round(draft.distance_km * 1000);
+      const getDurationParts = () => {
+        const current = ensureRunningDraft(ueId);
+        return {
+          minutes: Math.floor(current.duration_sec / 60),
+          seconds: current.duration_sec % 60,
+        };
+      };
+
+      const updateDuration = (minutes, seconds) => {
+        const safeMinutes = Math.max(0, Math.floor(Number(minutes || 0)));
+        const safeSeconds = Math.max(0, Math.floor(Number(seconds || 0)));
+        const total = safeMinutes * 60 + safeSeconds;
+        setRunningDraftValue(ueId, 'duration_sec', total);
+        renderRunningBody(ueId);
+      };
+
       controls.append(
-        buildBlock('Дистанция, км', 'distance_km', { step: 0.1 }),
-        buildBlock('Время', 'duration_sec', { step: 30 }),
-        buildBlock('Калории', 'calories', { step: 10 }),
+        createInputBlock('Дистанция, км', draft.distance_km.toFixed(2), (val) => {
+          const normalized = (val ?? '').toString().replace(',', '.');
+          setRunningDraftValue(ueId, 'distance_km', Number(normalized));
+          renderRunningBody(ueId);
+        }, { step: 0.01, min: 0, inputMode: 'decimal' }),
+        createInputBlock('Дистанция, м', distanceMeters, (val) => {
+          const next = Math.max(0, Math.round(Number(val || 0)));
+          setRunningDraftValue(ueId, 'distance_km', next / 1000);
+          renderRunningBody(ueId);
+        }, { step: 50, min: 0, inputMode: 'numeric' }),
+        createInputBlock('Минуты', Math.floor(draft.duration_sec / 60), (val) => {
+          const { seconds } = getDurationParts();
+          updateDuration(val, seconds);
+        }, { step: 1, min: 0, inputMode: 'numeric' }),
+        createInputBlock('Секунды', draft.duration_sec % 60, (val) => {
+          const { minutes } = getDurationParts();
+          updateDuration(minutes, val);
+        }, { step: 5, min: 0, inputMode: 'numeric' }),
+        createInputBlock('Калории', Number(draft.calories || 0), (val) => {
+          setRunningDraftValue(ueId, 'calories', Number(val || 0));
+          renderRunningBody(ueId);
+        }, { step: 5, min: 0, inputMode: 'numeric', suffix: 'ккал' }),
+        createInputBlock('Пульс', Number(draft.heart_rate || 0), (val) => {
+          setRunningDraftValue(ueId, 'heart_rate', Number(val || 0));
+          renderRunningBody(ueId);
+        }, { step: 1, min: 0, max: 260, inputMode: 'numeric', suffix: 'уд/мин' }),
       );
       container.appendChild(controls);
 
@@ -3122,6 +3187,7 @@
               distance_km: Number(draft.distance_km || 0),
               duration_sec: Number(draft.duration_sec || 0),
               calories: Number(draft.calories || 0),
+              heart_rate: Number(draft.heart_rate || 0),
             },
           });
           applyRunningUpdate(ueId, data);
@@ -3934,7 +4000,9 @@
           const dist = document.createElement('div'); dist.innerHTML = `<div class="label">Км</div><div class="value">${Number(row.distance_km || 0).toFixed(2)}</div>`;
           const time = document.createElement('div'); time.innerHTML = `<div class="label">Время</div><div class="value">${formatDurationValue(row.duration_sec)}</div>`;
           const paceEl = document.createElement('div'); paceEl.innerHTML = `<div class="label">Темп</div><div class="value">${formatPaceValue(row.pace_sec)} мин/км</div>`;
-          item.append(date, dist, time, paceEl);
+          const pulseEl = document.createElement('div'); pulseEl.innerHTML = `<div class="label">Пульс</div><div class="value">${row.heart_rate ? `${row.heart_rate} уд/мин` : '—'}</div>`;
+          const caloriesEl = document.createElement('div'); caloriesEl.innerHTML = `<div class="label">Ккал</div><div class="value">${Number(row.calories || 0) || '—'}</div>`;
+          item.append(date, dist, time, paceEl, pulseEl, caloriesEl);
           historyList.appendChild(item);
         });
         list.appendChild(historyList);
@@ -3949,7 +4017,16 @@
       const paceBlock = document.createElement('div');
       paceBlock.className = 'chart-block';
       paceBlock.appendChild(buildChart('Темп (мин/км)', pacePoints, 'pace_min', true));
-      charts.append(distBlock, paceBlock);
+      const durationBlock = document.createElement('div');
+      durationBlock.className = 'chart-block';
+      durationBlock.appendChild(buildChart('Время, сек', history, 'duration_sec', true));
+      const pulseBlock = document.createElement('div');
+      pulseBlock.className = 'chart-block';
+      pulseBlock.appendChild(buildChart('Пульс, уд/мин', history, 'heart_rate', true));
+      const caloriesBlock = document.createElement('div');
+      caloriesBlock.className = 'chart-block';
+      caloriesBlock.appendChild(buildChart('Калории', history, 'calories', true));
+      charts.append(distBlock, paceBlock, durationBlock, pulseBlock, caloriesBlock);
       grid.appendChild(charts);
       const removeBtn = document.getElementById('editorRemoveSet');
       if (removeBtn) removeBtn.disabled = true;
@@ -4084,7 +4161,13 @@
       const durationBlock = document.createElement('div');
       durationBlock.className = 'chart-block';
       durationBlock.appendChild(buildChart('Время, сек', history, 'duration_sec', true));
-      cards.append(distanceBlock, paceBlock, durationBlock);
+      const pulseBlock = document.createElement('div');
+      pulseBlock.className = 'chart-block';
+      pulseBlock.appendChild(buildChart('Пульс, уд/мин', history, 'heart_rate', true));
+      const caloriesBlock = document.createElement('div');
+      caloriesBlock.className = 'chart-block';
+      caloriesBlock.appendChild(buildChart('Калории', history, 'calories', true));
+      cards.append(distanceBlock, paceBlock, durationBlock, pulseBlock, caloriesBlock);
       container.appendChild(cards);
 
       const list = document.createElement('div');
@@ -4096,7 +4179,9 @@
         const dist = document.createElement('div'); dist.innerHTML = `<div class="label">Км</div><div class="value">${Number(row.distance_km || 0).toFixed(2)}</div>`;
         const time = document.createElement('div'); time.innerHTML = `<div class="label">Время</div><div class="value">${formatDurationValue(row.duration_sec)}</div>`;
         const pace = document.createElement('div'); pace.innerHTML = `<div class="label">Темп</div><div class="value">${formatPaceValue(row.pace_sec)} мин/км</div>`;
-        item.append(date, dist, time, pace);
+        const pulse = document.createElement('div'); pulse.innerHTML = `<div class="label">Пульс</div><div class="value">${row.heart_rate ? `${row.heart_rate} уд/мин` : '—'}</div>`;
+        const calories = document.createElement('div'); calories.innerHTML = `<div class="label">Ккал</div><div class="value">${Number(row.calories || 0) || '—'}</div>`;
+        item.append(date, dist, time, pace, pulse, calories);
         list.appendChild(item);
       });
       container.appendChild(list);
