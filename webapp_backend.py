@@ -21,6 +21,7 @@ from db import (
     get_user_timezone,
     list_day_completions,
     list_user_reminders,
+    mark_exercise_done,
     mark_day_completed,
 )
 
@@ -672,6 +673,39 @@ async def inc_last_set_fast(
 
     new_sets = await db.fetch_exercise_sets(session_id, user_exercise_id)
     return {"ok": True, "sets": _serialize_sets(new_sets)}
+
+
+@app.post("/day/{day_index}/exercise/{user_exercise_id}/done")
+async def mark_exercise_done_fast(
+    day_index: int,
+    user_exercise_id: int,
+    date: str | None = None,
+    ctx: AuthCtx = Depends(get_auth_ctx),
+):
+    user_id = ctx.user_id
+    await _validate_day(user_id, day_index)
+    await _ensure_user_exercise(user_id, user_exercise_id, day_index)
+    target_date = _parse_date_param(date)
+    iso_date = _iso_date(target_date)
+    session_id = await db.get_or_create_today_session(user_id, iso_date, day_index)
+    await mark_exercise_done(session_id, user_exercise_id)
+
+    exercises_rows = await db.fetch_day_exercises(user_id, day_index, iso_date)
+    all_done = bool(exercises_rows) and all(bool(row[3]) for row in exercises_rows)
+
+    completed_days = await get_active_day_completions(user_id)
+    day_completed = False
+    if all_done and day_index not in completed_days:
+        await mark_day_completed(user_id, day_index, datetime.now(UTC).isoformat())
+        completed_days = await get_active_day_completions(user_id)
+        day_completed = True
+
+    return {
+        "ok": True,
+        "user_exercise_id": user_exercise_id,
+        "day_completed": day_completed,
+        "completed_days": sorted(int(d) for d in completed_days),
+    }
 
 
 @app.get("/day/{day_index}/exercise/{ue_id}/context")
