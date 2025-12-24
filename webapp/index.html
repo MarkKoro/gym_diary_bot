@@ -180,11 +180,37 @@
         gap: 10px;
       }
       .exercise-card { cursor: pointer; }
-      .exercise-card.is-done { outline: 2px solid rgba(46, 204, 113, 0.55); background: color-mix(in srgb, var(--card) 88%, rgba(46, 204, 113, 0.06)); }
+      .exercise-card.is-done {
+        position: relative;
+        outline: 2px solid rgba(52, 199, 89, 0.75);
+        border-color: rgba(52, 199, 89, 0.45);
+        background: linear-gradient(135deg, color-mix(in srgb, var(--card) 80%, rgba(52, 199, 89, 0.12)) 0%, color-mix(in srgb, var(--card) 86%, rgba(52, 199, 89, 0.18)) 40%, color-mix(in srgb, var(--card) 88%, rgba(52, 199, 89, 0.06)) 100%);
+        overflow: hidden;
+      }
+      .exercise-card.is-done::after {
+        content: '';
+        position: absolute;
+        inset: 0;
+        border-radius: var(--radius);
+        pointer-events: none;
+        background-image:
+          repeating-linear-gradient(120deg, rgba(52,199,89,0.18) 0, rgba(52,199,89,0.18) 2px, transparent 2px, transparent 16px),
+          repeating-linear-gradient(-65deg, rgba(102,232,157,0.18) 0, rgba(102,232,157,0.18) 2px, transparent 2px, transparent 18px),
+          radial-gradient(circle at 18% 20%, rgba(102,232,157,0.35) 0, rgba(102,232,157,0) 36%),
+          radial-gradient(circle at 82% 72%, rgba(52,199,89,0.28) 0, rgba(52,199,89,0) 42%);
+        opacity: 0.9;
+        mix-blend-mode: screen;
+        transition: opacity 0.22s ease;
+      }
+      .exercise-card.is-done.expanded::after { opacity: 0; }
+      .exercise-card.finish-animate { animation: finishClose 360ms ease; }
+      .exercise-card.next-animate { animation: nextReveal 420ms ease; }
       .exercise-card.busy { opacity: 0.6; pointer-events: none; }
       .exercise-card .card-title { display: flex; align-items: center; gap: 6px; }
       .exercise-head { display: flex; justify-content: space-between; gap: 8px; align-items: flex-start; }
       .exercise-meta { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+      .finish-flag { font-size: 18px; filter: drop-shadow(0 4px 10px rgba(52,199,89,0.35)); }
+      .exercise-card:not(.is-done) .finish-flag { display: none; }
       .exercise-summary { font-size: 14px; color: var(--muted); display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
       .workout-body { display: none; border-top: 1px dashed var(--border); padding-top: 10px; gap: 12px; }
       .exercise-card.expanded .workout-body { display: grid; gap: 12px; }
@@ -194,6 +220,13 @@
       .card-title { font-size: 16px; font-weight: 800; letter-spacing: -0.01em; }
     .pill { font-size: 12px; color: var(--muted); background: rgba(0,0,0,0.04); padding: 4px 8px; border-radius: 999px; }
     [data-theme="dark"] .pill { background: rgba(255,255,255,0.05); }
+    .muscle-pill {
+      color: #f8fafc;
+      font-weight: 800;
+      box-shadow: 0 8px 18px rgba(0,0,0,0.14);
+      border: 1px solid rgba(255,255,255,0.14);
+      letter-spacing: -0.01em;
+    }
     .card-summary { font-size: 14px; color: var(--muted); }
       .card-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
     .btn {
@@ -331,6 +364,15 @@
       .text-btn { border: none; background: transparent; color: var(--accent); font-weight: 700; padding: 6px 8px; border-radius: 10px; cursor: pointer; font-size: 13px; }
       .text-btn:active { opacity: 0.7; }
       .outline-btn { border: 1px solid var(--border); background: var(--bg); color: var(--text); font-weight: 700; padding: 10px 12px; border-radius: 12px; display: inline-flex; align-items: center; gap: 8px; box-shadow: var(--shadow); cursor: pointer; }
+      .outline-btn.done-btn {
+        padding: 13px 16px;
+        border-color: rgba(52,199,89,0.75);
+        background: linear-gradient(135deg, rgba(52,199,89,0.95), rgba(22,163,74,0.95));
+        color: #ecfdf3;
+        box-shadow: 0 12px 26px rgba(52,199,89,0.25);
+        font-weight: 800;
+      }
+      .outline-btn.done-btn:active { transform: translateY(1px) scale(0.99); }
       .outline-btn:active { transform: translateY(1px); opacity: 0.9; }
     .sets-list { margin: 12px 0 4px; display: flex; flex-direction: column; gap: 8px; }
     .set-row {
@@ -391,6 +433,8 @@
     .circle-btn:disabled { opacity: 0.55; cursor: not-allowed; box-shadow: none; }
     .chips { display: none; }
     @keyframes setFlash { from { background: rgba(0,122,255,0.12); } to { background: var(--bg); } }
+    @keyframes finishClose { 0% { transform: translateY(0); opacity: 1; } 60% { transform: translateY(-6px); opacity: 0.75; } 100% { transform: translateY(-4px); opacity: 0.9; } }
+    @keyframes nextReveal { 0% { box-shadow: 0 0 0 rgba(46,204,113,0); transform: translateY(8px); } 45% { box-shadow: 0 12px 28px rgba(46,204,113,0.25); transform: translateY(0); } 100% { box-shadow: var(--shadow); transform: translateY(0); } }
     .section-header { display: flex; align-items: center; gap: 10px; }
     .back-link { border: none; background: none; color: var(--accent); font-weight: 700; font-size: 14px; cursor: pointer; padding: 8px 10px; border-radius: 12px; }
     .back-link:hover { background: rgba(0,0,0,0.04); }
@@ -1074,6 +1118,25 @@
       none: 'Не указано',
     };
 
+    const MUSCLE_COLORS = {
+      shoulders: '#f59e0b',
+      biceps: '#3b82f6',
+      chest: '#ef4444',
+      back: '#8b5cf6',
+      legs: '#22c55e',
+      core: '#14b8a6',
+      triceps: '#eab308',
+      kb: '#0ea5e9',
+      metcon: '#a855f7',
+      workout: '#6366f1',
+      run: '#10b981',
+      other: '#94a3b8',
+      none: '#cbd5e1',
+    };
+
+    const MUSCLE_COLOR_POOL = ['#f97316', '#22d3ee', '#f472b6', '#a3e635', '#c084fc', '#fb7185', '#7dd3fc', '#84cc16', '#fbbf24', '#d946ef', '#4ade80', '#e879f9'];
+    const muscleColorAssignments = new Map();
+
     const BODY_MUSCLES = new Set(['chest', 'back', 'legs', 'shoulders', 'core', 'biceps', 'triceps']);
     const BOT_USERNAME = 'progressottestbot';
 
@@ -1099,7 +1162,7 @@
       completedDays: new Set(),
       exercises: new Map(),
       todayDraft: {},
-      workout: { expanded: null, doneIds: new Set(), order: [] },
+      workout: { expanded: null, doneIds: new Set(), order: [], animations: { completed: null, next: null } },
       actionQueues: new Map(),
       contexts: new Map(),
       editor: { open: false, ueId: null, selectedSet: null, tab: 'sets', noteTimer: null, noteStatusTimer: null, flashSet: null, flashTimer: null, scrollTarget: null },
@@ -1251,6 +1314,40 @@
         });
       }
       return base;
+    }
+
+    function hexToRgb(hex) {
+      if (!hex || typeof hex !== 'string') return null;
+      let value = hex.replace('#', '').trim();
+      if (value.length === 3) value = value.split('').map((c) => c + c).join('');
+      if (value.length !== 6) return null;
+      const intVal = parseInt(value, 16);
+      if (Number.isNaN(intVal)) return null;
+      return { r: (intVal >> 16) & 255, g: (intVal >> 8) & 255, b: intVal & 255 };
+    }
+
+    function getTextColorForBg(hex) {
+      const rgb = hexToRgb(hex);
+      if (!rgb) return '#0f172a';
+      const brightness = (rgb.r * 299 + rgb.g * 587 + rgb.b * 114) / 1000;
+      return brightness > 150 ? '#0f172a' : '#f8fafc';
+    }
+
+    function getMuscleColor(value) {
+      const rawKey = (value ?? '').toString().trim().toLowerCase() || 'none';
+      const normalized = normalizeMuscleKey(value);
+      const colorKey = normalized === 'other' ? rawKey : normalized;
+      if (muscleColorAssignments.has(colorKey)) return muscleColorAssignments.get(colorKey);
+      const preset = MUSCLE_COLORS[colorKey] || MUSCLE_COLORS[normalized];
+      if (preset) {
+        muscleColorAssignments.set(colorKey, preset);
+        return preset;
+      }
+      const used = new Set(muscleColorAssignments.values());
+      const available = MUSCLE_COLOR_POOL.find((c) => !used.has(c));
+      const chosen = available || MUSCLE_COLOR_POOL[MUSCLE_COLOR_POOL.length - 1];
+      muscleColorAssignments.set(colorKey, chosen);
+      return chosen;
     }
 
     function formatMuscleGroup(value) {
@@ -1699,7 +1796,7 @@
       top.className = 'library-topbar';
       const back = document.createElement('button');
       back.className = 'library-back';
-      back.textContent = '← К списку упражнений';
+      back.textContent = '← Вернуться к группам мышц';
       back.addEventListener('click', () => { state.library.view = 'groups'; renderLibrary(); });
       const title = document.createElement('div');
       title.className = 'card-title';
@@ -1763,7 +1860,7 @@
       top.className = 'library-topbar';
       const back = document.createElement('button');
       back.className = 'library-back';
-      back.textContent = '← К списку упражнений';
+      back.textContent = '← Вернуться к упражнениям';
       back.addEventListener('click', () => { state.library.view = 'list'; renderLibrary(); });
       const title = document.createElement('div');
       title.className = 'card-title';
@@ -2662,11 +2759,11 @@
       const removeBtn = document.createElement('button'); removeBtn.type = 'button'; removeBtn.className = 'btn'; removeBtn.textContent = 'Удалить подход';
       removeBtn.disabled = !(exercise.sets || []).length;
       removeBtn.addEventListener('click', (ev) => { ev.stopPropagation(); handleWorkoutRemove(exercise); });
-      const doneBtn = document.createElement('button'); doneBtn.type = 'button'; doneBtn.className = 'outline-btn'; doneBtn.textContent = '✅ Готово';
+      const doneBtn = document.createElement('button'); doneBtn.type = 'button'; doneBtn.className = 'outline-btn done-btn'; doneBtn.textContent = '✅ Готово';
       doneBtn.addEventListener('click', (ev) => { ev.stopPropagation(); handleExerciseDone(ueId); });
       const detailsBtn = document.createElement('button'); detailsBtn.type = 'button'; detailsBtn.className = 'outline-btn'; detailsBtn.textContent = 'ℹ️ Детали';
       detailsBtn.addEventListener('click', (ev) => { ev.stopPropagation(); openEditor(exercise.user_exercise_id); });
-      actionsRow.append(addBtn, removeBtn, doneBtn, detailsBtn);
+      actionsRow.append(addBtn, removeBtn, detailsBtn, doneBtn);
       container.appendChild(actionsRow);
     }
 
@@ -2720,6 +2817,9 @@
 
       const nextUeId = findNextIncomplete(ueId);
       if (nextUeId) state.workout.expanded = nextUeId;
+      state.workout.animations = state.workout.animations || { completed: null, next: null };
+      state.workout.animations.completed = ueId;
+      state.workout.animations.next = nextUeId || null;
 
       renderExercises(Array.from(state.exercises.values()));
       if (nextUeId) scrollExerciseIntoView(nextUeId);
@@ -2792,7 +2892,8 @@
       const card = document.createElement('div');
       card.className = 'card exercise-card';
       card.dataset.ueid = exercise.user_exercise_id;
-      if (state.workout.doneIds?.has(exercise.user_exercise_id)) {
+      const isDone = state.workout.doneIds?.has(exercise.user_exercise_id);
+      if (isDone) {
         card.classList.add('is-done');
       }
 
@@ -2809,14 +2910,26 @@
       }
       const meta = document.createElement('div');
       meta.className = 'exercise-meta';
+      if (isDone) {
+        const finishFlag = document.createElement('span');
+        finishFlag.className = 'finish-flag';
+        finishFlag.textContent = '🏁';
+        meta.appendChild(finishFlag);
+      }
       const setsPill = document.createElement('span');
       setsPill.className = 'pill exercise-sets-pill';
       setsPill.textContent = `Подходов: ${exercise.sets?.length || 0}`;
+      const rawGroupName = (exercise.muscle_group ?? '').toString().trim();
       const group = formatMuscleGroup(exercise.muscle_group);
-      if (group && group !== 'Не указано') {
+      const displayGroup = group === 'Другое' && rawGroupName ? rawGroupName : group;
+      if (displayGroup && displayGroup !== 'Не указано') {
         const musclePill = document.createElement('span');
-        musclePill.className = 'pill';
-        musclePill.textContent = group;
+        musclePill.className = 'pill muscle-pill';
+        const color = getMuscleColor(exercise.muscle_group);
+        musclePill.style.background = color;
+        musclePill.style.borderColor = color;
+        musclePill.style.color = getTextColorForBg(color);
+        musclePill.textContent = displayGroup;
         meta.appendChild(musclePill);
       }
       meta.appendChild(setsPill);
@@ -2884,6 +2997,32 @@
         if (ex) container.appendChild(renderExerciseCard(ex));
       });
       syncExpandedCards();
+      applyWorkoutAnimations(container);
+    }
+
+    function applyWorkoutAnimations(container) {
+      if (!container) return;
+      const anim = state.workout.animations || {};
+      const { completed, next } = anim;
+      if (completed) {
+        const completedCard = container.querySelector(`[data-ueid="${completed}"]`);
+        if (completedCard) {
+          requestAnimationFrame(() => {
+            completedCard.classList.add('finish-animate');
+            setTimeout(() => completedCard.classList.remove('finish-animate'), 520);
+          });
+        }
+      }
+      if (next) {
+        const nextCard = container.querySelector(`[data-ueid="${next}"]`);
+        if (nextCard) {
+          requestAnimationFrame(() => {
+            nextCard.classList.add('next-animate');
+            setTimeout(() => nextCard.classList.remove('next-animate'), 620);
+          });
+        }
+      }
+      state.workout.animations = { completed: null, next: null };
     }
 
     function removeExerciseFromState(ueId, card) {
@@ -3082,6 +3221,7 @@
           state.workout.expanded = null;
           state.workout.doneIds = new Set();
           state.workout.order = [];
+          state.workout.animations = { completed: null, next: null };
           state.todayDraft = {};
         }
         state.contexts = new Map();
