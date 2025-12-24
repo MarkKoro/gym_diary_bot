@@ -180,6 +180,7 @@
         gap: 10px;
       }
       .exercise-card { cursor: pointer; }
+      .exercise-card.is-done { outline: 2px solid rgba(46, 204, 113, 0.55); background: color-mix(in srgb, var(--card) 88%, rgba(46, 204, 113, 0.06)); }
       .exercise-card.busy { opacity: 0.6; pointer-events: none; }
       .exercise-card .card-title { display: flex; align-items: center; gap: 6px; }
       .exercise-head { display: flex; justify-content: space-between; gap: 8px; align-items: flex-start; }
@@ -1086,7 +1087,7 @@
       completedDays: new Set(),
       exercises: new Map(),
       todayDraft: {},
-      workout: { expanded: null },
+      workout: { expanded: null, doneIds: new Set(), order: [] },
       actionQueues: new Map(),
       contexts: new Map(),
       editor: { open: false, ueId: null, selectedSet: null, tab: 'sets', noteTimer: null, noteStatusTimer: null, flashSet: null, flashTimer: null, scrollTarget: null },
@@ -2649,9 +2650,11 @@
       const removeBtn = document.createElement('button'); removeBtn.type = 'button'; removeBtn.className = 'btn'; removeBtn.textContent = 'Удалить подход';
       removeBtn.disabled = !(exercise.sets || []).length;
       removeBtn.addEventListener('click', (ev) => { ev.stopPropagation(); handleWorkoutRemove(exercise); });
+      const doneBtn = document.createElement('button'); doneBtn.type = 'button'; doneBtn.className = 'outline-btn'; doneBtn.textContent = '✅ Готово';
+      doneBtn.addEventListener('click', (ev) => { ev.stopPropagation(); handleExerciseDone(ueId); });
       const detailsBtn = document.createElement('button'); detailsBtn.type = 'button'; detailsBtn.className = 'outline-btn'; detailsBtn.textContent = 'ℹ️ Детали';
       detailsBtn.addEventListener('click', (ev) => { ev.stopPropagation(); openEditor(exercise.user_exercise_id); });
-      actionsRow.append(addBtn, removeBtn, detailsBtn);
+      actionsRow.append(addBtn, removeBtn, doneBtn, detailsBtn);
       container.appendChild(actionsRow);
     }
 
@@ -2670,6 +2673,44 @@
       const next = state.workout.expanded === ueId ? null : ueId;
       state.workout.expanded = next;
       syncExpandedCards();
+    }
+
+    function scrollExerciseIntoView(ueId) {
+      const card = document.querySelector(`[data-ueid="${ueId}"]`);
+      if (card) card.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+
+    function findNextIncomplete(currentId) {
+      const order = state.workout.order || [];
+      const doneIds = state.workout.doneIds || new Set();
+      const idx = order.indexOf(currentId);
+      if (idx !== -1) {
+        for (let i = idx + 1; i < order.length; i += 1) {
+          const id = order[i];
+          if (!doneIds.has(id) && state.exercises.has(id)) return id;
+        }
+        for (let i = idx - 1; i >= 0; i -= 1) {
+          const id = order[i];
+          if (!doneIds.has(id) && state.exercises.has(id)) return id;
+        }
+      }
+      for (const id of order) {
+        if (!doneIds.has(id) && state.exercises.has(id)) return id;
+      }
+      return null;
+    }
+
+    function handleExerciseDone(ueId) {
+      const doneIds = state.workout.doneIds || new Set();
+      state.workout.doneIds = doneIds;
+      doneIds.add(ueId);
+      if (state.workout.expanded === ueId) state.workout.expanded = null;
+
+      const nextUeId = findNextIncomplete(ueId);
+      if (nextUeId) state.workout.expanded = nextUeId;
+
+      renderExercises(Array.from(state.exercises.values()));
+      if (nextUeId) scrollExerciseIntoView(nextUeId);
     }
 
     function syncExpandedCards() {
@@ -2717,10 +2758,31 @@
       renderWorkoutBody(ueId);
     }
 
+    function syncWorkoutOrder(list) {
+      const ids = (list || []).map((ex) => ex.user_exercise_id);
+      const prev = Array.isArray(state.workout.order) ? state.workout.order : [];
+      const inList = new Set(ids);
+      const next = [];
+      const seen = new Set();
+      prev.forEach((id) => {
+        if (inList.has(id)) {
+          next.push(id);
+          seen.add(id);
+        }
+      });
+      ids.forEach((id) => {
+        if (!seen.has(id)) next.push(id);
+      });
+      state.workout.order = next;
+    }
+
     function renderExerciseCard(exercise) {
       const card = document.createElement('div');
       card.className = 'card exercise-card';
       card.dataset.ueid = exercise.user_exercise_id;
+      if (state.workout.doneIds?.has(exercise.user_exercise_id)) {
+        card.classList.add('is-done');
+      }
 
       const header = document.createElement('div');
       header.className = 'exercise-head';
@@ -2769,7 +2831,11 @@
       const container = document.getElementById('cards');
       container.innerHTML = '';
       closeMenus();
-      state.exercises = new Map();
+      const doneIds = state.workout.doneIds || (state.workout.doneIds = new Set());
+      syncWorkoutOrder(list);
+      const exercisesMap = new Map();
+      list.forEach((ex) => exercisesMap.set(ex.user_exercise_id, ex));
+      state.exercises = exercisesMap;
       if (!list.length) {
         const empty = document.createElement('div');
         empty.className = 'empty-day';
@@ -2796,9 +2862,14 @@
         container.appendChild(empty);
         return;
       }
-      list.forEach((ex) => {
-        state.exercises.set(ex.user_exercise_id, ex);
-        container.appendChild(renderExerciseCard(ex));
+      const order = state.workout.order && state.workout.order.length ? state.workout.order : Array.from(exercisesMap.keys());
+      const sortedIds = [
+        ...order.filter((id) => exercisesMap.has(id) && !doneIds.has(id)),
+        ...order.filter((id) => exercisesMap.has(id) && doneIds.has(id)),
+      ];
+      sortedIds.forEach((id) => {
+        const ex = exercisesMap.get(id);
+        if (ex) container.appendChild(renderExerciseCard(ex));
       });
       syncExpandedCards();
     }
@@ -2997,6 +3068,8 @@
         state.dayIndex = dayIndex;
         if (dayChanged) {
           state.workout.expanded = null;
+          state.workout.doneIds = new Set();
+          state.workout.order = [];
           state.todayDraft = {};
         }
         state.contexts = new Map();
@@ -3010,6 +3083,12 @@
         state.daySubtitle = active?.subtitle || (dayIndex ? `День ${dayIndex}` : '');
         state.date = sheet.date;
         state.dateIso = toIsoDate(sheet.date);
+        state.workout.order = (sheet.exercises || []).map((ex) => ex.user_exercise_id);
+        if (state.workout.doneIds && state.workout.doneIds.size) {
+          const valid = new Set();
+          state.workout.order.forEach((id) => { if (state.workout.doneIds.has(id)) valid.add(id); });
+          state.workout.doneIds = valid;
+        }
         renderDayHeader();
         updateAddButtonVisibility();
         renderExercises(sheet.exercises || []);
