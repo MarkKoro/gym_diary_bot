@@ -256,6 +256,11 @@
         font-weight: 700;
         margin-bottom: 10px;
       }
+      .finish-popover-total{
+        font-weight: 800;
+        font-size: 16px;
+        margin-bottom: 12px;
+      }
     .toast {
       position: fixed;
       left: 50%;
@@ -888,6 +893,7 @@
 
           <div class="finish-popover" id="finishPopover" role="dialog" aria-hidden="true">
             <div class="finish-popover-title" id="finishPopoverTitle">Завершить день</div>
+            <div class="finish-popover-total" id="finishTotal">Общий объём за сегодня: 0 кг</div>
             <button class="btn primary" id="finishBtn" type="button">Завершить день</button>
           </div>
         </div>
@@ -3225,6 +3231,20 @@
       return Array.from(state.exercises.values()).reduce((acc, ex) => acc + (ex.sets?.length || 0), 0);
     }
 
+    function getTotalVolumeTodayKg() {
+      let total = 0;
+      state.exercises.forEach((exercise) => {
+        (exercise.sets || []).forEach((set) => {
+          const weight = Number(set.weight_kg || 0);
+          const reps = Number(set.reps || 0);
+          if (weight > 0 && reps > 0) {
+            total += weight * reps;
+          }
+        });
+      });
+      return Math.round(total);
+    }
+
     function renderDayHeader() {
       const combined = state.daySubtitle ? `${state.dayLabel} / ${state.daySubtitle}` : (state.dayLabel || 'Тренировка');
       const title = document.getElementById('dayTitle');
@@ -3236,6 +3256,14 @@
       const completed = state.completedDays.has(Number(state.dayIndex));
       const badge = document.getElementById('dayCompletedBadge');
       if (badge) badge.style.display = completed ? '' : 'none';
+    }
+
+    function renderFinishPopoverStats() {
+      const totalEl = document.getElementById('finishTotal');
+      if (!totalEl) return;
+      const total = getTotalVolumeTodayKg();
+      const formatted = Number.isFinite(total) ? total.toLocaleString('ru-RU') : '0';
+      totalEl.textContent = `Общий объём за сегодня: ${formatted} кг`;
     }
 
     function updateFinishButton() {
@@ -3254,6 +3282,7 @@
 
       const badge = document.getElementById('dayCompletedBadge');
       if (badge) badge.style.display = completed ? '' : 'none';
+      renderFinishPopoverStats();
     }
 
     function setFinishFabVisible(visible) {
@@ -3276,6 +3305,7 @@
       if (!pop) return;
       const willOpen = !pop.classList.contains('show');
       if (willOpen) {
+        renderFinishPopoverStats();
         pop.classList.add('show');
         pop.setAttribute('aria-hidden', 'false');
         try { tg?.HapticFeedback?.impactOccurred?.('light'); } catch (e){}
