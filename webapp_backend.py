@@ -231,13 +231,14 @@ def _serialize_running_entry(entry: tuple | None) -> dict:
             "distance_km": 0.0,
             "duration_sec": 0,
             "calories": 0,
+            "heart_rate": 0,
             "pace_sec": None,
             "pace_text": "—",
             "is_draft": True,
             "created_at": None,
             "day_index": None,
         }
-    entry_id, dist, duration, calories, is_draft, created_at = entry
+    entry_id, dist, duration, calories, heart_rate, is_draft, created_at = entry
     distance_val = float(dist or 0.0)
     duration_val = int(duration or 0)
     pace_sec = None
@@ -248,6 +249,7 @@ def _serialize_running_entry(entry: tuple | None) -> dict:
         "distance_km": round(distance_val, 3),
         "duration_sec": duration_val,
         "calories": int(calories or 0),
+        "heart_rate": int(heart_rate or 0),
         "pace_sec": pace_sec,
         "pace_text": _format_pace_value(pace_sec),
         "is_draft": bool(is_draft),
@@ -259,7 +261,7 @@ def _serialize_running_entry(entry: tuple | None) -> dict:
 def _serialize_running_history_row(row: tuple | None) -> dict | None:
     if not row:
         return None
-    entry_id, dist, duration, calories, created_at, day_idx = row
+    entry_id, dist, duration, calories, heart_rate, created_at, day_idx = row
     distance_val = float(dist or 0.0)
     duration_val = int(duration or 0)
     pace_sec = None
@@ -270,6 +272,7 @@ def _serialize_running_history_row(row: tuple | None) -> dict | None:
         "distance_km": round(distance_val, 3),
         "duration_sec": duration_val,
         "calories": int(calories or 0),
+        "heart_rate": int(heart_rate or 0),
         "pace_sec": pace_sec,
         "pace_text": _format_pace_value(pace_sec),
         "created_at": created_at,
@@ -297,6 +300,13 @@ def _clamp_running_calories(value: float | int | str) -> int:
         return max(int(round(float(value))), 0)
     except (TypeError, ValueError):
         raise HTTPException(status_code=400, detail="Некорректные калории")
+
+
+def _clamp_running_heart_rate(value: float | int | str) -> int:
+    try:
+        return max(min(int(round(float(value))), 260), 0)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="Некорректный пульс")
 
 
 async def _build_running_state(
@@ -863,16 +873,19 @@ async def update_running_state(
     distance_raw = payload.get("distance_km") if isinstance(payload, dict) else None
     duration_raw = payload.get("duration_sec") if isinstance(payload, dict) else None
     calories_raw = payload.get("calories") if isinstance(payload, dict) else None
+    heart_rate_raw = payload.get("heart_rate") if isinstance(payload, dict) else None
 
     distance_val = _clamp_running_distance(distance_raw if distance_raw is not None else entry[1])
     duration_val = _clamp_running_duration(duration_raw if duration_raw is not None else entry[2])
     calories_val = _clamp_running_calories(calories_raw if calories_raw is not None else entry[3])
+    heart_rate_val = _clamp_running_heart_rate(heart_rate_raw if heart_rate_raw is not None else entry[4])
 
     await update_running_entry(
         entry_id,
         distance_km=distance_val,
         duration_sec=duration_val,
         calories=calories_val,
+        heart_rate=heart_rate_val,
         is_draft=1,
     )
     state = await _build_running_state(user_id, day_index, ue_id, target_date, history_limit=30)
