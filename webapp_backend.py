@@ -18,11 +18,15 @@ import db
 from keyboards import MG_NAMES
 from db import (
     clear_day_completions,
+    get_running_entry,
     get_user_timezone,
     list_day_completions,
+    list_running_history,
     list_user_reminders,
-    mark_exercise_done,
     mark_day_completed,
+    mark_exercise_done,
+    mark_running_entry_done,
+    update_running_entry,
 )
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -197,6 +201,136 @@ def _parse_completion_rows(rows: list[tuple[int, str | None]]):
         if latest is None or dt > latest:
             latest = dt
     return parsed, latest
+
+
+def _normalize_group(value: str | None) -> str:
+    return (value or "").strip().lower()
+
+
+def _format_duration_value(seconds: int) -> str:
+    total = max(int(seconds or 0), 0)
+    hours, remainder = divmod(total, 3600)
+    minutes, sec = divmod(remainder, 60)
+    if hours:
+        return f"{hours}:{minutes:02d}:{sec:02d}"
+    return f"{minutes}:{sec:02d}"
+
+
+def _format_pace_value(seconds: float | None) -> str:
+    if seconds is None:
+        return "—"
+    total = max(int(round(seconds)), 0)
+    minutes, sec = divmod(total, 60)
+    return f"{minutes}:{sec:02d}"
+
+
+def _serialize_running_entry(entry: tuple | None) -> dict:
+    if not entry:
+        return {
+            "entry_id": None,
+            "distance_km": 0.0,
+            "duration_sec": 0,
+            "calories": 0,
+            "pace_sec": None,
+            "pace_text": "—",
+            "is_draft": True,
+            "created_at": None,
+            "day_index": None,
+        }
+    entry_id, dist, duration, calories, is_draft, created_at = entry
+    distance_val = float(dist or 0.0)
+    duration_val = int(duration or 0)
+    pace_sec = None
+    if distance_val > 0 and duration_val > 0:
+        pace_sec = duration_val / distance_val
+    return {
+        "entry_id": int(entry_id),
+        "distance_km": round(distance_val, 3),
+        "duration_sec": duration_val,
+        "calories": int(calories or 0),
+        "pace_sec": pace_sec,
+        "pace_text": _format_pace_value(pace_sec),
+        "is_draft": bool(is_draft),
+        "created_at": created_at,
+        "day_index": None,
+    }
+
+
+def _serialize_running_history_row(row: tuple | None) -> dict | None:
+    if not row:
+        return None
+    entry_id, dist, duration, calories, created_at, day_idx = row
+    distance_val = float(dist or 0.0)
+    duration_val = int(duration or 0)
+    pace_sec = None
+    if distance_val > 0 and duration_val > 0:
+        pace_sec = duration_val / distance_val
+    return {
+        "entry_id": int(entry_id),
+        "distance_km": round(distance_val, 3),
+        "duration_sec": duration_val,
+        "calories": int(calories or 0),
+        "pace_sec": pace_sec,
+        "pace_text": _format_pace_value(pace_sec),
+        "created_at": created_at,
+        "date": (created_at or "").split("T")[0],
+        "day_index": int(day_idx) if day_idx is not None else None,
+    }
+
+
+def _clamp_running_distance(value: float | int | str) -> float:
+    try:
+        return max(round(float(value), 3), 0.0)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="Некорректная дистанция")
+
+
+def _clamp_running_duration(value: float | int | str) -> int:
+    try:
+        return max(int(round(float(value))), 0)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="Некорректное время")
+
+
+def _clamp_running_calories(value: float | int | str) -> int:
+    try:
+        return max(int(round(float(value))), 0)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="Некорректные калории")
+
+
+async def _build_running_state(
+    user_id: int,
+    day_index: int,
+    ue_id: int,
+    target_date: date,
+    *,
+    history_limit: int = 12,
+):
+    iso_date = _iso_date(target_date)
+    session_id = await db.get_or_create_today_session(user_id, iso_date, day_index)
+    entry = await get_running_entry(
+        user_id,
+        ue_id,
+        session_id=session_id,
+        day_index=day_index,
+        create=True,
+    )
+    running_summary = _serialize_running_entry(entry)
+    history_rows = await list_running_history(user_id, ue_id, limit=history_limit)
+    history = [_serialize_running_history_row(row) for row in history_rows if row]
+    prev_running = None
+    if history_rows:
+        prev_row = history_rows[0]
+        if entry and history_rows[0][0] == entry[0] and len(history_rows) > 1:
+            prev_row = history_rows[1]
+        prev_running = _serialize_running_history_row(prev_row)
+    return {
+        "running": running_summary,
+        "running_history": history,
+        "previous_running": prev_running,
+        "session_id": session_id,
+    }
 
 
 async def _get_primary_training_weekday(user_id: int) -> int | None:
@@ -485,17 +619,31 @@ async def day_sheet(
     exercises_rows = await db.fetch_day_exercises(user_id, day_index, iso_date)
     exercises: list[dict] = []
     for ue_id, name, muscle_group, is_done, exercise_id in exercises_rows:
-        sets_rows = await db.fetch_exercise_sets(session_id, ue_id)
-        exercises.append(
-            {
-                "user_exercise_id": int(ue_id),
-                "exercise_id": int(exercise_id),
-                "name": name,
-                "muscle_group": muscle_group,
-                "is_done": bool(is_done),
-                "sets": _serialize_sets(sets_rows),
-            }
-        )
+        normalized_group = _normalize_group(muscle_group)
+        exercise_payload: dict[str, object] = {
+            "user_exercise_id": int(ue_id),
+            "exercise_id": int(exercise_id),
+            "name": name,
+            "muscle_group": muscle_group,
+            "is_done": bool(is_done),
+        }
+        if normalized_group == "run":
+            running_state = await _build_running_state(
+                user_id, day_index, ue_id, target_date, history_limit=20
+            )
+            exercise_payload.update(
+                {
+                    "running": running_state.get("running"),
+                    "running_history": running_state.get("running_history"),
+                    "previous_running": running_state.get("previous_running"),
+                    "session_id": running_state.get("session_id"),
+                    "sets": [],
+                }
+            )
+        else:
+            sets_rows = await db.fetch_exercise_sets(session_id, ue_id)
+            exercise_payload["sets"] = _serialize_sets(sets_rows)
+        exercises.append(exercise_payload)
 
     return {
         "date": _human_date(target_date),
@@ -673,6 +821,103 @@ async def inc_last_set_fast(
 
     new_sets = await db.fetch_exercise_sets(session_id, user_exercise_id)
     return {"ok": True, "sets": _serialize_sets(new_sets)}
+
+
+@app.get("/day/{day_index}/exercise/{ue_id}/running")
+async def get_running_state(
+    day_index: int,
+    ue_id: int,
+    date: str | None = None,
+    ctx: AuthCtx = Depends(get_auth_ctx),
+):
+    user_id = ctx.user_id
+    await _validate_day(user_id, day_index)
+    await _ensure_user_exercise(user_id, ue_id, day_index)
+    target_date = _parse_date_param(date)
+    state = await _build_running_state(user_id, day_index, ue_id, target_date, history_limit=30)
+    return {"ok": True, **state}
+
+
+@app.post("/day/{day_index}/exercise/{ue_id}/running")
+async def update_running_state(
+    day_index: int,
+    ue_id: int,
+    payload: dict = Body(...),
+    date: str | None = None,
+    ctx: AuthCtx = Depends(get_auth_ctx),
+):
+    user_id = ctx.user_id
+    await _validate_day(user_id, day_index)
+    await _ensure_user_exercise(user_id, ue_id, day_index)
+    target_date = _parse_date_param(date)
+    iso_date = _iso_date(target_date)
+    session_id = await db.get_or_create_today_session(user_id, iso_date, day_index)
+    entry = await get_running_entry(
+        user_id,
+        ue_id,
+        session_id=session_id,
+        day_index=day_index,
+        create=True,
+    )
+    entry_id = entry[0]
+    distance_raw = payload.get("distance_km") if isinstance(payload, dict) else None
+    duration_raw = payload.get("duration_sec") if isinstance(payload, dict) else None
+    calories_raw = payload.get("calories") if isinstance(payload, dict) else None
+
+    distance_val = _clamp_running_distance(distance_raw if distance_raw is not None else entry[1])
+    duration_val = _clamp_running_duration(duration_raw if duration_raw is not None else entry[2])
+    calories_val = _clamp_running_calories(calories_raw if calories_raw is not None else entry[3])
+
+    await update_running_entry(
+        entry_id,
+        distance_km=distance_val,
+        duration_sec=duration_val,
+        calories=calories_val,
+        is_draft=1,
+    )
+    state = await _build_running_state(user_id, day_index, ue_id, target_date, history_limit=30)
+    return {"ok": True, **state}
+
+
+@app.post("/day/{day_index}/exercise/{ue_id}/running/done")
+async def complete_running_state(
+    day_index: int,
+    ue_id: int,
+    date: str | None = None,
+    ctx: AuthCtx = Depends(get_auth_ctx),
+):
+    user_id = ctx.user_id
+    await _validate_day(user_id, day_index)
+    await _ensure_user_exercise(user_id, ue_id, day_index)
+    target_date = _parse_date_param(date)
+    iso_date = _iso_date(target_date)
+    session_id = await db.get_or_create_today_session(user_id, iso_date, day_index)
+    entry = await get_running_entry(
+        user_id,
+        ue_id,
+        session_id=session_id,
+        day_index=day_index,
+        create=True,
+    )
+    entry_id = entry[0]
+    await mark_running_entry_done(entry_id)
+    if session_id:
+        await mark_exercise_done(session_id, ue_id)
+    exercises_rows = await db.fetch_day_exercises(user_id, day_index, iso_date)
+    all_done = bool(exercises_rows) and all(bool(row[3]) for row in exercises_rows)
+    completed_days = await get_active_day_completions(user_id)
+    day_completed = False
+    if all_done and day_index not in completed_days:
+        await mark_day_completed(user_id, day_index, datetime.now(UTC).isoformat())
+        completed_days = await get_active_day_completions(user_id)
+        day_completed = True
+    state = await _build_running_state(user_id, day_index, ue_id, target_date, history_limit=30)
+    return {
+        "ok": True,
+        **state,
+        "day_completed": day_completed,
+        "completed_days": sorted(int(d) for d in completed_days),
+    }
 
 
 @app.post("/day/{day_index}/exercise/{user_exercise_id}/done")

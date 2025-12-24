@@ -433,6 +433,13 @@
     .circle-btn { width: 48px; height: 48px; border-radius: 50%; border: 1px solid var(--border); background: var(--card); font-size: 22px; font-weight: 700; cursor: pointer; box-shadow: var(--shadow); color: var(--text); }
     .circle-btn:disabled { opacity: 0.55; cursor: not-allowed; box-shadow: none; }
     .chips { display: none; }
+    .running-meta { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+    .running-badge { padding: 6px 10px; border-radius: 12px; border: 1px solid var(--border); background: color-mix(in srgb, var(--card) 84%, var(--border)); font-weight: 700; }
+    .running-pace { font-size: 13px; color: var(--muted); }
+    .running-history { display: grid; gap: 8px; }
+    .running-history-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; padding: 10px; border-radius: 10px; border: 1px solid var(--border); background: color-mix(in srgb, var(--card) 90%, transparent); }
+    .running-history-row .label { color: var(--muted); font-size: 12px; }
+    .running-history-row .value { font-weight: 700; }
     @keyframes setFlash { from { background: rgba(0,122,255,0.12); } to { background: var(--bg); } }
     @keyframes finishClose {
       0% { transform: translateY(0) scale(1); opacity: 1; }
@@ -1177,6 +1184,7 @@
       completedDays: new Set(),
       exercises: new Map(),
       todayDraft: {},
+      runningDraft: {},
       workout: { expanded: null, doneIds: new Set(), order: [], animations: { completed: null, next: null } },
       actionQueues: new Map(),
       contexts: new Map(),
@@ -1313,6 +1321,45 @@
       if (!key) return 'none';
       if (MUSCLE_NAMES[key]) return key;
       return 'other';
+    }
+
+    function isRunningExercise(exercise) {
+      return normalizeMuscleKey(exercise?.muscle_group) === 'run';
+    }
+
+    function formatDurationValue(sec) {
+      const total = Math.max(Number(sec || 0), 0);
+      const hours = Math.floor(total / 3600);
+      const minutes = Math.floor((total % 3600) / 60);
+      const seconds = total % 60;
+      if (hours) return `${hours}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+      return `${minutes}:${String(seconds).padStart(2, '0')}`;
+    }
+
+    function parseDurationInput(value) {
+      if (typeof value === 'number') return Math.max(Math.round(value), 0);
+      const raw = (value || '').toString().trim();
+      if (!raw) return 0;
+      if (raw.includes(':')) {
+        const parts = raw.split(':').map((p) => Number(p.trim() || 0));
+        if (parts.length === 2) {
+          return Math.max(Math.round(parts[0] * 60 + parts[1]), 0);
+        }
+        if (parts.length === 3) {
+          return Math.max(Math.round(parts[0] * 3600 + parts[1] * 60 + parts[2]), 0);
+        }
+      }
+      const num = Number(raw.replace(',', '.'));
+      if (Number.isFinite(num)) return Math.max(Math.round(num), 0);
+      return 0;
+    }
+
+    function formatPaceValue(sec) {
+      if (!Number.isFinite(sec) || sec <= 0) return '—';
+      const total = Math.max(Math.round(sec), 0);
+      const minutes = Math.floor(total / 60);
+      const seconds = total % 60;
+      return `${minutes}:${String(seconds).padStart(2, '0')}`;
     }
 
     function normalizePercents(raw) {
@@ -2514,6 +2561,18 @@
     }
 
     function buildExerciseSummary(exercise) {
+      if (isRunningExercise(exercise)) {
+        const running = exercise.running || {};
+        const distance = Number(running.distance_km || running.distance || 0);
+        const duration = Number(running.duration_sec || running.duration || 0);
+        const calories = Number(running.calories || 0);
+        const pace = running.pace_text || formatPaceValue(duration > 0 && distance > 0 ? duration / distance : null);
+        const distanceLabel = distance ? `${distance.toFixed(2)} км` : '—';
+        const durationLabel = duration ? formatDurationValue(duration) : '—';
+        const parts = [`Дистанция: ${distanceLabel}`, `Время: ${durationLabel}`, `Темп: ${pace} мин/км`];
+        if (calories > 0) parts.push(`${calories} ккал`);
+        return parts.join(' • ');
+      }
       const count = exercise.sets?.length || 0;
       if (!count) return 'Подходов пока нет';
       const last = formatLastSet(exercise);
@@ -2521,6 +2580,9 @@
     }
 
     function buildExpandedExerciseSummary(exercise) {
+      if (isRunningExercise(exercise)) {
+        return buildExerciseSummary(exercise);
+      }
       const sets = exercise.sets || [];
       if (!sets.length) return 'Подходов пока нет';
       return sets.map((set, idx) => {
@@ -2610,6 +2672,35 @@
       saveCachedLastValues(ueId, values);
     }
 
+    function ensureRunningDraft(ueId) {
+      const exercise = state.exercises.get(ueId);
+      if (!exercise) return { distance_km: 0, duration_sec: 0, calories: 0 };
+      if (!state.runningDraft[ueId]) {
+        const running = exercise.running || {};
+        state.runningDraft[ueId] = {
+          distance_km: Number(running.distance_km || running.distance || 0),
+          duration_sec: Number(running.duration_sec || running.duration || 0),
+          calories: Number(running.calories || 0),
+        };
+      }
+      return state.runningDraft[ueId];
+    }
+
+    function setRunningDraftValue(ueId, field, value) {
+      const draft = ensureRunningDraft(ueId);
+      const safe = field === 'distance_km' ? Math.max(0, Math.round(Number(value || 0) * 1000) / 1000) : Math.max(0, Math.round(Number(value || 0)));
+      state.runningDraft[ueId] = { ...draft, [field]: safe };
+      return safe;
+    }
+
+    function adjustRunningDraft(ueId, field, delta) {
+      const draft = ensureRunningDraft(ueId);
+      const current = Number(draft[field] || 0);
+      const safeDelta = Number(delta || 0);
+      const next = current + safeDelta;
+      return setRunningDraftValue(ueId, field, next);
+    }
+
     function closeMenus() {
       document.querySelectorAll('.card-menu').forEach((menu) => menu.classList.remove('open'));
       state.menu.openId = null;
@@ -2638,6 +2729,24 @@
       updateDraft(ueId, draft);
       saveCachedLastValues(ueId, draft);
       return rounded;
+    }
+
+    function applyRunningUpdate(ueId, payload) {
+      const exercise = state.exercises.get(ueId);
+      if (!exercise) return;
+      const running = payload.running || payload;
+      const history = payload.running_history || exercise.running_history || [];
+      const previous_running = payload.previous_running || exercise.previous_running || null;
+      const updated = { ...exercise, running, running_history: history, previous_running };
+      state.exercises.set(ueId, updated);
+      state.runningDraft[ueId] = {
+        distance_km: Number(running?.distance_km || running?.distance || 0),
+        duration_sec: Number(running?.duration_sec || running?.duration || 0),
+        calories: Number(running?.calories || 0),
+      };
+      updateCardSummary(ueId);
+      if (state.workout.expanded === ueId) renderExerciseBody(ueId);
+      if (state.editor.open && state.editor.ueId === ueId) renderEditor();
     }
 
     function beginInlineNumberEdit(containerEl, {
@@ -2782,6 +2891,83 @@
       container.appendChild(actionsRow);
     }
 
+    function renderRunningControls(container, exercise) {
+      const ueId = exercise.user_exercise_id;
+      const draft = ensureRunningDraft(ueId);
+      container.innerHTML = '';
+
+      const meta = document.createElement('div');
+      meta.className = 'running-meta';
+      const pace = draft.distance_km > 0 && draft.duration_sec > 0 ? draft.duration_sec / draft.distance_km : null;
+      const paceLabel = formatPaceValue(pace);
+      const distanceBadge = document.createElement('span');
+      distanceBadge.className = 'running-badge';
+      distanceBadge.textContent = `Дистанция: ${draft.distance_km.toFixed(2)} км`;
+      const durationBadge = document.createElement('span');
+      durationBadge.className = 'running-badge';
+      durationBadge.textContent = `Время: ${formatDurationValue(draft.duration_sec)}`;
+      const paceText = document.createElement('span');
+      paceText.className = 'running-pace';
+      paceText.textContent = `Темп: ${paceLabel} мин/км`;
+      meta.append(distanceBadge, durationBadge, paceText);
+      container.appendChild(meta);
+
+      const controls = document.createElement('div');
+      controls.className = 'controls-grid';
+      const buildBlock = (label, field, opts = {}) => {
+        const block = document.createElement('div');
+        block.className = 'control-block';
+        const head = document.createElement('div'); head.className = 'control-head'; head.textContent = label;
+        const valueEl = document.createElement('div'); valueEl.className = 'control-value';
+        if (field === 'duration_sec') valueEl.textContent = formatDurationValue(draft.duration_sec);
+        else valueEl.textContent = field === 'distance_km' ? draft.distance_km.toFixed(2) : Number(draft[field] || 0);
+        valueEl.tabIndex = 0;
+        valueEl.setAttribute('role', 'button');
+        valueEl.style.cursor = 'text';
+        attachInlineNumberHandler(valueEl, () => {
+          const current = field === 'duration_sec' ? Number(draft.duration_sec || 0) : Number(draft[field] || 0);
+          return {
+            value: field === 'distance_km' ? current : current,
+            min: 0,
+            max: field === 'distance_km' ? 200 : (field === 'duration_sec' ? 24 * 3600 : 20000),
+            step: opts.step ?? 1,
+            decimals: field === 'distance_km' ? 2 : 0,
+            inputMode: field === 'distance_km' ? 'decimal' : 'numeric',
+            onCommit: (next) => {
+              const normalized = field === 'distance_km' ? next : (field === 'duration_sec' ? parseDurationInput(next) : next);
+              setRunningDraftValue(ueId, field, normalized);
+              renderRunningBody(ueId);
+            },
+          };
+        });
+        const actions = document.createElement('div'); actions.className = 'control-actions';
+        const minus = document.createElement('button'); minus.type = 'button'; minus.className = 'circle-btn'; minus.textContent = '−';
+        minus.addEventListener('click', (ev) => { ev.stopPropagation(); adjustRunningDraft(ueId, field, -(opts.step || 1)); renderRunningBody(ueId); });
+        const plus = document.createElement('button'); plus.type = 'button'; plus.className = 'circle-btn'; plus.textContent = '+'; plus.addEventListener('click', (ev) => { ev.stopPropagation(); adjustRunningDraft(ueId, field, opts.step || 1); renderRunningBody(ueId); });
+        actions.append(minus, valueEl, plus);
+        block.append(head, actions);
+        return block;
+      };
+
+      controls.append(
+        buildBlock('Дистанция, км', 'distance_km', { step: 0.1 }),
+        buildBlock('Время', 'duration_sec', { step: 30 }),
+        buildBlock('Калории', 'calories', { step: 10 }),
+      );
+      container.appendChild(controls);
+
+      const actionsRow = document.createElement('div');
+      actionsRow.className = 'workout-actions';
+      const saveBtn = document.createElement('button'); saveBtn.type = 'button'; saveBtn.className = 'btn primary'; saveBtn.textContent = 'Сохранить';
+      saveBtn.addEventListener('click', (ev) => { ev.stopPropagation(); handleRunningSave(exercise).catch(console.error); });
+      const historyBtn = document.createElement('button'); historyBtn.type = 'button'; historyBtn.className = 'btn'; historyBtn.textContent = 'История';
+      historyBtn.addEventListener('click', (ev) => { ev.stopPropagation(); openEditor(exercise.user_exercise_id); });
+      const doneBtn = document.createElement('button'); doneBtn.type = 'button'; doneBtn.className = 'outline-btn done-btn'; doneBtn.textContent = '✅ Готово';
+      doneBtn.addEventListener('click', (ev) => { ev.stopPropagation(); handleRunningDone(exercise).catch(console.error); });
+      actionsRow.append(saveBtn, historyBtn, doneBtn);
+      container.appendChild(actionsRow);
+    }
+
     function renderWorkoutBody(ueId) {
       const card = document.querySelector(`[data-ueid="${ueId}"]`);
       const exercise = state.exercises.get(ueId);
@@ -2791,6 +2977,24 @@
       if (state.workout.expanded !== ueId) { body.innerHTML = ''; body.style.display = 'none'; return; }
       body.style.display = '';
       renderWorkoutControls(body, exercise);
+    }
+
+    function renderRunningBody(ueId) {
+      const card = document.querySelector(`[data-ueid="${ueId}"]`);
+      const exercise = state.exercises.get(ueId);
+      if (!card || !exercise) return;
+      const body = card.querySelector('.workout-body');
+      if (!body) return;
+      if (state.workout.expanded !== ueId) { body.innerHTML = ''; body.style.display = 'none'; return; }
+      body.style.display = '';
+      renderRunningControls(body, exercise);
+    }
+
+    function renderExerciseBody(ueId) {
+      const exercise = state.exercises.get(ueId);
+      if (!exercise) return;
+      if (isRunningExercise(exercise)) renderRunningBody(ueId);
+      else renderWorkoutBody(ueId);
     }
 
     function toggleWorkoutCard(ueId) {
@@ -2867,7 +3071,7 @@
         const expanded = state.workout.expanded === ueId;
         card.classList.toggle('expanded', expanded);
         const body = card.querySelector('.workout-body');
-        if (expanded) renderWorkoutBody(ueId);
+        if (expanded) renderExerciseBody(ueId);
         else if (body) { body.innerHTML = ''; body.style.display = 'none'; }
         updateCardSummary(ueId);
       });
@@ -2904,6 +3108,51 @@
         toast('Ошибка связи. Попробуй ещё раз.');
       }
       renderWorkoutBody(ueId);
+    }
+
+    async function handleRunningSave(exercise, opts = {}) {
+      const ueId = exercise.user_exercise_id;
+      const draft = ensureRunningDraft(ueId);
+      const query = state.dateIso ? `?date=${state.dateIso}` : '';
+      await queueExerciseAction(ueId, async () => {
+        try {
+          const data = await apiFetch(`/gymapi/day/${state.dayIndex}/exercise/${ueId}/running${query}`, {
+            method: 'POST',
+            body: {
+              distance_km: Number(draft.distance_km || 0),
+              duration_sec: Number(draft.duration_sec || 0),
+              calories: Number(draft.calories || 0),
+            },
+          });
+          applyRunningUpdate(ueId, data);
+          if (opts.toast !== false) toast('Сохранено');
+        } catch (_) {
+          toast('Ошибка связи. Попробуй ещё раз.');
+        }
+      });
+    }
+
+    async function handleRunningDone(exercise) {
+      const ueId = exercise.user_exercise_id;
+      const query = state.dateIso ? `?date=${state.dateIso}` : '';
+      await queueExerciseAction(ueId, async () => {
+        try {
+          const data = await apiFetch(`/gymapi/day/${state.dayIndex}/exercise/${ueId}/running/done${query}`, { method: 'POST' });
+          applyRunningUpdate(ueId, data);
+          const doneIds = state.workout.doneIds instanceof Set ? state.workout.doneIds : new Set();
+          doneIds.add(ueId);
+          state.workout.doneIds = doneIds;
+          if (data.completed_days) {
+            state.completedDays = new Set((data.completed_days || []).map(Number));
+            renderDayOptions(state.dayIndex);
+            renderDayHeader();
+            updateFinishButton();
+          }
+          toast('Забег сохранён ✅');
+        } catch (_) {
+          toast('Ошибка связи. Попробуй ещё раз.');
+        }
+      });
     }
 
     function syncWorkoutOrder(list) {
@@ -2954,7 +3203,7 @@
       }
       const setsPill = document.createElement('span');
       setsPill.className = 'pill exercise-sets-pill';
-      setsPill.textContent = `Подходов: ${exercise.sets?.length || 0}`;
+      setsPill.textContent = isRunningExercise(exercise) ? 'Бег' : `Подходов: ${exercise.sets?.length || 0}`;
       const rawGroupName = (exercise.muscle_group ?? '').toString().trim();
       const group = formatMuscleGroup(exercise.muscle_group);
       const displayGroup = group === 'Другое' && rawGroupName ? rawGroupName : group;
@@ -3108,7 +3357,7 @@
       const pill = card.querySelector('.exercise-sets-pill');
       const expanded = card.classList.contains('expanded');
       if (summary) summary.textContent = expanded ? buildExpandedExerciseSummary(exercise) : buildExerciseSummary(exercise);
-      if (pill) pill.textContent = `Подходов: ${exercise.sets?.length || 0}`;
+      if (pill) pill.textContent = isRunningExercise(exercise) ? 'Бег' : `Подходов: ${exercise.sets?.length || 0}`;
     }
 
     function applySetsUpdate(ueId, sets) {
@@ -3259,6 +3508,7 @@
           state.workout.order = [];
           state.workout.animations = { completed: null, next: null };
           state.todayDraft = {};
+          state.runningDraft = {};
         }
         state.contexts = new Map();
         const sheet = await apiFetch(`/gymapi/day/${dayIndex}/sheet`);
@@ -3413,7 +3663,14 @@
     }
 
     function getTotalSetsToday() {
-      return Array.from(state.exercises.values()).reduce((acc, ex) => acc + (ex.sets?.length || 0), 0);
+      return Array.from(state.exercises.values()).reduce((acc, ex) => {
+        if (isRunningExercise(ex)) {
+          const run = ex.running || {};
+          const hasRun = Number(run.distance_km || run.distance || 0) > 0 || Number(run.duration_sec || run.duration || 0) > 0;
+          return acc + (hasRun ? 1 : 0);
+        }
+        return acc + (ex.sets?.length || 0);
+      }, 0);
     }
 
     function getTotalVolumeTodayKg() {
@@ -3644,6 +3901,60 @@
       });
     }
 
+    function renderRunningDetails(exercise) {
+      const list = document.getElementById('setsList');
+      const label = document.getElementById('selectedLabel');
+      const grid = document.getElementById('controlsGrid');
+      list.innerHTML = '';
+      grid.innerHTML = '';
+      const draft = ensureRunningDraft(exercise.user_exercise_id);
+      const pace = draft.distance_km > 0 && draft.duration_sec > 0 ? draft.duration_sec / draft.distance_km : null;
+      const meta = document.createElement('div');
+      meta.className = 'running-meta';
+      const d = document.createElement('span'); d.className = 'running-badge'; d.textContent = `Дистанция: ${draft.distance_km.toFixed(2)} км`;
+      const t = document.createElement('span'); t.className = 'running-badge'; t.textContent = `Время: ${formatDurationValue(draft.duration_sec)}`;
+      const p = document.createElement('span'); p.className = 'running-pace'; p.textContent = `Темп: ${formatPaceValue(pace)} мин/км`;
+      meta.append(d, t, p);
+      list.appendChild(meta);
+
+      label.textContent = 'История забегов';
+      const history = exercise.running_history || [];
+      if (!history.length) {
+        const empty = document.createElement('div');
+        empty.className = 'history-note';
+        empty.textContent = 'Здесь появятся последние пробежки.';
+        list.appendChild(empty);
+      } else {
+        const historyList = document.createElement('div');
+        historyList.className = 'running-history';
+        history.slice(0, 5).forEach((row) => {
+          const item = document.createElement('div');
+          item.className = 'running-history-row';
+          const date = document.createElement('div'); date.innerHTML = `<div class="label">Дата</div><div class="value">${row.date || '—'}</div>`;
+          const dist = document.createElement('div'); dist.innerHTML = `<div class="label">Км</div><div class="value">${Number(row.distance_km || 0).toFixed(2)}</div>`;
+          const time = document.createElement('div'); time.innerHTML = `<div class="label">Время</div><div class="value">${formatDurationValue(row.duration_sec)}</div>`;
+          const paceEl = document.createElement('div'); paceEl.innerHTML = `<div class="label">Темп</div><div class="value">${formatPaceValue(row.pace_sec)} мин/км</div>`;
+          item.append(date, dist, time, paceEl);
+          historyList.appendChild(item);
+        });
+        list.appendChild(historyList);
+      }
+
+      const charts = document.createElement('div');
+      charts.className = 'card-list';
+      const distBlock = document.createElement('div');
+      distBlock.className = 'chart-block';
+      distBlock.appendChild(buildChart('Дистанция, км', history, 'distance_km', true));
+      const pacePoints = history.map((row) => ({ ...row, pace_min: row.pace_sec ? row.pace_sec / 60 : 0 }));
+      const paceBlock = document.createElement('div');
+      paceBlock.className = 'chart-block';
+      paceBlock.appendChild(buildChart('Темп (мин/км)', pacePoints, 'pace_min', true));
+      charts.append(distBlock, paceBlock);
+      grid.appendChild(charts);
+      const removeBtn = document.getElementById('editorRemoveSet');
+      if (removeBtn) removeBtn.disabled = true;
+    }
+
     function buildControlBlock(label, field, value, primary = false) {
       const block = document.createElement('div');
       block.className = 'control-block' + (primary ? ' primary' : '');
@@ -3706,6 +4017,10 @@
     function renderHistoryTab(exercise) {
       const container = document.getElementById('historyContent');
       container.innerHTML = '';
+      if (isRunningExercise(exercise)) {
+        renderRunningHistoryTab(exercise);
+        return;
+      }
       const ctx = getOrCreateContext(exercise.user_exercise_id);
       if (!ctx.loaded && !ctx.loading) ensureExerciseContext(exercise.user_exercise_id);
       if (ctx.loading) { container.textContent = 'Загрузка…'; return; }
@@ -3750,6 +4065,43 @@
       }
     }
 
+    function renderRunningHistoryTab(exercise) {
+      const container = document.getElementById('historyContent');
+      const history = exercise.running_history || [];
+      if (!history.length) {
+        container.textContent = 'Пока нет истории по забегу.';
+        return;
+      }
+      const cards = document.createElement('div');
+      cards.className = 'card-list';
+      const distanceBlock = document.createElement('div');
+      distanceBlock.className = 'chart-block';
+      distanceBlock.appendChild(buildChart('Дистанция, км', history, 'distance_km', true));
+      const pacePoints = history.map((row) => ({ ...row, pace_min: row.pace_sec ? row.pace_sec / 60 : 0 }));
+      const paceBlock = document.createElement('div');
+      paceBlock.className = 'chart-block';
+      paceBlock.appendChild(buildChart('Темп (мин/км)', pacePoints, 'pace_min', true));
+      const durationBlock = document.createElement('div');
+      durationBlock.className = 'chart-block';
+      durationBlock.appendChild(buildChart('Время, сек', history, 'duration_sec', true));
+      cards.append(distanceBlock, paceBlock, durationBlock);
+      container.appendChild(cards);
+
+      const list = document.createElement('div');
+      list.className = 'running-history';
+      history.forEach((row) => {
+        const item = document.createElement('div');
+        item.className = 'running-history-row';
+        const date = document.createElement('div'); date.innerHTML = `<div class="label">Дата</div><div class="value">${row.date || '—'}</div>`;
+        const dist = document.createElement('div'); dist.innerHTML = `<div class="label">Км</div><div class="value">${Number(row.distance_km || 0).toFixed(2)}</div>`;
+        const time = document.createElement('div'); time.innerHTML = `<div class="label">Время</div><div class="value">${formatDurationValue(row.duration_sec)}</div>`;
+        const pace = document.createElement('div'); pace.innerHTML = `<div class="label">Темп</div><div class="value">${formatPaceValue(row.pace_sec)} мин/км</div>`;
+        item.append(date, dist, time, pace);
+        list.appendChild(item);
+      });
+      container.appendChild(list);
+    }
+
     function renderEditor() {
       if (!state.editor.open) return;
       const exercise = state.exercises.get(state.editor.ueId);
@@ -3757,8 +4109,22 @@
       document.getElementById('sheet').classList.add('show');
       document.getElementById('sheetSubtitle').textContent = exercise.name;
       setActiveTab(state.editor.tab || 'sets');
+      const isRunning = isRunningExercise(exercise);
+      const addBtn = document.getElementById('editorAddSet');
+      const removeBtn = document.getElementById('editorRemoveSet');
+      if (isRunning) {
+        if (addBtn) addBtn.style.display = 'none';
+        if (removeBtn) removeBtn.style.display = 'none';
+      } else {
+        if (addBtn) addBtn.style.display = '';
+        if (removeBtn) removeBtn.style.display = '';
+      }
 
       if (state.editor.tab === 'sets') {
+        if (isRunning) {
+          renderRunningDetails(exercise);
+          return;
+        }
         renderSetsList(exercise);
         const selected = exercise.sets.find((s) => s.set_no === state.editor.selectedSet);
         const nextNo = (exercise.sets[exercise.sets.length - 1]?.set_no || 0) + 1;
