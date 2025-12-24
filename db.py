@@ -1212,15 +1212,58 @@ async def set_workouts_per_week(user_id: int, n: int) -> list[tuple[int, int, in
 
     async with connect_db() as db:
         await db.execute("UPDATE users SET workouts_per_week=? WHERE id=?", (n, user_id))
+        removed_days: list[int] = []
         for i in range(1, 8):
             label = f"День {i}"
             is_active = 1 if i <= n else 0
+            if not is_active:
+                removed_days.append(i)
             await db.execute(
                 """
                 INSERT INTO user_days(user_id, day_index, label, is_active) VALUES(?,?,?,?)
                 ON CONFLICT(user_id, day_index) DO UPDATE SET label=excluded.label, is_active=excluded.is_active
                 """,
                 (user_id, i, label, is_active),
+            )
+
+        removed_ue_ids: list[int] = []
+        if removed_days:
+            placeholders = ",".join("?" for _ in removed_days)
+            day_params: tuple = tuple(removed_days)
+            cur = await db.execute(
+                f"SELECT id FROM user_exercises WHERE user_id=? AND day_index IN ({placeholders}) AND is_archived=0",
+                (user_id, *day_params),
+            )
+            removed_ue_ids = [int(r[0]) for r in await cur.fetchall() if r and r[0] is not None]
+            await db.execute(
+                f"UPDATE user_exercises SET is_archived=1 WHERE user_id=? AND day_index IN ({placeholders}) AND is_archived=0",
+                (user_id, *day_params),
+            )
+            await db.execute(
+                f"DELETE FROM exercise_baseline WHERE user_id=? AND day_index IN ({placeholders})",
+                (user_id, *day_params),
+            )
+            await db.execute(
+                f"DELETE FROM day_completions WHERE user_id=? AND day_index IN ({placeholders})",
+                (user_id, *day_params),
+            )
+            await db.execute(
+                f"DELETE FROM sessions WHERE user_id=? AND day_index IN ({placeholders})",
+                (user_id, *day_params),
+            )
+        if removed_ue_ids:
+            ue_placeholders = ",".join("?" for _ in removed_ue_ids)
+            await db.execute(
+                f"DELETE FROM running_entries WHERE user_id=? AND user_exercise_id IN ({ue_placeholders})",
+                (user_id, *tuple(removed_ue_ids)),
+            )
+            await db.execute(
+                f"DELETE FROM sets WHERE user_exercise_id IN ({ue_placeholders})",
+                tuple(removed_ue_ids),
+            )
+            await db.execute(
+                f"DELETE FROM session_exercises WHERE user_exercise_id IN ({ue_placeholders})",
+                tuple(removed_ue_ids),
             )
         await db.commit()
 
@@ -2289,6 +2332,22 @@ async def list_day_completions(user_id: int):
         return await cur.fetchall()
 
 
+async def get_day_completion(user_id: int, day_index: int) -> str | None:
+    async with connect_db() as db:
+        cur = await db.execute(
+            """
+            SELECT completed_at
+            FROM day_completions
+            WHERE user_id=? AND day_index=?
+            ORDER BY completed_at DESC
+            LIMIT 1
+            """,
+            (user_id, day_index),
+        )
+        row = await cur.fetchone()
+        return row[0] if row and row[0] else None
+
+
 async def get_last_completion_for_user(user_id: int):
     async with connect_db() as db:
         cur = await db.execute(
@@ -2306,6 +2365,10 @@ async def get_last_completion_for_user(user_id: int):
 
 async def mark_day_completed(user_id: int, day_index: int, completed_at: str):
     async with connect_db() as db:
+        await db.execute(
+            "DELETE FROM day_completions WHERE user_id=? AND day_index<>?",
+            (user_id, day_index),
+        )
         await db.execute(
             "REPLACE INTO day_completions(user_id, day_index, completed_at) VALUES(?,?,?)",
             (user_id, day_index, completed_at),

@@ -862,6 +862,7 @@ async def compose_main_menu(
         )
         for day_index, label in filtered_days
     ]
+    day_label_map = {idx: label for idx, label in days}
     completions = await get_active_day_completions(user_id)
     text = build_main_menu_text(prefs)
     stats_lines: list[str] = []
@@ -873,7 +874,7 @@ async def compose_main_menu(
     now_local = datetime.now(UTC).astimezone(zone)
     last_completion = await get_last_completion_for_user(user_id)
     if last_completion:
-        _, completed_at = last_completion
+        day_idx, completed_at = last_completion
         if completed_at:
             try:
                 last_dt = datetime.fromisoformat(completed_at)
@@ -885,8 +886,12 @@ async def compose_main_menu(
                 last_local = last_dt.astimezone(zone)
                 delta_days = (now_local.date() - last_local.date()).days
                 ago_text = _format_days_ago(max(delta_days, 0))
+                day_label = day_label_map.get(
+                    int(day_idx),
+                    f"{t('DAY')} {day_idx}",
+                )
                 stats_lines.append(
-                    f"Последняя отмеченная тренировка: {last_local.strftime('%d.%m.%Y')} — {ago_text}."
+                    f"Последний завершённый день: {day_label} — {last_local.strftime('%d.%m.%Y')} ({ago_text})."
                 )
     notifications_enabled = await get_user_notifications_enabled(user_id)
     if notifications_enabled:

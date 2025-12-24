@@ -115,8 +115,9 @@
     .icon-btn:disabled { opacity: 0.55; cursor: not-allowed; box-shadow: none; }
     .icon-btn.ghost { background: transparent; box-shadow: none; }
     .icon { width: 20px; height: 20px; display: block; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
-    .day-meta { display: none; }
-    .day-subtitle { display: none; }
+    .day-meta { display: grid; gap: 2px; }
+    .day-subtitle { display: block; color: var(--muted); font-size: 13px; }
+    .day-last { color: var(--muted); font-size: 13px; }
     .today-header .status { padding: 7px 10px; }
     .day-actions { display: none; }
     .drawer-backdrop {
@@ -954,6 +955,7 @@
         <div class="day-meta">
           <div class="day-date" id="dateLabel">—</div>
           <div class="day-subtitle" id="daySubtitle"></div>
+          <div class="day-last" id="dayLastCompleted" style="display:none"></div>
         </div>
         <div class="day-actions hidden" id="dayActions">
           <button id="headerAddBtn" class="icon-btn small hidden" aria-label="Добавить упражнение">＋</button>
@@ -1186,6 +1188,9 @@
       dateIso: '',
       dayLabel: '',
       daySubtitle: '',
+      lastCompletedAt: null,
+      lastCompletedLabel: '',
+      showLastCompleted: true,
       activeDays: [],
       completedDays: new Set(),
       exercises: new Map(),
@@ -1366,6 +1371,23 @@
       const minutes = Math.floor(total / 60);
       const seconds = total % 60;
       return `${minutes}:${String(seconds).padStart(2, '0')}`;
+    }
+
+    function formatDaysAgo(diffDays) {
+      if (diffDays <= 0) return 'сегодня';
+      if (diffDays === 1) return 'вчера';
+      if (diffDays <= 4) return `${diffDays} дня назад`;
+      return `${diffDays} дней назад`;
+    }
+
+    function formatLastCompleted(raw) {
+      if (!raw) return '';
+      const dt = new Date(raw);
+      if (Number.isNaN(dt.getTime())) return '';
+      const now = new Date();
+      const diffDays = Math.floor((now - dt) / (1000 * 60 * 60 * 24));
+      const dateText = dt.toLocaleDateString('ru-RU');
+      return `${dateText} (${formatDaysAgo(diffDays)})`;
     }
 
     function normalizePercents(raw) {
@@ -3119,6 +3141,7 @@
         renderDayOptions(state.dayIndex);
         renderDayHeader();
         updateFinishButton();
+        if (data?.last_completed_at) updateLastCompleted(data.last_completed_at);
         if (data?.day_completed) toast('День отмечен завершённым ✅');
       } catch (e) {
         state.workout.doneIds = previousDone;
@@ -3214,6 +3237,7 @@
             renderDayHeader();
             updateFinishButton();
           }
+          if (data?.last_completed_at) updateLastCompleted(data.last_completed_at);
           toast('Забег сохранён ✅');
         } catch (_) {
           toast('Ошибка связи. Попробуй ещё раз.');
@@ -3295,7 +3319,7 @@
       workoutBody.addEventListener('click', (e) => e.stopPropagation());
 
       card.append(header, summary, workoutBody);
-      const toggle = () => toggleWorkoutCard(exercise.user_exercise_id);
+      const toggle = () => { hideLastCompletedHint(); toggleWorkoutCard(exercise.user_exercise_id); };
       card.addEventListener('click', toggle);
       header.addEventListener('click', (ev) => { ev.stopPropagation(); toggle(); });
       summary.addEventListener('click', (ev) => { ev.stopPropagation(); toggle(); });
@@ -3547,6 +3571,7 @@
         renderDayOptions(state.dayIndex);
         renderDayHeader();
         updateFinishButton();
+        if (data?.last_completed_at) updateLastCompleted(data.last_completed_at);
         closeFinishPopover();
         triggerHaptic();
         toast('День завершён ✅');
@@ -3587,6 +3612,7 @@
         state.daySubtitle = active?.subtitle || (dayIndex ? `День ${dayIndex}` : '');
         state.date = sheet.date;
         state.dateIso = toIsoDate(sheet.date);
+        updateLastCompleted(sheet.last_completed_at || null);
         state.workout.order = (sheet.exercises || []).map((ex) => ex.user_exercise_id);
         const doneIdsFromServer = new Set();
         (sheet.exercises || []).forEach((ex) => { if (ex.is_done) doneIdsFromServer.add(Number(ex.user_exercise_id)); });
@@ -3764,6 +3790,25 @@
       const completed = state.completedDays.has(Number(state.dayIndex));
       const badge = document.getElementById('dayCompletedBadge');
       if (badge) badge.style.display = completed ? '' : 'none';
+      const last = document.getElementById('dayLastCompleted');
+      if (last) {
+        const text = state.showLastCompleted ? (state.lastCompletedLabel || '') : '';
+        last.textContent = text;
+        last.style.display = text ? '' : 'none';
+      }
+    }
+
+    function hideLastCompletedHint() {
+      if (!state.showLastCompleted) return;
+      state.showLastCompleted = false;
+      renderDayHeader();
+    }
+
+    function updateLastCompleted(raw) {
+      state.lastCompletedAt = raw || null;
+      state.lastCompletedLabel = formatLastCompleted(raw);
+      state.showLastCompleted = !!state.lastCompletedLabel;
+      renderDayHeader();
     }
 
     function renderFinishPopoverStats() {
