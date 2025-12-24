@@ -88,7 +88,7 @@
     }
     .today-header { display: grid; gap: 4px; padding: 12px; border-radius: 16px; border: 1px solid var(--border); background: var(--card); box-shadow: var(--shadow); }
     .day-line { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 10px; }
-    .day-title { font-weight: 800; font-size: 17px; letter-spacing: -0.01em; display: flex; align-items: center; gap: 8px; min-width: 0; }
+    .day-title { font-weight: 700; font-size: 17px; letter-spacing: -0.01em; display: flex; align-items: center; gap: 8px; min-width: 0; }
     .day-title .main-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .day-date { color: var(--muted); font-size: 13px; }
     .day-badge { padding: 6px 10px; border-radius: 999px; background: rgba(52,199,89,0.12); color: #1c8c4d; font-weight: 700; font-size: 12px; }
@@ -348,6 +348,8 @@
     .set-no { font-weight: 700; }
     .set-meta { font-size: 13px; color: var(--muted); text-align: right; }
     .selected-label { font-size: 13px; color: var(--muted); margin-bottom: 8px; }
+    [data-theme="light"] .set-row { color: rgba(0,0,0,0.82); }
+    [data-theme="light"] .set-meta { color: rgba(0,0,0,0.70); }
     .tab-panel { display: none; }
     .tab-panel.active { display: block; }
     .note-area { width: 100%; min-height: 120px; padding: 12px; border-radius: 12px; border: 1px solid var(--border); background: var(--bg); color: var(--text); font-size: 15px; }
@@ -605,6 +607,7 @@
         background: rgba(20,25,35,0.90);
         box-shadow: 0 16px 45px rgba(0,0,0,0.40);
       }
+      [data-theme="light"] .timer-pill { color: #fff; }
 
       .timer-pill.show{ display:flex; }
 
@@ -613,6 +616,7 @@
         letter-spacing: 0.5px;
         font-variant-numeric: tabular-nums;
       }
+      [data-theme="light"] .timer-time { color: #fff; }
 
       .timer-pill .timer-actions{
         display:flex;
@@ -661,6 +665,7 @@
         opacity: 0.85;
         margin-bottom: 8px;
       }
+      [data-theme="light"] .timer-box-title { color: rgba(255,255,255,0.85); }
 
       .timer-big{
         font-size: 34px;
@@ -687,6 +692,7 @@
         opacity: 0.75;
         margin-top: 10px;
       }
+      [data-theme="light"] .timer-hint { color: rgba(255,255,255,0.85); }
       .day-sheet .sheet { max-width: 520px; }
       .day-sheet-title { font-size: 17px; font-weight: 800; margin-bottom: 10px; }
       .day-option { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 12px; border-radius: 12px; border: 1px solid var(--border); background: var(--bg); cursor: pointer; }
