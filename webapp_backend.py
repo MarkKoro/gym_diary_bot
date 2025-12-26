@@ -231,6 +231,7 @@ def _serialize_running_entry(entry: tuple | None) -> dict:
             "entry_id": None,
             "distance_km": 0.0,
             "duration_sec": 0,
+            "duration_ms": 0,
             "calories": 0,
             "heart_rate": 0,
             "pace_sec": None,
@@ -239,16 +240,21 @@ def _serialize_running_entry(entry: tuple | None) -> dict:
             "created_at": None,
             "day_index": None,
         }
-    entry_id, dist, duration, calories, heart_rate, is_draft, created_at = entry
+    entry_id, dist, duration, duration_ms, calories, heart_rate, is_draft, created_at = entry
     distance_val = float(dist or 0.0)
+    duration_ms_val = int(duration_ms or 0)
     duration_val = int(duration or 0)
+    if duration_ms_val <= 0 and duration_val > 0:
+        duration_ms_val = duration_val * 1000
+    duration_val = max(duration_val, int(round(duration_ms_val / 1000)))
     pace_sec = None
-    if distance_val > 0 and duration_val > 0:
-        pace_sec = duration_val / distance_val
+    if distance_val > 0 and duration_ms_val > 0:
+        pace_sec = (duration_ms_val / 1000) / distance_val
     return {
         "entry_id": int(entry_id),
         "distance_km": round(distance_val, 3),
         "duration_sec": duration_val,
+        "duration_ms": duration_ms_val,
         "calories": int(calories or 0),
         "heart_rate": int(heart_rate or 0),
         "pace_sec": pace_sec,
@@ -262,16 +268,21 @@ def _serialize_running_entry(entry: tuple | None) -> dict:
 def _serialize_running_history_row(row: tuple | None) -> dict | None:
     if not row:
         return None
-    entry_id, dist, duration, calories, heart_rate, created_at, day_idx = row
+    entry_id, dist, duration, duration_ms, calories, heart_rate, created_at, day_idx = row
     distance_val = float(dist or 0.0)
+    duration_ms_val = int(duration_ms or 0)
     duration_val = int(duration or 0)
+    if duration_ms_val <= 0 and duration_val > 0:
+        duration_ms_val = duration_val * 1000
+    duration_val = max(duration_val, int(round(duration_ms_val / 1000)))
     pace_sec = None
-    if distance_val > 0 and duration_val > 0:
-        pace_sec = duration_val / distance_val
+    if distance_val > 0 and duration_ms_val > 0:
+        pace_sec = (duration_ms_val / 1000) / distance_val
     return {
         "entry_id": int(entry_id),
         "distance_km": round(distance_val, 3),
         "duration_sec": duration_val,
+        "duration_ms": duration_ms_val,
         "calories": int(calories or 0),
         "heart_rate": int(heart_rate or 0),
         "pace_sec": pace_sec,
@@ -290,6 +301,13 @@ def _clamp_running_distance(value: float | int | str) -> float:
 
 
 def _clamp_running_duration(value: float | int | str) -> int:
+    try:
+        return max(int(round(float(value))), 0)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="Некорректное время")
+
+
+def _clamp_running_duration_ms(value: float | int | str) -> int:
     try:
         return max(int(round(float(value))), 0)
     except (TypeError, ValueError):
@@ -875,19 +893,30 @@ async def update_running_state(
     )
     entry_id = entry[0]
     distance_raw = payload.get("distance_km") if isinstance(payload, dict) else None
-    duration_raw = payload.get("duration_sec") if isinstance(payload, dict) else None
+    duration_sec_raw = payload.get("duration_sec") if isinstance(payload, dict) else None
+    duration_ms_raw = payload.get("duration_ms") if isinstance(payload, dict) else None
     calories_raw = payload.get("calories") if isinstance(payload, dict) else None
     heart_rate_raw = payload.get("heart_rate") if isinstance(payload, dict) else None
 
     distance_val = _clamp_running_distance(distance_raw if distance_raw is not None else entry[1])
-    duration_val = _clamp_running_duration(duration_raw if duration_raw is not None else entry[2])
-    calories_val = _clamp_running_calories(calories_raw if calories_raw is not None else entry[3])
-    heart_rate_val = _clamp_running_heart_rate(heart_rate_raw if heart_rate_raw is not None else entry[4])
+    base_duration_ms = entry[3] if len(entry) > 3 else 0
+    if not base_duration_ms and entry[2]:
+        base_duration_ms = int(entry[2]) * 1000
+    if duration_ms_raw is not None:
+        duration_ms_val = _clamp_running_duration_ms(duration_ms_raw)
+    elif duration_sec_raw is not None:
+        duration_ms_val = _clamp_running_duration_ms(float(duration_sec_raw) * 1000)
+    else:
+        duration_ms_val = base_duration_ms
+    duration_sec_val = max(int(round(duration_ms_val / 1000)), 0)
+    calories_val = _clamp_running_calories(calories_raw if calories_raw is not None else entry[4])
+    heart_rate_val = _clamp_running_heart_rate(heart_rate_raw if heart_rate_raw is not None else entry[5])
 
     await update_running_entry(
         entry_id,
         distance_km=distance_val,
-        duration_sec=duration_val,
+        duration_sec=duration_sec_val,
+        duration_ms=duration_ms_val,
         calories=calories_val,
         heart_rate=heart_rate_val,
         is_draft=1,

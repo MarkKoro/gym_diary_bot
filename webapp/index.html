@@ -447,6 +447,11 @@
     .running-history-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 8px; padding: 10px; border-radius: 10px; border: 1px solid var(--border); background: color-mix(in srgb, var(--card) 90%, transparent); }
     .running-history-row .label { color: var(--muted); font-size: 12px; }
     .running-history-row .value { font-weight: 700; }
+    .history-pager { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+    .pager-buttons { display: flex; gap: 6px; }
+    .pager-btn { border: 1px solid var(--border); background: var(--card); color: var(--text); border-radius: 10px; padding: 8px 10px; font-weight: 700; cursor: pointer; box-shadow: var(--shadow); min-width: 42px; }
+    .pager-btn:disabled { opacity: 0.5; cursor: not-allowed; box-shadow: none; }
+    .pager-label { color: var(--muted); font-size: 13px; }
     @keyframes setFlash { from { background: rgba(0,122,255,0.12); } to { background: var(--bg); } }
     @keyframes finishClose {
       0% { transform: translateY(0) scale(1); opacity: 1; }
@@ -893,7 +898,7 @@
       </div>
       <nav class="drawer-menu">
         <button class="menu-item active" data-route="today">Сегодня</button>
-        <button class="menu-item" data-route="library">Мои упражнения</button>
+        <button class="menu-item" data-route="library">Статистика упражнений</button>
       </nav>
     </div>
   </div>
@@ -981,7 +986,7 @@
 
       <section id="screen-library" class="screen" data-route="library">
         <div class="card" id="libraryCard">
-          <div class="card-title">Мои упражнения</div>
+          <div class="card-title">Статистика упражнений</div>
           <div id="libraryContent"></div>
         </div>
       </section>
@@ -1178,7 +1183,7 @@
 
     const ROUTE_TITLES = {
       today: 'Сегодня',
-      library: 'Мои упражнения',
+      library: 'Статистика упражнений',
     };
 
     const state = {
@@ -1196,6 +1201,7 @@
       exercises: new Map(),
       todayDraft: {},
       runningDraft: {},
+      runningHistoryIndex: {},
       workout: { expanded: null, doneIds: new Set(), order: [], animations: { completed: null, next: null } },
       actionQueues: new Map(),
       contexts: new Map(),
@@ -1345,6 +1351,36 @@
       const seconds = total % 60;
       if (hours) return `${hours}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
       return `${minutes}:${String(seconds).padStart(2, '0')}`;
+    }
+
+    function formatDurationValueMs(ms) {
+      const totalMs = Math.max(Number(ms || 0), 0);
+      const totalSeconds = Math.floor(totalMs / 1000);
+      const milliseconds = Math.floor(totalMs % 1000);
+      const hours = Math.floor(totalSeconds / 3600);
+      const minutes = Math.floor((totalSeconds % 3600) / 60);
+      const seconds = totalSeconds % 60;
+      const base = hours ? `${hours}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}` : `${minutes}:${String(seconds).padStart(2, '0')}`;
+      if (milliseconds) return `${base}.${String(milliseconds).padStart(3, '0')}`;
+      return base;
+    }
+
+    function normalizeRunningDurationMs(source) {
+      const durationMs = Number(source?.duration_ms || 0);
+      const durationSec = Number(source?.duration_sec || source?.duration || 0);
+      if (durationMs > 0) return Math.round(durationMs);
+      if (durationSec > 0) return Math.round(durationSec * 1000);
+      return 0;
+    }
+
+    function splitDurationMs(ms) {
+      const safeMs = Math.max(Number(ms || 0), 0);
+      const totalSeconds = Math.floor(safeMs / 1000);
+      return {
+        minutes: Math.floor(totalSeconds / 60),
+        seconds: totalSeconds % 60,
+        milliseconds: safeMs % 1000,
+      };
     }
 
     function parseDurationInput(value) {
@@ -2592,12 +2628,13 @@
       if (isRunningExercise(exercise)) {
         const running = exercise.running || {};
         const distance = Number(running.distance_km || running.distance || 0);
-        const duration = Number(running.duration_sec || running.duration || 0);
+        const durationMs = normalizeRunningDurationMs(running);
+        const duration = Math.max(0, Math.round(durationMs / 1000));
         const calories = Number(running.calories || 0);
         const heartRate = Number(running.heart_rate || 0);
-        const pace = running.pace_text || formatPaceValue(duration > 0 && distance > 0 ? duration / distance : null);
+        const pace = running.pace_text || formatPaceValue(durationMs > 0 && distance > 0 ? (durationMs / 1000) / distance : null);
         const distanceLabel = distance ? `${distance.toFixed(2)} км` : '—';
-        const durationLabel = duration ? formatDurationValue(duration) : '—';
+        const durationLabel = durationMs ? formatDurationValueMs(durationMs) : '—';
         const parts = [`Дистанция: ${distanceLabel}`, `Время: ${durationLabel}`, `Темп: ${pace} мин/км`];
         if (calories > 0) parts.push(`${calories} ккал`);
         if (heartRate > 0) parts.push(`Пульс: ${heartRate} уд/мин`);
@@ -2704,12 +2741,14 @@
 
     function ensureRunningDraft(ueId) {
       const exercise = state.exercises.get(ueId);
-      if (!exercise) return { distance_km: 0, duration_sec: 0, calories: 0, heart_rate: 0 };
+      if (!exercise) return { distance_km: 0, duration_sec: 0, duration_ms: 0, calories: 0, heart_rate: 0 };
       if (!state.runningDraft[ueId]) {
         const running = exercise.running || {};
+        const durationMs = normalizeRunningDurationMs(running);
         state.runningDraft[ueId] = {
           distance_km: Number(running.distance_km || running.distance || 0),
-          duration_sec: Number(running.duration_sec || running.duration || 0),
+          duration_sec: Math.max(0, Math.round(durationMs / 1000)),
+          duration_ms: durationMs,
           calories: Number(running.calories || 0),
           heart_rate: Number(running.heart_rate || 0),
         };
@@ -2717,10 +2756,39 @@
       return state.runningDraft[ueId];
     }
 
+    function getRunningDraftDurationMs(ueId) {
+      const draft = ensureRunningDraft(ueId);
+      const ms = Number(draft.duration_ms || 0);
+      if (ms > 0) return ms;
+      const sec = Number(draft.duration_sec || 0);
+      return sec > 0 ? Math.round(sec * 1000) : 0;
+    }
+
+    function setRunningDurationMs(ueId, value) {
+      const safeMs = Math.max(0, Math.round(Number(value) || 0));
+      const sec = Math.max(0, Math.round(safeMs / 1000));
+      const draft = ensureRunningDraft(ueId);
+      state.runningDraft[ueId] = { ...draft, duration_ms: safeMs, duration_sec: sec };
+      return safeMs;
+    }
+
+    function getRunningHistoryIndex(ueId) {
+      const idx = state.runningHistoryIndex?.[ueId];
+      return Number.isInteger(idx) && idx >= 0 ? idx : 0;
+    }
+
+    function setRunningHistoryIndex(ueId, value) {
+      state.runningHistoryIndex = state.runningHistoryIndex || {};
+      state.runningHistoryIndex[ueId] = Math.max(0, Math.round(Number(value) || 0));
+    }
+
     function setRunningDraftValue(ueId, field, value) {
       const draft = ensureRunningDraft(ueId);
       const num = Number(value);
       const raw = Number.isFinite(num) ? num : 0;
+      if (field === 'duration_ms') {
+        return setRunningDurationMs(ueId, raw);
+      }
       const safe = field === 'distance_km'
         ? Math.max(0, Math.round(raw * 1000) / 1000)
         : Math.max(0, Math.min(Math.round(raw), field === 'heart_rate' ? 260 : Number.MAX_SAFE_INTEGER));
@@ -2772,13 +2840,20 @@
       const running = payload.running || payload;
       const history = payload.running_history || exercise.running_history || [];
       const previous_running = payload.previous_running || exercise.previous_running || null;
-      const updated = { ...exercise, running, running_history: history, previous_running };
+      const durationMs = normalizeRunningDurationMs(running);
+      const normalizedRunning = {
+        ...running,
+        duration_ms: durationMs,
+        duration_sec: Math.max(0, Math.round(durationMs / 1000)),
+      };
+      const updated = { ...exercise, running: normalizedRunning, running_history: history, previous_running };
       state.exercises.set(ueId, updated);
       state.runningDraft[ueId] = {
-        distance_km: Number(running?.distance_km || running?.distance || 0),
-        duration_sec: Number(running?.duration_sec || running?.duration || 0),
-        calories: Number(running?.calories || 0),
-        heart_rate: Number(running?.heart_rate || 0),
+        distance_km: Number(normalizedRunning?.distance_km || normalizedRunning?.distance || 0),
+        duration_sec: Math.max(0, Math.round(durationMs / 1000)),
+        duration_ms: durationMs,
+        calories: Number(normalizedRunning?.calories || 0),
+        heart_rate: Number(normalizedRunning?.heart_rate || 0),
       };
       updateCardSummary(ueId);
       if (state.workout.expanded === ueId) renderExerciseBody(ueId);
@@ -2929,35 +3004,30 @@
 
     function renderRunningControls(container, exercise) {
       const ueId = exercise.user_exercise_id;
-      const draft = ensureRunningDraft(ueId);
+      ensureRunningDraft(ueId);
       container.innerHTML = '';
 
       const meta = document.createElement('div');
       meta.className = 'running-meta';
-      const pace = draft.distance_km > 0 && draft.duration_sec > 0 ? draft.duration_sec / draft.distance_km : null;
-      const paceLabel = formatPaceValue(pace);
       const distanceBadge = document.createElement('span');
       distanceBadge.className = 'running-badge';
-      distanceBadge.textContent = `Дистанция: ${draft.distance_km.toFixed(2)} км`;
+      distanceBadge.textContent = 'Дистанция: 0.00 км';
       const durationBadge = document.createElement('span');
       durationBadge.className = 'running-badge';
-      durationBadge.textContent = `Время: ${formatDurationValue(draft.duration_sec)}`;
-      const caloriesVal = Number(draft.calories || 0);
-      const pulseVal = Number(draft.heart_rate || 0);
+      durationBadge.textContent = 'Время: 0:00';
       const paceText = document.createElement('span');
       paceText.className = 'running-pace';
-      paceText.textContent = `Темп: ${paceLabel} мин/км`;
       const caloriesBadge = document.createElement('span');
       caloriesBadge.className = 'running-badge';
-      caloriesBadge.textContent = `Калории: ${caloriesVal ? `${caloriesVal} ккал` : '—'}`;
       const pulseBadge = document.createElement('span');
       pulseBadge.className = 'running-badge';
-      pulseBadge.textContent = `Пульс: ${pulseVal ? `${pulseVal} уд/мин` : '—'}`;
       meta.append(distanceBadge, durationBadge, caloriesBadge, pulseBadge, paceText);
       container.appendChild(meta);
 
       const controls = document.createElement('div');
       controls.className = 'controls-grid running-manual-grid';
+
+      const inputs = {};
 
       const createInputBlock = (label, value, onChange, opts = {}) => {
         const block = document.createElement('div');
@@ -2983,8 +3053,8 @@
         if (opts.max !== undefined) input.max = String(opts.max);
         input.value = value;
         input.addEventListener('click', (ev) => ev.stopPropagation());
-        input.addEventListener('input', (ev) => onChange(ev.target.value));
-        input.addEventListener('blur', (ev) => onChange(ev.target.value));
+        input.addEventListener('input', (ev) => onChange(ev.target.value, false));
+        input.addEventListener('blur', (ev) => onChange(ev.target.value, true));
         wrap.appendChild(input);
         if (opts.suffix) {
           const suffix = document.createElement('span');
@@ -2993,55 +3063,98 @@
           wrap.appendChild(suffix);
         }
         block.append(head, wrap);
-        return block;
+        return { block, input };
       };
 
-      const distanceMeters = Math.round(draft.distance_km * 1000);
-      const getDurationParts = () => {
-        const current = ensureRunningDraft(ueId);
-        return {
-          minutes: Math.floor(current.duration_sec / 60),
-          seconds: current.duration_sec % 60,
+      const updateView = (opts = {}) => {
+        const draft = ensureRunningDraft(ueId);
+        const durationMs = getRunningDraftDurationMs(ueId);
+        const pace = draft.distance_km > 0 && durationMs > 0 ? (durationMs / 1000) / draft.distance_km : null;
+        distanceBadge.textContent = `Дистанция: ${draft.distance_km.toFixed(2)} км`;
+        durationBadge.textContent = `Время: ${formatDurationValueMs(durationMs)}`;
+        const caloriesVal = Number(draft.calories || 0);
+        const pulseVal = Number(draft.heart_rate || 0);
+        caloriesBadge.textContent = `Калории: ${caloriesVal ? `${caloriesVal} ккал` : '—'}`;
+        pulseBadge.textContent = `Пульс: ${pulseVal ? `${pulseVal} уд/мин` : '—'}`;
+        paceText.textContent = `Темп: ${formatPaceValue(pace)} мин/км`;
+        if (opts.syncInputs) {
+          const metersVal = Math.round(draft.distance_km * 1000);
+          if (!opts.skip || inputs.distanceKm !== opts.skip) inputs.distanceKm.value = draft.distance_km.toFixed(2);
+          if (!opts.skip || inputs.distanceM !== opts.skip) inputs.distanceM.value = metersVal;
+          const parts = splitDurationMs(durationMs);
+          if (!opts.skip || inputs.minutes !== opts.skip) inputs.minutes.value = parts.minutes;
+          if (!opts.skip || inputs.seconds !== opts.skip) inputs.seconds.value = parts.seconds;
+          if (!opts.skip || inputs.milliseconds !== opts.skip) inputs.milliseconds.value = parts.milliseconds;
+          if (!opts.skip || inputs.calories !== opts.skip) inputs.calories.value = caloriesVal;
+          if (!opts.skip || inputs.heartRate !== opts.skip) inputs.heartRate.value = pulseVal;
+        }
+      };
+
+      const updateDuration = (patch) => {
+        const durationMs = getRunningDraftDurationMs(ueId);
+        const parts = splitDurationMs(durationMs);
+        const next = {
+          minutes: patch.minutes !== undefined ? Math.max(0, Math.floor(Number(patch.minutes || 0))) : parts.minutes,
+          seconds: patch.seconds !== undefined ? Math.max(0, Math.min(59, Math.floor(Number(patch.seconds || 0)))) : parts.seconds,
+          milliseconds: patch.milliseconds !== undefined ? Math.max(0, Math.min(999, Math.floor(Number(patch.milliseconds || 0)))) : parts.milliseconds,
         };
+        const total = (next.minutes * 60 * 1000) + (next.seconds * 1000) + next.milliseconds;
+        setRunningDurationMs(ueId, total);
+        updateView({ syncInputs: true, skip: patch.skip });
       };
 
-      const updateDuration = (minutes, seconds) => {
-        const safeMinutes = Math.max(0, Math.floor(Number(minutes || 0)));
-        const safeSeconds = Math.max(0, Math.floor(Number(seconds || 0)));
-        const total = safeMinutes * 60 + safeSeconds;
-        setRunningDraftValue(ueId, 'duration_sec', total);
-        renderRunningBody(ueId);
-      };
+      const { block: distKmBlock, input: distKmInput } = createInputBlock('Дистанция, км', '', (val, sync) => {
+        const normalized = (val ?? '').toString().replace(',', '.');
+        setRunningDraftValue(ueId, 'distance_km', Number(normalized));
+        updateView({ syncInputs: true, skip: sync ? null : distKmInput });
+      }, { step: 0.01, min: 0, inputMode: 'decimal' });
+      inputs.distanceKm = distKmInput;
+
+      const { block: distMBlock, input: distMInput } = createInputBlock('Дистанция, м', '', (val, sync) => {
+        const next = Math.max(0, Math.round(Number(val || 0)));
+        setRunningDraftValue(ueId, 'distance_km', next / 1000);
+        updateView({ syncInputs: true, skip: sync ? null : distMInput });
+      }, { step: 50, min: 0, inputMode: 'numeric' });
+      inputs.distanceM = distMInput;
+
+      const { block: minutesBlock, input: minutesInput } = createInputBlock('Минуты', '', (val, sync) => {
+        updateDuration({ minutes: val, skip: sync ? null : minutesInput });
+      }, { step: 1, min: 0, inputMode: 'numeric' });
+      inputs.minutes = minutesInput;
+
+      const { block: secondsBlock, input: secondsInput } = createInputBlock('Секунды', '', (val, sync) => {
+        updateDuration({ seconds: val, skip: sync ? null : secondsInput });
+      }, { step: 5, min: 0, max: 59, inputMode: 'numeric' });
+      inputs.seconds = secondsInput;
+
+      const { block: msBlock, input: msInput } = createInputBlock('Миллисекунды', '', (val, sync) => {
+        updateDuration({ milliseconds: val, skip: sync ? null : msInput });
+      }, { step: 10, min: 0, max: 999, inputMode: 'numeric' });
+      inputs.milliseconds = msInput;
+
+      const { block: caloriesBlock, input: caloriesInput } = createInputBlock('Калории', '', (val, sync) => {
+        setRunningDraftValue(ueId, 'calories', Number(val || 0));
+        updateView({ syncInputs: true, skip: sync ? null : caloriesInput });
+      }, { step: 5, min: 0, inputMode: 'numeric', suffix: 'ккал' });
+      inputs.calories = caloriesInput;
+
+      const { block: pulseBlock, input: pulseInput } = createInputBlock('Пульс', '', (val, sync) => {
+        setRunningDraftValue(ueId, 'heart_rate', Number(val || 0));
+        updateView({ syncInputs: true, skip: sync ? null : pulseInput });
+      }, { step: 1, min: 0, max: 260, inputMode: 'numeric', suffix: 'уд/мин' });
+      inputs.heartRate = pulseInput;
 
       controls.append(
-        createInputBlock('Дистанция, км', draft.distance_km.toFixed(2), (val) => {
-          const normalized = (val ?? '').toString().replace(',', '.');
-          setRunningDraftValue(ueId, 'distance_km', Number(normalized));
-          renderRunningBody(ueId);
-        }, { step: 0.01, min: 0, inputMode: 'decimal' }),
-        createInputBlock('Дистанция, м', distanceMeters, (val) => {
-          const next = Math.max(0, Math.round(Number(val || 0)));
-          setRunningDraftValue(ueId, 'distance_km', next / 1000);
-          renderRunningBody(ueId);
-        }, { step: 50, min: 0, inputMode: 'numeric' }),
-        createInputBlock('Минуты', Math.floor(draft.duration_sec / 60), (val) => {
-          const { seconds } = getDurationParts();
-          updateDuration(val, seconds);
-        }, { step: 1, min: 0, inputMode: 'numeric' }),
-        createInputBlock('Секунды', draft.duration_sec % 60, (val) => {
-          const { minutes } = getDurationParts();
-          updateDuration(minutes, val);
-        }, { step: 5, min: 0, inputMode: 'numeric' }),
-        createInputBlock('Калории', Number(draft.calories || 0), (val) => {
-          setRunningDraftValue(ueId, 'calories', Number(val || 0));
-          renderRunningBody(ueId);
-        }, { step: 5, min: 0, inputMode: 'numeric', suffix: 'ккал' }),
-        createInputBlock('Пульс', Number(draft.heart_rate || 0), (val) => {
-          setRunningDraftValue(ueId, 'heart_rate', Number(val || 0));
-          renderRunningBody(ueId);
-        }, { step: 1, min: 0, max: 260, inputMode: 'numeric', suffix: 'уд/мин' }),
+        distKmBlock,
+        distMBlock,
+        minutesBlock,
+        secondsBlock,
+        msBlock,
+        caloriesBlock,
+        pulseBlock,
       );
       container.appendChild(controls);
+      updateView({ syncInputs: true });
 
       const actionsRow = document.createElement('div');
       actionsRow.className = 'workout-actions';
@@ -3201,6 +3314,8 @@
     async function handleRunningSave(exercise, opts = {}) {
       const ueId = exercise.user_exercise_id;
       const draft = ensureRunningDraft(ueId);
+      const durationMs = getRunningDraftDurationMs(ueId);
+      const durationSec = Math.max(0, Math.round(durationMs / 1000));
       const query = state.dateIso ? `?date=${state.dateIso}` : '';
       await queueExerciseAction(ueId, async () => {
         try {
@@ -3208,7 +3323,8 @@
             method: 'POST',
             body: {
               distance_km: Number(draft.distance_km || 0),
-              duration_sec: Number(draft.duration_sec || 0),
+              duration_sec: durationSec,
+              duration_ms: durationMs,
               calories: Number(draft.calories || 0),
               heart_rate: Number(draft.heart_rate || 0),
             },
@@ -3334,7 +3450,13 @@
       const doneIds = state.workout.doneIds || (state.workout.doneIds = new Set());
       syncWorkoutOrder(list);
       const exercisesMap = new Map();
-      list.forEach((ex) => exercisesMap.set(ex.user_exercise_id, ex));
+      list.forEach((ex) => {
+        if (isRunningExercise(ex) && ex.running) {
+          const durationMs = normalizeRunningDurationMs(ex.running);
+          ex.running = { ...ex.running, duration_ms: durationMs, duration_sec: Math.max(0, Math.round(durationMs / 1000)) };
+        }
+        exercisesMap.set(ex.user_exercise_id, ex);
+      });
       state.exercises = exercisesMap;
       if (!list.length) {
         const empty = document.createElement('div');
@@ -3600,6 +3722,7 @@
           state.workout.animations = { completed: null, next: null };
           state.todayDraft = {};
           state.runningDraft = {};
+          state.runningHistoryIndex = {};
         }
         state.contexts = new Map();
         const sheet = await apiFetch(`/gymapi/day/${dayIndex}/sheet`);
@@ -3758,7 +3881,7 @@
       return Array.from(state.exercises.values()).reduce((acc, ex) => {
         if (isRunningExercise(ex)) {
           const run = ex.running || {};
-          const hasRun = Number(run.distance_km || run.distance || 0) > 0 || Number(run.duration_sec || run.duration || 0) > 0;
+          const hasRun = Number(run.distance_km || run.distance || 0) > 0 || normalizeRunningDurationMs(run) > 0;
           return acc + (hasRun ? 1 : 0);
         }
         return acc + (ex.sets?.length || 0);
@@ -4012,18 +4135,65 @@
       });
     }
 
+    function buildHistoryPager(total, index, onChange, dateLabel = '') {
+      const pager = document.createElement('div');
+      pager.className = 'history-pager';
+      const buttons = document.createElement('div');
+      buttons.className = 'pager-buttons';
+      const makeBtn = (text, target, disabled) => {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'pager-btn';
+        btn.textContent = text;
+        btn.disabled = disabled;
+        btn.addEventListener('click', () => onChange(target));
+        return btn;
+      };
+      buttons.append(
+        makeBtn('⏮', 0, index <= 0),
+        makeBtn('◀', Math.max(0, index - 1), index <= 0),
+        makeBtn('▶', Math.min(total - 1, index + 1), index >= total - 1),
+        makeBtn('⏭', Math.max(0, total - 1), index >= total - 1),
+      );
+      const label = document.createElement('div');
+      label.className = 'pager-label';
+      const parts = [];
+      if (dateLabel) parts.push(dateLabel);
+      parts.push(`Запись ${total ? index + 1 : 0} из ${total}`);
+      label.textContent = parts.join(' • ');
+      pager.append(buttons, label);
+      return pager;
+    }
+
+    function buildRunningHistoryRow(row) {
+      const item = document.createElement('div');
+      item.className = 'running-history-row';
+      const durationMs = normalizeRunningDurationMs(row);
+      const paceVal = row.pace_sec ?? ((durationMs > 0 && Number(row.distance_km || 0) > 0) ? (durationMs / 1000) / Number(row.distance_km || 0) : null);
+      const date = document.createElement('div'); date.innerHTML = `<div class="label">Дата</div><div class="value">${row.date || '—'}</div>`;
+      const dist = document.createElement('div'); dist.innerHTML = `<div class="label">Км</div><div class="value">${Number(row.distance_km || 0).toFixed(2)}</div>`;
+      const time = document.createElement('div'); time.innerHTML = `<div class="label">Время</div><div class="value">${formatDurationValueMs(durationMs)}</div>`;
+      const paceEl = document.createElement('div'); paceEl.innerHTML = `<div class="label">Темп</div><div class="value">${formatPaceValue(paceVal)} мин/км</div>`;
+      const pulseEl = document.createElement('div'); pulseEl.innerHTML = `<div class="label">Пульс</div><div class="value">${row.heart_rate ? `${row.heart_rate} уд/мин` : '—'}</div>`;
+      const caloriesEl = document.createElement('div'); caloriesEl.innerHTML = `<div class="label">Ккал</div><div class="value">${Number(row.calories || 0) || '—'}</div>`;
+      item.append(date, dist, time, paceEl, pulseEl, caloriesEl);
+      return item;
+    }
+
     function renderRunningDetails(exercise) {
+      const ueId = exercise.user_exercise_id;
       const list = document.getElementById('setsList');
       const label = document.getElementById('selectedLabel');
       const grid = document.getElementById('controlsGrid');
       list.innerHTML = '';
       grid.innerHTML = '';
-      const draft = ensureRunningDraft(exercise.user_exercise_id);
-      const pace = draft.distance_km > 0 && draft.duration_sec > 0 ? draft.duration_sec / draft.distance_km : null;
+      const draft = ensureRunningDraft(ueId);
+      const durationMs = getRunningDraftDurationMs(ueId);
+      const pace = draft.distance_km > 0 && durationMs > 0 ? (durationMs / 1000) / draft.distance_km : null;
       const meta = document.createElement('div');
       meta.className = 'running-meta';
       const d = document.createElement('span'); d.className = 'running-badge'; d.textContent = `Дистанция: ${draft.distance_km.toFixed(2)} км`;
-      const t = document.createElement('span'); t.className = 'running-badge'; t.textContent = `Время: ${formatDurationValue(draft.duration_sec)}`;
+      const t = document.createElement('span'); t.className = 'running-badge'; t.textContent = `Время: ${formatDurationValueMs(durationMs)}`;
       const p = document.createElement('span'); p.className = 'running-pace'; p.textContent = `Темп: ${formatPaceValue(pace)} мин/км`;
       meta.append(d, t, p);
       list.appendChild(meta);
@@ -4036,21 +4206,16 @@
         empty.textContent = 'Здесь появятся последние пробежки.';
         list.appendChild(empty);
       } else {
+        const idx = Math.min(getRunningHistoryIndex(ueId), history.length - 1);
+        setRunningHistoryIndex(ueId, idx);
+        const pager = buildHistoryPager(history.length, idx, (nextIdx) => {
+          setRunningHistoryIndex(ueId, nextIdx);
+          renderRunningDetails(exercise);
+        }, history[idx]?.date || '');
         const historyList = document.createElement('div');
         historyList.className = 'running-history';
-        history.slice(0, 5).forEach((row) => {
-          const item = document.createElement('div');
-          item.className = 'running-history-row';
-          const date = document.createElement('div'); date.innerHTML = `<div class="label">Дата</div><div class="value">${row.date || '—'}</div>`;
-          const dist = document.createElement('div'); dist.innerHTML = `<div class="label">Км</div><div class="value">${Number(row.distance_km || 0).toFixed(2)}</div>`;
-          const time = document.createElement('div'); time.innerHTML = `<div class="label">Время</div><div class="value">${formatDurationValue(row.duration_sec)}</div>`;
-          const paceEl = document.createElement('div'); paceEl.innerHTML = `<div class="label">Темп</div><div class="value">${formatPaceValue(row.pace_sec)} мин/км</div>`;
-          const pulseEl = document.createElement('div'); pulseEl.innerHTML = `<div class="label">Пульс</div><div class="value">${row.heart_rate ? `${row.heart_rate} уд/мин` : '—'}</div>`;
-          const caloriesEl = document.createElement('div'); caloriesEl.innerHTML = `<div class="label">Ккал</div><div class="value">${Number(row.calories || 0) || '—'}</div>`;
-          item.append(date, dist, time, paceEl, pulseEl, caloriesEl);
-          historyList.appendChild(item);
-        });
-        list.appendChild(historyList);
+        historyList.appendChild(buildRunningHistoryRow(history[idx]));
+        list.append(pager, historyList);
       }
 
       const charts = document.createElement('div');
@@ -4194,6 +4359,10 @@
         container.textContent = 'Пока нет истории по забегу.';
         return;
       }
+      const ueId = exercise.user_exercise_id;
+      const idx = Math.min(getRunningHistoryIndex(ueId), history.length - 1);
+      setRunningHistoryIndex(ueId, idx);
+      const selectedRow = history[idx];
       const cards = document.createElement('div');
       cards.className = 'card-list';
       const distanceBlock = document.createElement('div');
@@ -4213,23 +4382,14 @@
       caloriesBlock.className = 'chart-block';
       caloriesBlock.appendChild(buildChart('Калории', history, 'calories', true));
       cards.append(distanceBlock, paceBlock, durationBlock, pulseBlock, caloriesBlock);
-      container.appendChild(cards);
-
+      const pager = buildHistoryPager(history.length, idx, (nextIdx) => {
+        setRunningHistoryIndex(ueId, nextIdx);
+        renderRunningHistoryTab(exercise);
+      }, selectedRow?.date || '');
       const list = document.createElement('div');
       list.className = 'running-history';
-      history.forEach((row) => {
-        const item = document.createElement('div');
-        item.className = 'running-history-row';
-        const date = document.createElement('div'); date.innerHTML = `<div class="label">Дата</div><div class="value">${row.date || '—'}</div>`;
-        const dist = document.createElement('div'); dist.innerHTML = `<div class="label">Км</div><div class="value">${Number(row.distance_km || 0).toFixed(2)}</div>`;
-        const time = document.createElement('div'); time.innerHTML = `<div class="label">Время</div><div class="value">${formatDurationValue(row.duration_sec)}</div>`;
-        const pace = document.createElement('div'); pace.innerHTML = `<div class="label">Темп</div><div class="value">${formatPaceValue(row.pace_sec)} мин/км</div>`;
-        const pulse = document.createElement('div'); pulse.innerHTML = `<div class="label">Пульс</div><div class="value">${row.heart_rate ? `${row.heart_rate} уд/мин` : '—'}</div>`;
-        const calories = document.createElement('div'); calories.innerHTML = `<div class="label">Ккал</div><div class="value">${Number(row.calories || 0) || '—'}</div>`;
-        item.append(date, dist, time, pace, pulse, calories);
-        list.appendChild(item);
-      });
-      container.appendChild(list);
+      list.appendChild(buildRunningHistoryRow(selectedRow));
+      container.append(cards, pager, list);
     }
 
     function renderEditor() {

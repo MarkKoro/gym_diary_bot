@@ -5599,6 +5599,7 @@ async def fetch_day_sheet_data(
             entry["fortime_summary"] = {"last_time_sec": last_for_time}
         elif resolved_group == RUNNING_GROUP:
             running_entry = None
+            duration_ms_value = 0
             if session_id is not None:
                 running_entry = await get_running_entry(
                     user_id,
@@ -5608,9 +5609,21 @@ async def fetch_day_sheet_data(
                     create=False,
                 )
             if running_entry:
-                _, dist, duration, calories, is_draft, created_at = running_entry
+                (
+                    _,
+                    dist,
+                    duration_sec,
+                    duration_ms,
+                    calories,
+                    heart_rate,
+                    is_draft,
+                    created_at,
+                ) = running_entry
                 distance_value = float(dist or 0.0)
-                duration_value = int(duration or 0)
+                duration_ms_value = int(duration_ms or 0)
+                if not duration_ms_value and duration_sec:
+                    duration_ms_value = int(duration_sec) * 1000
+                duration_value = max(int(round(duration_ms_value / 1000)), 0)
                 calories_value = int(calories or 0)
             else:
                 distance_value = 0.0
@@ -5619,6 +5632,7 @@ async def fetch_day_sheet_data(
             entry["running_summary"] = {
                 "distance": distance_value,
                 "duration": duration_value,
+                "duration_ms": duration_ms_value if running_entry else 0,
                 "calories": calories_value,
             }
             history_rows = await list_running_history(user_id, ue_id, limit=2)
@@ -5630,10 +5644,23 @@ async def fetch_day_sheet_data(
                 else:
                     prev_entry = history_rows[0]
             if prev_entry:
-                _, prev_distance, prev_duration, prev_calories, prev_created, _ = prev_entry
+                (
+                    _,
+                    prev_distance,
+                    prev_duration,
+                    prev_duration_ms,
+                    prev_calories,
+                    prev_heart_rate,
+                    prev_created,
+                    _,
+                ) = prev_entry
+                prev_duration_ms_val = int(prev_duration_ms or 0)
+                if not prev_duration_ms_val and prev_duration:
+                    prev_duration_ms_val = int(prev_duration) * 1000
+                prev_duration_val = max(int(round(prev_duration_ms_val / 1000)), 0)
                 entry["prev_summary"] = format_running_line(
                     float(prev_distance or 0.0),
-                    int(prev_duration or 0),
+                    prev_duration_val,
                     int(prev_calories or 0),
                 )
                 entry["prev_date"] = prev_created
@@ -6338,20 +6365,39 @@ async def build_summary_map(
                     day_index=day,
                     create=False,
                 )
-            if running_entry and not int(running_entry[4] or 0):
-                distance_value = float(running_entry[1] or 0.0)
-                duration_value = int(running_entry[2] or 0)
-                calories_value = int(running_entry[3] or 0)
-                if distance_value or duration_value or calories_value:
+            if running_entry:
+                (
+                    _,
+                    dist,
+                    duration_sec,
+                    duration_ms,
+                    calories_val,
+                    heart_rate_val,
+                    is_draft,
+                    _created_at,
+                ) = running_entry
+                distance_value = float(dist or 0.0)
+                duration_ms_val = int(duration_ms or 0)
+                if not duration_ms_val and duration_sec:
+                    duration_ms_val = int(duration_sec) * 1000
+                duration_value = max(int(round(duration_ms_val / 1000)), 0)
+                calories_value = int(calories_val or 0)
+                if not int(is_draft or 0) and (
+                    distance_value or duration_value or calories_value
+                ):
                     last_label = format_running_line(
                         distance_value, duration_value, calories_value
                     )
             if not last_label:
                 history_rows = await list_running_history(user_id, ue_id, limit=1)
                 if history_rows:
-                    _, dist, dur, cal, _created_at, _ = history_rows[0]
+                    _, dist, dur, dur_ms, cal, _hr, _created_at, _ = history_rows[0]
+                    duration_ms_val = int(dur_ms or 0)
+                    if not duration_ms_val and dur:
+                        duration_ms_val = int(dur) * 1000
+                    duration_val = max(int(round(duration_ms_val / 1000)), 0)
                     last_label = format_running_line(
-                        float(dist or 0.0), int(dur or 0), int(cal or 0)
+                        float(dist or 0.0), duration_val, int(cal or 0)
                     )
         else:
             work_sets = filter_work_sets(current_sets_full)
@@ -6615,9 +6661,21 @@ async def render_exercise_view(
             day_index=day,
             create=True,
         )
-        entry_id, dist, duration, calories, draft_flag, created_at = running_entry
+        (
+            entry_id,
+            dist,
+            duration_sec,
+            duration_ms,
+            calories,
+            heart_rate,
+            draft_flag,
+            created_at,
+        ) = running_entry
         distance_value = float(dist or 0.0)
-        duration_value = int(duration or 0)
+        duration_ms_value = int(duration_ms or 0)
+        if not duration_ms_value and duration_sec:
+            duration_ms_value = int(duration_sec) * 1000
+        duration_value = max(int(round(duration_ms_value / 1000)), 0)
         calories_value = int(calories or 0)
         current_line = format_running_line(distance_value, duration_value, calories_value)
         history_rows = await list_running_history(user_id, ue_id, limit=2)
@@ -6628,10 +6686,23 @@ async def render_exercise_view(
             if candidate[0] == entry_id and len(history_rows) > 1:
                 candidate = history_rows[1]
             if candidate[0] != entry_id:
-                _, prev_distance, prev_duration, prev_calories, prev_created, _ = candidate
+                (
+                    _,
+                    prev_distance,
+                    prev_duration,
+                    prev_duration_ms,
+                    prev_calories,
+                    prev_hr,
+                    prev_created,
+                    _,
+                ) = candidate
+                prev_duration_ms_val = int(prev_duration_ms or 0)
+                if not prev_duration_ms_val and prev_duration:
+                    prev_duration_ms_val = int(prev_duration) * 1000
+                prev_duration_val = max(int(round(prev_duration_ms_val / 1000)), 0)
                 prev_text = format_running_line(
                     float(prev_distance or 0.0),
-                    int(prev_duration or 0),
+                    prev_duration_val,
                     int(prev_calories or 0),
                 )
                 prev_created_at = prev_created
@@ -6844,10 +6915,16 @@ async def build_running_history_view(
         return "\n".join(lines), kb
     total = len(entries)
     safe_index = max(0, min(index, total - 1))
-    _, distance, duration, calories, created_at, entry_day = entries[safe_index]
+    _, distance, duration_sec, duration_ms, calories, heart_rate, created_at, entry_day = entries[
+        safe_index
+    ]
+    duration_ms_val = int(duration_ms or 0)
+    if not duration_ms_val and duration_sec:
+        duration_ms_val = int(duration_sec) * 1000
+    duration_val = max(int(round(duration_ms_val / 1000)), 0)
     timestamp = format_measurement_timestamp(created_at, zone)
     summary = format_running_line(
-        float(distance or 0.0), int(duration or 0), int(calories or 0)
+        float(distance or 0.0), duration_val, int(calories or 0)
     )
     lines.append(f"Запись {safe_index + 1} из {total}")
     lines.append(timestamp)
@@ -9645,7 +9722,11 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 update_kwargs = {"distance_km": new_distance, "is_draft": 1}
             elif field == "time":
                 duration = clamp_running_duration(parse_duration_input(text_value))
-                update_kwargs = {"duration_sec": duration, "is_draft": 1}
+                update_kwargs = {
+                    "duration_sec": duration,
+                    "duration_ms": duration * 1000,
+                    "is_draft": 1,
+                }
             elif field == "pace":
                 pace_seconds = clamp_running_duration(parse_duration_input(text_value))
                 entry_row = await get_running_entry_by_id(entry_id)
@@ -9658,6 +9739,7 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 update_kwargs = {
                     "distance_km": safe_distance,
                     "duration_sec": new_duration,
+                    "duration_ms": new_duration * 1000,
                     "is_draft": 1,
                 }
             elif field == "calories":
@@ -10756,7 +10838,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             groups = await list_library_groups(target_user_id)
             custom = await get_custom_groups(target_user_id, context)
             prefs = await load_ui_preferences(target_user_id)
-            text = "Мои упражнения:"
+            text = "Статистика упражнений:"
             kb = library_menu_kb(groups, custom, context=context)
             await show_screen(q, context, text, kb, target_user_id)
             return
@@ -11598,7 +11680,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     custom.pop(group, None)
                     groups = await list_library_groups(target_user_id)
                     menu = library_menu_kb(groups, custom, context=context)
-                    text = "Мои упражнения:"
+                    text = "Статистика упражнений:"
                     await q.answer("Группа удалена.")
                     await show_screen(q, context, text, menu, target_user_id)
                     return
@@ -11822,7 +11904,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         groups = await list_library_groups(target_user_id)
                         custom = await get_custom_groups(target_user_id, context)
                         kb = library_menu_kb(groups, custom, context=context)
-                        await show_screen(q, context, "Мои упражнения:", kb, target_user_id)
+                        await show_screen(q, context, "Статистика упражнений:", kb, target_user_id)
                     return
 
         if parts[0] == "run":
@@ -11879,6 +11961,9 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 entry_id = int(running.get("entry_id") or 0)
                 distance_value = float(running.get("distance") or 0.0)
                 duration_value = int(running.get("duration") or 0)
+                duration_ms_value = int(running.get("duration_ms") or 0)
+                if not duration_ms_value and duration_value:
+                    duration_ms_value = duration_value * 1000
                 if not entry_id:
                     await q.answer("Не удалось загрузить забег.", show_alert=True)
                     return
@@ -11903,6 +11988,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             duration_value + int(round(delta_value))
                         )
                         update_kwargs["duration_sec"] = new_duration
+                        update_kwargs["duration_ms"] = new_duration * 1000
                     else:
                         return
                     await update_running_entry(entry_id, **update_kwargs)
