@@ -1593,7 +1593,7 @@ async def list_user_library_groups(user_id: int):
     async with connect_db() as db:
         cur = await db.execute(
             """
-            SELECT e.muscle_group, e.name
+            SELECT DISTINCT e.id, e.muscle_group, e.name
             FROM user_exercises ue
             JOIN exercises e ON e.id=ue.exercise_id
             WHERE ue.user_id=? AND ue.is_archived=0
@@ -1603,7 +1603,7 @@ async def list_user_library_groups(user_id: int):
         rows = await cur.fetchall()
 
     counters: dict[str, int] = {}
-    for group, name in rows:
+    for _ex_id, group, name in rows:
         code = (group or "").strip().lower()
         resolved = "metcon" if name in METCON_EXERCISE_NAMES else (code or "none")
         counters[resolved] = counters.get(resolved, 0) + 1
@@ -1654,12 +1654,12 @@ async def fetch_exercise_history_points(user_id: int, exercise_id: int, start_da
     async with connect_db() as db:
         cur = await db.execute(
             f"""
-            SELECT s.date, st.reps, st.seconds, st.weight_kg
+            SELECT s.date, st.set_no, st.reps, st.seconds, st.weight_kg
             FROM sets st
             JOIN sessions s ON s.id = st.session_id
             JOIN user_exercises ue ON ue.id = st.user_exercise_id
             WHERE s.user_id=? AND ue.exercise_id=? AND st.is_warmup=0 AND s.date<=? {date_clause}
-            ORDER BY s.date
+            ORDER BY s.date, st.set_no
             """,
             tuple(params),
         )
