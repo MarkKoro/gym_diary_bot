@@ -1396,7 +1396,8 @@ async def exercise_history(
 
     rows = await db.fetch_exercise_history_points(user_id, exercise_id, start_iso, end_iso)
     timeline: dict[str, dict] = {}
-    for session_date, reps, seconds, weight in rows:
+    sessions: dict[str, dict] = {}
+    for session_date, set_no, reps, seconds, weight in rows:
         iso_date = session_date
         if iso_date not in timeline:
             timeline[iso_date] = {
@@ -1407,10 +1408,20 @@ async def exercise_history(
                 "volume": 0.0,
                 "set_count": 0,
             }
+        if iso_date not in sessions:
+            sessions[iso_date] = {"date": iso_date, "sets": []}
         item = timeline[iso_date]
         reps_val = int(reps or 0)
         sec_val = int(seconds or 0)
         weight_val = float(weight or 0.0)
+        sessions[iso_date]["sets"].append(
+            {
+                "set_no": int(set_no or 0),
+                "reps": reps_val,
+                "seconds": sec_val,
+                "weight_kg": weight_val,
+            }
+        )
         if reps_val > 0 and weight_val > 0:
             item["top_weight"] = max(item["top_weight"], weight_val)
             item["volume"] += weight_val * reps_val
@@ -1443,6 +1454,7 @@ async def exercise_history(
         "exercise_name": name,
         "range": normalized_range,
         "points": points,
+        "sessions": sorted(sessions.values(), key=lambda x: x["date"]),
         "last_session": last_session,
     }
 

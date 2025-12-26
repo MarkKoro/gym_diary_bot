@@ -1224,6 +1224,7 @@
         historyCache: {},
         currentExerciseId: null,
         currentExerciseName: '',
+        historyIndex: {},
       },
       menu: { openId: null },
     };
@@ -1874,15 +1875,8 @@
     function renderGroupsView() {
       const content = document.getElementById('libraryContent');
       content.innerHTML = '';
-      const search = document.createElement('input');
-      search.type = 'search';
-      search.className = 'search-input library-search';
-      search.placeholder = 'Поиск упражнения…';
-      search.value = state.library.query;
-      search.addEventListener('input', (e) => { state.library.query = e.target.value; renderGroupsView(); });
-      content.appendChild(search);
 
-      const filtered = (state.library.groups || []).filter((g) => !state.library.query || libraryGroupLabel(g.code).toLowerCase().includes(state.library.query.toLowerCase()));
+      const filtered = state.library.groups || [];
       if (state.library.loading) {
         const loading = document.createElement('div');
         loading.className = 'library-empty';
@@ -1929,14 +1923,6 @@
       title.textContent = libraryGroupLabel(state.library.selectedGroup?.code);
       top.append(back, title);
       content.appendChild(top);
-
-      const search = document.createElement('input');
-      search.type = 'search';
-      search.className = 'search-input library-search';
-      search.placeholder = 'Поиск упражнения…';
-      search.value = state.library.query;
-      search.addEventListener('input', (e) => { state.library.query = e.target.value; debounceLoadGroup(); });
-      content.appendChild(search);
 
       if (state.library.loading) {
         const loading = document.createElement('div');
@@ -2042,6 +2028,36 @@
         volChart.appendChild(buildChart('Объём', points, 'volume', false));
         charts.appendChild(volChart);
         content.appendChild(charts);
+      }
+
+      const sessions = (state.library.history?.sessions || []).filter((s) => Array.isArray(s.sets) && s.sets.length);
+      if (sessions.length) {
+        const exId = state.library.history?.exercise_id || state.library.currentExerciseId;
+        const savedIdx = getLibraryHistoryIndex(exId);
+        const idx = savedIdx === null ? sessions.length - 1 : Math.min(savedIdx, sessions.length - 1);
+        setLibraryHistoryIndex(exId, idx);
+        const wrap = document.createElement('div');
+        wrap.className = 'card';
+        const title = document.createElement('div');
+        title.className = 'card-title';
+        title.textContent = 'История подходов';
+        const dateLabel = document.createElement('div');
+        dateLabel.className = 'group-count';
+        dateLabel.textContent = sessions[idx]?.date || '—';
+        const table = document.createElement('table');
+        table.className = 'history-table';
+        table.innerHTML = '<tr><th>№</th><th>повт</th><th>сек</th><th>кг</th></tr>';
+        sessions[idx].sets.forEach((s) => {
+          const row = document.createElement('tr');
+          row.innerHTML = `<td>${s.set_no}</td><td>${s.reps}</td><td>${s.seconds}</td><td>${s.weight_kg}</td>`;
+          table.appendChild(row);
+        });
+        const pager = buildHistoryPager(sessions.length, idx, (nextIdx) => {
+          setLibraryHistoryIndex(exId, nextIdx);
+          renderLibrary();
+        }, sessions[idx]?.date || '');
+        wrap.append(title, dateLabel, table, pager);
+        content.appendChild(wrap);
       }
 
       const last = state.library.history?.last_session;
@@ -2187,19 +2203,11 @@
       await loadGroupExercises();
     }
 
-    let groupSearchTimer = null;
-    function debounceLoadGroup() {
-      if (groupSearchTimer) clearTimeout(groupSearchTimer);
-      groupSearchTimer = setTimeout(() => loadGroupExercises().catch(console.error), 300);
-    }
-
     async function loadGroupExercises() {
       if (!state.library.selectedGroup) return;
       state.library.loading = true;
       renderLibrary();
-      const params = new URLSearchParams();
-      if (state.library.query) params.set('query', state.library.query);
-      const data = await apiFetch(`/gymapi/library/group/${state.library.selectedGroup.code}/exercises?${params.toString()}`, { silent: true });
+      const data = await apiFetch(`/gymapi/library/group/${state.library.selectedGroup.code}/exercises`, { silent: true });
       state.library.exercises = data.items || [];
       state.library.loading = false;
       renderLibrary();
@@ -2233,6 +2241,26 @@
           return false;
         }
         return dt >= cutoff;
+      });
+    }
+
+    function filterHistorySessions(sessions, rangeCode) {
+      if (!Array.isArray(sessions) || !sessions.length) return [];
+      const days = rangeCode === 'all' ? null : (rangeCode === '90d' ? 90 : 30);
+      if (!days) return sessions;
+      const cutoff = new Date();
+      cutoff.setHours(0, 0, 0, 0);
+      cutoff.setDate(cutoff.getDate() - days + 1);
+      return sessions.filter((s) => {
+        const dt = new Date(s.date || s.day || s.day_label || s.ts || 0);
+        if (!Number.isNaN(dt.getTime())) return dt >= cutoff;
+        const parts = String(s.date || '').split('-');
+        if (parts.length === 3) {
+          const [y, m, d] = parts.map(Number);
+          const alt = new Date(y, m - 1, d);
+          return !Number.isNaN(alt.getTime()) && alt >= cutoff;
+        }
+        return false;
       });
     }
 
@@ -2272,7 +2300,14 @@
             finalHistory = { ...fallbackCache.all, points: filterHistoryPoints(fallbackCache.all.points, range) };
           }
         }
-        state.library.history = { ...finalHistory, exercise_id: exerciseId };
+        const filteredSessions = filterHistorySessions(finalHistory.sessions || [], range);
+        const finalWithSessions = { ...finalHistory, sessions: filteredSessions };
+        state.library.history = { ...finalWithSessions, exercise_id: exerciseId };
+        const sessions = Array.isArray(filteredSessions) ? filteredSessions : [];
+        if (sessions.length) {
+          const desired = Number.isInteger(getLibraryHistoryIndex(exerciseId)) ? getLibraryHistoryIndex(exerciseId) : sessions.length - 1;
+          setLibraryHistoryIndex(exerciseId, Math.min(Math.max(desired, 0), sessions.length - 1));
+        }
       } catch (e) {
         state.library.history = cache.ranges?.[range] || null;
         throw e;
@@ -2794,6 +2829,16 @@
         : Math.max(0, Math.min(Math.round(raw), field === 'heart_rate' ? 260 : Number.MAX_SAFE_INTEGER));
       state.runningDraft[ueId] = { ...draft, [field]: safe };
       return safe;
+    }
+
+    function getLibraryHistoryIndex(exerciseId) {
+      const idx = state.library.historyIndex?.[exerciseId];
+      return Number.isInteger(idx) && idx >= 0 ? idx : null;
+    }
+
+    function setLibraryHistoryIndex(exerciseId, value) {
+      state.library.historyIndex = state.library.historyIndex || {};
+      state.library.historyIndex[exerciseId] = Math.max(0, Math.round(Number(value) || 0));
     }
 
     function adjustRunningDraft(ueId, field, delta) {
