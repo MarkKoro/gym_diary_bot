@@ -635,6 +635,7 @@ async def init_db():
             day_index INTEGER,
             distance_km REAL DEFAULT 0,
             duration_sec INTEGER DEFAULT 0,
+            duration_ms INTEGER DEFAULT 0,
             calories INTEGER DEFAULT 0,
             heart_rate INTEGER DEFAULT 0,
             is_draft INTEGER DEFAULT 1,
@@ -763,6 +764,8 @@ async def init_db():
             await db.execute("ALTER TABLE payments ADD COLUMN external_id TEXT")
         if not await _column_exists(db, "running_entries", "heart_rate"):
             await db.execute("ALTER TABLE running_entries ADD COLUMN heart_rate INTEGER DEFAULT 0")
+        if not await _column_exists(db, "running_entries", "duration_ms"):
+            await db.execute("ALTER TABLE running_entries ADD COLUMN duration_ms INTEGER DEFAULT 0")
         try:
             await db.execute("ALTER TABLE users ADD COLUMN is_trainer INTEGER NOT NULL DEFAULT 0")
         except Exception:
@@ -3126,7 +3129,7 @@ async def get_running_entry(
         if session_id is not None:
             cur = await db.execute(
                 """
-                SELECT id, distance_km, duration_sec, calories, heart_rate, is_draft, created_at
+                SELECT id, distance_km, duration_sec, duration_ms, calories, heart_rate, is_draft, created_at
                 FROM running_entries
                 WHERE session_id=? AND user_exercise_id=?
                 ORDER BY created_at DESC
@@ -3137,7 +3140,7 @@ async def get_running_entry(
         else:
             cur = await db.execute(
                 """
-                SELECT id, distance_km, duration_sec, calories, heart_rate, is_draft, created_at
+                SELECT id, distance_km, duration_sec, duration_ms, calories, heart_rate, is_draft, created_at
                 FROM running_entries
                 WHERE user_id=? AND user_exercise_id=? AND session_id IS NULL AND is_draft=1
                 ORDER BY created_at DESC
@@ -3153,15 +3156,15 @@ async def get_running_entry(
             """
             INSERT INTO running_entries(
                 user_id, user_exercise_id, session_id, day_index,
-                distance_km, duration_sec, calories, heart_rate, is_draft, created_at
-            ) VALUES(?,?,?,?,0,0,0,0,1,?)
+                distance_km, duration_sec, duration_ms, calories, heart_rate, is_draft, created_at
+            ) VALUES(?,?,?,?,0,0,0,0,0,1,?)
             """,
             (user_id, user_exercise_id, session_id, day_index, created_at),
         )
         await db.commit()
         cur = await db.execute("SELECT last_insert_rowid()")
         new_id = (await cur.fetchone())[0]
-        return (new_id, 0.0, 0, 0, 0, 1, created_at)
+        return (new_id, 0.0, 0, 0, 0, 0, 1, created_at)
 
 
 async def update_running_entry(
@@ -3169,6 +3172,7 @@ async def update_running_entry(
     *,
     distance_km: float | None = None,
     duration_sec: int | None = None,
+    duration_ms: int | None = None,
     calories: int | None = None,
     heart_rate: int | None = None,
     is_draft: int | None = None,
@@ -3181,6 +3185,9 @@ async def update_running_entry(
     if duration_sec is not None:
         fields.append("duration_sec=?")
         values.append(int(duration_sec))
+    if duration_ms is not None:
+        fields.append("duration_ms=?")
+        values.append(int(duration_ms))
     if calories is not None:
         fields.append("calories=?")
         values.append(int(calories))
@@ -3223,7 +3230,7 @@ async def list_running_history(
     async with connect_db() as db:
         cur = await db.execute(
             """
-            SELECT id, distance_km, duration_sec, calories, heart_rate, created_at, day_index
+            SELECT id, distance_km, duration_sec, duration_ms, calories, heart_rate, created_at, day_index
             FROM running_entries
             WHERE user_id=? AND user_exercise_id=? AND is_draft=0
             ORDER BY created_at DESC
@@ -3239,7 +3246,7 @@ async def get_running_entry_by_id(entry_id: int) -> tuple | None:
         cur = await db.execute(
             """
             SELECT id, user_id, user_exercise_id, session_id, day_index,
-                   distance_km, duration_sec, calories, heart_rate, is_draft, created_at
+                   distance_km, duration_sec, duration_ms, calories, heart_rate, is_draft, created_at
             FROM running_entries
             WHERE id=?
             """,

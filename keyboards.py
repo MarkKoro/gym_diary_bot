@@ -69,16 +69,16 @@ def main_menu_kb(
             ]
         )
     rows.append(
-        [
-            InlineKeyboardButton(
-                dual(
-                    "📘 Мои упражнения",
-                    "Мои упражнения — личная библиотека",
-                ),
-                callback_data="menu:library",
-            )
-        ]
-    )
+            [
+                InlineKeyboardButton(
+                    dual(
+                        "📘 Статистика упражнений",
+                        "Статистика упражнений — личная библиотека",
+                    ),
+                    callback_data="menu:library",
+                )
+            ]
+        )
     rows.append(
         [
             InlineKeyboardButton(
