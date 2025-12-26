@@ -334,8 +334,13 @@ async def _build_running_state(
     ue_id: int,
     target_date: date,
     *,
+    exercise_id: int | None = None,
     history_limit: int = 12,
 ):
+    ex_id = exercise_id
+    if ex_id is None:
+        info = await db.get_exercise_info(ue_id)
+        ex_id = int(info[0]) if info else None
     iso_date = _iso_date(target_date)
     session_id = await db.get_or_create_today_session(user_id, iso_date, day_index)
     entry = await get_running_entry(
@@ -346,7 +351,12 @@ async def _build_running_state(
         create=True,
     )
     running_summary = _serialize_running_entry(entry)
-    history_rows = await list_running_history(user_id, ue_id, limit=history_limit)
+    history_rows = await list_running_history(
+        user_id,
+        ue_id,
+        exercise_id=ex_id,
+        limit=history_limit,
+    )
     history = [_serialize_running_history_row(row) for row in history_rows if row]
     prev_running = None
     if history_rows:
@@ -659,7 +669,12 @@ async def day_sheet(
         }
         if normalized_group == "run":
             running_state = await _build_running_state(
-                user_id, day_index, ue_id, target_date, history_limit=20
+                user_id,
+                day_index,
+                ue_id,
+                target_date,
+                exercise_id=int(exercise_id),
+                history_limit=20,
             )
             exercise_payload.update(
                 {

@@ -3223,20 +3223,39 @@ async def mark_running_entry_done(entry_id: int):
 
 async def list_running_history(
     user_id: int,
-    user_exercise_id: int,
+    user_exercise_id: int | None = None,
+    *,
+    exercise_id: int | None = None,
     limit: int = 10,
     offset: int = 0,
 ) -> list[tuple]:
+    if user_exercise_id is None and exercise_id is None:
+        raise ValueError("Either user_exercise_id or exercise_id must be provided")
+    params: list[object] = [user_id]
+    use_exercise = exercise_id is not None
+    if use_exercise:
+        params.append(exercise_id)
+    else:
+        params.append(user_exercise_id)
+    params.extend([limit, offset])
+    where_clause = (
+        "re.user_id=? AND ue.exercise_id=?" if use_exercise else "re.user_id=? AND re.user_exercise_id=?"
+    )
     async with connect_db() as db:
         cur = await db.execute(
             """
-            SELECT id, distance_km, duration_sec, duration_ms, calories, heart_rate, created_at, day_index
-            FROM running_entries
-            WHERE user_id=? AND user_exercise_id=? AND is_draft=0
-            ORDER BY created_at DESC
+            SELECT re.id, re.distance_km, re.duration_sec, re.duration_ms, re.calories, re.heart_rate, re.created_at, re.day_index
+            FROM running_entries re
+            JOIN user_exercises ue ON ue.id=re.user_exercise_id
+            WHERE """
+            + where_clause
+            + """
+              AND re.is_draft=0
+              AND ue.user_id=re.user_id
+            ORDER BY re.created_at DESC
             LIMIT ? OFFSET ?
             """,
-            (user_id, user_exercise_id, limit, offset),
+            tuple(params),
         )
         return await cur.fetchall()
 

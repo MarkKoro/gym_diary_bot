@@ -5635,7 +5635,9 @@ async def fetch_day_sheet_data(
                 "duration_ms": duration_ms_value if running_entry else 0,
                 "calories": calories_value,
             }
-            history_rows = await list_running_history(user_id, ue_id, limit=2)
+            history_rows = await list_running_history(
+                user_id, ue_id, exercise_id=ex_id, limit=2
+            )
             prev_entry = None
             if history_rows:
                 if running_entry and history_rows[0][0] == running_entry[0]:
@@ -6389,7 +6391,9 @@ async def build_summary_map(
                         distance_value, duration_value, calories_value
                     )
             if not last_label:
-                history_rows = await list_running_history(user_id, ue_id, limit=1)
+                history_rows = await list_running_history(
+                    user_id, ue_id, exercise_id=ex_id, limit=1
+                )
                 if history_rows:
                     _, dist, dur, dur_ms, cal, _hr, _created_at, _ = history_rows[0]
                     duration_ms_val = int(dur_ms or 0)
@@ -6678,7 +6682,9 @@ async def render_exercise_view(
         duration_value = max(int(round(duration_ms_value / 1000)), 0)
         calories_value = int(calories or 0)
         current_line = format_running_line(distance_value, duration_value, calories_value)
-        history_rows = await list_running_history(user_id, ue_id, limit=2)
+        history_rows = await list_running_history(
+            user_id, ue_id, exercise_id=ex_id, limit=2
+        )
         prev_text = t("NOT_FIXED")
         prev_created_at = None
         if history_rows:
@@ -6900,8 +6906,8 @@ async def build_running_history_view(
     back_callback: str | None = None,
     prefs: UiPreferences | None = None,
 ) -> tuple[str, InlineKeyboardMarkup]:
-    _, name, _ = await get_exercise_info(ue_id)
-    entries = await list_running_history(user_id, ue_id, limit=20)
+    ex_id, name, _ = await get_exercise_info(ue_id)
+    entries = await list_running_history(user_id, ue_id, exercise_id=ex_id, limit=20)
     prefs_local = prefs or await load_ui_preferences(user_id)
     tz_name = await get_user_timezone(user_id)
     zone = resolve_user_zone(tz_name)
