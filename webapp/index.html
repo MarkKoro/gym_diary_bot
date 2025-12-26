@@ -2059,28 +2059,6 @@
         wrap.append(title, dateLabel, table, pager);
         content.appendChild(wrap);
       }
-
-      const last = state.library.history?.last_session;
-      if (last) {
-        const block = document.createElement('div');
-        block.className = 'chart-block';
-        const title = document.createElement('div');
-        title.className = 'chart-title';
-        title.textContent = 'Последняя тренировка';
-        const date = document.createElement('div');
-        date.className = 'group-count';
-        date.textContent = last.date;
-        const table = document.createElement('table');
-        table.className = 'history-table';
-        table.innerHTML = '<tr><th>№</th><th>повт</th><th>сек</th><th>кг</th></tr>';
-        last.sets.forEach((s) => {
-          const row = document.createElement('tr');
-          row.innerHTML = `<td>${s.set_no}</td><td>${s.reps}</td><td>${s.seconds}</td><td>${s.weight_kg}</td>`;
-          table.appendChild(row);
-        });
-        block.append(title, date, table);
-        content.appendChild(block);
-      }
     }
 
     function buildChart(title, points, field, line = true) {
@@ -2300,10 +2278,14 @@
             finalHistory = { ...fallbackCache.all, points: filterHistoryPoints(fallbackCache.all.points, range) };
           }
         }
-        const filteredSessions = filterHistorySessions(finalHistory.sessions || [], range);
-        const finalWithSessions = { ...finalHistory, sessions: filteredSessions };
-        state.library.history = { ...finalWithSessions, exercise_id: exerciseId };
-        const sessions = Array.isArray(filteredSessions) ? filteredSessions : [];
+
+        const allHistory = range === 'all'
+          ? data
+          : (cache.all || (await ensureHistoryCache(exerciseId))?.all || null);
+        const allSessions = Array.isArray(allHistory?.sessions) ? allHistory.sessions : (Array.isArray(data?.sessions) ? data.sessions : []);
+
+        state.library.history = { ...finalHistory, sessions: allSessions, exercise_id: exerciseId };
+        const sessions = Array.isArray(allSessions) ? allSessions : [];
         if (sessions.length) {
           const desired = Number.isInteger(getLibraryHistoryIndex(exerciseId)) ? getLibraryHistoryIndex(exerciseId) : sessions.length - 1;
           setLibraryHistoryIndex(exerciseId, Math.min(Math.max(desired, 0), sessions.length - 1));
@@ -4110,6 +4092,7 @@
         try { tg.ready(); } catch (_) {}
         try { tg.expand(); } catch (_) {}
         try { tg.disableVerticalSwipes?.(); } catch (_) {}
+        try { tg.BackButton?.onClick?.(() => handleBackAction()); } catch (_) {}
       }
 
       // Extract user id if possible (not a substitute for initData signature, but useful)
