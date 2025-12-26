@@ -866,9 +866,6 @@ async def compose_main_menu(
     completions = await get_active_day_completions(user_id)
     text = build_main_menu_text(prefs)
     stats_lines: list[str] = []
-    stats_lines.append(
-        f"Завершено тренировок на этой неделе: {len(completions)}."
-    )
     tz_code = await get_user_timezone(user_id)
     zone = resolve_user_zone(tz_code)
     now_local = datetime.now(UTC).astimezone(zone)
