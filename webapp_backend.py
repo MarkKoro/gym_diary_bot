@@ -1387,12 +1387,34 @@ async def exercise_history(
     ctx: AuthCtx = Depends(get_auth_ctx),
 ):
     user_id = ctx.user_id
-    name, _ = await _require_user_exercise(user_id, exercise_id)
+    name, muscle_group = await _require_user_exercise(user_id, exercise_id)
 
     end_date = _today_date()
     normalized_range, start_date = _resolve_range(range, end_date)
     start_iso = None if normalized_range == "all" else _iso_date(start_date)
     end_iso = _iso_date(end_date)
+
+    normalized_group = _normalize_group(muscle_group)
+    is_running = normalized_group == "run"
+
+    if is_running:
+        history_rows = await db.list_running_history(
+            user_id,
+            exercise_id=exercise_id,
+            start_date=start_iso,
+            end_date=end_iso,
+            limit=500,
+            offset=0,
+        )
+        entries = [_serialize_running_history_row(row) for row in history_rows if row]
+        return {
+            "ok": True,
+            "exercise_id": exercise_id,
+            "exercise_name": name,
+            "range": normalized_range,
+            "is_running": True,
+            "running_entries": entries,
+        }
 
     rows = await db.fetch_exercise_history_points(user_id, exercise_id, start_iso, end_iso)
     timeline: dict[str, dict] = {}
@@ -1456,6 +1478,7 @@ async def exercise_history(
         "points": points,
         "sessions": sorted(sessions.values(), key=lambda x: x["date"]),
         "last_session": last_session,
+        "is_running": False,
     }
 
 
