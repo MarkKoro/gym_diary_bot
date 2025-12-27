@@ -500,6 +500,7 @@
     .section-title { font-size: 17px; font-weight: 800; letter-spacing: -0.01em; }
     .subtext { color: var(--muted); font-size: 14px; }
     .legend-card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 12px; box-shadow: var(--shadow); display: grid; gap: 8px; }
+    .legend-list { display: grid; gap: 8px; }
     .legend-item { display: flex; align-items: center; gap: 10px; font-size: 14px; }
     .legend-dot { width: 14px; height: 14px; border-radius: 50%; }
       .search-input { width: 100%; padding: 12px 14px; border-radius: 12px; border: 1px solid var(--border); background: var(--card); color: var(--text); font-size: 15px; box-shadow: var(--shadow); }
@@ -657,6 +658,7 @@
       transition: opacity 0.1s ease;
     }
     .chart-tooltip.show { opacity: 1; }
+    .chart-description { color: var(--muted); font-size: 13px; margin-top: 8px; line-height: 1.4; }
     .chart-point { fill: var(--accent); stroke: var(--bg); stroke-width: 2; }
     .empty-day {
       border: 1px dashed var(--border);
@@ -2006,6 +2008,10 @@
         content.appendChild(loading);
         return;
       }
+      if (state.library.history?.is_running) {
+        renderLibraryRunningHistory(content);
+        return;
+      }
       const points = state.library.history?.points || [];
       if (!points.length) {
         const empty = document.createElement('div');
@@ -2061,7 +2067,52 @@
       }
     }
 
-    function buildChart(title, points, field, line = true) {
+    function renderLibraryRunningHistory(container) {
+      const entries = state.library.history?.running_entries || [];
+      if (!entries.length) {
+        const empty = document.createElement('div');
+        empty.className = 'library-empty';
+        empty.textContent = 'Пока нет сохранённых пробежек для этого упражнения.';
+        container.appendChild(empty);
+        return;
+      }
+      const exerciseId = state.library.history?.exercise_id || state.library.currentExerciseId;
+      const savedIdx = getLibraryHistoryIndex(exerciseId);
+      const idx = Math.min(Number.isInteger(savedIdx) ? savedIdx : 0, entries.length - 1);
+      setLibraryHistoryIndex(exerciseId, idx);
+      const entry = entries[idx];
+      const card = document.createElement('div');
+      card.className = 'card';
+      const title = document.createElement('div');
+      title.className = 'card-title';
+      title.textContent = 'История пробежек';
+      const subtitle = document.createElement('div');
+      subtitle.className = 'group-count';
+      subtitle.textContent = entry.date || '—';
+
+      const table = document.createElement('table');
+      table.className = 'history-table';
+      table.innerHTML = '<tr><th>Дата</th><th>Км</th><th>Время</th><th>Темп</th><th>Ккал</th><th>Пульс</th></tr>';
+      const durationMs = normalizeRunningDurationMs(entry);
+      const pace = entry.pace_sec ?? ((durationMs > 0 && Number(entry.distance_km || 0) > 0) ? (durationMs / 1000) / Number(entry.distance_km || 0) : null);
+      const row = document.createElement('tr');
+      row.innerHTML = `<td>${entry.date || '—'}</td><td>${Number(entry.distance_km || 0).toFixed(2)}</td><td>${formatDurationValueMs(durationMs)}</td><td>${formatPaceValue(pace)} мин/км</td><td>${Number(entry.calories || 0) || '—'}</td><td>${entry.heart_rate ? `${entry.heart_rate} уд/мин` : '—'}</td>`;
+      table.appendChild(row);
+
+      const pager = buildHistoryPager(entries.length, idx, (nextIdx) => {
+        setLibraryHistoryIndex(exerciseId, nextIdx);
+        renderLibrary();
+      }, entry.date || '');
+
+      const note = document.createElement('div');
+      note.className = 'history-note';
+      note.textContent = 'Используй стрелки, чтобы листать записи за 30/90 дней или за всё время.';
+
+      card.append(title, subtitle, table, pager, note);
+      container.appendChild(card);
+    }
+
+    function buildChart(title, points, field, line = true, description = '') {
       const wrapper = document.createElement('div');
       wrapper.className = 'chart-wrapper';
       const h = document.createElement('div');
@@ -2114,10 +2165,11 @@
         if (field === 'top_weight') label = `Вес: ${val} кг${point.top_reps ? ` × ${point.top_reps}` : ''}`;
         if (field === 'top_seconds') label = `Секунды: ${val}`;
         tooltip.textContent = `${labelDate || 'Дата неизвестна'} — ${label}`;
-        tooltip.style.left = `${(x / 300) * 100}%`;
-        tooltip.style.top = `${(y / 120) * 100}%`;
+        const leftPct = Math.min(96, Math.max(4, (x / 300) * 100));
+        const topPct = Math.min(94, Math.max(6, (y / 120) * 100));
+        tooltip.style.left = `${leftPct}%`;
+        tooltip.style.top = `${topPct}%`;
         tooltip.classList.add('show');
-        toast(`${tooltip.textContent}`);
       };
 
       const hideTooltip = () => tooltip.classList.remove('show');
@@ -2151,6 +2203,12 @@
       svg.addEventListener('mouseleave', hideTooltip);
 
       wrapper.appendChild(svg);
+      if (description) {
+        const desc = document.createElement('div');
+        desc.className = 'chart-description';
+        desc.textContent = description;
+        wrapper.appendChild(desc);
+      }
       return wrapper;
     }
 
@@ -2267,6 +2325,14 @@
         cache.ranges[range] = data;
         if (range === 'all') cache.all = data;
         state.library.historyCache[exerciseId] = cache;
+        if (data?.is_running) {
+          state.library.history = data;
+          const entries = Array.isArray(data.running_entries) ? data.running_entries : [];
+          const desired = Number.isInteger(getLibraryHistoryIndex(exerciseId)) ? getLibraryHistoryIndex(exerciseId) : 0;
+          const clamped = entries.length ? Math.min(Math.max(desired, 0), entries.length - 1) : 0;
+          setLibraryHistoryIndex(exerciseId, clamped);
+          return;
+        }
         let finalHistory = data;
         const hasPoints = Array.isArray(data?.points) && data.points.length;
         if (range !== 'all' && cache.all) {
@@ -3185,13 +3251,11 @@
 
       const actionsRow = document.createElement('div');
       actionsRow.className = 'workout-actions';
-      const saveBtn = document.createElement('button'); saveBtn.type = 'button'; saveBtn.className = 'btn primary'; saveBtn.textContent = 'Сохранить';
-      saveBtn.addEventListener('click', (ev) => { ev.stopPropagation(); handleRunningSave(exercise).catch(console.error); });
       const historyBtn = document.createElement('button'); historyBtn.type = 'button'; historyBtn.className = 'btn'; historyBtn.textContent = 'История';
       historyBtn.addEventListener('click', (ev) => { ev.stopPropagation(); openEditor(exercise.user_exercise_id); });
       const doneBtn = document.createElement('button'); doneBtn.type = 'button'; doneBtn.className = 'outline-btn done-btn'; doneBtn.textContent = '✅ Готово';
       doneBtn.addEventListener('click', (ev) => { ev.stopPropagation(); handleRunningDone(exercise).catch(console.error); });
-      actionsRow.append(saveBtn, historyBtn, doneBtn);
+      actionsRow.append(historyBtn, doneBtn);
       container.appendChild(actionsRow);
     }
 
@@ -4246,26 +4310,50 @@
         list.append(pager, historyList);
       }
 
+      const legend = document.createElement('div');
+      legend.className = 'legend-card';
+      const legendTitle = document.createElement('div');
+      legendTitle.className = 'section-title';
+      legendTitle.textContent = 'Что показывают графики';
+      const legendItems = [
+        'Дистанция — сколько километров в каждой записи.',
+        'Темп — минут на километр, ниже = быстрее.',
+        'Время — длительность пробежки.',
+        'Пульс — сохранённый средний/целевой пульс.',
+        'Калории — оценка затраченной энергии.',
+      ];
+      const legendList = document.createElement('div');
+      legendList.className = 'legend-list';
+      legendItems.forEach((text) => {
+        const item = document.createElement('div');
+        item.className = 'legend-item';
+        const dot = document.createElement('span'); dot.className = 'legend-dot'; dot.style.background = 'var(--accent)';
+        const label = document.createElement('span'); label.textContent = text;
+        item.append(dot, label);
+        legendList.appendChild(item);
+      });
+      legend.append(legendTitle, legendList);
+
       const charts = document.createElement('div');
       charts.className = 'card-list';
       const distBlock = document.createElement('div');
       distBlock.className = 'chart-block';
-      distBlock.appendChild(buildChart('Дистанция, км', history, 'distance_km', true));
+      distBlock.appendChild(buildChart('Дистанция, км', history, 'distance_km', true, 'Километры за каждую сохранённую пробежку.'));
       const pacePoints = history.map((row) => ({ ...row, pace_min: row.pace_sec ? row.pace_sec / 60 : 0 }));
       const paceBlock = document.createElement('div');
       paceBlock.className = 'chart-block';
-      paceBlock.appendChild(buildChart('Темп (мин/км)', pacePoints, 'pace_min', true));
+      paceBlock.appendChild(buildChart('Темп (мин/км)', pacePoints, 'pace_min', true, 'Минуты на километр — чем ниже значение, тем быстрее был забег.'));
       const durationBlock = document.createElement('div');
       durationBlock.className = 'chart-block';
-      durationBlock.appendChild(buildChart('Время, сек', history, 'duration_sec', true));
+      durationBlock.appendChild(buildChart('Время, сек', history, 'duration_sec', true, 'Общая длительность забега в секундах.'));
       const pulseBlock = document.createElement('div');
       pulseBlock.className = 'chart-block';
-      pulseBlock.appendChild(buildChart('Пульс, уд/мин', history, 'heart_rate', true));
+      pulseBlock.appendChild(buildChart('Пульс, уд/мин', history, 'heart_rate', true, 'Сохранённый пульс во время пробежки.'));
       const caloriesBlock = document.createElement('div');
       caloriesBlock.className = 'chart-block';
-      caloriesBlock.appendChild(buildChart('Калории', history, 'calories', true));
+      caloriesBlock.appendChild(buildChart('Калории', history, 'calories', true, 'Оценка расхода энергии на пробежку.'));
       charts.append(distBlock, paceBlock, durationBlock, pulseBlock, caloriesBlock);
-      grid.appendChild(charts);
+      grid.append(legend, charts);
       const removeBtn = document.getElementById('editorRemoveSet');
       if (removeBtn) removeBtn.disabled = true;
     }
@@ -4395,21 +4483,36 @@
       cards.className = 'card-list';
       const distanceBlock = document.createElement('div');
       distanceBlock.className = 'chart-block';
-      distanceBlock.appendChild(buildChart('Дистанция, км', history, 'distance_km', true));
+      distanceBlock.appendChild(buildChart('Дистанция, км', history, 'distance_km', true, 'Километры в каждой сохранённой пробежке.'));
       const pacePoints = history.map((row) => ({ ...row, pace_min: row.pace_sec ? row.pace_sec / 60 : 0 }));
       const paceBlock = document.createElement('div');
       paceBlock.className = 'chart-block';
-      paceBlock.appendChild(buildChart('Темп (мин/км)', pacePoints, 'pace_min', true));
+      paceBlock.appendChild(buildChart('Темп (мин/км)', pacePoints, 'pace_min', true, 'Минуты на километр — чем ниже значение, тем быстрее была пробежка.'));
       const durationBlock = document.createElement('div');
       durationBlock.className = 'chart-block';
-      durationBlock.appendChild(buildChart('Время, сек', history, 'duration_sec', true));
+      durationBlock.appendChild(buildChart('Время, сек', history, 'duration_sec', true, 'Общая длительность забега.'));
       const pulseBlock = document.createElement('div');
       pulseBlock.className = 'chart-block';
-      pulseBlock.appendChild(buildChart('Пульс, уд/мин', history, 'heart_rate', true));
+      pulseBlock.appendChild(buildChart('Пульс, уд/мин', history, 'heart_rate', true, 'Сохранённый пульс во время забега.'));
       const caloriesBlock = document.createElement('div');
       caloriesBlock.className = 'chart-block';
-      caloriesBlock.appendChild(buildChart('Калории', history, 'calories', true));
-      cards.append(distanceBlock, paceBlock, durationBlock, pulseBlock, caloriesBlock);
+      caloriesBlock.appendChild(buildChart('Калории', history, 'calories', true, 'Оценка расхода энергии.'));
+      const legend = document.createElement('div');
+      legend.className = 'legend-card';
+      const legendTitle = document.createElement('div');
+      legendTitle.className = 'section-title';
+      legendTitle.textContent = 'Что показывают графики';
+      const legendItems = ['Км за пробежку', 'Темп (мин/км)', 'Длительность', 'Пульс', 'Калории'];
+      const legendList = document.createElement('div'); legendList.className = 'legend-list';
+      legendItems.forEach((text) => {
+        const item = document.createElement('div'); item.className = 'legend-item';
+        const dot = document.createElement('span'); dot.className = 'legend-dot'; dot.style.background = 'var(--accent)';
+        const label = document.createElement('span'); label.textContent = text;
+        item.append(dot, label);
+        legendList.appendChild(item);
+      });
+      legend.append(legendTitle, legendList);
+      cards.append(legend, distanceBlock, paceBlock, durationBlock, pulseBlock, caloriesBlock);
       const pager = buildHistoryPager(history.length, idx, (nextIdx) => {
         setRunningHistoryIndex(ueId, nextIdx);
         renderRunningHistoryTab(exercise);

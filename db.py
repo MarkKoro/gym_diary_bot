@@ -3226,6 +3226,8 @@ async def list_running_history(
     user_exercise_id: int | None = None,
     *,
     exercise_id: int | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
     limit: int = 10,
     offset: int = 0,
 ) -> list[tuple]:
@@ -3237,10 +3239,18 @@ async def list_running_history(
         params.append(exercise_id)
     else:
         params.append(user_exercise_id)
+    if start_date:
+        params.append(start_date)
+    if end_date:
+        params.append(end_date)
     params.extend([limit, offset])
     where_clause = (
         "re.user_id=? AND ue.exercise_id=?" if use_exercise else "re.user_id=? AND re.user_exercise_id=?"
     )
+    if start_date:
+        where_clause += " AND DATE(re.created_at) >= DATE(?)"
+    if end_date:
+        where_clause += " AND DATE(re.created_at) <= DATE(?)"
     async with connect_db() as db:
         cur = await db.execute(
             """
