@@ -260,7 +260,7 @@ logging.basicConfig(
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("telegram").setLevel(logging.INFO)
 
-WEBAPP_URL = "https://telegrambotsforeveryone.duckdns.org/gymapp_prod/"
+WEBAPP_URL = os.getenv("WEBAPP_URL", "https://telegrambotsforeveryone.duckdns.org/gymapp/")
 
 user_locks = defaultdict(asyncio.Lock)
 logger = logging.getLogger(__name__)
