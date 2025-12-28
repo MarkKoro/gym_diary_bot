@@ -1175,7 +1175,10 @@
     const muscleColorAssignments = new Map();
 
     const BODY_MUSCLES = new Set(['chest', 'back', 'legs', 'shoulders', 'core', 'biceps', 'triceps']);
-    const BOT_USERNAME = 'progressottestbot';
+    const BOT_USERNAME =
+  ((window.location && window.location.pathname) ? window.location.pathname : '').startsWith('/gymapp_prod')
+    ? 'progresor_bot'
+    : 'progressottestbot';
 
     function html(strings, ...values) {
       const template = document.createElement('template');
