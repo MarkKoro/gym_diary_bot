@@ -4,7 +4,7 @@ from datetime import UTC, datetime, date, time, timedelta
 from math import sqrt
 from typing import Optional
 from zoneinfo import ZoneInfo
-from fastapi import Body, Depends, FastAPI, Header, HTTPException, Request
+from fastapi import Body, Depends, FastAPI, Header, HTTPException, Request, Response
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from settings import TG_TOKEN
@@ -591,6 +591,10 @@ def _serialize_sets(rows: list[tuple]) -> list[dict]:
 @app.get("/health")
 def health():
     return {"ok": True}
+
+@app.head("/health")
+def health_head():
+    return Response(status_code=200)
 
 
 @app.get("/")
