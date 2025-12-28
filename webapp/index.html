@@ -2495,6 +2495,11 @@
     }
 
     async function apiFetch(path, options = {}) {
+      const appPath = (window.location && window.location.pathname) ? window.location.pathname : '';
+      const apiPrefix = appPath.startsWith('/gymapp_prod') ? '/gymapi_prod' : '/gymapi';
+      if (typeof path === 'string' && path.startsWith('/gymapi/')) {
+        path = apiPrefix + path.slice('/gymapi'.length);
+      }
       const { silent = false, fetchOptions = null, timeoutMs = 15000, ...direct } = options || {};
 
       // Merge headers from both layers
