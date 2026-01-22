@@ -719,6 +719,64 @@ async def search_catalog(query: str | None = None, ctx: AuthCtx = Depends(get_au
     }
 
 
+@app.get("/catalog/groups")
+async def list_catalog_groups(ctx: AuthCtx = Depends(get_auth_ctx)):
+    user_id = ctx.user_id
+    custom = await db.list_user_muscle_groups(user_id)
+    groups = [
+        {"code": code, "name": name, "is_custom": False}
+        for code, name in MG_NAMES.items()
+    ]
+    groups.extend(
+        {"code": code, "name": name, "is_custom": True}
+        for code, name in custom
+    )
+    return {"ok": True, "groups": groups}
+
+
+@app.get("/catalog/group/{code}")
+async def list_catalog_group_exercises(
+    code: str,
+    day_index: int | None = None,
+    ctx: AuthCtx = Depends(get_auth_ctx),
+):
+    user_id = ctx.user_id
+    normalized_code = (code or "").strip().lower()
+    if not normalized_code:
+        raise HTTPException(status_code=400, detail="Группа не указана")
+    if day_index is not None:
+        await _validate_day(user_id, int(day_index))
+    rows = await db.list_exercises_by_group(normalized_code)
+    added = set()
+    if day_index is not None:
+        added = set(await db.list_user_exercise_ids(user_id, int(day_index), normalized_code))
+    return {
+        "ok": True,
+        "items": [
+            {
+                "id": int(ex_id),
+                "name": name,
+                "muscle_group": normalized_code,
+                "is_added": int(ex_id) in added,
+            }
+            for ex_id, name in rows
+        ],
+    }
+
+
+@app.post("/catalog/group")
+async def create_catalog_group(
+    payload: dict = Body(...),
+    ctx: AuthCtx = Depends(get_auth_ctx),
+):
+    user_id = ctx.user_id
+    name_raw = (payload or {}).get("name") if isinstance(payload, dict) else None
+    if not name_raw or not str(name_raw).strip():
+        raise HTTPException(status_code=400, detail="Название обязательно")
+    code = await db.add_user_muscle_group(user_id, str(name_raw).strip())
+    return {"ok": True, "code": code, "name": str(name_raw).strip()}
+
+
 @app.post("/day/{day_index}/exercise")
 async def add_day_exercise(
     day_index: int,
