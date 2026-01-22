@@ -82,6 +82,39 @@
     .status.ready .dot { background: #34c759; }
     .status.error .dot { background: var(--danger); }
     .status .status-text { color: var(--muted); }
+    .manage-menu-wrap { position: relative; display: inline-flex; align-items: center; }
+    .manage-trigger { position: relative; }
+    .manage-icon { width: 24px; height: 24px; }
+    .manage-plus { stroke: #22c55e; stroke-width: 3.4; stroke-linecap: round; }
+    .manage-minus { stroke: #ef4444; stroke-width: 3.6; stroke-linecap: round; }
+    .manage-menu {
+      position: absolute;
+      top: 52px;
+      right: 0;
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      box-shadow: var(--shadow);
+      padding: 8px;
+      display: none;
+      min-width: 200px;
+      z-index: 24;
+    }
+    .manage-menu.open { display: grid; gap: 6px; }
+    .manage-menu button {
+      width: 100%;
+      text-align: left;
+      border: none;
+      background: var(--bg);
+      border-radius: 12px;
+      padding: 10px 12px;
+      font-weight: 700;
+      cursor: pointer;
+      color: var(--text);
+    }
+    .manage-menu button:hover { background: rgba(0,0,0,0.04); }
+    [data-theme="dark"] .manage-menu button:hover { background: rgba(255,255,255,0.06); }
+    .header-done-btn { height: 42px; padding: 0 16px; border-radius: 14px; font-weight: 800; }
     @media (max-width: 420px) {
       .status { padding: 8px; }
       .status .status-text { display: none; }
@@ -181,7 +214,26 @@
         flex-direction: column;
         gap: 10px;
       }
-      .exercise-card { cursor: pointer; }
+      .exercise-card { cursor: pointer; position: relative; }
+      .exercise-card.delete-mode { cursor: default; }
+      .exercise-delete-btn {
+        position: absolute;
+        top: 10px;
+        right: 10px;
+        width: 32px;
+        height: 32px;
+        border-radius: 10px;
+        border: none;
+        background: rgba(239, 68, 68, 0.15);
+        color: #ef4444;
+        display: grid;
+        place-items: center;
+        font-size: 18px;
+        font-weight: 800;
+        cursor: pointer;
+        z-index: 2;
+      }
+      .exercise-delete-btn:hover { background: rgba(239, 68, 68, 0.22); }
       .exercise-card.expanded {
         border-color: var(--accent);
         box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 55%, transparent), var(--shadow);
@@ -792,7 +844,48 @@
       .primary-link { padding: 10px 14px; border-radius: 12px; background: var(--accent); color: #fff; border: none; font-weight: 700; box-shadow: 0 8px 18px rgba(0,122,255,0.18); cursor: pointer; }
       .primary-link:active { transform: translateY(1px); }
       .fab { position: fixed; right: 16px; bottom: calc(110px + env(safe-area-inset-bottom)); width: 54px; height: 54px; border-radius: 50%; border: none; background: var(--accent); color: #fff; font-size: 28px; font-weight: 800; box-shadow: 0 14px 28px rgba(0,122,255,0.28); cursor: pointer; z-index: 14; display: grid; place-items: center; }
-      .fab.hidden { display: none; }
+    .fab.hidden { display: none; }
+    .manage-sheet .sheet { max-width: 560px; }
+    .manage-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+    }
+    .manage-title { font-size: 17px; font-weight: 800; }
+    .manage-day-line { display: grid; grid-template-columns: auto 1fr auto; gap: 10px; align-items: center; margin-top: 6px; }
+    .manage-day-center { width: 100%; text-align: center; border: none; background: none; color: var(--text); font-weight: 700; font-size: 15px; }
+    .manage-day-subtitle { color: var(--muted); font-size: 13px; margin-top: 6px; }
+    .manage-content { margin-top: 12px; display: grid; gap: 12px; }
+    .manage-topbar { display: flex; align-items: center; gap: 10px; }
+    .manage-back { border: none; background: none; color: var(--accent); font-weight: 700; cursor: pointer; }
+    .manage-list { display: grid; gap: 10px; }
+    .manage-item {
+      padding: 12px;
+      border-radius: 12px;
+      border: 1px solid var(--border);
+      background: var(--bg);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      cursor: pointer;
+    }
+    .manage-item .meta { color: var(--muted); font-size: 13px; }
+    .manage-item.added { border-color: rgba(34,197,94,0.45); background: rgba(34,197,94,0.08); }
+    .manage-check { color: #22c55e; font-weight: 800; }
+    .manage-secondary { background: var(--card); }
+    .manage-actions { display: grid; gap: 10px; }
+    .manage-actions .btn { width: 100%; }
+    .text-input {
+      width: 100%;
+      border-radius: 12px;
+      border: 1px solid var(--border);
+      padding: 12px 14px;
+      background: var(--bg);
+      color: var(--text);
+      font-size: 15px;
+    }
       .card.removing { overflow: hidden; transition: opacity 0.2s ease, transform 0.2s ease, max-height 0.22s ease, margin 0.22s ease, padding 0.22s ease; opacity: 0; transform: translateY(-6px); max-height: 0; margin: 0; padding: 0; }
       .menu-button { width: 36px; height: 36px; border-radius: 10px; border: 1px solid var(--border); background: var(--bg); color: var(--text); cursor: pointer; display: grid; place-items: center; }
       .card-menu { position: absolute; top: 44px; right: 0; background: var(--card); border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow); padding: 6px; display: none; min-width: 160px; z-index: 5; }
@@ -930,7 +1023,19 @@
               <circle cx="12" cy="13" r="7"></circle>
             </svg>
           </button>
-          <div id="status" class="status booting"><span class="dot"></span><span class="status-text">загрузка</span></div>
+          <div id="manageMenuWrap" class="manage-menu-wrap">
+            <button id="manageExerciseBtn" class="icon-btn manage-trigger" aria-label="Добавить или удалить упражнения">
+              <svg class="manage-icon" viewBox="0 0 24 24" aria-hidden="true">
+                <path class="manage-plus" d="M12 5v14M5 12h14"></path>
+                <path class="manage-minus" d="M8 12h8"></path>
+              </svg>
+            </button>
+            <div id="manageMenu" class="manage-menu" role="menu" aria-hidden="true">
+              <button type="button" data-action="add">Добавить упражнение</button>
+              <button type="button" data-action="delete">Удалить упражнение</button>
+            </div>
+          </div>
+          <button id="deleteModeDone" class="btn primary header-done-btn hidden" type="button">Готово</button>
         </div>
       </div>
       <div id="todayHeader" class="today-header">
@@ -1077,16 +1182,46 @@
     </div>
   </div>
 
-  <div id="addExerciseSheet" class="sheet-backdrop">
+  <div id="manageExerciseSheet" class="sheet-backdrop manage-sheet">
     <div class="sheet">
       <div class="sheet-handle"></div>
-      <div class="sheet-title">Добавить упражнение</div>
-      <input id="addSearch" type="search" class="search-input" placeholder="Поиск…">
-      <div id="addResults" class="result-list"></div>
-      <div id="addEmpty" class="muted-small" style="display:none; margin-top:8px;">Ничего не найдено.</div>
-      <div id="addCreateWrap" class="add-sheet-footer" style="display:none;">
-        <button id="addCreateBtn" class="btn primary" type="button"></button>
-        <div class="muted-small">Будет добавлено в выбранный день.</div>
+      <div class="manage-header">
+        <div class="manage-title">Добавление упражнений</div>
+        <button id="manageDoneBtn" class="btn primary" type="button">Готово</button>
+      </div>
+      <div class="manage-day-line">
+        <button id="manageDayPrev" class="icon-btn" aria-label="Предыдущий день">
+          <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
+            <path d="m15 18-6-6 6-6"></path>
+          </svg>
+        </button>
+        <button id="manageDayCenter" class="manage-day-center" type="button" aria-label="Выбрать день">—</button>
+        <button id="manageDayNext" class="icon-btn" aria-label="Следующий день">
+          <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
+            <path d="m9 6 6 6-6 6"></path>
+          </svg>
+        </button>
+      </div>
+      <div class="manage-day-subtitle" id="manageDaySubtitle"></div>
+      <div id="manageContent" class="manage-content"></div>
+    </div>
+  </div>
+
+  <div id="manageDaySheet" class="sheet-backdrop day-sheet">
+    <div class="sheet">
+      <div class="sheet-handle"></div>
+      <div class="day-sheet-title">Выбери тренировочный день</div>
+      <div id="manageDayOptions" class="card-list"></div>
+    </div>
+  </div>
+
+  <div id="textPrompt" class="modal-backdrop">
+    <div class="modal">
+      <div class="modal-title" id="textPromptTitle">Введите название</div>
+      <input id="textPromptInput" class="text-input" type="text" placeholder="Название">
+      <div class="modal-actions">
+        <button id="textPromptCancel" class="btn">Отмена</button>
+        <button id="textPromptConfirm" class="btn primary">Добавить</button>
       </div>
     </div>
   </div>
@@ -1223,7 +1358,20 @@
       drawerOpen: false,
       isTelegram: false,
       muscleLoad: { groups: [], selectedKey: null, showAll: false, detailsOpen: true, byMuscle: {}, loading: false },
-      addExercise: { open: false, query: '', items: [], loading: false, timer: null },
+      manage: {
+        mode: 'normal',
+        menuOpen: false,
+        add: {
+          open: false,
+          view: 'groups',
+          dayIndex: null,
+          groups: [],
+          exercises: [],
+          selectedGroup: null,
+          selectedIds: new Set(),
+          loading: false,
+        },
+      },
       library: {
         view: 'groups',
         loading: false,
@@ -1240,6 +1388,7 @@
         historyIndex: {},
       },
       menu: { openId: null },
+      prompt: null,
     };
 
     let openConfirmModal = null;
@@ -2396,7 +2545,11 @@
       document.getElementById('headerTitle').textContent = ROUTE_TITLES[normalized] || ROUTE_TITLES.today;
       setVisible(document.getElementById('todayHeader'), normalized === 'today');
       updateAddButtonVisibility();
-      if (normalized !== 'today') closeAddExerciseSheet();
+      if (normalized !== 'today') {
+        closeManageAddSheet();
+        setManageMenu(false);
+        if (state.manage.mode !== 'normal') setManageMode('normal');
+      }
       document.querySelectorAll('.menu-item').forEach((btn) => {
         const active = btn.dataset.route === normalized;
         btn.classList.toggle('active', active);
@@ -2435,7 +2588,13 @@
     function handleBackAction() {
       const timerSheetOpen = document.getElementById('timerSheet')?.classList.contains('show');
       if (timerSheetOpen) { closeTimerSheet(); return; }
+      const manageSheetOpen = document.getElementById('manageExerciseSheet')?.classList.contains('show');
+      if (manageSheetOpen) { closeManageAddSheet(); return; }
+      const manageDaySheetOpen = document.getElementById('manageDaySheet')?.classList.contains('show');
+      if (manageDaySheetOpen) { closeManageDayPicker(); return; }
       if (state.drawerOpen) { closeDrawer(); return; }
+      if (state.manage?.menuOpen) { setManageMenu(false); return; }
+      if (state.manage?.mode === 'delete') { setManageMode('normal'); return; }
       if (state.currentRoute === 'library' && state.library.view !== 'groups') {
         if (state.library.view === 'details') { state.library.view = 'list'; renderLibrary(); return; }
         if (state.library.view === 'list') { state.library.view = 'groups'; renderLibrary(); return; }
@@ -3491,8 +3650,21 @@
       card.className = 'card exercise-card';
       card.dataset.ueid = exercise.user_exercise_id;
       const isDone = state.workout.doneIds?.has(exercise.user_exercise_id);
+      const isDeleteMode = state.manage.mode === 'delete';
       if (isDone) {
         card.classList.add('is-done');
+      }
+      if (isDeleteMode) {
+        card.classList.add('delete-mode');
+        const delBtn = document.createElement('button');
+        delBtn.type = 'button';
+        delBtn.className = 'exercise-delete-btn';
+        delBtn.textContent = '×';
+        delBtn.addEventListener('click', (ev) => {
+          ev.stopPropagation();
+          handleExerciseDelete(exercise);
+        });
+        card.appendChild(delBtn);
       }
 
       const header = document.createElement('div');
@@ -3543,9 +3715,11 @@
 
       card.append(header, summary, workoutBody);
       const toggle = () => { hideLastCompletedHint(); toggleWorkoutCard(exercise.user_exercise_id); };
-      card.addEventListener('click', toggle);
-      header.addEventListener('click', (ev) => { ev.stopPropagation(); toggle(); });
-      summary.addEventListener('click', (ev) => { ev.stopPropagation(); toggle(); });
+      if (!isDeleteMode) {
+        card.addEventListener('click', toggle);
+        header.addEventListener('click', (ev) => { ev.stopPropagation(); toggle(); });
+        summary.addEventListener('click', (ev) => { ev.stopPropagation(); toggle(); });
+      }
 
       return card;
     }
@@ -3570,22 +3744,16 @@
         empty.className = 'empty-day';
         const title = document.createElement('div');
         title.className = 'empty-day-title';
-        title.textContent = 'Упражнения добавляются в боте';
+        title.textContent = 'Пока нет упражнений';
         const text = document.createElement('div');
         text.className = 'empty-day-text';
-        text.textContent = 'В приложении удобно смотреть дневник и править подходы. Добавь упражнения в Telegram-боте — выбери день, и мы откроем нужное место.';
+        text.textContent = 'Добавь упражнения прямо здесь: нажми кнопку с плюсиком в правом верхнем углу и выбери «Добавить упражнение».';
         const btn = document.createElement('button');
         btn.type = 'button';
         btn.className = 'btn primary';
-        btn.textContent = 'Добавить упражнения в боте';
+        btn.textContent = 'Добавить упражнения';
         btn.addEventListener('click', () => {
-          const tg = getTg();
-          const dateIso = state.dateIso || getIsoDate();
-          const link = `https://t.me/${BOT_USERNAME}?start=day_${dateIso}`;
-          if (tg?.openTelegramLink) tg.openTelegramLink(link);
-          else window.location.href = link;
-          tg?.close?.();
-          // TODO: ensure bot understands day_YYYY-MM-DD payload
+          openManageAddSheet();
         });
         empty.append(title, text, btn);
         container.appendChild(empty);
@@ -3639,6 +3807,23 @@
         });
       }
       updateFinishButton();
+    }
+
+    async function handleExerciseDelete(exercise) {
+      if (!state.dayIndex) return;
+      const card = document.querySelector(`.card[data-ueid="${exercise.user_exercise_id}"]`);
+      try {
+        const data = await apiFetch(`/gymapi/day/${state.dayIndex}/exercise/${exercise.exercise_id}/toggle`, { method: 'POST' });
+        if (!data?.enabled) {
+          removeExerciseFromState(exercise.user_exercise_id, card);
+          toast('Упражнение удалено');
+        } else {
+          toast('Упражнение возвращено');
+          loadSheet(state.dayIndex).catch(console.error);
+        }
+      } catch (_) {
+        toast('Ошибка связи');
+      }
     }
 
     async function archiveExercise(exercise) {
@@ -3868,6 +4053,7 @@
         state.completedDays = new Set((info.completed_days || []).map(Number));
         const targetDay = info.suggested_day_index || (state.activeDays[0]?.day_index);
         renderDayOptions(targetDay);
+        if (state.manage.add.open) renderManageDayOptions();
         state.date = info.date || '';
         await loadSheet(targetDay);
         setStatus('ready');
@@ -3880,108 +4066,393 @@
       }
     }
 
-    function renderAddExerciseSheet() {
-      const { items, query, loading } = state.addExercise;
-      const results = document.getElementById('addResults');
-      results.innerHTML = '';
-      (items || []).forEach((item) => {
-        const row = document.createElement('div');
-        row.className = 'result-item';
-        const name = document.createElement('div'); name.className = 'result-name'; name.textContent = item.name;
-        const meta = document.createElement('div'); meta.className = 'result-meta'; meta.textContent = formatMuscleGroup(item.muscle_group);
-        row.append(name, meta);
-        row.addEventListener('click', () => handleAddExerciseSelect(item.id));
-        results.appendChild(row);
-      });
-      const trimmed = (query || '').trim();
-      const empty = document.getElementById('addEmpty');
-      const showEmpty = loading || !(items || []).length;
-      empty.textContent = loading ? 'Ищем…' : 'Ничего не найдено.';
-      empty.style.display = showEmpty ? '' : 'none';
+    function setManageMenu(open) {
+      const menu = document.getElementById('manageMenu');
+      if (!menu) return;
+      state.manage.menuOpen = open;
+      menu.classList.toggle('open', open);
+      menu.setAttribute('aria-hidden', open ? 'false' : 'true');
+    }
 
-      const createWrap = document.getElementById('addCreateWrap');
-      const showCreate = !loading && trimmed.length > 0 && !(items || []).length;
-      createWrap.style.display = showCreate ? '' : 'none';
-      if (showCreate) {
-        const btn = document.getElementById('addCreateBtn');
-        btn.textContent = `Создать упражнение «${trimmed}»`;
+    function toggleManageMenu() {
+      triggerHaptic();
+      setManageMenu(!state.manage.menuOpen);
+    }
+
+    function updateManageHeader() {
+      const wrap = document.getElementById('manageMenuWrap');
+      const doneBtn = document.getElementById('deleteModeDone');
+      const isDelete = state.manage.mode === 'delete';
+      wrap?.classList.toggle('hidden', isDelete);
+      doneBtn?.classList.toggle('hidden', !isDelete);
+    }
+
+    function setManageMode(mode) {
+      state.manage.mode = mode || 'normal';
+      setManageMenu(false);
+      updateManageHeader();
+      renderExercises(Array.from(state.exercises.values()));
+    }
+
+    function renderManageDay() {
+      const dayIndex = state.manage.add.dayIndex;
+      const day = state.activeDays.find((d) => Number(d.day_index) === Number(dayIndex));
+      const label = day ? `${day.day_index}. ${day.label}` : (dayIndex ? `День ${dayIndex}` : '—');
+      const subtitle = day?.subtitle || '';
+      const center = document.getElementById('manageDayCenter');
+      const subtitleEl = document.getElementById('manageDaySubtitle');
+      if (center) center.textContent = label;
+      if (subtitleEl) subtitleEl.textContent = subtitle;
+    }
+
+    function renderManageGroups() {
+      const content = document.getElementById('manageContent');
+      content.innerHTML = '';
+      if (state.manage.add.loading) {
+        const loading = document.createElement('div');
+        loading.className = 'muted-small';
+        loading.textContent = 'Загрузка…';
+        content.appendChild(loading);
+        return;
+      }
+      const list = document.createElement('div');
+      list.className = 'manage-list';
+      if (!(state.manage.add.groups || []).length) {
+        const empty = document.createElement('div');
+        empty.className = 'muted-small';
+        empty.textContent = 'Группы не найдены.';
+        content.appendChild(empty);
+      }
+      (state.manage.add.groups || []).forEach((group) => {
+        const item = document.createElement('div');
+        item.className = 'manage-item';
+        const text = document.createElement('div');
+        const title = document.createElement('div');
+        title.className = 'card-title';
+        title.textContent = group.name;
+        const meta = document.createElement('div');
+        meta.className = 'meta';
+        meta.textContent = group.is_custom ? 'Своя группа' : 'Группа мышц';
+        text.append(title, meta);
+        const chevron = document.createElement('div');
+        chevron.className = 'chevron';
+        chevron.textContent = '›';
+        item.append(text, chevron);
+        item.addEventListener('click', () => openManageGroup(group));
+        list.appendChild(item);
+      });
+      content.appendChild(list);
+
+      const actions = document.createElement('div');
+      actions.className = 'manage-actions';
+      const addGroupBtn = document.createElement('button');
+      addGroupBtn.type = 'button';
+      addGroupBtn.className = 'btn';
+      addGroupBtn.textContent = 'Добавить свою группу';
+      addGroupBtn.addEventListener('click', openCustomGroupPrompt);
+      actions.appendChild(addGroupBtn);
+      content.appendChild(actions);
+    }
+
+    function renderManageExercises() {
+      const content = document.getElementById('manageContent');
+      content.innerHTML = '';
+      const topbar = document.createElement('div');
+      topbar.className = 'manage-topbar';
+      const back = document.createElement('button');
+      back.className = 'manage-back';
+      back.textContent = '← Назад';
+      back.addEventListener('click', () => {
+        state.manage.add.view = 'groups';
+        state.manage.add.selectedGroup = null;
+        renderManageContent();
+      });
+      const title = document.createElement('div');
+      title.className = 'card-title';
+      title.textContent = state.manage.add.selectedGroup?.name || 'Группа';
+      topbar.append(back, title);
+      content.appendChild(topbar);
+
+      if (state.manage.add.loading) {
+        const loading = document.createElement('div');
+        loading.className = 'muted-small';
+        loading.textContent = 'Загрузка…';
+        content.appendChild(loading);
+        return;
+      }
+
+      const list = document.createElement('div');
+      list.className = 'manage-list';
+      if (!(state.manage.add.exercises || []).length) {
+        const empty = document.createElement('div');
+        empty.className = 'muted-small';
+        empty.textContent = 'Пока нет упражнений в этой группе.';
+        content.appendChild(empty);
+      }
+      (state.manage.add.exercises || []).forEach((ex) => {
+        const item = document.createElement('div');
+        item.className = 'manage-item';
+        const text = document.createElement('div');
+        const title = document.createElement('div');
+        title.className = 'card-title';
+        title.textContent = ex.name;
+        const meta = document.createElement('div');
+        meta.className = 'meta';
+        meta.textContent = state.manage.add.selectedGroup?.name || formatMuscleGroup(ex.muscle_group);
+        text.append(title, meta);
+        item.appendChild(text);
+
+        const isAdded = ex.is_added || state.manage.add.selectedIds.has(ex.id);
+        if (isAdded) {
+          item.classList.add('added');
+          const check = document.createElement('div');
+          check.className = 'manage-check';
+          check.textContent = '✓';
+          item.appendChild(check);
+        }
+
+        item.addEventListener('click', () => {
+          if (isAdded) return;
+          handleManageAddExercise(ex.id, item);
+        });
+        list.appendChild(item);
+      });
+      content.appendChild(list);
+
+      const actions = document.createElement('div');
+      actions.className = 'manage-actions';
+      const addCustomBtn = document.createElement('button');
+      addCustomBtn.type = 'button';
+      addCustomBtn.className = 'btn primary';
+      addCustomBtn.textContent = 'Добавить своё упражнение';
+      addCustomBtn.addEventListener('click', openCustomExercisePrompt);
+      actions.appendChild(addCustomBtn);
+      content.appendChild(actions);
+    }
+
+    function renderManageContent() {
+      renderManageDay();
+      if (state.manage.add.view === 'exercises') renderManageExercises();
+      else renderManageGroups();
+    }
+
+    async function loadManageGroups() {
+      state.manage.add.loading = true;
+      renderManageContent();
+      try {
+        const data = await apiFetch('/gymapi/catalog/groups', { silent: true });
+        state.manage.add.groups = data.groups || [];
+      } catch (_) {
+        state.manage.add.groups = [];
+      } finally {
+        state.manage.add.loading = false;
+        renderManageContent();
       }
     }
 
-    function scheduleAddSearch(value) {
-      state.addExercise.query = value;
-      if (state.addExercise.timer) clearTimeout(state.addExercise.timer);
-      state.addExercise.timer = setTimeout(() => loadAddSearch(value).catch(console.error), 220);
-      renderAddExerciseSheet();
-    }
-
-    async function loadAddSearch(value) {
-      state.addExercise.loading = true;
-      renderAddExerciseSheet();
+    async function loadManageExercises(group) {
+      if (!group) return;
+      state.manage.add.loading = true;
+      renderManageContent();
       try {
         const params = new URLSearchParams();
-        if (value !== undefined && value !== null) params.set('query', value.trim());
+        if (state.manage.add.dayIndex) params.set('day_index', String(state.manage.add.dayIndex));
         const suffix = params.toString() ? `?${params.toString()}` : '';
-        const data = await apiFetch(`/gymapi/catalog/search${suffix}`, { silent: true });
-        state.addExercise.items = data.items || [];
-      } catch (e) {
-        state.addExercise.items = [];
+        const data = await apiFetch(`/gymapi/catalog/group/${encodeURIComponent(group.code)}${suffix}`, { silent: true });
+        const items = data.items || [];
+        state.manage.add.exercises = items;
+        state.manage.add.selectedIds = new Set(items.filter((ex) => ex.is_added).map((ex) => ex.id));
+      } catch (_) {
+        state.manage.add.exercises = [];
+        state.manage.add.selectedIds = new Set();
       } finally {
-        state.addExercise.loading = false;
-        renderAddExerciseSheet();
+        state.manage.add.loading = false;
+        renderManageContent();
       }
     }
 
-    async function handleAddExerciseSelect(exerciseId) {
-      if (!state.dayIndex) return;
+    async function handleManageAddExercise(exerciseId, row) {
+      const dayIndex = state.manage.add.dayIndex;
+      if (!dayIndex) return;
       try {
-        await apiFetch(`/gymapi/day/${state.dayIndex}/exercise`, {
+        await apiFetch(`/gymapi/day/${dayIndex}/exercise`, {
           method: 'POST',
           body: JSON.stringify({ exercise_id: exerciseId }),
         });
-        closeAddExerciseSheet();
-        await loadSheet(state.dayIndex);
+        state.manage.add.selectedIds.add(exerciseId);
+        if (row) {
+          row.classList.add('added');
+          if (!row.querySelector('.manage-check')) {
+            const check = document.createElement('div');
+            check.className = 'manage-check';
+            check.textContent = '✓';
+            row.appendChild(check);
+          }
+        }
+        if (Number(dayIndex) === Number(state.dayIndex)) {
+          loadSheet(state.dayIndex).catch(console.error);
+        }
         toast('Добавлено ✅');
-      } catch (e) {
+      } catch (_) {
         toast('Ошибка связи');
       }
     }
 
-    async function handleCreateExercise() {
-      const name = (state.addExercise.query || '').trim();
-      if (!name || !state.dayIndex) return;
-      try {
-        const params = new URLSearchParams({ day_index: String(state.dayIndex) });
-        await apiFetch(`/gymapi/catalog/exercise?${params.toString()}`, {
-          method: 'POST',
-          body: JSON.stringify({ name }),
+    function openManageGroup(group) {
+      state.manage.add.view = 'exercises';
+      state.manage.add.selectedGroup = group;
+      renderManageContent();
+      loadManageExercises(group).catch(console.error);
+    }
+
+    function openManageAddSheet() {
+      if (!state.dayIndex) return;
+      state.manage.add.open = true;
+      state.manage.add.view = 'groups';
+      state.manage.add.dayIndex = state.dayIndex;
+      state.manage.add.selectedGroup = null;
+      state.manage.add.exercises = [];
+      state.manage.add.selectedIds = new Set();
+      setManageMode('add');
+      document.getElementById('manageExerciseSheet').classList.add('show');
+      renderManageContent();
+      renderManageDayOptions();
+      loadManageGroups().catch(console.error);
+    }
+
+    function closeManageAddSheet(opts = {}) {
+      const { keepMode = false } = opts;
+      state.manage.add.open = false;
+      document.getElementById('manageExerciseSheet').classList.remove('show');
+      closeManageDayPicker();
+      if (!keepMode) setManageMode('normal');
+    }
+
+    function openManageDayPicker() {
+      triggerHaptic();
+      document.getElementById('manageDaySheet').classList.add('show');
+    }
+
+    function closeManageDayPicker() {
+      document.getElementById('manageDaySheet').classList.remove('show');
+    }
+
+    function renderManageDayOptions() {
+      const container = document.getElementById('manageDayOptions');
+      if (!container) return;
+      container.innerHTML = '';
+      (state.activeDays || []).forEach((d) => {
+        const option = document.createElement('div');
+        option.className = 'day-option' + (Number(d.day_index) === Number(state.manage.add.dayIndex) ? ' active' : '');
+        const labels = document.createElement('div');
+        labels.className = 'labels';
+        const title = document.createElement('div');
+        title.className = 'title';
+        title.textContent = `${d.day_index}. ${d.label}`;
+        labels.appendChild(title);
+        if (d.subtitle) {
+          const subtitle = document.createElement('div');
+          subtitle.className = 'subtitle';
+          subtitle.textContent = d.subtitle;
+          labels.appendChild(subtitle);
+        }
+        const badge = document.createElement('div');
+        badge.className = 'pill';
+        badge.textContent = state.completedDays.has(Number(d.day_index)) ? 'Завершён' : 'Активный';
+        option.append(labels, badge);
+        option.addEventListener('click', () => {
+          state.manage.add.dayIndex = d.day_index;
+          closeManageDayPicker();
+          renderManageDay();
+          if (state.manage.add.view === 'exercises') loadManageExercises(state.manage.add.selectedGroup).catch(console.error);
         });
-        closeAddExerciseSheet();
-        await loadSheet(state.dayIndex);
-        toast('Добавлено ✅');
-      } catch (e) {
-        toast('Ошибка связи');
+        container.appendChild(option);
+      });
+    }
+
+    function shiftManageDay(step) {
+      if (!state.activeDays.length) return;
+      const currentIdx = state.activeDays.findIndex((d) => Number(d.day_index) === Number(state.manage.add.dayIndex));
+      const nextIdx = (currentIdx + step + state.activeDays.length) % state.activeDays.length;
+      const next = state.activeDays[nextIdx];
+      if (next) {
+        triggerHaptic();
+        state.manage.add.dayIndex = next.day_index;
+        renderManageDay();
+        if (state.manage.add.view === 'exercises') loadManageExercises(state.manage.add.selectedGroup).catch(console.error);
       }
     }
 
-    function openAddExerciseSheet() {
-      if (state.addExercise.timer) clearTimeout(state.addExercise.timer);
-      state.addExercise = { ...state.addExercise, open: true, query: '', items: [], loading: false, timer: null };
-      const sheet = document.getElementById('addExerciseSheet');
-      const input = document.getElementById('addSearch');
-      if (input) input.value = '';
-      sheet.classList.add('show');
-      renderAddExerciseSheet();
-      loadAddSearch('').catch(console.error);
+    function openTextPrompt({ title, placeholder, confirmLabel, onConfirm }) {
+      const modal = document.getElementById('textPrompt');
+      const titleEl = document.getElementById('textPromptTitle');
+      const input = document.getElementById('textPromptInput');
+      const confirm = document.getElementById('textPromptConfirm');
+      state.prompt = { onConfirm };
+      if (titleEl) titleEl.textContent = title || 'Введите название';
+      if (input) {
+        input.value = '';
+        input.placeholder = placeholder || 'Название';
+      }
+      if (confirm) confirm.textContent = confirmLabel || 'Добавить';
+      modal.classList.add('show');
       setTimeout(() => input?.focus(), 120);
     }
 
-    function closeAddExerciseSheet() {
-      state.addExercise.open = false;
-      if (state.addExercise.timer) clearTimeout(state.addExercise.timer);
-      state.addExercise.timer = null;
-      const sheet = document.getElementById('addExerciseSheet');
-      sheet.classList.remove('show');
+    function closeTextPrompt() {
+      const modal = document.getElementById('textPrompt');
+      modal.classList.remove('show');
+      state.prompt = null;
+    }
+
+    function openCustomGroupPrompt() {
+      openTextPrompt({
+        title: 'Новая группа мышц',
+        placeholder: 'Название группы',
+        confirmLabel: 'Добавить группу',
+        onConfirm: async (value) => {
+          const name = (value || '').trim();
+          if (!name) return;
+          try {
+            await apiFetch('/gymapi/catalog/group', {
+              method: 'POST',
+              body: JSON.stringify({ name }),
+            });
+            toast('Группа добавлена ✅');
+            loadManageGroups().catch(console.error);
+          } catch (_) {
+            toast('Ошибка связи');
+          }
+        },
+      });
+    }
+
+    function openCustomExercisePrompt() {
+      openTextPrompt({
+        title: 'Новое упражнение',
+        placeholder: 'Название упражнения',
+        confirmLabel: 'Добавить упражнение',
+        onConfirm: async (value) => {
+          const name = (value || '').trim();
+          const dayIndex = state.manage.add.dayIndex;
+          const group = state.manage.add.selectedGroup;
+          if (!name || !dayIndex || !group) return;
+          try {
+            const params = new URLSearchParams({ day_index: String(dayIndex) });
+            await apiFetch(`/gymapi/catalog/exercise?${params.toString()}`, {
+              method: 'POST',
+              body: JSON.stringify({ name, muscle_group: group.code }),
+            });
+            toast('Добавлено ✅');
+            loadManageExercises(group).catch(console.error);
+            if (Number(dayIndex) === Number(state.dayIndex)) {
+              loadSheet(state.dayIndex).catch(console.error);
+            }
+          } catch (_) {
+            toast('Ошибка связи');
+          }
+        },
+      });
     }
 
     function getTotalSetsToday() {
@@ -4114,7 +4585,8 @@
       document.getElementById('dayCenter').addEventListener('click', openDayPicker);
       document.getElementById('openDayPicker').addEventListener('click', openDayPicker);
       document.getElementById('daySheet').addEventListener('click', (e) => { if (e.target.id === 'daySheet') closeDayPicker(); });
-      document.getElementById('addExerciseSheet').addEventListener('click', (e) => { if (e.target.id === 'addExerciseSheet') closeAddExerciseSheet(); });
+      document.getElementById('manageExerciseSheet').addEventListener('click', (e) => { if (e.target.id === 'manageExerciseSheet') closeManageAddSheet(); });
+      document.getElementById('manageDaySheet').addEventListener('click', (e) => { if (e.target.id === 'manageDaySheet') closeManageDayPicker(); });
       const fab = document.getElementById('finishFab');
       const pop = document.getElementById('finishPopover');
       document.getElementById('finishBtn').addEventListener('click', () => {
@@ -4125,10 +4597,39 @@
       fab.addEventListener('click', (e) => { e.stopPropagation(); toggleFinishPopover(); });
       document.addEventListener('click', () => closeFinishPopover());
       pop.addEventListener('click', (e) => e.stopPropagation());
-      document.getElementById('addExerciseBtn').addEventListener('click', () => { if (state.dayIndex) openAddExerciseSheet(); });
-      document.getElementById('headerAddBtn').addEventListener('click', () => { if (state.dayIndex) openAddExerciseSheet(); });
-      document.getElementById('addSearch').addEventListener('input', (e) => scheduleAddSearch(e.target.value));
-      document.getElementById('addCreateBtn').addEventListener('click', handleCreateExercise);
+      document.getElementById('manageExerciseBtn').addEventListener('click', (e) => { e.stopPropagation(); toggleManageMenu(); });
+      document.getElementById('manageMenu').addEventListener('click', (e) => {
+        const action = e.target?.dataset?.action;
+        if (!action) return;
+        setManageMenu(false);
+        if (action === 'add') openManageAddSheet();
+        if (action === 'delete') {
+          if (state.manage.add.open) closeManageAddSheet({ keepMode: true });
+          setManageMode('delete');
+        }
+      });
+      document.getElementById('deleteModeDone').addEventListener('click', () => setManageMode('normal'));
+      document.getElementById('manageDoneBtn').addEventListener('click', closeManageAddSheet);
+      document.getElementById('manageDayPrev').addEventListener('click', () => shiftManageDay(-1));
+      document.getElementById('manageDayNext').addEventListener('click', () => shiftManageDay(1));
+      document.getElementById('manageDayCenter').addEventListener('click', () => { renderManageDayOptions(); openManageDayPicker(); });
+      document.getElementById('textPromptCancel').addEventListener('click', closeTextPrompt);
+      document.getElementById('textPromptConfirm').addEventListener('click', () => {
+        const input = document.getElementById('textPromptInput');
+        const value = input ? input.value : '';
+        const handler = state.prompt?.onConfirm;
+        closeTextPrompt();
+        if (handler) handler(value);
+      });
+      document.getElementById('textPromptInput').addEventListener('keydown', (e) => {
+        if (e.key !== 'Enter') return;
+        e.preventDefault();
+        const value = e.target.value;
+        const handler = state.prompt?.onConfirm;
+        closeTextPrompt();
+        if (handler) handler(value);
+      });
+      document.getElementById('textPrompt').addEventListener('click', (e) => { if (e.target.id === 'textPrompt') closeTextPrompt(); });
       document.getElementById('timerSheet').addEventListener('click', (e) => { if (e.target.id === 'timerSheet') closeTimerSheet(); });
       document.getElementById('editorClose').addEventListener('click', closeEditor);
       document.getElementById('editorAddSet').addEventListener('click', () => queueExerciseAction(state.editor.ueId, () => addSet(state.editor.ueId, { toastOnSave: true })));
@@ -4144,7 +4645,8 @@
             case 'daySheet': closeDayPicker(); break;
             case 'timerSheet': closeTimerSheet(); break;
             case 'sheet': closeEditor(); break;
-            case 'addExerciseSheet': closeAddExerciseSheet(); break;
+            case 'manageExerciseSheet': closeManageAddSheet(); break;
+            case 'manageDaySheet': closeManageDayPicker(); break;
             default: backdrop.classList.remove('show'); backdrop.classList.remove('open'); break;
           }
         });
@@ -4169,6 +4671,7 @@
       });
       document.addEventListener('click', (e) => {
         if (!e.target.closest('.card-menu') && !e.target.closest('.menu-button')) closeMenus();
+        if (!e.target.closest('#manageMenu') && !e.target.closest('#manageExerciseBtn')) setManageMenu(false);
       });
     }
 
