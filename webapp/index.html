@@ -117,7 +117,8 @@
     .icon { width: 20px; height: 20px; display: block; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
     .day-meta { display: grid; gap: 2px; }
     .day-subtitle { display: block; color: var(--muted); font-size: 13px; }
-    .day-last { color: var(--muted); font-size: 13px; }
+    .day-last { color: var(--muted); font-size: 13px; display: flex; align-items: center; gap: 8px; }
+    .day-last .day-total { margin-left: auto; white-space: nowrap; }
     .today-header .status { padding: 7px 10px; }
     .day-actions { display: none; }
     .drawer-backdrop {
@@ -966,7 +967,10 @@
         <div class="day-meta">
           <div class="day-date" id="dateLabel">—</div>
           <div class="day-subtitle" id="daySubtitle"></div>
-          <div class="day-last" id="dayLastCompleted" style="display:none"></div>
+          <div class="day-last" id="dayLastCompleted" style="display:none">
+            <span id="dayLastCompletedLabel"></span>
+            <span class="day-total" id="dayLastCompletedTotal"></span>
+          </div>
         </div>
         <div class="day-actions hidden" id="dayActions">
           <button id="headerAddBtn" class="icon-btn small hidden" aria-label="Добавить упражнение">＋</button>
@@ -4019,7 +4023,20 @@
       const last = document.getElementById('dayLastCompleted');
       if (last) {
         const text = state.showLastCompleted ? (state.lastCompletedLabel || '') : '';
-        last.textContent = text;
+        const lastLabel = document.getElementById('dayLastCompletedLabel');
+        const lastTotal = document.getElementById('dayLastCompletedTotal');
+        if (lastLabel) lastLabel.textContent = text;
+        if (lastTotal) {
+          if (completed && text) {
+            const total = getTotalVolumeTodayKg();
+            const formatted = Number.isFinite(total) ? total.toLocaleString('ru-RU') : '0';
+            lastTotal.textContent = `${formatted} кг`;
+            lastTotal.style.display = '';
+          } else {
+            lastTotal.textContent = '';
+            lastTotal.style.display = 'none';
+          }
+        }
         last.style.display = text ? '' : 'none';
       }
     }
