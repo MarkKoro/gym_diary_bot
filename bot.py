@@ -171,6 +171,8 @@ from db import (
     set_ui_mode,
     set_ui_emoji_enabled,
     set_ui_verbose_level,
+    get_webapp_prompt_suppressed,
+    set_webapp_prompt_suppressed,
     fetch_last_session_sets,
     inc_specific_set,
     add_user_muscle_group,
@@ -13143,6 +13145,23 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
                 await show_screen(q, context, 'Напиши схему WOD. Оставь пусто, чтобы очистить.', kb, target_user_id)
                 return
+            if action == "webappoff":
+                await set_webapp_prompt_suppressed(target_user_id, True)
+                view = await render_exercise_view(
+                    target_user_id, day, ue_id, selected, prefs=prefs
+                )
+                set_flex_selected(context, day, ue_id, view.selected_set)
+                kb = build_exercise_actions_markup(
+                    view,
+                    day=day,
+                    ue_id=ue_id,
+                    group=view.group,
+                    prefs=prefs,
+                    is_library=is_library,
+                    context=context,
+                )
+                await show_screen(q, context, view.text, kb, target_user_id)
+                return
             if action == "select":
                 set_no = int(parts[4])
                 view = await render_exercise_view(
@@ -13161,7 +13180,10 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await show_screen(q, context, view.text, kb, target_user_id)
                 return
             if action == "view":
-                if not is_library and (len(parts) < 5 or parts[4] != "bot"):
+                show_prompt = not is_library and (len(parts) < 5 or parts[4] != "bot")
+                if show_prompt and await get_webapp_prompt_suppressed(target_user_id):
+                    show_prompt = False
+                if show_prompt:
                     ex_id, ex_name, ex_group = await get_exercise_info(ue_id)
                     resolved_group = resolve_group(ex_name, ex_group)
                     prompt_text = (
@@ -13176,6 +13198,12 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                 )
                             ],
                             [InlineKeyboardButton("Открыть в боте", callback_data=f"ex:view:{day}:{ue_id}:bot")],
+                            [
+                                InlineKeyboardButton(
+                                    "Больше не показывать",
+                                    callback_data=f"ex:webappoff:{day}:{ue_id}",
+                                )
+                            ],
                             [InlineKeyboardButton("Назад", callback_data=f"day:group:{day}:{resolved_group}")],
                         ]
                     )

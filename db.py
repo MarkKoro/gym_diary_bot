@@ -615,7 +615,8 @@ async def init_db():
             day_view_mode TEXT DEFAULT 'detailed',
             ui_mode TEXT CHECK(ui_mode IN ('compact','detailed')) DEFAULT 'detailed',
             ui_emoji_enabled INTEGER CHECK(ui_emoji_enabled IN (0,1)) DEFAULT 1,
-            ui_verbose_level INTEGER CHECK(ui_verbose_level IN (0,1)) DEFAULT 0
+            ui_verbose_level INTEGER CHECK(ui_verbose_level IN (0,1)) DEFAULT 0,
+            suppress_webapp_prompt INTEGER CHECK(suppress_webapp_prompt IN (0,1)) DEFAULT 0
         );
 
         CREATE TABLE IF NOT EXISTS user_measurements(
@@ -759,6 +760,10 @@ async def init_db():
         if not await _column_exists(db, "user_prefs", "ui_verbose_level"):
             await db.execute(
                 "ALTER TABLE user_prefs ADD COLUMN ui_verbose_level INTEGER CHECK(ui_verbose_level IN (0,1)) DEFAULT 0"
+            )
+        if not await _column_exists(db, "user_prefs", "suppress_webapp_prompt"):
+            await db.execute(
+                "ALTER TABLE user_prefs ADD COLUMN suppress_webapp_prompt INTEGER CHECK(suppress_webapp_prompt IN (0,1)) DEFAULT 0"
             )
         if not await _column_exists(db, "payments", "external_id"):
             await db.execute("ALTER TABLE payments ADD COLUMN external_id TEXT")
@@ -3004,6 +3009,31 @@ async def set_ui_verbose_level(user_id: int, level: int):
             ON CONFLICT(user_id) DO UPDATE SET ui_verbose_level=excluded.ui_verbose_level
             """,
             (user_id, safe_level),
+        )
+        await db.commit()
+
+
+async def get_webapp_prompt_suppressed(user_id: int) -> bool:
+    async with connect_db() as db:
+        cur = await db.execute(
+            "SELECT suppress_webapp_prompt FROM user_prefs WHERE user_id=?",
+            (user_id,),
+        )
+        row = await cur.fetchone()
+    if row and row[0] in (0, 1):
+        return bool(row[0])
+    return False
+
+
+async def set_webapp_prompt_suppressed(user_id: int, suppressed: bool):
+    value = 1 if suppressed else 0
+    async with connect_db() as db:
+        await db.execute(
+            """
+            INSERT INTO user_prefs(user_id, suppress_webapp_prompt) VALUES(?,?)
+            ON CONFLICT(user_id) DO UPDATE SET suppress_webapp_prompt=excluded.suppress_webapp_prompt
+            """,
+            (user_id, value),
         )
         await db.commit()
 
