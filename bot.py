@@ -12212,6 +12212,12 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     )
                 return
             if action == "days_count":
+                if context.user_data.get("acting_user_id"):
+                    await q.answer(
+                        "Количество тренировочных дней может менять только сам спортсмен.",
+                        show_alert=True,
+                    )
+                    return
                 if not is_edit_allowed(context.user_data):
                     await q.answer(
                         "Подопечный не дал вам права менять его график тренировок.",

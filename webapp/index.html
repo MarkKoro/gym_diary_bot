@@ -181,6 +181,10 @@
         gap: 10px;
       }
       .exercise-card { cursor: pointer; }
+      .exercise-card.expanded {
+        border-color: var(--accent);
+        box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 55%, transparent), var(--shadow);
+      }
       .exercise-card.is-done {
         position: relative;
         outline: 2px solid rgba(52, 199, 89, 0.75);
