@@ -217,9 +217,6 @@
       .exercise-card { cursor: pointer; position: relative; }
     .exercise-card.delete-mode { cursor: default; }
     .exercise-delete-btn {
-        position: absolute;
-        top: 10px;
-        right: 10px;
         width: 44px;
         height: 44px;
         border-radius: 12px;
@@ -231,7 +228,6 @@
         font-size: 24px;
         font-weight: 900;
         cursor: pointer;
-        z-index: 2;
         box-shadow: 0 10px 18px rgba(229, 57, 53, 0.18);
       }
       .exercise-delete-btn:hover { background: rgba(239, 68, 68, 0.28); }
@@ -267,7 +263,8 @@
       .exercise-card.next-animate { animation: nextReveal 620ms ease; }
       .exercise-card.busy { opacity: 0.6; pointer-events: none; }
       .exercise-card .card-title { display: flex; align-items: center; gap: 6px; }
-      .exercise-head { display: flex; justify-content: space-between; gap: 8px; align-items: flex-start; }
+      .exercise-head { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 10px; align-items: flex-start; }
+      .exercise-info { display: grid; gap: 6px; min-width: 0; }
       .exercise-meta { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
       .finish-flag { font-size: 18px; filter: drop-shadow(0 4px 10px rgba(52,199,89,0.35)); }
       .exercise-card:not(.is-done) .finish-flag { display: none; }
@@ -882,6 +879,28 @@
       text-align: center;
       z-index: 70;
     }
+    body.add-mode::before {
+      content: '';
+      position: fixed;
+      inset: 6px;
+      border: 2px solid rgba(34, 197, 94, 0.85);
+      border-radius: 18px;
+      pointer-events: none;
+      z-index: 80;
+      box-shadow: 0 0 0 6px rgba(34, 197, 94, 0.08);
+    }
+    .add-mode-banner {
+      padding: 8px 12px;
+      border-radius: 12px;
+      border: 1px solid rgba(34, 197, 94, 0.45);
+      background: rgba(34, 197, 94, 0.12);
+      color: #22c55e;
+      font-weight: 800;
+      font-size: 13px;
+      letter-spacing: -0.01em;
+      text-align: center;
+      box-shadow: var(--shadow);
+    }
     .delete-mode-card .exercise-summary { display: none; }
     .delete-mode-card .exercise-meta { gap: 8px; }
     .manage-sheet .sheet { max-width: 560px; }
@@ -890,6 +909,7 @@
       overflow-y: auto;
       -webkit-overflow-scrolling: touch;
       touch-action: pan-y;
+      overscroll-behavior: contain;
     }
     .manage-header {
       display: flex;
@@ -938,6 +958,7 @@
       .card-menu button { width: 100%; text-align: left; background: none; border: none; padding: 10px 12px; border-radius: 10px; cursor: pointer; font-weight: 700; color: var(--text); }
       .card-menu button:hover { background: rgba(0,0,0,0.05); }
       [data-theme="dark"] .card-menu button:hover { background: rgba(255,255,255,0.08); }
+      body.manage-add-open { overflow: hidden; }
       .result-list { display: flex; flex-direction: column; gap: 10px; margin-top: 10px; }
       .result-item { padding: 12px; border-radius: 12px; border: 1px solid var(--border); background: var(--bg); display: grid; gap: 4px; cursor: pointer; }
       .result-name { font-weight: 800; letter-spacing: -0.01em; }
@@ -1068,6 +1089,7 @@
               <circle cx="12" cy="13" r="7"></circle>
             </svg>
           </button>
+          <div id="addModeHeaderText" class="add-mode-banner hidden">Вы находитесь в меню добавления</div>
           <div id="deleteModeHeaderText" class="delete-mode-banner hidden">Вы находитесь в меню удаления</div>
           <div id="manageMenuWrap" class="manage-menu-wrap">
             <button id="manageExerciseBtn" class="icon-btn manage-trigger" aria-label="Добавить или удалить упражнения">
@@ -3704,19 +3726,12 @@
       if (isDeleteMode) {
         card.classList.add('delete-mode');
         card.classList.add('delete-mode-card');
-        const delBtn = document.createElement('button');
-        delBtn.type = 'button';
-        delBtn.className = 'exercise-delete-btn';
-        delBtn.textContent = '×';
-        delBtn.addEventListener('click', (ev) => {
-          ev.stopPropagation();
-          handleExerciseDelete(exercise);
-        });
-        card.appendChild(delBtn);
       }
 
       const header = document.createElement('div');
       header.className = 'exercise-head';
+      const info = document.createElement('div');
+      info.className = 'exercise-info';
       const titleWrap = document.createElement('div');
       titleWrap.className = 'card-title';
       titleWrap.textContent = exercise.name;
@@ -3753,7 +3768,19 @@
         setsPill.textContent = isRunningExercise(exercise) ? 'Бег' : `Подходов: ${exercise.sets?.length || 0}`;
         meta.appendChild(setsPill);
       }
-      header.append(titleWrap, meta);
+      info.append(titleWrap, meta);
+      header.appendChild(info);
+      if (isDeleteMode) {
+        const delBtn = document.createElement('button');
+        delBtn.type = 'button';
+        delBtn.className = 'exercise-delete-btn';
+        delBtn.textContent = '×';
+        delBtn.addEventListener('click', (ev) => {
+          ev.stopPropagation();
+          handleExerciseDelete(exercise);
+        });
+        header.appendChild(delBtn);
+      }
 
       const summary = document.createElement('div');
       summary.className = 'exercise-summary';
@@ -4147,6 +4174,15 @@
       document.getElementById('deleteModeHeaderText')?.classList.toggle('hidden', !isDelete);
       document.getElementById('deleteModeFooter')?.classList.toggle('hidden', !isDelete);
       document.getElementById('timerOpenBtn')?.classList.toggle('hidden', isDelete);
+      document.getElementById('finishFabWrap')?.classList.toggle('hidden', isDelete || state.manage.add.open);
+    }
+
+    function updateAddModeUI() {
+      const isAdd = state.manage.mode === 'add' || state.manage.add.open;
+      document.body.classList.toggle('add-mode', isAdd);
+      document.body.classList.toggle('manage-add-open', state.manage.add.open);
+      document.getElementById('addModeHeaderText')?.classList.toggle('hidden', !isAdd);
+      document.getElementById('finishFabWrap')?.classList.toggle('hidden', isAdd || state.manage.mode === 'delete');
     }
 
     function setManageMode(mode) {
@@ -4154,6 +4190,7 @@
       setManageMenu(false);
       updateManageHeader();
       updateDeleteModeUI();
+      updateAddModeUI();
       renderExercises(Array.from(state.exercises.values()));
     }
 
@@ -4389,6 +4426,7 @@
       document.getElementById('manageExerciseSheet').classList.remove('show');
       closeManageDayPicker();
       if (!keepMode) setManageMode('normal');
+      updateAddModeUI();
     }
 
     function openManageDayPicker() {
