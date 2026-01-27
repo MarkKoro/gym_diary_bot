@@ -578,6 +578,13 @@
     .settings-row.inline { grid-template-columns: minmax(0, 1fr) auto; align-items: center; }
     .settings-row .label { font-weight: 700; font-size: 14px; }
     .settings-row .hint { color: var(--muted); font-size: 13px; }
+    .settings-panel {
+      border-radius: 14px;
+      border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--border));
+      background: color-mix(in srgb, var(--card) 78%, var(--bg));
+      padding: 12px;
+      box-shadow: 0 10px 20px rgba(0, 122, 255, 0.12);
+    }
     .settings-input, .settings-select {
       width: 100%;
       padding: 10px 12px;
@@ -586,6 +593,12 @@
       background: var(--bg);
       color: var(--text);
       font-size: 14px;
+    }
+    .settings-input:focus,
+    .settings-select:focus {
+      outline: none;
+      border-color: var(--accent);
+      box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 35%, transparent);
     }
     .settings-chip-row { display: flex; flex-wrap: wrap; gap: 6px; }
     .settings-chip {
@@ -987,6 +1000,49 @@
       text-align: center;
       box-shadow: var(--shadow);
     }
+    .acting-banner {
+      padding: 8px 12px;
+      border-radius: 12px;
+      border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+      background: color-mix(in srgb, var(--accent) 16%, transparent);
+      color: var(--accent);
+      font-weight: 800;
+      font-size: 13px;
+      letter-spacing: -0.01em;
+      text-align: center;
+      box-shadow: var(--shadow);
+    }
+    .icon-btn.trainee-btn { color: var(--accent); }
+    .trainee-sheet .sheet { max-width: 520px; }
+    .trainee-sheet-title { font-size: 17px; font-weight: 800; margin-bottom: 10px; }
+    .trainee-list { display: grid; gap: 10px; }
+    .trainee-card {
+      border-radius: 14px;
+      border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--border));
+      background: color-mix(in srgb, var(--card) 82%, var(--bg));
+      padding: 12px;
+      display: grid;
+      gap: 10px;
+      box-shadow: var(--shadow);
+    }
+    .trainee-card-header { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+    .trainee-card-title { font-weight: 800; font-size: 15px; }
+    .trainee-card-subtitle { color: var(--muted); font-size: 13px; }
+    .trainee-card-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+    .trainee-action-btn {
+      border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--border));
+      background: color-mix(in srgb, var(--accent) 14%, var(--bg));
+      color: var(--accent);
+      font-weight: 700;
+      border-radius: 12px;
+      padding: 9px 12px;
+      cursor: pointer;
+    }
+    .trainee-action-btn:active { transform: translateY(1px); }
+    .trainee-action-btn.secondary {
+      background: var(--bg);
+      color: var(--accent);
+    }
     .delete-mode-card .exercise-summary { display: none; }
     .delete-mode-card .exercise-meta { gap: 8px; }
     .manage-sheet .sheet { max-width: 560px; }
@@ -1166,10 +1222,12 @@
               <path d="M4 7h16M4 12h16M4 17h16"></path>
             </svg>
           </button>
-          <button id="settingsBtn" class="icon-btn" aria-label="Открыть настройки">
+          <button id="traineeBtn" class="icon-btn trainee-btn hidden" aria-label="Открыть список подопечных">
             <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
-              <circle cx="12" cy="12" r="3.5"></circle>
-              <path d="M19.4 15a1 1 0 0 0 .2 1.1l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1 1 0 0 0-1.1-.2 1 1 0 0 0-.6.9V21a2 2 0 1 1-4 0v-.1a1 1 0 0 0-.6-.9 1 1 0 0 0-1.1.2l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1 1 0 0 0 .2-1.1 1 1 0 0 0-.9-.6H3a2 2 0 1 1 0-4h.1a1 1 0 0 0 .9-.6 1 1 0 0 0-.2-1.1l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1 1 0 0 0 1.1.2 1 1 0 0 0 .6-.9V3a2 2 0 1 1 4 0v.1a1 1 0 0 0 .6.9 1 1 0 0 0 1.1-.2l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1 1 0 0 0-.2 1.1 1 1 0 0 0 .9.6H21a2 2 0 1 1 0 4h-.1a1 1 0 0 0-.9.6z"></path>
+              <circle cx="8" cy="8" r="3"></circle>
+              <path d="M2.5 19a5.5 5.5 0 0 1 11 0"></path>
+              <circle cx="16.5" cy="9" r="2.5"></circle>
+              <path d="M13 19a4.5 4.5 0 0 1 8.5 0"></path>
             </svg>
           </button>
         </div>
@@ -1184,6 +1242,7 @@
           </button>
           <div id="addModeHeaderText" class="add-mode-banner hidden">Вы находитесь в меню добавления</div>
           <div id="deleteModeHeaderText" class="delete-mode-banner hidden">Вы находитесь в меню удаления</div>
+          <div id="actingHeaderText" class="acting-banner hidden"></div>
           <div id="manageMenuWrap" class="manage-menu-wrap">
             <button id="manageExerciseBtn" class="icon-btn manage-trigger" aria-label="Добавить или удалить упражнения">
               <svg class="manage-icon" viewBox="0 0 24 24" aria-hidden="true">
@@ -1395,6 +1454,14 @@
     </div>
   </div>
 
+  <div id="traineeSheet" class="sheet-backdrop trainee-sheet">
+    <div class="sheet">
+      <div class="sheet-handle"></div>
+      <div class="trainee-sheet-title">Подопечные</div>
+      <div id="traineeSheetContent" class="trainee-list"></div>
+    </div>
+  </div>
+
     <div id="sheet" class="sheet-backdrop">
       <div class="sheet" id="sheetBody">
         <div class="sheet-handle"></div>
@@ -1583,6 +1650,11 @@
           text: '',
           copyText: '',
         },
+      },
+      acting: {
+        userId: null,
+        name: '',
+        canEdit: true,
       },
       menu: { openId: null },
       prompt: null,
@@ -2580,6 +2652,23 @@
       return label ? label : `День ${day?.day_index ?? ''}`.trim();
     }
 
+    function mergeDayLabels(currentDays, nextDays) {
+      const existing = new Map();
+      (currentDays || []).forEach((day) => {
+        if (!day || !Number.isInteger(day.day_index)) return;
+        const label = (day.label || '').trim();
+        if (label) existing.set(day.day_index, label);
+      });
+      return (nextDays || []).map((day) => {
+        if (!day) return day;
+        const label = (day.label || '').trim();
+        if (label) return day;
+        const fallback = existing.get(day.day_index);
+        if (!fallback) return day;
+        return { ...day, label: fallback };
+      });
+    }
+
     function formatDayOfWeek(value) {
       const labels = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
       const index = Number.isInteger(value) ? value : 0;
@@ -2638,14 +2727,150 @@
       }
     }
 
-    function formatTimezoneLabel(timezone) {
-      if (!timezone) return 'UTC';
-      const offset = getTimezoneOffsetMinutes(timezone);
+    function formatTimezoneOffset(offset) {
       const sign = offset >= 0 ? '+' : '-';
       const abs = Math.abs(offset);
       const hours = String(Math.floor(abs / 60)).padStart(2, '0');
       const minutes = String(abs % 60).padStart(2, '0');
-      return `UTC${sign}${hours}:${minutes} · ${timezone}`;
+      if (offset === 0) return 'UTC';
+      return `UTC${sign}${hours}:${minutes}`;
+    }
+
+    function formatTimezoneLabel(timezone) {
+      if (!timezone) return 'UTC';
+      const offset = getTimezoneOffsetMinutes(timezone);
+      return formatTimezoneOffset(offset);
+    }
+
+    function buildTimezoneOptions(selectedTimezone) {
+      const timezoneList = getTimezones();
+      const byOffset = new Map();
+      timezoneList.forEach((tz) => {
+        const offset = getTimezoneOffsetMinutes(tz);
+        if (!byOffset.has(offset)) byOffset.set(offset, tz);
+      });
+      if (selectedTimezone) {
+        const selectedOffset = getTimezoneOffsetMinutes(selectedTimezone);
+        byOffset.set(selectedOffset, selectedTimezone);
+      }
+      return Array.from(byOffset.entries())
+        .sort((a, b) => a[0] - b[0])
+        .map(([offset, tz]) => (
+          `<option value="${tz}" ${tz === selectedTimezone ? 'selected' : ''}>${formatTimezoneOffset(offset)}</option>`
+        ))
+        .join('');
+    }
+
+    function updateTraineeButtonVisibility() {
+      const btn = document.getElementById('traineeBtn');
+      if (!btn) return;
+      const trainer = state.settings.trainer || {};
+      const trainees = Array.isArray(trainer.trainees) ? trainer.trainees : [];
+      const show = trainer.isTrainer && trainees.length > 0;
+      btn.classList.toggle('hidden', !show);
+    }
+
+    function updateActingBanner() {
+      const banner = document.getElementById('actingHeaderText');
+      if (!banner) return;
+      if (!state.acting.userId) {
+        banner.classList.add('hidden');
+        banner.textContent = '';
+        return;
+      }
+      const name = state.acting.name || 'подопечный';
+      const suffix = state.acting.canEdit ? '' : ' · только просмотр';
+      banner.textContent = `Режим тренера: ${name}${suffix}`;
+      banner.classList.remove('hidden');
+    }
+
+    function renderTraineeSheet() {
+      const container = document.getElementById('traineeSheetContent');
+      if (!container) return;
+      const trainer = state.settings.trainer || {};
+      const trainees = Array.isArray(trainer.trainees) ? trainer.trainees : [];
+      const backCard = state.acting.userId
+        ? `
+          <div class="trainee-card">
+            <div class="trainee-card-header">
+              <div>
+                <div class="trainee-card-title">Ваш дневник</div>
+                <div class="trainee-card-subtitle">Вернуться к своим тренировкам</div>
+              </div>
+            </div>
+            <div class="trainee-card-actions">
+              <button class="trainee-action-btn" data-action="trainee-clear">
+                Вернуться к себе
+              </button>
+            </div>
+          </div>
+        `
+        : '';
+      if (!trainees.length) {
+        container.innerHTML = `${backCard}<div class="muted-inline">Подопечных пока нет.</div>`;
+        return;
+      }
+      container.innerHTML = `${backCard}${trainees
+        .map((trainee) => {
+          const canEdit = trainee.can_edit_plan ? '1' : '0';
+          return `
+            <div class="trainee-card">
+              <div class="trainee-card-header">
+                <div>
+                  <div class="trainee-card-title">${trainee.display_name}</div>
+                  <div class="trainee-card-subtitle">Право менять план: ${trainee.can_edit_plan ? 'Вкл' : 'Выкл'}</div>
+                </div>
+              </div>
+              <div class="trainee-card-actions">
+                <button class="trainee-action-btn" data-action="trainee-open" data-trainee-id="${trainee.trainee_user_id}" data-trainee-name="${trainee.display_name}" data-can-edit="${canEdit}">
+                  Открыть дневник
+                </button>
+                <button class="trainee-action-btn secondary" data-action="trainee-rename" data-link-id="${trainee.link_id}">
+                  Переименовать
+                </button>
+                <button class="trainee-action-btn secondary" data-action="trainee-detach" data-trainee-id="${trainee.trainee_user_id}">
+                  Открепить
+                </button>
+              </div>
+            </div>
+          `;
+        })
+        .join('')}`;
+    }
+
+    function openTraineeSheet() {
+      if (!state.settings.trainer.loaded && !state.settings.trainer.loading) {
+        loadTrainerOverview().catch(console.error);
+      }
+      renderTraineeSheet();
+      document.getElementById('traineeSheet')?.classList.add('show');
+    }
+
+    function closeTraineeSheet() {
+      document.getElementById('traineeSheet')?.classList.remove('show');
+    }
+
+    async function setActingUser(trainee) {
+      if (!trainee) return;
+      state.acting = {
+        userId: Number(trainee.id),
+        name: trainee.name || '',
+        canEdit: trainee.canEdit !== false,
+      };
+      updateActingBanner();
+      closeTraineeSheet();
+      navigateTo('today');
+      await loadToday();
+      toast(state.acting.canEdit ? 'Открыт дневник подопечного' : 'Открыт дневник подопечного (только просмотр)');
+    }
+
+    async function clearActingUser() {
+      state.acting = { userId: null, name: '', canEdit: true };
+      updateActingBanner();
+      closeTraineeSheet();
+      navigateTo('today');
+      await loadToday();
+      toast('Вы вернулись в свой дневник');
     }
 
     function renderTrainerHub() {
@@ -2910,12 +3135,7 @@
 
       const fallbackTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
       const selectedTimezone = s.timezone || fallbackTimezone;
-      const timezoneList = getTimezones();
-      const timezoneOptions = (timezoneList.includes(selectedTimezone)
-        ? timezoneList
-        : [selectedTimezone, ...timezoneList])
-        .map((tz) => `<option value="${tz}" ${tz === selectedTimezone ? 'selected' : ''}>${formatTimezoneLabel(tz)}</option>`)
-        .join('');
+      const timezoneOptions = buildTimezoneOptions(selectedTimezone);
       const timezoneLabel = formatTimezoneLabel(selectedTimezone);
 
       const sections = {
@@ -2938,7 +3158,7 @@
         notifications: `
           <div class="card">
             <div class="card-title">Уведомления</div>
-            <div class="settings-row">
+            <div class="settings-row settings-panel">
               <div class="label">Уведомления</div>
               <div class="settings-pill">Статус: ${s.notificationsEnabled ? 'включены' : 'выключены'}</div>
               <div class="settings-actions">
@@ -2947,12 +3167,12 @@
                 </button>
               </div>
             </div>
-            <div class="settings-row">
+            <div class="settings-row settings-panel">
               <div class="label">Часовой пояс</div>
               <div class="hint">Используется для времени уведомлений: ${timezoneLabel}</div>
               <select class="settings-select" data-settings-timezone>${timezoneOptions}</select>
             </div>
-            <div class="settings-list">${remindersHtml}</div>
+            <div class="settings-list settings-panel">${remindersHtml}</div>
             <div class="settings-actions">
               <button class="btn primary" data-action="save-reminders">Сохранить уведомления</button>
             </div>
@@ -2991,9 +3211,10 @@
       state.settings.loading = true;
       renderSettings();
       try {
+        const previousDays = state.settings.days || [];
         const data = await apiFetch('/gymapi/settings/overview');
         state.settings.workoutsPerWeek = data.workouts_per_week || 0;
-        state.settings.days = data.days || [];
+        state.settings.days = mergeDayLabels(previousDays, data.days || []);
         state.settings.customGroups = data.custom_groups || [];
         state.settings.reminders = data.reminders || [];
         state.settings.notificationsEnabled = data.notifications_enabled !== false;
@@ -3011,6 +3232,9 @@
       renderSettings();
       try {
         const data = await apiFetch('/gymapi/settings/trainer');
+        const link = data.link && data.link.status && data.link.status !== 'none'
+          ? data.link
+          : null;
         state.settings.trainer = {
           ...state.settings.trainer,
           loading: false,
@@ -3018,10 +3242,15 @@
           isTrainer: !!data.is_trainer,
           trainerCode: data.trainer_code || '',
           acceptsRequests: data.accepts_requests !== false,
-          link: data.link || null,
+          link,
           requests: data.requests || [],
           trainees: data.trainees || [],
         };
+        if (!data.is_trainer && state.acting.userId) {
+          state.acting = { userId: null, name: '', canEdit: true };
+          updateActingBanner();
+        }
+        updateTraineeButtonVisibility();
       } catch (e) {
         toast('Не удалось загрузить тренерские настройки');
         state.settings.trainer.loading = false;
@@ -3089,6 +3318,16 @@
         const target = event.target.closest('[data-action]');
         if (!target) return;
         const action = target.dataset.action;
+        const applyWorkoutsPerWeek = async (count) => {
+          const currentDays = state.settings.days || [];
+          const data = await apiFetch('/gymapi/settings/workouts_per_week', {
+            method: 'POST',
+            body: JSON.stringify({ value: count }),
+          });
+          state.settings.workoutsPerWeek = data.workouts_per_week || count;
+          state.settings.days = mergeDayLabels(currentDays, data.days || []);
+          await loadSettingsOverview();
+        };
         try {
           if (action === 'open-settings') {
             const section = target.dataset.section || 'menu';
@@ -3104,13 +3343,16 @@
           if (action === 'set-days') {
             const count = Number(target.dataset.count || 0);
             if (!count) return;
-            const data = await apiFetch('/gymapi/settings/workouts_per_week', {
-              method: 'POST',
-              body: JSON.stringify({ value: count }),
-            });
-            state.settings.workoutsPerWeek = data.workouts_per_week || count;
-            state.settings.days = data.days || [];
-            await loadSettingsOverview();
+            const currentCount = state.settings.workoutsPerWeek || state.settings.days.length || 0;
+            if (count === currentCount) return;
+            if (count < currentCount && openConfirmModal) {
+              const removed = currentCount - count;
+              const title = 'Изменить количество дней?';
+              const text = `Вы удалите ${removed} ${removed === 1 ? 'день' : (removed < 5 ? 'дня' : 'дней')} и все упражнения из них. Настройку нужно будет сделать заново. Продолжить?`;
+              openConfirmModal(() => applyWorkoutsPerWeek(count), title, text);
+              return;
+            }
+            await applyWorkoutsPerWeek(count);
             return;
           }
           if (action === 'rename-day') {
@@ -3242,6 +3484,10 @@
             if (!traineeId) return;
             await apiFetch(`/gymapi/settings/trainer/trainee/${traineeId}/detach`, { method: 'POST', body: JSON.stringify({}) });
             await loadTrainerOverview();
+            if (state.acting.userId && Number(traineeId) === Number(state.acting.userId)) {
+              state.acting = { userId: null, name: '', canEdit: true };
+              updateActingBanner();
+            }
             return;
           }
           if (action === 'trainer-copy-code') {
@@ -3490,6 +3736,8 @@
       if (timerSheetOpen) { closeTimerSheet(); return; }
       const manageSheetOpen = document.getElementById('manageExerciseSheet')?.classList.contains('show');
       if (manageSheetOpen) { closeManageAddSheet(); return; }
+      const traineeSheetOpen = document.getElementById('traineeSheet')?.classList.contains('show');
+      if (traineeSheetOpen) { closeTraineeSheet(); return; }
       const manageDaySheetOpen = document.getElementById('manageDaySheet')?.classList.contains('show');
       if (manageDaySheetOpen) { closeManageDayPicker(); return; }
       if (state.drawerOpen) { closeDrawer(); return; }
@@ -3509,7 +3757,8 @@
 
     function setupNavigation() {
       document.getElementById('menuBtn').addEventListener('click', toggleDrawer);
-      document.getElementById('settingsBtn').addEventListener('click', () => navigateTo('settings'));
+      const traineeBtn = document.getElementById('traineeBtn');
+      if (traineeBtn) traineeBtn.addEventListener('click', openTraineeSheet);
       document.getElementById('closeDrawer').addEventListener('click', closeDrawer);
       document.getElementById('drawerOverlay').addEventListener('click', (e) => { if (e.target.id === 'drawerOverlay') closeDrawer(); });
       document.querySelectorAll('.menu-item').forEach((btn) => btn.addEventListener('click', () => navigateTo(btn.dataset.route)));
@@ -3587,6 +3836,11 @@
       if (direct && 'headers' in direct) delete direct.headers;
 
       if (state.initData) headers.set('X-Telegram-InitData', state.initData);
+      const actingExcluded = typeof path === 'string'
+        && (path.startsWith('/gymapi/settings/trainer') || path.startsWith('/gymapi_prod/settings/trainer'));
+      if (state.acting?.userId && !actingExcluded) {
+        headers.set('X-Acting-User', String(state.acting.userId));
+      }
 
       // Merge init (direct overrides fetchOptions)
       const init = { ...(fetchOptions || {}), ...(direct || {}), headers };
@@ -5079,6 +5333,11 @@
     }
 
     function setManageMode(mode) {
+      const readOnly = state.acting.userId && !state.acting.canEdit;
+      if (readOnly && (mode === 'add' || mode === 'delete')) {
+        toast('У вас нет права редактировать дневник подопечного');
+        return;
+      }
       state.manage.mode = mode || 'normal';
       setManageMenu(false);
       updateManageHeader();
@@ -5581,6 +5840,53 @@
       document.getElementById('daySheet').addEventListener('click', (e) => { if (e.target.id === 'daySheet') closeDayPicker(); });
       document.getElementById('manageExerciseSheet').addEventListener('click', (e) => { if (e.target.id === 'manageExerciseSheet') closeManageAddSheet(); });
       document.getElementById('manageDaySheet').addEventListener('click', (e) => { if (e.target.id === 'manageDaySheet') closeManageDayPicker(); });
+      document.getElementById('traineeSheet').addEventListener('click', (e) => { if (e.target.id === 'traineeSheet') closeTraineeSheet(); });
+      document.getElementById('traineeSheet').addEventListener('click', async (event) => {
+        const target = event.target.closest('[data-action]');
+        if (!target) return;
+        const action = target.dataset.action;
+        if (action === 'trainee-open') {
+          const id = Number(target.dataset.traineeId || 0);
+          if (!id) return;
+          await setActingUser({
+            id,
+            name: target.dataset.traineeName || '',
+            canEdit: target.dataset.canEdit === '1',
+          });
+          return;
+        }
+        if (action === 'trainee-clear') {
+          await clearActingUser();
+          return;
+        }
+        if (action === 'trainee-rename') {
+          const linkId = target.dataset.linkId;
+          if (!linkId) return;
+          const label = prompt('Как подписать подопечного?', '');
+          if (label === null) return;
+          await apiFetch(`/gymapi/settings/trainer/trainee/${linkId}/label`, {
+            method: 'POST',
+            body: JSON.stringify({ label }),
+          });
+          await loadTrainerOverview();
+          renderTraineeSheet();
+          return;
+        }
+        if (action === 'trainee-detach') {
+          const traineeId = target.dataset.traineeId;
+          if (!traineeId) return;
+          openConfirmModal?.(async () => {
+            await apiFetch(`/gymapi/settings/trainer/trainee/${traineeId}/detach`, { method: 'POST', body: JSON.stringify({}) });
+            await loadTrainerOverview();
+            if (state.acting.userId && Number(traineeId) === Number(state.acting.userId)) {
+              state.acting = { userId: null, name: '', canEdit: true };
+              updateActingBanner();
+            }
+            renderTraineeSheet();
+            toast('Подопечный удалён');
+          }, 'Открепить подопечного?', 'Связь будет удалена, и подопечный пропадёт из списка. Продолжить?');
+        }
+      });
       const fab = document.getElementById('finishFab');
       const pop = document.getElementById('finishPopover');
       document.getElementById('finishBtn').addEventListener('click', () => {
@@ -5641,6 +5947,7 @@
             case 'sheet': closeEditor(); break;
             case 'manageExerciseSheet': closeManageAddSheet(); break;
             case 'manageDaySheet': closeManageDayPicker(); break;
+            case 'traineeSheet': closeTraineeSheet(); break;
             default: backdrop.classList.remove('show'); backdrop.classList.remove('open'); break;
           }
         });
@@ -6133,7 +6440,9 @@
       openConfirmModal = setupModal();
       bindEvents();
       bindTimer();
+      updateActingBanner();
       if (!state.isTelegram) { handleRouteFromHash(); return; }
+      loadTrainerOverview().catch(console.error);
       await loadToday();
     }
 

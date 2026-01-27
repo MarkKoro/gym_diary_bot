@@ -150,10 +150,34 @@ class AuthCtx:
     first_name: Optional[str]
     last_name: Optional[str]
     auth_date: int
+    actor_user_id: Optional[int] = None
+    acting_can_edit: bool = True
+    is_acting: bool = False
 
 
-async def get_auth_ctx(tg: TelegramInitData = Depends(get_tg_init_data)) -> AuthCtx:
+async def get_auth_ctx(
+    request: Request,
+    tg: TelegramInitData = Depends(get_tg_init_data),
+    x_acting_user: int | None = Header(default=None, alias="X-Acting-User"),
+) -> AuthCtx:
     internal_user_id = await db.get_or_create_user(tg.user.id, tg.user.username)
+    actor_user_id = internal_user_id
+    acting_user_id = None
+    acting_can_edit = True
+    is_acting = False
+    if x_acting_user and x_acting_user != internal_user_id:
+        acting_user_id = int(x_acting_user)
+        if request.url.path.startswith("/settings/trainer"):
+            acting_user_id = None
+        else:
+            link = await get_trainer_link(internal_user_id, acting_user_id)
+            if not link or str(link[1]) != "accepted":
+                raise HTTPException(status_code=403, detail="Trainer link not available")
+            acting_can_edit = bool(link[2])
+            is_acting = True
+            if request.method != "GET" and not acting_can_edit:
+                raise HTTPException(status_code=403, detail="No edit permission for trainee")
+            internal_user_id = acting_user_id
 
     return AuthCtx(
         tg_id=tg.user.id,
@@ -162,6 +186,9 @@ async def get_auth_ctx(tg: TelegramInitData = Depends(get_tg_init_data)) -> Auth
         first_name=tg.user.first_name,
         last_name=tg.user.last_name,
         auth_date=tg.auth_date,
+        actor_user_id=actor_user_id if is_acting else None,
+        acting_can_edit=acting_can_edit,
+        is_acting=is_acting,
     )
 
 
