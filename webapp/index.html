@@ -447,6 +447,18 @@
     .set-no { font-weight: 700; }
     .set-meta { font-size: 13px; color: var(--muted); text-align: right; }
     .selected-label { font-size: 13px; color: var(--muted); margin-bottom: 8px; }
+    .last-summary {
+      font-size: 13px;
+      color: var(--text);
+      background: color-mix(in srgb, var(--card) 70%, var(--bg));
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 8px 10px;
+      margin-bottom: 10px;
+      display: none;
+    }
+    .last-summary.show { display: block; }
+    .exercise-summary.empty { color: color-mix(in srgb, var(--text) 85%, var(--muted)); font-weight: 600; }
     [data-theme="light"] .set-row { color: rgba(0,0,0,0.82); }
     [data-theme="light"] .set-meta { color: rgba(0,0,0,0.70); }
     .tab-panel { display: none; }
@@ -1309,6 +1321,7 @@
         <div id="tabSets" class="tab-panel active">
           <div id="setsList" class="sets-list"></div>
           <div id="selectedLabel" class="selected-label">—</div>
+          <div id="lastSummary" class="last-summary"></div>
           <div id="controlsGrid" class="controls-grid"></div>
         </div>
 
@@ -2951,6 +2964,56 @@
       return formatSetDetail(last);
     }
 
+    function findPreviousBestSet(previousSets = []) {
+      if (!previousSets.length) return null;
+      let best = previousSets[0];
+      previousSets.forEach((set) => {
+        const weight = Number(set.weight_kg || 0);
+        const bestWeight = Number(best.weight_kg || 0);
+        if (weight > bestWeight) { best = set; return; }
+        if (weight === bestWeight) {
+          const reps = Number(set.reps || 0);
+          const bestReps = Number(best.reps || 0);
+          if (reps > bestReps) { best = set; return; }
+          if (reps === bestReps) {
+            const seconds = Number(set.seconds || 0);
+            const bestSeconds = Number(best.seconds || 0);
+            if (seconds > bestSeconds) best = set;
+          }
+        }
+      });
+      const bestWeight = Number(best.weight_kg || 0);
+      if (bestWeight > 0) return best;
+      return previousSets[previousSets.length - 1] || best;
+    }
+
+    function updateLastSummary(exercise) {
+      const summary = document.getElementById('lastSummary');
+      if (!summary) return;
+      const ctx = getOrCreateContext(exercise.user_exercise_id);
+      if (!ctx.loaded && !ctx.loading) ensureExerciseContext(exercise.user_exercise_id);
+      if (ctx.loading) {
+        summary.textContent = 'Загружаем прошлый результат…';
+        summary.classList.add('show');
+        return;
+      }
+      if (ctx.error) {
+        summary.textContent = 'Не удалось загрузить прошлый результат.';
+        summary.classList.add('show');
+        return;
+      }
+      const previousSets = ctx.data?.previous_sets || [];
+      const best = findPreviousBestSet(previousSets);
+      if (!best) {
+        summary.classList.remove('show');
+        summary.textContent = '';
+        return;
+      }
+      const detail = formatSetDetail(best);
+      summary.textContent = detail ? `В прошлый раз: ${detail}` : '';
+      summary.classList.toggle('show', Boolean(detail));
+    }
+
     function buildExerciseSummary(exercise) {
       if (isRunningExercise(exercise)) {
         const running = exercise.running || {};
@@ -3785,6 +3848,9 @@
       const summary = document.createElement('div');
       summary.className = 'exercise-summary';
       summary.textContent = buildExerciseSummary(exercise);
+      if (!isRunningExercise(exercise) && (exercise.sets?.length || 0) === 0) {
+        summary.classList.add('empty');
+      }
 
       const workoutBody = document.createElement('div');
       workoutBody.className = 'workout-body';
@@ -3941,7 +4007,10 @@
       const summary = card.querySelector('.exercise-summary');
       const pill = card.querySelector('.exercise-sets-pill');
       const expanded = card.classList.contains('expanded');
-      if (summary) summary.textContent = expanded ? buildExpandedExerciseSummary(exercise) : buildExerciseSummary(exercise);
+      if (summary) {
+        summary.textContent = expanded ? buildExpandedExerciseSummary(exercise) : buildExerciseSummary(exercise);
+        summary.classList.toggle('empty', !isRunningExercise(exercise) && (exercise.sets?.length || 0) === 0);
+      }
       if (pill) pill.textContent = isRunningExercise(exercise) ? 'Бег' : `Подходов: ${exercise.sets?.length || 0}`;
     }
 
@@ -5161,7 +5230,7 @@
       const exercise = state.exercises.get(state.editor.ueId);
       if (!exercise) return;
       document.getElementById('sheet').classList.add('show');
-      document.getElementById('sheetSubtitle').textContent = exercise.name;
+      document.getElementById('sheetSubtitle').textContent = `Упражнение: ${exercise.name}`;
       setActiveTab(state.editor.tab || 'sets');
       const isRunning = isRunningExercise(exercise);
       const addBtn = document.getElementById('editorAddSet');
@@ -5184,6 +5253,7 @@
         const nextNo = (exercise.sets[exercise.sets.length - 1]?.set_no || 0) + 1;
         const labelText = exercise.sets.length === 0 ? 'Подход 1:' : (selected ? `Подход ${selected.set_no}:` : `Подход ${nextNo}:`);
         document.getElementById('selectedLabel').textContent = labelText;
+        updateLastSummary(exercise);
         const removeBtn = document.getElementById('editorRemoveSet');
         if (removeBtn) removeBtn.disabled = exercise.sets.length === 0;
 
