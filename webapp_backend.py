@@ -1,4 +1,5 @@
 import os
+import random
 from dataclasses import dataclass
 from datetime import UTC, datetime, date, time, timedelta
 from math import sqrt
@@ -7,7 +8,7 @@ from zoneinfo import ZoneInfo
 from fastapi import Body, Depends, FastAPI, Header, HTTPException, Request, Response
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from settings import TG_TOKEN
+from settings import BOT_PUBLIC_LINK, TG_TOKEN
 from telegram_webapp_auth import (
     InitDataError,
     TelegramInitData,
@@ -18,15 +19,39 @@ import db
 from keyboards import MG_NAMES
 from db import (
     clear_day_completions,
+    create_trainer_request,
+    deactivate_trainer_links,
+    find_user_by_id,
+    find_user_by_trainer_code,
     get_running_entry,
     get_day_completion,
     get_user_timezone,
+    get_user_notifications_enabled,
+    get_active_trainer_link_for_trainee,
+    get_latest_trainer_link_for_trainee,
+    get_trainer_link,
+    add_user_reminder,
+    clear_user_reminders,
     list_day_completions,
+    list_trainer_requests,
+    list_exercise_weight_progress,
     list_running_history,
+    list_user_muscle_groups,
     list_user_reminders,
     mark_day_completed,
     mark_exercise_done,
     mark_running_entry_done,
+    reactivate_trainer_links,
+    remove_user_muscle_group,
+    rename_day,
+    set_trainer_accepting_requests,
+    set_user_notifications_enabled,
+    set_user_timezone,
+    set_workouts_per_week,
+    update_trainer_label,
+    update_trainer_link_permissions,
+    update_trainer_link_status,
+    update_trainee_label,
     update_running_entry,
 )
 
@@ -1600,3 +1625,770 @@ async def body_overall(
         "end": end_iso,
         "muscles": muscles,
     }
+
+
+FEATURED_MEASUREMENTS_ORDER = ["body_weight", "body_fat", "chest", "hips"]
+FEATURED_MEASUREMENTS_MAP = {
+    "body_weight": {"name": "Вес", "unit": "кг", "precision": 1},
+    "body_fat": {"name": "Жир", "unit": "%", "precision": 1},
+    "chest": {"name": "Грудь", "unit": "см", "precision": 1},
+    "hips": {"name": "Бёдра", "unit": "см", "precision": 1},
+}
+SHARE_RESULTS_EXERCISE_LIMIT = 5
+SHARE_RESULTS_WINDOW_DAYS = 90
+SHARE_RESULTS_COPY_TEXT_MAX_LENGTH = 4096
+
+
+def _parse_iso_datetime(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    text = str(value)
+    try:
+        dt = datetime.fromisoformat(text)
+    except ValueError:
+        if text.endswith("Z"):
+            try:
+                dt = datetime.fromisoformat(text[:-1] + "+00:00")
+            except ValueError:
+                dt = None
+        else:
+            try:
+                base = text.split(".")[0]
+                dt = datetime.fromisoformat(base)
+            except ValueError:
+                try:
+                    dt = datetime.strptime(text.split("T")[0], "%Y-%m-%d")
+                except ValueError:
+                    dt = None
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=UTC)
+    return dt
+
+
+def _plural_ru(value: int, forms: tuple[str, str, str]) -> str:
+    num = abs(value) % 100
+    if 10 <= num <= 20:
+        return forms[2]
+    num %= 10
+    if num == 1:
+        return forms[0]
+    if 2 <= num <= 4:
+        return forms[1]
+    return forms[2]
+
+
+def _calculate_training_weeks(first: datetime | None, last: datetime | None) -> int:
+    if first is None or last is None:
+        return 1
+    if last < first:
+        first, last = last, first
+    span_days = max(0, (last.date() - first.date()).days)
+    if span_days <= 0:
+        return 1
+    weeks = round(span_days / 7)
+    return max(1, weeks)
+
+
+def _format_weight_value(value: float) -> str:
+    text = f"{value:.1f}"
+    if "." in text:
+        text = text.rstrip("0").rstrip(".")
+    if not text:
+        return "0"
+    return text
+
+
+def _format_share_measurement_line(item: dict, delta: float) -> str:
+    precision = int(item.get("precision", 1) or 1)
+    formatted = f"{delta:+.{precision}f}"
+    unit = (item.get("unit") or "").strip()
+    unit_part = f" {unit}" if unit else ""
+    name = item.get("short_name") or item.get("name") or item.get("code") or ""
+    return f"{name}: {formatted}{unit_part}".strip()
+
+
+def _get_public_link() -> str:
+    link = (BOT_PUBLIC_LINK or "").strip()
+    if link:
+        return link
+    return "https://t.me/progresor_bot"
+
+
+def _select_share_exercises(items: list[dict], *, randomize: bool = False) -> list[dict]:
+    if not items:
+        return []
+    limit = min(SHARE_RESULTS_EXERCISE_LIMIT, len(items))
+    if randomize and len(items) > limit:
+        selected = random.sample(items, k=limit)
+    else:
+        selected = items[:limit]
+    return sorted(selected, key=lambda entry: entry["delta"], reverse=True)
+
+
+def _copy_text_length(text: str) -> int:
+    return len(text.encode("utf-8"))
+
+
+def _truncate_with_ellipsis(text: str, max_length_bytes: int) -> str:
+    encoded = text.encode("utf-8")
+    if len(encoded) <= max_length_bytes:
+        return text
+    if max_length_bytes <= 0:
+        return ""
+    ellipsis = "…"
+    ellipsis_bytes = ellipsis.encode("utf-8")
+    if max_length_bytes <= len(ellipsis_bytes):
+        truncated = encoded[:max_length_bytes]
+        return truncated.decode("utf-8", "ignore")
+    trimmed_bytes = encoded[: max_length_bytes - len(ellipsis_bytes)]
+    trimmed_text = trimmed_bytes.decode("utf-8", "ignore").rstrip()
+    if not trimmed_text:
+        return trimmed_bytes.decode("utf-8", "ignore")
+    candidate = f"{trimmed_text}{ellipsis}"
+    if len(candidate.encode("utf-8")) <= max_length_bytes:
+        return candidate
+    return trimmed_text
+
+
+def _render_share_results_copy_text(
+    header: str, measurements: list[str], exercises: list[dict], link: str
+) -> str:
+    lines: list[str] = [header]
+    body_lines: list[str] = []
+    if measurements:
+        body_lines.append("Вот мои результаты:")
+        body_lines.append("Изменения в теле:")
+        body_lines.extend(measurements)
+    if exercises:
+        if not body_lines:
+            body_lines.append("Вот мои результаты:")
+        body_lines.append("Силовой прогресс за последние три месяца:")
+        for progress in exercises:
+            delta_text = _format_weight_value(progress["delta"])
+            start_text = _format_weight_value(progress["start_weight"])
+            end_text = _format_weight_value(progress["end_weight"])
+            body_lines.append(
+                "• {name}: +{delta} кг (с {start} до {end} кг)".format(
+                    name=progress["name"],
+                    delta=delta_text,
+                    start=start_text,
+                    end=end_text,
+                )
+            )
+    if body_lines:
+        lines.append("")
+        lines.extend(body_lines)
+    lines.append("")
+    call_to_action = (
+        "Это мой результат. Если ты хочешь так же прогрессировать со мной, то "
+        f"Подключайся 👉 {link}"
+    )
+    lines.append(call_to_action)
+
+    def _join(parts: list[str]) -> str:
+        return "\n".join(parts)
+
+    text = _join(lines)
+    if _copy_text_length(text) <= SHARE_RESULTS_COPY_TEXT_MAX_LENGTH:
+        return text
+
+    header_line = lines[0]
+    tail_lines = lines[-2:]
+    middle_lines = lines[1:-2]
+
+    trimmed_middle = list(middle_lines)
+    while trimmed_middle and _copy_text_length(
+        _join([header_line, *trimmed_middle, *tail_lines])
+    ) > SHARE_RESULTS_COPY_TEXT_MAX_LENGTH:
+        trimmed_middle.pop()
+    candidate = _join([header_line, *trimmed_middle, *tail_lines])
+    if _copy_text_length(candidate) <= SHARE_RESULTS_COPY_TEXT_MAX_LENGTH:
+        return candidate
+
+    trimmed_middle = [line for line in trimmed_middle if line.strip()]
+    candidate = _join([header_line, *trimmed_middle, *tail_lines])
+    if _copy_text_length(candidate) <= SHARE_RESULTS_COPY_TEXT_MAX_LENGTH:
+        return candidate
+
+    fallback_lines: list[str] = []
+    if header_line:
+        fallback_lines.append(header_line)
+        fallback_lines.append("")
+    fallback_lines.append(call_to_action)
+    candidate = _join(fallback_lines)
+    if _copy_text_length(candidate) <= SHARE_RESULTS_COPY_TEXT_MAX_LENGTH:
+        return candidate
+
+    if header_line:
+        suffix = f"\n\n{call_to_action}"
+        available = SHARE_RESULTS_COPY_TEXT_MAX_LENGTH - _copy_text_length(suffix)
+        if available > 0:
+            shortened_header = _truncate_with_ellipsis(header_line, available)
+            shortened_header = shortened_header.strip()
+            if shortened_header:
+                candidate = f"{shortened_header}{suffix}"
+                if _copy_text_length(candidate) <= SHARE_RESULTS_COPY_TEXT_MAX_LENGTH:
+                    return candidate
+
+    return _truncate_with_ellipsis(call_to_action, SHARE_RESULTS_COPY_TEXT_MAX_LENGTH)
+
+
+def _render_share_results_text(
+    header: str, measurements: list[str], exercises: list[dict], link: str
+) -> str:
+    lines: list[str] = [header]
+    body_lines: list[str] = []
+    if measurements:
+        body_lines.append("Вот мои результаты:")
+        body_lines.append("Изменения в теле:")
+        body_lines.extend(measurements)
+    if exercises:
+        if not body_lines:
+            body_lines.append("Вот мои результаты:")
+        body_lines.append("Силовой прогресс за последние три месяца:")
+        for progress in exercises:
+            delta_text = _format_weight_value(progress["delta"])
+            start_text = _format_weight_value(progress["start_weight"])
+            end_text = _format_weight_value(progress["end_weight"])
+            body_lines.append(
+                "• {name}: +{delta} кг (с {start} до {end} кг)".format(
+                    name=progress["name"],
+                    delta=delta_text,
+                    start=start_text,
+                    end=end_text,
+                )
+            )
+    if body_lines:
+        lines.append("")
+        lines.extend(body_lines)
+    lines.append("")
+    lines.append(
+        "Это мой результат. Если ты хочешь так же прогрессировать со мной, то "
+        f"Подключайся 👉 {link}."
+    )
+    return "\n".join(lines)
+
+
+async def _load_training_summary(user_id: int) -> tuple[int, datetime | None, datetime | None]:
+    async with db.connect_db() as conn:
+        cur = await conn.execute(
+            """
+            SELECT COUNT(*), MIN(date), MAX(date)
+            FROM sessions
+            WHERE user_id=? AND day_index>0
+            """,
+            (user_id,),
+        )
+        row = await cur.fetchone()
+    if not row:
+        return 0, None, None
+    count = int(row[0] or 0)
+    first = _parse_iso_datetime(row[1])
+    last = _parse_iso_datetime(row[2])
+    return count, first, last
+
+
+async def _load_featured_measurement_changes(
+    user_id: int,
+) -> list[tuple[str, float, dict]]:
+    entries: list[tuple[str, float, dict]] = []
+    async with db.connect_db() as conn:
+        for metric in FEATURED_MEASUREMENTS_ORDER:
+            cur = await conn.execute(
+                """
+                SELECT value, created_at
+                FROM user_measurements
+                WHERE user_id=? AND metric=?
+                ORDER BY created_at ASC
+                LIMIT 1
+                """,
+                (user_id, metric),
+            )
+            first_row = await cur.fetchone()
+            cur = await conn.execute(
+                """
+                SELECT value, created_at
+                FROM user_measurements
+                WHERE user_id=? AND metric=?
+                ORDER BY created_at DESC
+                LIMIT 1
+                """,
+                (user_id, metric),
+            )
+            last_row = await cur.fetchone()
+            if not first_row or not last_row:
+                continue
+            try:
+                first_value = float(first_row[0])
+                last_value = float(last_row[0])
+            except (TypeError, ValueError):
+                continue
+            delta = last_value - first_value
+            if abs(delta) <= 0:
+                continue
+            item = FEATURED_MEASUREMENTS_MAP.get(metric, {"name": metric, "unit": "", "precision": 1})
+            precision = int(item.get("precision", 1) or 1)
+            threshold = 0.5 * 10 ** (-precision)
+            if abs(delta) < threshold:
+                continue
+            entries.append((metric, delta, item))
+    entries.sort(key=lambda entry: abs(entry[1]), reverse=True)
+    return entries[:4]
+
+
+async def build_share_results_view(user_id: int, *, randomize: bool = False) -> dict:
+    trainings_count, first, last = await _load_training_summary(user_id)
+    measurement_entries = await _load_featured_measurement_changes(user_id)
+    link = _get_public_link()
+    measurements = [
+        _format_share_measurement_line(item, delta)
+        for _metric, delta, item in measurement_entries
+    ]
+    progress_entries = await list_exercise_weight_progress(
+        user_id, days=SHARE_RESULTS_WINDOW_DAYS
+    )
+    exercises = [
+        {
+            "name": str(entry.get("name") or "").strip(),
+            "start_weight": float(entry.get("start_weight", 0.0) or 0.0),
+            "end_weight": float(entry.get("end_weight", 0.0) or 0.0),
+            "delta": float(entry.get("delta", 0.0) or 0.0),
+        }
+        for entry in progress_entries
+        if entry.get("name")
+    ]
+    exercises = [
+        entry
+        for entry in exercises
+        if entry["delta"] > 0 and entry["end_weight"] > entry["start_weight"]
+    ]
+    exercises.sort(key=lambda item: item["delta"], reverse=True)
+    displayed = _select_share_exercises(exercises, randomize=randomize)
+
+    has_training_data = trainings_count > 0 and first is not None and last is not None
+    if not has_training_data and not measurements and not displayed:
+        fallback_text = "\n".join(
+            [
+                "Я только начинаю тренироваться с этим ботом 💪",
+                "Скоро здесь будет мой прогресс.",
+                "",
+                f"Если хочешь начать вместе со мной, то Подключайся 👉 {link}",
+            ]
+        )
+        return {
+            "text": fallback_text,
+            "copy_text": fallback_text,
+            "exercises": displayed,
+            "measurements": measurements,
+        }
+
+    weeks = _calculate_training_weeks(first, last)
+    week_label = _plural_ru(weeks, ("неделю", "недели", "недель"))
+    training_label = _plural_ru(
+        trainings_count, ("тренировку", "тренировки", "тренировок")
+    )
+    header = (
+        f"Я тренируюсь с ботом уже {weeks} {week_label} "
+        f"({trainings_count} {training_label}) 💪"
+    )
+    text = _render_share_results_text(header, measurements, displayed, link)
+    copy_text = _render_share_results_copy_text(header, measurements, displayed, link)
+    return {
+        "text": text,
+        "copy_text": copy_text,
+        "exercises": displayed,
+        "measurements": measurements,
+    }
+
+
+async def _fetch_trainer_profile(user_id: int) -> dict:
+    async with db.connect_db() as conn:
+        cur = await conn.execute(
+            """
+            SELECT is_trainer, trainer_code, trainer_accepts_requests
+            FROM users
+            WHERE id=?
+            """,
+            (user_id,),
+        )
+        row = await cur.fetchone()
+    if not row:
+        return {"is_trainer": False, "trainer_code": None, "accepts_requests": True}
+    is_trainer = bool(int(row[0] or 0))
+    accepts = True
+    try:
+        accepts = bool(int(row[2] or 0))
+    except (TypeError, ValueError):
+        accepts = True
+    return {
+        "is_trainer": is_trainer,
+        "trainer_code": row[1],
+        "accepts_requests": accepts,
+    }
+
+
+async def _ensure_trainer_mode(user_id: int) -> str | None:
+    async with db.connect_db() as conn:
+        code = await db._ensure_user_trainer_code(conn, user_id)
+        await conn.execute(
+            """
+            UPDATE users
+            SET is_trainer=1, trainer_accepts_requests=1
+            WHERE id=?
+            """,
+            (user_id,),
+        )
+        await conn.commit()
+    return code
+
+
+async def _user_display_name(user_id: int) -> str:
+    record = await find_user_by_id(user_id)
+    username = record[2] if record else None
+    if username:
+        return f"@{username}"
+    return f"ID {user_id}"
+
+
+async def _get_trainer_link_by_id(link_id: int):
+    async with db.connect_db() as conn:
+        cur = await conn.execute(
+            """
+            SELECT id, trainer_user_id, trainee_user_id, status, can_edit_plan, trainer_label, trainee_label
+            FROM trainer_links
+            WHERE id=?
+            """,
+            (link_id,),
+        )
+        return await cur.fetchone()
+
+
+@app.get("/settings/overview")
+async def settings_overview(ctx: AuthCtx = Depends(get_auth_ctx)):
+    user_id = ctx.user_id
+    wpw, active_days = await _load_user_settings(user_id)
+    custom_groups = await list_user_muscle_groups(user_id)
+    reminders = await list_user_reminders(user_id)
+    notifications_enabled = await get_user_notifications_enabled(user_id)
+    timezone = await get_user_timezone(user_id)
+    return {
+        "ok": True,
+        "workouts_per_week": wpw,
+        "days": [{"day_index": int(d), "label": label} for d, label in active_days],
+        "custom_groups": [{"code": code, "name": name} for code, name in custom_groups],
+        "reminders": [
+            {"day_no": int(day_no), "dow": int(dow), "hour": int(hour), "minute": int(minute)}
+            for day_no, dow, hour, minute in reminders
+        ],
+        "notifications_enabled": bool(notifications_enabled),
+        "timezone": timezone,
+    }
+
+
+@app.post("/settings/days/{day_index}/rename")
+async def settings_rename_day(
+    day_index: int,
+    payload: dict = Body(default_factory=dict),
+    ctx: AuthCtx = Depends(get_auth_ctx),
+):
+    user_id = ctx.user_id
+    await _validate_day(user_id, day_index)
+    label = str(payload.get("label") or "").strip()
+    if not label:
+        label = f"День {day_index}"
+    await rename_day(user_id, day_index, label)
+    wpw, active_days = await _load_user_settings(user_id)
+    return {
+        "ok": True,
+        "workouts_per_week": wpw,
+        "days": [{"day_index": int(d), "label": lbl} for d, lbl in active_days],
+    }
+
+
+@app.post("/settings/workouts_per_week")
+async def settings_workouts_per_week(
+    payload: dict = Body(default_factory=dict),
+    ctx: AuthCtx = Depends(get_auth_ctx),
+):
+    user_id = ctx.user_id
+    try:
+        value = int(payload.get("value") or 0)
+    except (TypeError, ValueError):
+        value = 0
+    value = max(1, min(7, value))
+    await set_workouts_per_week(user_id, value)
+    wpw, active_days = await _load_user_settings(user_id)
+    return {
+        "ok": True,
+        "workouts_per_week": wpw,
+        "days": [{"day_index": int(d), "label": lbl} for d, lbl in active_days],
+    }
+
+
+@app.delete("/settings/custom_groups/{code}")
+async def settings_custom_group_delete(
+    code: str,
+    ctx: AuthCtx = Depends(get_auth_ctx),
+):
+    user_id = ctx.user_id
+    removed = await remove_user_muscle_group(user_id, code)
+    return {"ok": True, "removed": removed}
+
+
+@app.post("/settings/reminders")
+async def settings_update_reminders(
+    payload: dict = Body(default_factory=dict),
+    ctx: AuthCtx = Depends(get_auth_ctx),
+):
+    user_id = ctx.user_id
+    enabled = payload.get("enabled", True)
+    await set_user_notifications_enabled(user_id, bool(enabled))
+    timezone = str(payload.get("timezone") or "").strip()
+    if timezone:
+        await set_user_timezone(user_id, timezone)
+    reminders = payload.get("reminders") or []
+    await clear_user_reminders(user_id)
+    for reminder in reminders:
+        if not isinstance(reminder, dict):
+            continue
+        try:
+            day_no = int(reminder.get("day_no", 0))
+            dow = int(reminder.get("dow", 0))
+            hour = int(reminder.get("hour", 0))
+            minute = int(reminder.get("minute", 0))
+        except (TypeError, ValueError):
+            continue
+        if day_no <= 0:
+            continue
+        await add_user_reminder(user_id, dow, hour, minute, day_no=day_no)
+    return {"ok": True}
+
+
+@app.post("/settings/clear_completions")
+async def settings_clear_completions(
+    ctx: AuthCtx = Depends(get_auth_ctx),
+):
+    user_id = ctx.user_id
+    await clear_day_completions(user_id)
+    return {"ok": True}
+
+
+@app.get("/settings/share")
+async def settings_share_results(
+    randomize: int | None = None,
+    ctx: AuthCtx = Depends(get_auth_ctx),
+):
+    user_id = ctx.user_id
+    view = await build_share_results_view(user_id, randomize=bool(randomize))
+    return {"ok": True, **view}
+
+
+@app.get("/settings/trainer")
+async def settings_trainer_overview(ctx: AuthCtx = Depends(get_auth_ctx)):
+    user_id = ctx.user_id
+    profile = await _fetch_trainer_profile(user_id)
+    link = await get_latest_trainer_link_for_trainee(user_id)
+    link_payload = None
+    if link:
+        link_id, trainer_user_id, status, can_edit_plan, trainer_label, _ = link
+        display_name = (trainer_label or "").strip() or await _user_display_name(trainer_user_id)
+        link_payload = {
+            "link_id": int(link_id),
+            "trainer_user_id": int(trainer_user_id),
+            "status": str(status),
+            "can_edit_plan": bool(can_edit_plan),
+            "display_name": display_name,
+        }
+
+    requests_payload = []
+    trainees_payload = []
+    if profile["is_trainer"]:
+        requests = await list_trainer_requests(user_id, limit=50, offset=0)
+        for link_id, trainee_user_id, _status, _created_at in requests:
+            display_name = await _user_display_name(int(trainee_user_id))
+            requests_payload.append(
+                {
+                    "link_id": int(link_id),
+                    "trainee_user_id": int(trainee_user_id),
+                    "display_name": display_name,
+                }
+            )
+        async with db.connect_db() as conn:
+            cur = await conn.execute(
+                """
+                SELECT id, trainee_user_id, trainee_label, can_edit_plan, created_at
+                FROM trainer_links
+                WHERE trainer_user_id = ? AND status = 'accepted'
+                ORDER BY created_at DESC
+                LIMIT 50
+                """,
+                (user_id,),
+            )
+            trainees = await cur.fetchall()
+        for link_id, trainee_user_id, trainee_label, can_edit_plan, _created_at in trainees:
+            label = str(trainee_label or "").strip()
+            display_name = label or await _user_display_name(int(trainee_user_id))
+            trainees_payload.append(
+                {
+                    "link_id": int(link_id),
+                    "trainee_user_id": int(trainee_user_id),
+                    "display_name": display_name,
+                    "can_edit_plan": bool(can_edit_plan),
+                }
+            )
+
+    return {
+        "ok": True,
+        "is_trainer": profile["is_trainer"],
+        "trainer_code": profile["trainer_code"],
+        "accepts_requests": profile["accepts_requests"],
+        "link": link_payload,
+        "requests": requests_payload,
+        "trainees": trainees_payload,
+    }
+
+
+@app.post("/settings/trainer/toggle")
+async def settings_trainer_toggle(
+    payload: dict = Body(default_factory=dict),
+    ctx: AuthCtx = Depends(get_auth_ctx),
+):
+    user_id = ctx.user_id
+    enabled = bool(payload.get("enabled"))
+    if enabled:
+        await _ensure_trainer_mode(user_id)
+        await reactivate_trainer_links(user_id)
+    else:
+        async with db.connect_db() as conn:
+            await conn.execute("UPDATE users SET is_trainer=0 WHERE id=?", (user_id,))
+            await conn.execute(
+                "UPDATE users SET trainer_accepts_requests=0 WHERE id=?", (user_id,)
+            )
+            await conn.commit()
+        await deactivate_trainer_links(user_id)
+    return {"ok": True}
+
+
+@app.post("/settings/trainer/requests")
+async def settings_trainer_requests(
+    payload: dict = Body(default_factory=dict),
+    ctx: AuthCtx = Depends(get_auth_ctx),
+):
+    user_id = ctx.user_id
+    enabled = bool(payload.get("enabled"))
+    await set_trainer_accepting_requests(user_id, enabled)
+    return {"ok": True}
+
+
+@app.post("/settings/trainer/request/{link_id}/{decision}")
+async def settings_trainer_request_decision(
+    link_id: int,
+    decision: str,
+    ctx: AuthCtx = Depends(get_auth_ctx),
+):
+    user_id = ctx.user_id
+    link = await _get_trainer_link_by_id(link_id)
+    if not link or int(link[1]) != user_id:
+        raise HTTPException(status_code=404, detail="Request not found")
+    status = str(link[3] or "")
+    if status != "pending":
+        raise HTTPException(status_code=400, detail="Request already processed")
+    if decision == "accept":
+        await update_trainer_link_status(int(link[0]), "accepted")
+    elif decision == "decline":
+        await update_trainer_link_status(int(link[0]), "declined")
+    else:
+        raise HTTPException(status_code=400, detail="Unsupported decision")
+    return {"ok": True}
+
+
+@app.post("/settings/trainer/link")
+async def settings_trainer_link(
+    payload: dict = Body(default_factory=dict),
+    ctx: AuthCtx = Depends(get_auth_ctx),
+):
+    user_id = ctx.user_id
+    code = str(payload.get("code") or "").strip()
+    if not code:
+        raise HTTPException(status_code=400, detail="Missing code")
+    trainer = await find_user_by_trainer_code(code)
+    if not trainer:
+        raise HTTPException(status_code=404, detail="Trainer not found")
+    trainer_id, _username, accepts_requests = trainer
+    if int(trainer_id) == user_id:
+        raise HTTPException(status_code=400, detail="Нельзя использовать свой код")
+    if not accepts_requests:
+        raise HTTPException(status_code=400, detail="Trainer is not accepting requests")
+    existing = await get_latest_trainer_link_for_trainee(user_id)
+    if existing and str(existing[2]) in {"pending", "accepted"}:
+        raise HTTPException(status_code=400, detail="Link already exists")
+    await create_trainer_request(int(trainer_id), user_id, can_edit_plan=False)
+    return {"ok": True}
+
+
+@app.post("/settings/trainer/detach")
+async def settings_trainer_detach(ctx: AuthCtx = Depends(get_auth_ctx)):
+    user_id = ctx.user_id
+    link = await get_active_trainer_link_for_trainee(user_id)
+    if not link:
+        return {"ok": True, "removed": False}
+    await update_trainer_link_status(int(link[0]), "removed")
+    return {"ok": True, "removed": True}
+
+
+@app.post("/settings/trainer/allow_edit")
+async def settings_trainer_allow_edit(
+    payload: dict = Body(default_factory=dict),
+    ctx: AuthCtx = Depends(get_auth_ctx),
+):
+    user_id = ctx.user_id
+    enabled = bool(payload.get("enabled"))
+    link = await get_active_trainer_link_for_trainee(user_id)
+    if not link:
+        raise HTTPException(status_code=404, detail="Link not found")
+    await update_trainer_link_permissions(int(link[0]), 1 if enabled else 0)
+    return {"ok": True}
+
+
+@app.post("/settings/trainer/label")
+async def settings_trainer_label(
+    payload: dict = Body(default_factory=dict),
+    ctx: AuthCtx = Depends(get_auth_ctx),
+):
+    user_id = ctx.user_id
+    link = await get_active_trainer_link_for_trainee(user_id)
+    if not link:
+        raise HTTPException(status_code=404, detail="Link not found")
+    label = str(payload.get("label") or "").strip() or None
+    await update_trainer_label(int(link[0]), label)
+    return {"ok": True}
+
+
+@app.post("/settings/trainer/trainee/{link_id}/label")
+async def settings_trainer_trainee_label(
+    link_id: int,
+    payload: dict = Body(default_factory=dict),
+    ctx: AuthCtx = Depends(get_auth_ctx),
+):
+    user_id = ctx.user_id
+    link = await _get_trainer_link_by_id(link_id)
+    if not link or int(link[1]) != user_id:
+        raise HTTPException(status_code=404, detail="Link not found")
+    label = str(payload.get("label") or "").strip() or None
+    await update_trainee_label(int(link_id), label)
+    return {"ok": True}
+
+
+@app.post("/settings/trainer/trainee/{trainee_user_id}/detach")
+async def settings_trainer_trainee_detach(
+    trainee_user_id: int,
+    ctx: AuthCtx = Depends(get_auth_ctx),
+):
+    user_id = ctx.user_id
+    link = await get_trainer_link(user_id, int(trainee_user_id))
+    if not link:
+        raise HTTPException(status_code=404, detail="Link not found")
+    await update_trainer_link_status(int(link[0]), "removed")
+    return {"ok": True}

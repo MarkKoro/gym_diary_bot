@@ -572,7 +572,59 @@
     .legend-dot { width: 14px; height: 14px; border-radius: 50%; }
       .search-input { width: 100%; padding: 12px 14px; border-radius: 12px; border: 1px solid var(--border); background: var(--card); color: var(--text); font-size: 15px; box-shadow: var(--shadow); }
       .empty-state { color: var(--muted); font-size: 14px; }
-      .settings-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px,1fr)); gap: 12px; }
+    .settings-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px,1fr)); gap: 12px; }
+    .settings-section { display: grid; gap: 12px; }
+    .settings-row { display: grid; gap: 8px; }
+    .settings-row.inline { grid-template-columns: minmax(0, 1fr) auto; align-items: center; }
+    .settings-row .label { font-weight: 700; font-size: 14px; }
+    .settings-row .hint { color: var(--muted); font-size: 13px; }
+    .settings-input, .settings-select {
+      width: 100%;
+      padding: 10px 12px;
+      border-radius: 12px;
+      border: 1px solid var(--border);
+      background: var(--bg);
+      color: var(--text);
+      font-size: 14px;
+    }
+    .settings-chip-row { display: flex; flex-wrap: wrap; gap: 6px; }
+    .settings-chip {
+      padding: 8px 10px;
+      border-radius: 10px;
+      border: 1px solid var(--border);
+      background: var(--card);
+      font-weight: 700;
+      cursor: pointer;
+    }
+    .settings-chip.active { border-color: var(--accent); color: var(--accent); }
+    .settings-list { display: grid; gap: 8px; }
+    .settings-list .list-row { align-items: flex-start; }
+    .settings-list .list-actions { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+    .settings-badge { font-size: 12px; padding: 4px 8px; border-radius: 999px; background: rgba(0,0,0,0.04); color: var(--muted); }
+    [data-theme="dark"] .settings-badge { background: rgba(255,255,255,0.06); }
+    .settings-pill { display: inline-flex; align-items: center; gap: 6px; padding: 6px 10px; border-radius: 999px; border: 1px solid var(--border); background: var(--bg); font-size: 12px; color: var(--muted); }
+    .settings-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+    .settings-actions .btn { flex: 1; min-width: 140px; }
+    .settings-code {
+      font-weight: 800;
+      font-size: 18px;
+      letter-spacing: 0.08em;
+      padding: 10px 12px;
+      border-radius: 12px;
+      border: 1px dashed var(--border);
+      background: color-mix(in srgb, var(--card) 82%, var(--bg));
+      text-align: center;
+    }
+    .settings-copy { display: flex; gap: 8px; flex-wrap: wrap; }
+    .settings-pre {
+      white-space: pre-wrap;
+      padding: 12px;
+      border-radius: 12px;
+      border: 1px solid var(--border);
+      background: var(--bg);
+      font-size: 13px;
+      color: var(--text);
+    }
     .anatomy-list { display: flex; flex-direction: column; gap: 10px; }
     .anatomy-row { display: grid; grid-template-columns: minmax(0,1fr) 130px; gap: 10px; align-items: center; padding: 10px 12px; border-radius: 12px; border: 1px solid var(--border); background: var(--bg); }
     .anatomy-controls { display: flex; align-items: center; gap: 8px; justify-content: flex-end; }
@@ -1077,6 +1129,7 @@
       <nav class="drawer-menu">
         <button class="menu-item active" data-route="today">Сегодня</button>
         <button class="menu-item" data-route="library">Статистика упражнений</button>
+        <button class="menu-item" data-route="settings">Настройки</button>
       </nav>
     </div>
   </div>
@@ -1089,6 +1142,12 @@
           <button id="menuBtn" class="icon-btn" aria-label="Открыть меню">
             <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
               <path d="M4 7h16M4 12h16M4 17h16"></path>
+            </svg>
+          </button>
+          <button id="settingsBtn" class="icon-btn" aria-label="Открыть настройки">
+            <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
+              <circle cx="12" cy="12" r="3.5"></circle>
+              <path d="M19.4 15a1 1 0 0 0 .2 1.1l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1 1 0 0 0-1.1-.2 1 1 0 0 0-.6.9V21a2 2 0 1 1-4 0v-.1a1 1 0 0 0-.6-.9 1 1 0 0 0-1.1.2l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1 1 0 0 0 .2-1.1 1 1 0 0 0-.9-.6H3a2 2 0 1 1 0-4h.1a1 1 0 0 0 .9-.6 1 1 0 0 0-.2-1.1l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1 1 0 0 0 1.1.2 1 1 0 0 0 .6-.9V3a2 2 0 1 1 4 0v.1a1 1 0 0 0 .6.9 1 1 0 0 0 1.1-.2l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1 1 0 0 0-.2 1.1 1 1 0 0 0 .9.6H21a2 2 0 1 1 0 4h-.1a1 1 0 0 0-.9.6z"></path>
             </svg>
           </button>
         </div>
@@ -1183,6 +1242,13 @@
         <div class="card" id="libraryCard">
           <div class="card-title">Статистика упражнений</div>
           <div id="libraryContent"></div>
+        </div>
+      </section>
+
+      <section id="screen-settings" class="screen" data-route="settings">
+        <div class="card">
+          <div class="card-title">Настройки</div>
+          <div id="settingsContent" class="settings-section"></div>
         </div>
       </section>
 
@@ -1414,6 +1480,7 @@
     const ROUTE_TITLES = {
       today: 'Сегодня',
       library: 'Статистика упражнений',
+      settings: 'Настройки',
     };
 
     const state = {
@@ -1468,6 +1535,31 @@
         currentExerciseId: null,
         currentExerciseName: '',
         historyIndex: {},
+      },
+      settings: {
+        loading: false,
+        workoutsPerWeek: 0,
+        days: [],
+        customGroups: [],
+        reminders: [],
+        notificationsEnabled: true,
+        timezone: '',
+        trainer: {
+          loading: false,
+          loaded: false,
+          isTrainer: false,
+          trainerCode: '',
+          acceptsRequests: true,
+          link: null,
+          requests: [],
+          trainees: [],
+        },
+        share: {
+          loading: false,
+          loaded: false,
+          text: '',
+          copyText: '',
+        },
       },
       menu: { openId: null },
       prompt: null,
@@ -2460,6 +2552,556 @@
       else if (state.library.view === 'details') renderHistoryDetails();
     }
 
+    function settingsDayLabel(day) {
+      const label = (day?.label || '').trim();
+      return label ? label : `День ${day?.day_index ?? ''}`.trim();
+    }
+
+    function formatDayOfWeek(value) {
+      const labels = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
+      const index = Number.isInteger(value) ? value : 0;
+      return labels[index] || labels[0];
+    }
+
+    function getReminderMap() {
+      const map = new Map();
+      (state.settings.reminders || []).forEach((rem) => {
+        if (!rem || !Number.isInteger(rem.day_no)) return;
+        map.set(rem.day_no, rem);
+      });
+      return map;
+    }
+
+    function renderTrainerHub() {
+      const trainer = state.settings.trainer || {};
+      const link = trainer.link;
+      const linkStatus = link?.status || 'none';
+      const requests = Array.isArray(trainer.requests) ? trainer.requests : [];
+      const trainees = Array.isArray(trainer.trainees) ? trainer.trainees : [];
+      const trainerCode = trainer.trainerCode || '';
+      const trainerCodeBlock = trainerCode
+        ? `
+          <div class="settings-row">
+            <div class="label">Ваш код тренера</div>
+            <div class="settings-code">${trainerCode}</div>
+            <div class="settings-copy">
+              <button class="btn small-btn" data-action="trainer-copy-code">Скопировать</button>
+              <button class="btn small-btn" data-action="trainer-share-code">Поделиться</button>
+            </div>
+          </div>
+        `
+        : '';
+
+      const pendingHtml = requests.length
+        ? `
+          <div class="settings-row">
+            <div class="label">Заявки от подопечных</div>
+            <div class="settings-list">
+              ${requests
+                .map(
+                  (req) => `
+                    <div class="list-row">
+                      <div class="list-text">
+                        <div class="label">${req.display_name}</div>
+                        <div class="list-subtitle">Запрос на связь</div>
+                      </div>
+                      <div class="list-actions">
+                        <button class="btn small-btn" data-action="trainer-request-accept" data-link-id="${req.link_id}">Принять</button>
+                        <button class="btn small-btn" data-action="trainer-request-decline" data-link-id="${req.link_id}">Отклонить</button>
+                      </div>
+                    </div>
+                  `
+                )
+                .join('')}
+            </div>
+          </div>
+        `
+        : `<div class="muted-inline">Заявок пока нет.</div>`;
+
+      const traineeHtml = trainees.length
+        ? `
+          <div class="settings-row">
+            <div class="label">Подопечные</div>
+            <div class="settings-list">
+              ${trainees
+                .map(
+                  (trainee) => `
+                    <div class="list-row">
+                      <div class="list-text">
+                        <div class="label">${trainee.display_name}</div>
+                        <div class="list-subtitle">Право менять план: ${trainee.can_edit_plan ? 'Вкл' : 'Выкл'}</div>
+                      </div>
+                      <div class="list-actions">
+                        <button class="btn small-btn" data-action="trainee-rename" data-link-id="${trainee.link_id}">Переименовать</button>
+                        <button class="btn small-btn" data-action="trainee-detach" data-trainee-id="${trainee.trainee_user_id}">Открепить</button>
+                      </div>
+                    </div>
+                  `
+                )
+                .join('')}
+            </div>
+          </div>
+        `
+        : `<div class="muted-inline">Подопечных пока нет.</div>`;
+
+      const traineeBlock = `
+        <div class="settings-row">
+          <div class="label">Подопечный</div>
+          <div class="hint">Введите код тренера, чтобы отправить заявку и связать дневник.</div>
+          <div class="settings-row">
+            <input class="settings-input" id="trainerCodeInput" placeholder="Код тренера" value="">
+            <button class="btn small-btn" data-action="trainer-attach">Отправить заявку</button>
+          </div>
+        </div>
+      `;
+
+      const linkStatusText = linkStatus === 'accepted'
+        ? 'связь подтверждена'
+        : linkStatus === 'pending'
+          ? 'заявка отправлена'
+          : linkStatus === 'trainer_disabled'
+            ? 'тренер отключил режим'
+            : 'нет';
+
+      const traineeControls = link
+        ? `
+          <div class="settings-row">
+            <div class="label">Текущий тренер</div>
+            <div class="settings-pill">Статус: ${linkStatusText}</div>
+            <div class="settings-list">
+              <div class="list-row">
+                <div class="list-text">
+                  <div class="label">${link.display_name}</div>
+                  <div class="list-subtitle">Право тренера менять план: ${link.can_edit_plan ? 'Вкл' : 'Выкл'}</div>
+                </div>
+                <div class="list-actions">
+                  <button class="btn small-btn" data-action="trainer-rename">Переименовать</button>
+                  <button class="btn small-btn" data-action="trainer-detach">Отвязаться</button>
+                </div>
+              </div>
+            </div>
+            <button class="btn small-btn" data-action="trainer-toggle-edit" data-enabled="${link.can_edit_plan ? '0' : '1'}">
+              ${link.can_edit_plan ? 'Запретить правки' : 'Разрешить правки'}
+            </button>
+          </div>
+        `
+        : '';
+
+      return `
+        <div class="settings-row">
+          <div class="label">Режим тренера</div>
+          <div class="settings-pill">Статус: ${trainer.isTrainer ? 'включён' : 'выключен'}</div>
+          <div class="settings-actions">
+            <button class="btn small-btn" data-action="trainer-toggle" data-enabled="${trainer.isTrainer ? '0' : '1'}">
+              ${trainer.isTrainer ? 'Выключить' : 'Включить'}
+            </button>
+            <button class="btn small-btn" data-action="trainer-requests-toggle" data-enabled="${trainer.acceptsRequests ? '0' : '1'}" ${trainer.isTrainer ? '' : 'disabled'}>
+              ${trainer.acceptsRequests ? 'Закрыть заявки' : 'Открыть заявки'}
+            </button>
+          </div>
+        </div>
+        ${trainerCodeBlock}
+        ${trainer.isTrainer ? pendingHtml : ''}
+        ${trainer.isTrainer ? traineeHtml : ''}
+        ${traineeControls}
+        ${traineeBlock}
+      `;
+    }
+
+    function renderSettings() {
+      const container = document.getElementById('settingsContent');
+      if (!container) return;
+      const s = state.settings;
+      const trainer = s.trainer || {};
+      if (s.loading && !s.days.length) {
+        container.innerHTML = '<div class="loading">Загружаем настройки…</div>';
+        return;
+      }
+      const workoutsPerWeek = s.workoutsPerWeek || s.days.length || 3;
+      const daysHtml = (s.days || [])
+        .map(
+          (day) => `
+            <div class="list-row">
+              <div class="list-text">
+                <div class="label">День ${day.day_index}</div>
+                <div class="list-subtitle">${settingsDayLabel(day)}</div>
+              </div>
+              <button class="btn small-btn" data-action="rename-day" data-day="${day.day_index}">Переименовать</button>
+            </div>
+          `
+        )
+        .join('');
+
+      const chips = Array.from({ length: 7 }, (_, i) => i + 1)
+        .map(
+          (count) => `
+            <button class="settings-chip ${count === workoutsPerWeek ? 'active' : ''}" data-action="set-days" data-count="${count}">
+              ${count}
+            </button>
+          `
+        )
+        .join('');
+
+      const groupHtml = (s.customGroups || [])
+        .map(
+          (group) => `
+            <div class="list-row">
+              <div class="list-text">
+                <div class="label">${group.name}</div>
+                <div class="list-subtitle">Пользовательская группа</div>
+              </div>
+              <button class="btn small-btn danger" data-action="delete-group" data-code="${group.code}">Удалить</button>
+            </div>
+          `
+        )
+        .join('');
+
+      const reminderMap = getReminderMap();
+      const remindersHtml = Array.from({ length: workoutsPerWeek }, (_, i) => i + 1)
+        .map((dayNo) => {
+          const rem = reminderMap.get(dayNo) || { dow: (dayNo - 1) % 7, hour: 9, minute: 0 };
+          const timeValue = `${String(rem.hour).padStart(2, '0')}:${String(rem.minute).padStart(2, '0')}`;
+          const options = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс']
+            .map((label, idx) => `<option value="${idx}" ${idx === rem.dow ? 'selected' : ''}>${label}</option>`)
+            .join('');
+          return `
+            <div class="list-row" data-reminder-day="${dayNo}">
+              <div class="list-text">
+                <div class="label">День ${dayNo}</div>
+                <div class="list-subtitle">Напоминание</div>
+              </div>
+              <div class="settings-row">
+                <select class="settings-select" data-reminder-dow>${options}</select>
+                <input class="settings-input" type="time" data-reminder-time value="${timeValue}">
+              </div>
+            </div>
+          `;
+        })
+        .join('');
+
+      const shareText = s.share.text || 'Здесь появится текст с вашим прогрессом.';
+
+      container.innerHTML = `
+        <div class="card">
+          <div class="card-title">План тренировок</div>
+          <div class="settings-row">
+            <div class="label">Количество тренировок в неделю</div>
+            <div class="settings-chip-row">${chips}</div>
+          </div>
+          <div class="settings-list">${daysHtml || '<div class="muted-inline">Нет активных дней.</div>'}</div>
+        </div>
+
+        <div class="card">
+          <div class="card-title">Мои группы мышц</div>
+          <div class="settings-list">${groupHtml || '<div class="muted-inline">Пользовательских групп нет.</div>'}</div>
+        </div>
+
+        <div class="card">
+          <div class="card-title">Уведомления</div>
+          <div class="settings-row">
+            <div class="label">Уведомления</div>
+            <div class="settings-pill">Статус: ${s.notificationsEnabled ? 'включены' : 'выключены'}</div>
+            <div class="settings-actions">
+              <button class="btn small-btn" data-action="toggle-notifications">
+                ${s.notificationsEnabled ? 'Выключить' : 'Включить'}
+              </button>
+            </div>
+          </div>
+          <div class="settings-row">
+            <div class="hint">Часовой пояс: ${s.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'}</div>
+          </div>
+          <div class="settings-list">${remindersHtml}</div>
+          <div class="settings-actions">
+            <button class="btn primary" data-action="save-reminders">Сохранить уведомления</button>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-title">Тренер / подопечный</div>
+          ${trainer.loading ? '<div class="loading">Загружаем данные…</div>' : renderTrainerHub()}
+        </div>
+
+        <div class="card">
+          <div class="card-title">Поделиться результатом</div>
+          <div class="settings-pre">${shareText}</div>
+          <div class="settings-actions">
+            <button class="btn small-btn" data-action="share-copy">Скопировать текст</button>
+            <button class="btn small-btn" data-action="share-shuffle">Сменить упражнения</button>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-title">Сервисные действия</div>
+          <div class="settings-actions">
+            <button class="btn danger" data-action="clear-completions">Убрать галочки</button>
+          </div>
+        </div>
+      `;
+    }
+
+    async function loadSettingsOverview() {
+      state.settings.loading = true;
+      renderSettings();
+      try {
+        const data = await apiFetch('/gymapi/settings/overview');
+        state.settings.workoutsPerWeek = data.workouts_per_week || 0;
+        state.settings.days = data.days || [];
+        state.settings.customGroups = data.custom_groups || [];
+        state.settings.reminders = data.reminders || [];
+        state.settings.notificationsEnabled = data.notifications_enabled !== false;
+        state.settings.timezone = data.timezone || '';
+      } catch (e) {
+        toast('Не удалось загрузить настройки');
+      } finally {
+        state.settings.loading = false;
+        renderSettings();
+      }
+    }
+
+    async function loadTrainerOverview() {
+      state.settings.trainer.loading = true;
+      renderSettings();
+      try {
+        const data = await apiFetch('/gymapi/settings/trainer');
+        state.settings.trainer = {
+          ...state.settings.trainer,
+          loading: false,
+          loaded: true,
+          isTrainer: !!data.is_trainer,
+          trainerCode: data.trainer_code || '',
+          acceptsRequests: data.accepts_requests !== false,
+          link: data.link || null,
+          requests: data.requests || [],
+          trainees: data.trainees || [],
+        };
+      } catch (e) {
+        toast('Не удалось загрузить тренерские настройки');
+        state.settings.trainer.loading = false;
+      } finally {
+        renderSettings();
+      }
+    }
+
+    async function loadShareResults(randomize = false) {
+      state.settings.share.loading = true;
+      renderSettings();
+      try {
+        const suffix = randomize ? '?randomize=1' : '';
+        const data = await apiFetch(`/gymapi/settings/share${suffix}`);
+        state.settings.share.text = data.text || '';
+        state.settings.share.copyText = data.copy_text || data.text || '';
+        state.settings.share.loaded = true;
+      } catch (e) {
+        toast('Не удалось загрузить текст шеринга');
+      } finally {
+        state.settings.share.loading = false;
+        renderSettings();
+      }
+    }
+
+    async function saveRemindersFromUI() {
+      const rows = Array.from(document.querySelectorAll('[data-reminder-day]'));
+      const reminders = rows
+        .map((row) => {
+          const dayNo = Number(row.dataset.reminderDay || 0);
+          const dow = Number(row.querySelector('[data-reminder-dow]')?.value ?? 0);
+          const time = row.querySelector('[data-reminder-time]')?.value || '09:00';
+          const [hour, minute] = time.split(':').map((value) => Number(value));
+          return {
+            day_no: dayNo,
+            dow: Number.isFinite(dow) ? dow : 0,
+            hour: Number.isFinite(hour) ? hour : 9,
+            minute: Number.isFinite(minute) ? minute : 0,
+          };
+        })
+        .filter((item) => item.day_no > 0);
+      const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || state.settings.timezone || 'UTC';
+      await apiFetch('/gymapi/settings/reminders', {
+        method: 'POST',
+        body: JSON.stringify({
+          enabled: state.settings.notificationsEnabled,
+          timezone,
+          reminders,
+        }),
+      });
+      state.settings.timezone = timezone;
+      state.settings.reminders = reminders;
+      toast('Уведомления сохранены ✅');
+      renderSettings();
+    }
+
+    function setupSettingsHandlers() {
+      const container = document.getElementById('settingsContent');
+      if (!container) return;
+      container.addEventListener('click', async (event) => {
+        const target = event.target.closest('[data-action]');
+        if (!target) return;
+        const action = target.dataset.action;
+        try {
+          if (action === 'set-days') {
+            const count = Number(target.dataset.count || 0);
+            if (!count) return;
+            const data = await apiFetch('/gymapi/settings/workouts_per_week', {
+              method: 'POST',
+              body: JSON.stringify({ value: count }),
+            });
+            state.settings.workoutsPerWeek = data.workouts_per_week || count;
+            state.settings.days = data.days || [];
+            await loadSettingsOverview();
+            return;
+          }
+          if (action === 'rename-day') {
+            const day = Number(target.dataset.day || 0);
+            const current = settingsDayLabel(state.settings.days.find((d) => d.day_index === day));
+            const label = prompt(`Новое название для Дня ${day}:`, current || '');
+            if (label === null) return;
+            await apiFetch(`/gymapi/settings/days/${day}/rename`, {
+              method: 'POST',
+              body: JSON.stringify({ label }),
+            });
+            await loadSettingsOverview();
+            toast('День переименован ✅');
+            return;
+          }
+          if (action === 'delete-group') {
+            const code = target.dataset.code;
+            if (!code) return;
+            await apiFetch(`/gymapi/settings/custom_groups/${encodeURIComponent(code)}`, { method: 'DELETE' });
+            await loadSettingsOverview();
+            toast('Группа удалена');
+            return;
+          }
+          if (action === 'toggle-notifications') {
+            state.settings.notificationsEnabled = !state.settings.notificationsEnabled;
+            renderSettings();
+            return;
+          }
+          if (action === 'save-reminders') {
+            await saveRemindersFromUI();
+            return;
+          }
+          if (action === 'clear-completions') {
+            await apiFetch('/gymapi/settings/clear_completions', { method: 'POST', body: JSON.stringify({}) });
+            toast('Галочки сброшены');
+            return;
+          }
+          if (action === 'share-copy') {
+            if (!state.settings.share.loaded) await loadShareResults();
+            await navigator.clipboard.writeText(state.settings.share.copyText || state.settings.share.text || '');
+            toast('Текст скопирован ✅');
+            return;
+          }
+          if (action === 'share-shuffle') {
+            await loadShareResults(true);
+            return;
+          }
+          if (action === 'trainer-toggle') {
+            const enabled = target.dataset.enabled === '1';
+            await apiFetch('/gymapi/settings/trainer/toggle', {
+              method: 'POST',
+              body: JSON.stringify({ enabled }),
+            });
+            await loadTrainerOverview();
+            return;
+          }
+          if (action === 'trainer-requests-toggle') {
+            const enabled = target.dataset.enabled === '1';
+            await apiFetch('/gymapi/settings/trainer/requests', {
+              method: 'POST',
+              body: JSON.stringify({ enabled }),
+            });
+            await loadTrainerOverview();
+            return;
+          }
+          if (action === 'trainer-request-accept' || action === 'trainer-request-decline') {
+            const linkId = target.dataset.linkId;
+            if (!linkId) return;
+            const verdict = action === 'trainer-request-accept' ? 'accept' : 'decline';
+            await apiFetch(`/gymapi/settings/trainer/request/${linkId}/${verdict}`, { method: 'POST', body: JSON.stringify({}) });
+            await loadTrainerOverview();
+            return;
+          }
+          if (action === 'trainer-attach') {
+            const input = document.getElementById('trainerCodeInput');
+            const code = (input?.value || '').trim();
+            if (!code) {
+              toast('Введите код тренера');
+              return;
+            }
+            await apiFetch('/gymapi/settings/trainer/link', {
+              method: 'POST',
+              body: JSON.stringify({ code }),
+            });
+            if (input) input.value = '';
+            await loadTrainerOverview();
+            toast('Заявка отправлена');
+            return;
+          }
+          if (action === 'trainer-detach') {
+            await apiFetch('/gymapi/settings/trainer/detach', { method: 'POST', body: JSON.stringify({}) });
+            await loadTrainerOverview();
+            toast('Связь удалена');
+            return;
+          }
+          if (action === 'trainer-toggle-edit') {
+            const enabled = target.dataset.enabled === '1';
+            await apiFetch('/gymapi/settings/trainer/allow_edit', {
+              method: 'POST',
+              body: JSON.stringify({ enabled }),
+            });
+            await loadTrainerOverview();
+            return;
+          }
+          if (action === 'trainer-rename') {
+            const label = prompt('Как подписать тренера?', '');
+            if (label === null) return;
+            await apiFetch('/gymapi/settings/trainer/label', {
+              method: 'POST',
+              body: JSON.stringify({ label }),
+            });
+            await loadTrainerOverview();
+            return;
+          }
+          if (action === 'trainee-rename') {
+            const linkId = target.dataset.linkId;
+            if (!linkId) return;
+            const label = prompt('Как подписать подопечного?', '');
+            if (label === null) return;
+            await apiFetch(`/gymapi/settings/trainer/trainee/${linkId}/label`, {
+              method: 'POST',
+              body: JSON.stringify({ label }),
+            });
+            await loadTrainerOverview();
+            return;
+          }
+          if (action === 'trainee-detach') {
+            const traineeId = target.dataset.traineeId;
+            if (!traineeId) return;
+            await apiFetch(`/gymapi/settings/trainer/trainee/${traineeId}/detach`, { method: 'POST', body: JSON.stringify({}) });
+            await loadTrainerOverview();
+            return;
+          }
+          if (action === 'trainer-copy-code') {
+            await navigator.clipboard.writeText(state.settings.trainer.trainerCode || '');
+            toast('Код скопирован ✅');
+            return;
+          }
+          if (action === 'trainer-share-code') {
+            const code = state.settings.trainer.trainerCode || '';
+            const shareText = `Мой код тренера: ${code}`;
+            if (navigator.share) {
+              await navigator.share({ text: shareText });
+            } else {
+              await navigator.clipboard.writeText(shareText);
+              toast('Код скопирован ✅');
+            }
+          }
+        } catch (err) {
+          toast('Ошибка связи. Попробуй ещё раз.');
+        }
+      });
+    }
+
     async function loadLibraryGroups() {
       state.library.loading = true;
       renderLibrary();
@@ -2643,6 +3285,12 @@
         renderLibrary();
         if (!state.library.groups.length) loadLibraryGroups().catch(console.error);
       }
+      if (normalized === 'settings') {
+        renderSettings();
+        if (!state.settings.days.length && !state.settings.loading) loadSettingsOverview();
+        if (!state.settings.trainer.loaded && !state.settings.trainer.loading) loadTrainerOverview();
+        if (!state.settings.share.loaded && !state.settings.share.loading) loadShareResults();
+      }
     }
 
     function navigateTo(route, replace = false) {
@@ -2686,6 +3334,7 @@
 
     function setupNavigation() {
       document.getElementById('menuBtn').addEventListener('click', toggleDrawer);
+      document.getElementById('settingsBtn').addEventListener('click', () => navigateTo('settings'));
       document.getElementById('closeDrawer').addEventListener('click', closeDrawer);
       document.getElementById('drawerOverlay').addEventListener('click', (e) => { if (e.target.id === 'drawerOverlay') closeDrawer(); });
       document.querySelectorAll('.menu-item').forEach((btn) => btn.addEventListener('click', () => navigateTo(btn.dataset.route)));
@@ -5305,6 +5954,7 @@
 
     async function init() {
       setupNavigation();
+      setupSettingsHandlers();
       openConfirmModal = setupModal();
       bindEvents();
       bindTimer();
