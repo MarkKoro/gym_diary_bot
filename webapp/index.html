@@ -605,6 +605,28 @@
     .settings-pill { display: inline-flex; align-items: center; gap: 6px; padding: 6px 10px; border-radius: 999px; border: 1px solid var(--border); background: var(--bg); font-size: 12px; color: var(--muted); }
     .settings-actions { display: flex; gap: 8px; flex-wrap: wrap; }
     .settings-actions .btn { flex: 1; min-width: 140px; }
+    .settings-back { align-self: flex-start; }
+    .settings-menu { display: grid; gap: 12px; }
+    .settings-menu-group { display: grid; gap: 8px; }
+    .settings-menu-title { font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
+    .settings-menu-item {
+      border: 1px solid var(--border);
+      background: var(--bg);
+      color: var(--text);
+      border-radius: 12px;
+      padding: 12px 14px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 15px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    .settings-menu-item:hover { background: rgba(0,0,0,0.04); }
+    [data-theme="dark"] .settings-menu-item:hover { background: rgba(255,255,255,0.06); }
+    .settings-menu-item.danger { color: var(--danger); }
+    .settings-menu-divider { height: 1px; background: var(--border); }
+    .settings-menu-arrow { color: var(--muted); font-weight: 600; }
     .settings-code {
       font-weight: 800;
       font-size: 18px;
@@ -1537,6 +1559,7 @@
         historyIndex: {},
       },
       settings: {
+        view: 'menu',
         loading: false,
         workoutsPerWeek: 0,
         days: [],
@@ -2572,6 +2595,59 @@
       return map;
     }
 
+    const FALLBACK_TIMEZONES = [
+      'UTC',
+      'Europe/Kaliningrad',
+      'Europe/Moscow',
+      'Europe/Samara',
+      'Asia/Yekaterinburg',
+      'Asia/Omsk',
+      'Asia/Krasnoyarsk',
+      'Asia/Irkutsk',
+      'Asia/Yakutsk',
+      'Asia/Vladivostok',
+      'Asia/Magadan',
+      'Asia/Kamchatka',
+    ];
+    let cachedTimezones = null;
+
+    function getTimezones() {
+      if (cachedTimezones) return cachedTimezones;
+      let zones = [];
+      try {
+        if (typeof Intl.supportedValuesOf === 'function') {
+          zones = Intl.supportedValuesOf('timeZone');
+        }
+      } catch (_) {}
+      if (!Array.isArray(zones) || !zones.length) {
+        zones = FALLBACK_TIMEZONES.slice();
+      }
+      cachedTimezones = zones;
+      return zones;
+    }
+
+    function getTimezoneOffsetMinutes(timezone) {
+      try {
+        const now = new Date();
+        const localeString = now.toLocaleString('en-US', { timeZone: timezone });
+        const tzDate = new Date(localeString);
+        const diffMinutes = Math.round((tzDate - now) / 60000);
+        return Number.isFinite(diffMinutes) ? diffMinutes : 0;
+      } catch (_) {
+        return 0;
+      }
+    }
+
+    function formatTimezoneLabel(timezone) {
+      if (!timezone) return 'UTC';
+      const offset = getTimezoneOffsetMinutes(timezone);
+      const sign = offset >= 0 ? '+' : '-';
+      const abs = Math.abs(offset);
+      const hours = String(Math.floor(abs / 60)).padStart(2, '0');
+      const minutes = String(abs % 60).padStart(2, '0');
+      return `UTC${sign}${hours}:${minutes} · ${timezone}`;
+    }
+
     function renderTrainerHub() {
       const trainer = state.settings.trainer || {};
       const link = trainer.link;
@@ -2713,8 +2789,59 @@
       if (!container) return;
       const s = state.settings;
       const trainer = s.trainer || {};
-      if (s.loading && !s.days.length) {
-        container.innerHTML = '<div class="loading">Загружаем настройки…</div>';
+      const view = s.view || 'menu';
+      const backButton = '<button class="btn small-btn settings-back" data-action="settings-back">← К списку настроек</button>';
+      if (view === 'menu') {
+        container.innerHTML = `
+          <div class="card">
+            <div class="card-title">Выберите раздел настроек</div>
+            <div class="settings-menu">
+              <div class="settings-menu-group">
+                <div class="settings-menu-title">План и тренировки</div>
+                <button class="settings-menu-item" data-action="open-settings" data-section="plan">
+                  <span>План тренировок</span>
+                  <span class="settings-menu-arrow">›</span>
+                </button>
+                <button class="settings-menu-item" data-action="open-settings" data-section="groups">
+                  <span>Мои группы мышц</span>
+                  <span class="settings-menu-arrow">›</span>
+                </button>
+              </div>
+              <div class="settings-menu-divider"></div>
+              <div class="settings-menu-group">
+                <div class="settings-menu-title">Уведомления</div>
+                <button class="settings-menu-item" data-action="open-settings" data-section="notifications">
+                  <span>Уведомления и часовой пояс</span>
+                  <span class="settings-menu-arrow">›</span>
+                </button>
+              </div>
+              <div class="settings-menu-divider"></div>
+              <div class="settings-menu-group">
+                <div class="settings-menu-title">Связи и обмен</div>
+                <button class="settings-menu-item" data-action="open-settings" data-section="trainer">
+                  <span>Тренер / подопечный</span>
+                  <span class="settings-menu-arrow">›</span>
+                </button>
+                <button class="settings-menu-item" data-action="open-settings" data-section="share">
+                  <span>Поделиться результатом</span>
+                  <span class="settings-menu-arrow">›</span>
+                </button>
+              </div>
+              <div class="settings-menu-divider"></div>
+              <div class="settings-menu-group">
+                <div class="settings-menu-title">Сервис</div>
+                <button class="settings-menu-item danger" data-action="open-settings" data-section="service">
+                  <span>Сервисные действия</span>
+                  <span class="settings-menu-arrow">›</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        `;
+        return;
+      }
+      if (s.loading && !s.days.length && ['plan', 'groups', 'notifications'].includes(view)) {
+        container.innerHTML = `${backButton}<div class="loading">Загружаем настройки…</div>`;
         return;
       }
       const workoutsPerWeek = s.workoutsPerWeek || s.days.length || 3;
@@ -2781,62 +2908,83 @@
 
       const shareText = s.share.text || 'Здесь появится текст с вашим прогрессом.';
 
-      container.innerHTML = `
-        <div class="card">
-          <div class="card-title">План тренировок</div>
-          <div class="settings-row">
-            <div class="label">Количество тренировок в неделю</div>
-            <div class="settings-chip-row">${chips}</div>
+      const fallbackTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+      const selectedTimezone = s.timezone || fallbackTimezone;
+      const timezoneList = getTimezones();
+      const timezoneOptions = (timezoneList.includes(selectedTimezone)
+        ? timezoneList
+        : [selectedTimezone, ...timezoneList])
+        .map((tz) => `<option value="${tz}" ${tz === selectedTimezone ? 'selected' : ''}>${formatTimezoneLabel(tz)}</option>`)
+        .join('');
+      const timezoneLabel = formatTimezoneLabel(selectedTimezone);
+
+      const sections = {
+        plan: `
+          <div class="card">
+            <div class="card-title">План тренировок</div>
+            <div class="settings-row">
+              <div class="label">Количество тренировок в неделю</div>
+              <div class="settings-chip-row">${chips}</div>
+            </div>
+            <div class="settings-list">${daysHtml || '<div class="muted-inline">Нет активных дней.</div>'}</div>
           </div>
-          <div class="settings-list">${daysHtml || '<div class="muted-inline">Нет активных дней.</div>'}</div>
-        </div>
-
-        <div class="card">
-          <div class="card-title">Мои группы мышц</div>
-          <div class="settings-list">${groupHtml || '<div class="muted-inline">Пользовательских групп нет.</div>'}</div>
-        </div>
-
-        <div class="card">
-          <div class="card-title">Уведомления</div>
-          <div class="settings-row">
-            <div class="label">Уведомления</div>
-            <div class="settings-pill">Статус: ${s.notificationsEnabled ? 'включены' : 'выключены'}</div>
+        `,
+        groups: `
+          <div class="card">
+            <div class="card-title">Мои группы мышц</div>
+            <div class="settings-list">${groupHtml || '<div class="muted-inline">Пользовательских групп нет.</div>'}</div>
+          </div>
+        `,
+        notifications: `
+          <div class="card">
+            <div class="card-title">Уведомления</div>
+            <div class="settings-row">
+              <div class="label">Уведомления</div>
+              <div class="settings-pill">Статус: ${s.notificationsEnabled ? 'включены' : 'выключены'}</div>
+              <div class="settings-actions">
+                <button class="btn small-btn" data-action="toggle-notifications">
+                  ${s.notificationsEnabled ? 'Выключить' : 'Включить'}
+                </button>
+              </div>
+            </div>
+            <div class="settings-row">
+              <div class="label">Часовой пояс</div>
+              <div class="hint">Используется для времени уведомлений: ${timezoneLabel}</div>
+              <select class="settings-select" data-settings-timezone>${timezoneOptions}</select>
+            </div>
+            <div class="settings-list">${remindersHtml}</div>
             <div class="settings-actions">
-              <button class="btn small-btn" data-action="toggle-notifications">
-                ${s.notificationsEnabled ? 'Выключить' : 'Включить'}
-              </button>
+              <button class="btn primary" data-action="save-reminders">Сохранить уведомления</button>
             </div>
           </div>
-          <div class="settings-row">
-            <div class="hint">Часовой пояс: ${s.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'}</div>
+        `,
+        trainer: `
+          <div class="card">
+            <div class="card-title">Тренер / подопечный</div>
+            ${trainer.loading ? '<div class="loading">Загружаем данные…</div>' : renderTrainerHub()}
           </div>
-          <div class="settings-list">${remindersHtml}</div>
-          <div class="settings-actions">
-            <button class="btn primary" data-action="save-reminders">Сохранить уведомления</button>
+        `,
+        share: `
+          <div class="card">
+            <div class="card-title">Поделиться результатом</div>
+            <div class="settings-pre">${shareText}</div>
+            <div class="settings-actions">
+              <button class="btn small-btn" data-action="share-copy">Скопировать текст</button>
+              <button class="btn small-btn" data-action="share-shuffle">Сменить упражнения</button>
+            </div>
           </div>
-        </div>
+        `,
+        service: `
+          <div class="card">
+            <div class="card-title">Сервисные действия</div>
+            <div class="settings-actions">
+              <button class="btn danger" data-action="clear-completions">Убрать галочки</button>
+            </div>
+          </div>
+        `,
+      };
 
-        <div class="card">
-          <div class="card-title">Тренер / подопечный</div>
-          ${trainer.loading ? '<div class="loading">Загружаем данные…</div>' : renderTrainerHub()}
-        </div>
-
-        <div class="card">
-          <div class="card-title">Поделиться результатом</div>
-          <div class="settings-pre">${shareText}</div>
-          <div class="settings-actions">
-            <button class="btn small-btn" data-action="share-copy">Скопировать текст</button>
-            <button class="btn small-btn" data-action="share-shuffle">Сменить упражнения</button>
-          </div>
-        </div>
-
-        <div class="card">
-          <div class="card-title">Сервисные действия</div>
-          <div class="settings-actions">
-            <button class="btn danger" data-action="clear-completions">Убрать галочки</button>
-          </div>
-        </div>
-      `;
+      container.innerHTML = `${backButton}${sections[view] || sections.plan}`;
     }
 
     async function loadSettingsOverview() {
@@ -2915,7 +3063,11 @@
           };
         })
         .filter((item) => item.day_no > 0);
-      const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || state.settings.timezone || 'UTC';
+      const timezone =
+        document.querySelector('[data-settings-timezone]')?.value
+        || state.settings.timezone
+        || Intl.DateTimeFormat().resolvedOptions().timeZone
+        || 'UTC';
       await apiFetch('/gymapi/settings/reminders', {
         method: 'POST',
         body: JSON.stringify({
@@ -2938,6 +3090,17 @@
         if (!target) return;
         const action = target.dataset.action;
         try {
+          if (action === 'open-settings') {
+            const section = target.dataset.section || 'menu';
+            state.settings.view = section;
+            renderSettings();
+            return;
+          }
+          if (action === 'settings-back') {
+            state.settings.view = 'menu';
+            renderSettings();
+            return;
+          }
           if (action === 'set-days') {
             const count = Number(target.dataset.count || 0);
             if (!count) return;
@@ -3099,6 +3262,12 @@
         } catch (err) {
           toast('Ошибка связи. Попробуй ещё раз.');
         }
+      });
+      container.addEventListener('change', (event) => {
+        const target = event.target.closest('[data-settings-timezone]');
+        if (!target) return;
+        state.settings.timezone = target.value;
+        renderSettings();
       });
     }
 
@@ -3286,6 +3455,7 @@
         if (!state.library.groups.length) loadLibraryGroups().catch(console.error);
       }
       if (normalized === 'settings') {
+        state.settings.view = 'menu';
         renderSettings();
         if (!state.settings.days.length && !state.settings.loading) loadSettingsOverview();
         if (!state.settings.trainer.loaded && !state.settings.trainer.loading) loadTrainerOverview();
@@ -3327,7 +3497,12 @@
       if (state.manage?.mode === 'delete') { setManageMode('normal'); return; }
       if (state.currentRoute === 'library' && state.library.view !== 'groups') {
         if (state.library.view === 'details') { state.library.view = 'list'; renderLibrary(); return; }
-        if (state.library.view === 'list') { state.library.view = 'groups'; renderLibrary(); return; }
+      if (state.library.view === 'list') { state.library.view = 'groups'; renderLibrary(); return; }
+      }
+      if (state.currentRoute === 'settings' && state.settings.view !== 'menu') {
+        state.settings.view = 'menu';
+        renderSettings();
+        return;
       }
       if (state.currentRoute !== 'today') navigateTo('today');
     }
