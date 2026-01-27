@@ -3684,6 +3684,15 @@ async def update_trainer_label(link_id: int, trainer_label: str | None):
         await db.commit()
 
 
+async def update_trainee_label(link_id: int, trainee_label: str | None):
+    async with connect_db() as db:
+        await db.execute(
+            "UPDATE trainer_links SET trainee_label = ? WHERE id = ?",
+            (trainee_label, link_id),
+        )
+        await db.commit()
+
+
 async def list_user_exercises_for_mapping(
     user_id: int, query: str | None = None, muscle: str | None = None
 ):
