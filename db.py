@@ -1244,7 +1244,7 @@ async def set_workouts_per_week(user_id: int, n: int) -> list[tuple[int, int, in
             await db.execute(
                 """
                 INSERT INTO user_days(user_id, day_index, label, is_active) VALUES(?,?,?,?)
-                ON CONFLICT(user_id, day_index) DO UPDATE SET label=excluded.label, is_active=excluded.is_active
+                ON CONFLICT(user_id, day_index) DO UPDATE SET is_active=excluded.is_active
                 """,
                 (user_id, i, label, is_active),
             )
