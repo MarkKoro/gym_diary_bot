@@ -45,6 +45,7 @@ from db import (
     remove_user_muscle_group,
     rename_day,
     set_trainer_accepting_requests,
+    set_app_meta,
     set_user_notifications_enabled,
     set_user_timezone,
     set_workouts_per_week,
@@ -1215,9 +1216,17 @@ def _sort_groups(items: dict[str, int]):
 async def list_library_groups(ctx: AuthCtx = Depends(get_auth_ctx)):
     user_id = ctx.user_id
     counters = await db.list_user_library_groups(user_id)
+    custom_groups = await list_user_muscle_groups(user_id)
+    custom_map = {code: name for code, name in custom_groups}
     groups = []
     for code, count in _sort_groups(counters):
-        groups.append({"code": code, "name": MUSCLE_NAME_MAP.get(code, "Не указано"), "count": int(count)})
+        groups.append(
+            {
+                "code": code,
+                "name": custom_map.get(code, MUSCLE_NAME_MAP.get(code, "Не указано")),
+                "count": int(count),
+            }
+        )
     return {"ok": True, "groups": groups}
 
 
@@ -2190,6 +2199,7 @@ async def settings_update_reminders(
         if day_no <= 0:
             continue
         await add_user_reminder(user_id, dow, hour, minute, day_no=day_no)
+    await set_app_meta("reminders_updated_at", datetime.now(UTC).isoformat())
     return {"ok": True}
 
 

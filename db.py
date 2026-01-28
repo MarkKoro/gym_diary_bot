@@ -1403,22 +1403,62 @@ async def remove_user_muscle_group(user_id: int, code: str) -> bool:
         return False
     async with connect_db() as db:
         cur = await db.execute(
+            "SELECT 1 FROM user_muscle_groups WHERE id=? AND user_id=?",
+            (group_id, user_id),
+        )
+        if not await cur.fetchone():
+            return False
+        cur = await db.execute(
+            "SELECT id FROM exercises WHERE muscle_group=?",
+            (code,),
+        )
+        exercise_ids = [int(r[0]) for r in await cur.fetchall() if r and r[0] is not None]
+        if exercise_ids:
+            placeholders = ",".join("?" for _ in exercise_ids)
+            cur = await db.execute(
+                f"SELECT id FROM user_exercises WHERE exercise_id IN ({placeholders})",
+                tuple(exercise_ids),
+            )
+            ue_ids = [int(r[0]) for r in await cur.fetchall() if r and r[0] is not None]
+            if ue_ids:
+                ue_placeholders = ",".join("?" for _ in ue_ids)
+                await db.execute(
+                    f"DELETE FROM running_entries WHERE user_exercise_id IN ({ue_placeholders})",
+                    tuple(ue_ids),
+                )
+                await db.execute(
+                    f"DELETE FROM sets WHERE user_exercise_id IN ({ue_placeholders})",
+                    tuple(ue_ids),
+                )
+                await db.execute(
+                    f"DELETE FROM session_exercises WHERE user_exercise_id IN ({ue_placeholders})",
+                    tuple(ue_ids),
+                )
+            await db.execute(
+                f"DELETE FROM exercise_baseline WHERE exercise_id IN ({placeholders})",
+                tuple(exercise_ids),
+            )
+            await db.execute(
+                f"DELETE FROM user_exercise_muscles WHERE exercise_id IN ({placeholders})",
+                tuple(exercise_ids),
+            )
+            await db.execute(
+                f"DELETE FROM exercise_muscles WHERE exercise_id IN ({placeholders})",
+                tuple(exercise_ids),
+            )
+            await db.execute(
+                f"DELETE FROM user_exercises WHERE exercise_id IN ({placeholders})",
+                tuple(exercise_ids),
+            )
+            await db.execute(
+                f"DELETE FROM exercises WHERE id IN ({placeholders})",
+                tuple(exercise_ids),
+            )
+        cur = await db.execute(
             "DELETE FROM user_muscle_groups WHERE id=? AND user_id=?",
             (group_id, user_id),
         )
         removed = cur.rowcount > 0
-        if removed:
-            await db.execute(
-                """
-                UPDATE user_exercises
-                SET is_archived=1
-                WHERE user_id=?
-                  AND exercise_id IN (
-                      SELECT id FROM exercises WHERE muscle_group=?
-                  )
-                """,
-                (user_id, code),
-            )
         await db.commit()
         return removed
 

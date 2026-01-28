@@ -650,6 +650,16 @@
       background: color-mix(in srgb, var(--card) 82%, var(--bg));
       text-align: center;
     }
+    .trainer-hub { display: grid; gap: 14px; }
+    .trainer-hub .label { font-size: 16px; }
+    .trainer-hub .settings-pill { font-size: 13px; }
+    .trainer-hub .list-row { padding: 14px; }
+    .trainer-hub .list-subtitle { font-size: 14px; }
+    .trainer-hub .list-actions .btn { font-size: 14px; padding: 10px 12px; }
+    .trainer-code-block { padding: 12px; border-radius: 14px; border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--border)); background: color-mix(in srgb, var(--accent) 12%, var(--card)); box-shadow: var(--shadow); }
+    .trainer-code-block .settings-code { font-size: 16px; text-align: center; }
+    .trainer-code-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+    .trainer-code-actions .btn { flex: 1; min-width: 140px; }
     .settings-copy { display: flex; gap: 8px; flex-wrap: wrap; }
     .settings-pre {
       white-space: pre-wrap;
@@ -1020,14 +1030,14 @@
       border-radius: 14px;
       border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--border));
       background: color-mix(in srgb, var(--card) 82%, var(--bg));
-      padding: 12px;
+      padding: 16px;
       display: grid;
       gap: 10px;
       box-shadow: var(--shadow);
     }
     .trainee-card-header { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
-    .trainee-card-title { font-weight: 800; font-size: 15px; }
-    .trainee-card-subtitle { color: var(--muted); font-size: 13px; }
+    .trainee-card-title { font-weight: 800; font-size: 19px; }
+    .trainee-card-subtitle { color: var(--muted); font-size: 16px; }
     .trainee-card-actions { display: flex; flex-wrap: wrap; gap: 8px; }
     .trainee-action-btn {
       border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--border));
@@ -1035,7 +1045,8 @@
       color: var(--accent);
       font-weight: 700;
       border-radius: 12px;
-      padding: 9px 12px;
+      padding: 12px 14px;
+      font-size: 15px;
       cursor: pointer;
     }
     .trainee-action-btn:active { transform: translateY(1px); }
@@ -1059,13 +1070,36 @@
       align-items: center;
       gap: 12px;
     }
+    .manage-sticky {
+      position: sticky;
+      top: 0;
+      z-index: 4;
+      background: var(--card);
+      padding: 12px 16px 10px;
+      margin: -12px -16px 0;
+      border-bottom: 1px solid var(--border);
+      box-shadow: 0 8px 20px rgba(0,0,0,0.08);
+    }
+    [data-theme="dark"] .manage-sticky {
+      box-shadow: 0 12px 24px rgba(0,0,0,0.35);
+    }
     .manage-title { font-size: 17px; font-weight: 800; }
     .manage-day-line { display: grid; grid-template-columns: auto 1fr auto; gap: 10px; align-items: center; margin-top: 6px; }
     .manage-day-center { width: 100%; text-align: center; border: none; background: none; color: var(--text); font-weight: 700; font-size: 15px; }
     .manage-day-subtitle { color: var(--muted); font-size: 13px; margin-top: 6px; }
     .manage-content { margin-top: 12px; display: grid; gap: 12px; }
     .manage-topbar { display: flex; align-items: center; gap: 10px; }
-    .manage-back { border: none; background: none; color: var(--accent); font-weight: 700; cursor: pointer; }
+    .manage-back {
+      border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--border));
+      background: color-mix(in srgb, var(--accent) 12%, var(--bg));
+      color: var(--accent);
+      font-weight: 800;
+      cursor: pointer;
+      padding: 8px 12px;
+      border-radius: 12px;
+      box-shadow: var(--shadow);
+    }
+    .manage-back:active { transform: translateY(1px); }
     .manage-list { display: grid; gap: 10px; }
     .manage-item {
       padding: 12px;
@@ -1413,24 +1447,26 @@
   <div id="manageExerciseSheet" class="sheet-backdrop manage-sheet">
     <div class="sheet">
       <div class="sheet-handle"></div>
-      <div class="manage-header">
-        <div class="manage-title">Добавление упражнений</div>
-        <button id="manageDoneBtn" class="btn primary" type="button">Готово</button>
+      <div class="manage-sticky">
+        <div class="manage-header">
+          <div class="manage-title">Добавление упражнений</div>
+          <button id="manageDoneBtn" class="btn primary" type="button">Готово</button>
+        </div>
+        <div class="manage-day-line">
+          <button id="manageDayPrev" class="icon-btn" aria-label="Предыдущий день">
+            <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
+              <path d="m15 18-6-6 6-6"></path>
+            </svg>
+          </button>
+          <button id="manageDayCenter" class="manage-day-center" type="button" aria-label="Выбрать день">—</button>
+          <button id="manageDayNext" class="icon-btn" aria-label="Следующий день">
+            <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
+              <path d="m9 6 6 6-6 6"></path>
+            </svg>
+          </button>
+        </div>
+        <div class="manage-day-subtitle" id="manageDaySubtitle"></div>
       </div>
-      <div class="manage-day-line">
-        <button id="manageDayPrev" class="icon-btn" aria-label="Предыдущий день">
-          <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
-            <path d="m15 18-6-6 6-6"></path>
-          </svg>
-        </button>
-        <button id="manageDayCenter" class="manage-day-center" type="button" aria-label="Выбрать день">—</button>
-        <button id="manageDayNext" class="icon-btn" aria-label="Следующий день">
-          <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
-            <path d="m9 6 6 6-6 6"></path>
-          </svg>
-        </button>
-      </div>
-      <div class="manage-day-subtitle" id="manageDaySubtitle"></div>
       <div id="manageContent" class="manage-content"></div>
     </div>
   </div>
@@ -1628,6 +1664,7 @@
       settings: {
         view: 'menu',
         loading: false,
+        loaded: false,
         workoutsPerWeek: 0,
         days: [],
         customGroups: [],
@@ -1772,6 +1809,19 @@
       return 'other';
     }
 
+    function findCustomGroupName(code) {
+      const raw = (code ?? '').toString().trim();
+      if (!raw) return '';
+      const lower = raw.toLowerCase();
+      const fromSettings = (state.settings.customGroups || []).find((group) => (group.code || '').toString().toLowerCase() === lower);
+      if (fromSettings?.name) return fromSettings.name;
+      const fromManage = (state.manage.add.groups || []).find((group) => (group.code || '').toString().toLowerCase() === lower);
+      if (fromManage?.name) return fromManage.name;
+      const fromLibrary = (state.library.groups || []).find((group) => (group.code || '').toString().toLowerCase() === lower);
+      if (fromLibrary?.name) return fromLibrary.name;
+      return '';
+    }
+
     function isRunningExercise(exercise) {
       return normalizeMuscleKey(exercise?.muscle_group) === 'run';
     }
@@ -1909,8 +1959,12 @@
     }
 
     function formatMuscleGroup(value) {
-      const key = normalizeMuscleKey(value);
-      return MUSCLE_NAMES[key] || 'Не указано';
+      const raw = (value ?? '').toString().trim();
+      if (!raw) return 'Не указано';
+      const custom = findCustomGroupName(raw);
+      if (custom) return custom;
+      const key = normalizeMuscleKey(raw);
+      return MUSCLE_NAMES[key] || raw || 'Не указано';
     }
 
     function calcSetWork(set) {
@@ -2300,7 +2354,7 @@
     }
 
     function libraryGroupLabel(code) {
-      return MUSCLE_NAMES[code] || 'Не указано';
+      return formatMuscleGroup(code);
     }
 
     function renderGroupsView() {
@@ -2770,18 +2824,30 @@
       btn.classList.toggle('hidden', !show);
     }
 
+    function updateSettingsAccess() {
+      const settingsBtn = document.querySelector('.menu-item[data-route="settings"]');
+      const restricted = !!state.acting.userId;
+      if (settingsBtn) settingsBtn.classList.toggle('hidden', restricted);
+      if (restricted && state.currentRoute === 'settings') {
+        toast('Настройки недоступны в режиме тренера');
+        navigateTo('today', true);
+      }
+    }
+
     function updateActingBanner() {
       const banner = document.getElementById('actingHeaderText');
       if (!banner) return;
       if (!state.acting.userId) {
         banner.classList.add('hidden');
         banner.textContent = '';
+        updateSettingsAccess();
         return;
       }
       const name = state.acting.name || 'подопечный';
       const suffix = state.acting.canEdit ? '' : ' · только просмотр';
       banner.textContent = `Режим тренера: ${name}${suffix}`;
       banner.classList.remove('hidden');
+      updateSettingsAccess();
     }
 
     function renderTraineeSheet() {
@@ -2839,7 +2905,7 @@
     }
 
     function openTraineeSheet() {
-      if (!state.settings.trainer.loaded && !state.settings.trainer.loading) {
+      if (!state.settings.trainer.loading) {
         loadTrainerOverview().catch(console.error);
       }
       renderTraineeSheet();
@@ -2880,14 +2946,14 @@
       const requests = Array.isArray(trainer.requests) ? trainer.requests : [];
       const trainees = Array.isArray(trainer.trainees) ? trainer.trainees : [];
       const trainerCode = trainer.trainerCode || '';
-      const trainerCodeBlock = trainerCode
+      const trainerCodeBlock = trainer.isTrainer && trainerCode
         ? `
-          <div class="settings-row">
+          <div class="settings-row trainer-code-block">
             <div class="label">Ваш код тренера</div>
             <div class="settings-code">${trainerCode}</div>
-            <div class="settings-copy">
-              <button class="btn small-btn" data-action="trainer-copy-code">Скопировать</button>
-              <button class="btn small-btn" data-action="trainer-share-code">Поделиться</button>
+            <div class="trainer-code-actions">
+              <button class="btn small-btn secondary" data-action="trainer-copy-code">Скопировать</button>
+              <button class="btn small-btn primary" data-action="trainer-share-code">Поделиться в Telegram</button>
             </div>
           </div>
         `
@@ -2989,23 +3055,25 @@
         : '';
 
       return `
-        <div class="settings-row">
-          <div class="label">Режим тренера</div>
-          <div class="settings-pill">Статус: ${trainer.isTrainer ? 'включён' : 'выключен'}</div>
-          <div class="settings-actions">
-            <button class="btn small-btn" data-action="trainer-toggle" data-enabled="${trainer.isTrainer ? '0' : '1'}">
-              ${trainer.isTrainer ? 'Выключить' : 'Включить'}
-            </button>
-            <button class="btn small-btn" data-action="trainer-requests-toggle" data-enabled="${trainer.acceptsRequests ? '0' : '1'}" ${trainer.isTrainer ? '' : 'disabled'}>
-              ${trainer.acceptsRequests ? 'Закрыть заявки' : 'Открыть заявки'}
-            </button>
+        <div class="trainer-hub">
+          <div class="settings-row">
+            <div class="label">Режим тренера</div>
+            <div class="settings-pill">Статус: ${trainer.isTrainer ? 'включён' : 'выключен'}</div>
+            <div class="settings-actions">
+              <button class="btn small-btn" data-action="trainer-toggle" data-enabled="${trainer.isTrainer ? '0' : '1'}">
+                ${trainer.isTrainer ? 'Выключить' : 'Включить'}
+              </button>
+              <button class="btn small-btn" data-action="trainer-requests-toggle" data-enabled="${trainer.acceptsRequests ? '0' : '1'}" ${trainer.isTrainer ? '' : 'disabled'}>
+                ${trainer.acceptsRequests ? 'Закрыть заявки' : 'Открыть заявки'}
+              </button>
+            </div>
           </div>
+          ${trainerCodeBlock}
+          ${trainer.isTrainer ? pendingHtml : ''}
+          ${trainer.isTrainer ? traineeHtml : ''}
+          ${traineeControls}
+          ${traineeBlock}
         </div>
-        ${trainerCodeBlock}
-        ${trainer.isTrainer ? pendingHtml : ''}
-        ${trainer.isTrainer ? traineeHtml : ''}
-        ${traineeControls}
-        ${traineeBlock}
       `;
     }
 
@@ -3189,6 +3257,7 @@
             <div class="card-title">Поделиться результатом</div>
             <div class="settings-pre">${shareText}</div>
             <div class="settings-actions">
+              <button class="btn small-btn" data-action="share-telegram">Поделиться</button>
               <button class="btn small-btn" data-action="share-copy">Скопировать текст</button>
               <button class="btn small-btn" data-action="share-shuffle">Сменить упражнения</button>
             </div>
@@ -3219,11 +3288,20 @@
         state.settings.reminders = data.reminders || [];
         state.settings.notificationsEnabled = data.notifications_enabled !== false;
         state.settings.timezone = data.timezone || '';
+        state.settings.loaded = true;
       } catch (e) {
         toast('Не удалось загрузить настройки');
       } finally {
         state.settings.loading = false;
         renderSettings();
+      }
+    }
+
+    async function ensureSettingsOverviewLoaded({ refreshExercises = false } = {}) {
+      if (state.settings.loaded || state.settings.loading) return;
+      await loadSettingsOverview();
+      if (refreshExercises && state.currentRoute === 'today') {
+        renderExercises(Array.from(state.exercises.values()));
       }
     }
 
@@ -3358,22 +3436,58 @@
           if (action === 'rename-day') {
             const day = Number(target.dataset.day || 0);
             const current = settingsDayLabel(state.settings.days.find((d) => d.day_index === day));
-            const label = prompt(`Новое название для Дня ${day}:`, current || '');
-            if (label === null) return;
-            await apiFetch(`/gymapi/settings/days/${day}/rename`, {
-              method: 'POST',
-              body: JSON.stringify({ label }),
+            openTextPrompt({
+              title: `Новое название для Дня ${day}`,
+              placeholder: `День ${day}`,
+              confirmLabel: 'Сохранить',
+              value: current || '',
+              onConfirm: async (value) => {
+                const label = (value ?? '').trim();
+                if (label === (current || '').trim()) return;
+                await apiFetch(`/gymapi/settings/days/${day}/rename`, {
+                  method: 'POST',
+                  body: JSON.stringify({ label }),
+                });
+                await loadSettingsOverview();
+                toast('День переименован ✅');
+              },
             });
-            await loadSettingsOverview();
-            toast('День переименован ✅');
             return;
           }
           if (action === 'delete-group') {
             const code = target.dataset.code;
             if (!code) return;
-            await apiFetch(`/gymapi/settings/custom_groups/${encodeURIComponent(code)}`, { method: 'DELETE' });
-            await loadSettingsOverview();
-            toast('Группа удалена');
+            const performDelete = async () => {
+              await apiFetch(`/gymapi/settings/custom_groups/${encodeURIComponent(code)}`, { method: 'DELETE' });
+              await loadSettingsOverview();
+              if (state.manage.add.open) {
+                if (state.manage.add.selectedGroup?.code === code) {
+                  state.manage.add.selectedGroup = null;
+                  state.manage.add.view = 'groups';
+                  state.manage.add.exercises = [];
+                  state.manage.add.selectedIds = new Set();
+                }
+                await loadManageGroups();
+                renderManageContent();
+              }
+              state.library.groups = [];
+              state.library.exercises = [];
+              state.library.view = 'groups';
+              if (state.currentRoute === 'library') loadLibraryGroups().catch(console.error);
+              if (state.currentRoute === 'today' && state.dayIndex) {
+                refreshTodayData({ keepDay: true }).catch(console.error);
+              }
+              toast('Группа удалена');
+            };
+            if (openConfirmModal) {
+              openConfirmModal(
+                () => performDelete().catch(console.error),
+                'Удалить группу мышц?',
+                'Удаление сотрёт все упражнения и историю из этой группы. Продолжить?',
+              );
+              return;
+            }
+            await performDelete();
             return;
           }
           if (action === 'toggle-notifications') {
@@ -3394,6 +3508,11 @@
             if (!state.settings.share.loaded) await loadShareResults();
             await navigator.clipboard.writeText(state.settings.share.copyText || state.settings.share.text || '');
             toast('Текст скопирован ✅');
+            return;
+          }
+          if (action === 'share-telegram') {
+            if (!state.settings.share.loaded) await loadShareResults();
+            await shareTextViaTelegram(state.settings.share.copyText || state.settings.share.text || '');
             return;
           }
           if (action === 'share-shuffle') {
@@ -3498,12 +3617,7 @@
           if (action === 'trainer-share-code') {
             const code = state.settings.trainer.trainerCode || '';
             const shareText = `Мой код тренера: ${code}`;
-            if (navigator.share) {
-              await navigator.share({ text: shareText });
-            } else {
-              await navigator.clipboard.writeText(shareText);
-              toast('Код скопирован ✅');
-            }
+            await shareTextViaTelegram(shareText);
           }
         } catch (err) {
           toast('Ошибка связи. Попробуй ещё раз.');
@@ -3677,6 +3791,11 @@
 
     function applyRoute(route) {
       const normalized = ROUTE_TITLES[route] ? route : 'today';
+      if (normalized === 'settings' && state.acting.userId) {
+        toast('Настройки недоступны в режиме тренера');
+        navigateTo('today', true);
+        return;
+      }
       state.currentRoute = normalized;
       document.querySelectorAll('.screen').forEach((el) => {
         el.classList.toggle('active', el.dataset.route === normalized);
@@ -3695,17 +3814,18 @@
         btn.setAttribute('aria-current', active ? 'page' : 'false');
       });
       closeDrawer();
+      updateSettingsAccess();
       updateBackButton(normalized);
       if (normalized === 'library') {
         renderLibrary();
-        if (!state.library.groups.length) loadLibraryGroups().catch(console.error);
+        loadLibraryGroups().catch(console.error);
       }
       if (normalized === 'settings') {
         state.settings.view = 'menu';
         renderSettings();
-        if (!state.settings.days.length && !state.settings.loading) loadSettingsOverview();
-        if (!state.settings.trainer.loaded && !state.settings.trainer.loading) loadTrainerOverview();
-        if (!state.settings.share.loaded && !state.settings.share.loading) loadShareResults();
+        if (!state.settings.loading) loadSettingsOverview();
+        if (!state.settings.trainer.loading) loadTrainerOverview();
+        if (!state.settings.share.loading) loadShareResults();
       }
     }
 
@@ -3817,6 +3937,29 @@
         if (text) textEl.textContent = text;
         modal.classList.add('show');
       };
+    }
+
+    async function shareTextViaTelegram(text) {
+      const payload = (text || '').trim();
+      if (!payload) return;
+      const tg = getTg();
+      const shareUrl = `https://t.me/share/url?text=${encodeURIComponent(payload)}`;
+      try {
+        if (tg?.openTelegramLink) {
+          tg.openTelegramLink(shareUrl);
+          return;
+        }
+        if (tg?.openLink) {
+          tg.openLink(shareUrl);
+          return;
+        }
+      } catch (_) {}
+      if (navigator.share) {
+        await navigator.share({ text: payload });
+        return;
+      }
+      await navigator.clipboard.writeText(payload);
+      toast('Текст скопирован ✅');
     }
 
     async function apiFetch(path, options = {}) {
@@ -4386,29 +4529,27 @@
       });
       input.addEventListener('blur', commit);
 
-      input.focus({ preventScroll: true });
+      input.focus();
       input.select();
     }
 
     function attachInlineNumberHandler(el, getOptions) {
       if (!el || typeof getOptions !== 'function') return;
 
-      const startEdit = () => {
+      const startEdit = (event) => {
+        if (event) {
+          event.preventDefault();
+          event.stopPropagation();
+        }
+        if (el.querySelector('input.inline-num-input')) return;
         const opts = getOptions();
         beginInlineNumberEdit(el, opts);
       };
 
-      el.addEventListener('pointerdown', (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        startEdit();
-      });
-
-      el.addEventListener('click', (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        startEdit();
-      });
+      el.addEventListener('pointerdown', startEdit);
+      el.addEventListener('mousedown', startEdit);
+      el.addEventListener('touchstart', startEdit, { passive: false });
+      el.addEventListener('click', startEdit);
 
       el.addEventListener('keydown', (e) => {
         if (e.key === 'Enter' || e.key === ' ') {
@@ -4890,9 +5031,7 @@
         finishFlag.textContent = '🏁';
         meta.appendChild(finishFlag);
       }
-      const rawGroupName = (exercise.muscle_group ?? '').toString().trim();
-      const group = formatMuscleGroup(exercise.muscle_group);
-      const displayGroup = group === 'Другое' && rawGroupName ? rawGroupName : group;
+      const displayGroup = formatMuscleGroup(exercise.muscle_group);
       if (displayGroup && displayGroup !== 'Не указано') {
         const musclePill = document.createElement('span');
         musclePill.className = 'pill muscle-pill';
@@ -5294,6 +5433,50 @@
       }
     }
 
+    async function refreshTodayData({ keepDay = true } = {}) {
+      try {
+        const info = await apiFetch('/gymapi/day/today');
+        state.activeDays = info.active_days || [];
+        state.completedDays = new Set((info.completed_days || []).map(Number));
+        const targetDay = (keepDay && state.dayIndex)
+          ? state.dayIndex
+          : (info.suggested_day_index || state.activeDays[0]?.day_index);
+        if (targetDay) {
+          renderDayOptions(targetDay);
+          if (state.manage.add.open) renderManageDayOptions();
+          state.date = info.date || '';
+          await loadSheet(targetDay);
+        }
+        setStatus('ready');
+      } catch (e) {
+        const status = e?.status ? ` (HTTP ${e.status})` : '';
+        const text = normalizeError(e).split('\n')[0].slice(0, 140);
+        showErrorOverlay(`Не удалось обновить данные дня${status}. ${text}`);
+        setStatus('error');
+      }
+    }
+
+    let lastDataRefresh = 0;
+    async function refreshAppData(source = '') {
+      const now = Date.now();
+      if (now - lastDataRefresh < 5000) return;
+      lastDataRefresh = now;
+      if (!state.isTelegram) return;
+      if (!state.settings.loading) loadSettingsOverview().catch(console.error);
+      if (!state.settings.trainer.loading) loadTrainerOverview().catch(console.error);
+      if (state.currentRoute === 'library') loadLibraryGroups().catch(console.error);
+      if (state.currentRoute === 'today' && !state.editor.open && !state.manage.add.open) {
+        refreshTodayData({ keepDay: true }).catch(console.error);
+      }
+    }
+
+    function setupVisibilityRefresh() {
+      document.addEventListener('visibilitychange', () => {
+        if (!document.hidden) refreshAppData('visibility');
+      });
+      window.addEventListener('focus', () => refreshAppData('focus'));
+    }
+
     function setManageMenu(open) {
       const menu = document.getElementById('manageMenu');
       if (!menu) return;
@@ -5636,7 +5819,7 @@
       }
     }
 
-    function openTextPrompt({ title, placeholder, confirmLabel, onConfirm }) {
+    function openTextPrompt({ title, placeholder, confirmLabel, value, onConfirm }) {
       const modal = document.getElementById('textPrompt');
       const titleEl = document.getElementById('textPromptTitle');
       const input = document.getElementById('textPromptInput');
@@ -5644,12 +5827,16 @@
       state.prompt = { onConfirm };
       if (titleEl) titleEl.textContent = title || 'Введите название';
       if (input) {
-        input.value = '';
+        input.value = value ?? '';
         input.placeholder = placeholder || 'Название';
       }
       if (confirm) confirm.textContent = confirmLabel || 'Добавить';
       modal.classList.add('show');
-      setTimeout(() => input?.focus(), 120);
+      setTimeout(() => {
+        if (!input) return;
+        input.focus();
+        input.select();
+      }, 120);
     }
 
     function closeTextPrompt() {
@@ -6440,10 +6627,12 @@
       openConfirmModal = setupModal();
       bindEvents();
       bindTimer();
+      setupVisibilityRefresh();
       updateActingBanner();
       if (!state.isTelegram) { handleRouteFromHash(); return; }
       loadTrainerOverview().catch(console.error);
       await loadToday();
+      ensureSettingsOverviewLoaded({ refreshExercises: true }).catch(console.error);
     }
 
     window.BODY_MUSCLES = window.BODY_MUSCLES || {

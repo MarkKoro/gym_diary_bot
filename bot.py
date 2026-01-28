@@ -179,6 +179,7 @@ from db import (
     list_user_muscle_groups,
     remove_user_muscle_group,
     list_users_with_reminders,
+    get_app_meta,
     copy_day_plan_to_other_days,
     ensure_library_history,
     list_library_groups,
@@ -364,6 +365,8 @@ REMINDER_EDIT_LABEL_KEY = "reminder_edit_label"
 REMINDER_SELECTED_DOW_KEY = "reminder_selected_dow"
 REMINDER_EDIT_DAY_INDEX_KEY = "reminder_edit_day_index"
 REMINDER_TIME_PAGE_KEY = "reminder_time_page"
+REMINDER_META_KEY = "reminders_updated_at"
+_last_reminders_meta: str | None = None
 
 EMOJI_RE = re.compile(
     "["
@@ -7545,6 +7548,33 @@ def _rem_schedule_once(
 
 async def post_init(app: Application):
     await schedule_all_reminders(app)
+    global _last_reminders_meta
+    try:
+        _last_reminders_meta = await get_app_meta(REMINDER_META_KEY)
+    except Exception:
+        _last_reminders_meta = None
+    app.job_queue.run_repeating(
+        _refresh_reminders_if_needed,
+        interval=60,
+        first=30,
+        name="refresh_reminders_meta",
+    )
+
+
+async def _refresh_reminders_if_needed(context: ContextTypes.DEFAULT_TYPE):
+    global _last_reminders_meta
+    try:
+        meta = await get_app_meta(REMINDER_META_KEY)
+    except Exception as exc:
+        logger.warning("Failed to read reminders meta: %s", exc)
+        return
+    if not meta or meta == _last_reminders_meta:
+        return
+    _last_reminders_meta = meta
+    try:
+        await schedule_all_reminders(context.application)
+    except Exception as exc:
+        logger.warning("Failed to refresh reminders: %s", exc)
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await require_subscription(update, context):
