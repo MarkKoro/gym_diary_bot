@@ -670,6 +670,59 @@
       font-size: 13px;
       color: var(--text);
     }
+    .measurements-header { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; justify-content: space-between; }
+    .measurement-category { display: grid; gap: 10px; }
+    .measurement-item {
+      padding: 12px;
+      border-radius: 12px;
+      border: 1px solid var(--border);
+      background: var(--bg);
+      display: grid;
+      gap: 10px;
+    }
+    .measurement-head { display: flex; justify-content: space-between; gap: 10px; align-items: flex-start; }
+    .measurement-name { font-weight: 700; font-size: 14px; }
+    .measurement-value { font-size: 18px; font-weight: 800; }
+    .measurement-meta { color: var(--muted); font-size: 12px; display: flex; gap: 8px; flex-wrap: wrap; }
+    .measurement-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+    .measurement-actions .btn { flex: 1; min-width: 120px; }
+    .measurement-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 8px;
+      border-radius: 999px;
+      border: 1px solid var(--border);
+      font-size: 11px;
+      color: var(--muted);
+      background: color-mix(in srgb, var(--bg) 80%, transparent);
+    }
+    .measurement-history { display: grid; gap: 8px; margin-top: 12px; }
+    .measurement-history .history-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 10px;
+      align-items: center;
+      padding: 10px 12px;
+      border-radius: 10px;
+      border: 1px solid var(--border);
+      background: var(--bg);
+    }
+    .history-meta { color: var(--muted); font-size: 12px; display: flex; gap: 8px; flex-wrap: wrap; }
+    .measurement-chart {
+      width: 100%;
+      height: 180px;
+      border-radius: 12px;
+      border: 1px solid var(--border);
+      background: var(--bg);
+      padding: 12px;
+    }
+    .measurement-chart svg { width: 100%; height: 100%; }
+    .measurement-chart .grid-line { stroke: color-mix(in srgb, var(--muted) 25%, transparent); stroke-width: 1; }
+    .measurement-chart .line { fill: none; stroke: var(--accent); stroke-width: 2.2; }
+    .measurement-chart .dot { fill: var(--accent); }
+    .measurement-sheet-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 14px; }
+    .measurement-sheet-actions .btn { flex: 1; min-width: 120px; }
     .anatomy-list { display: flex; flex-direction: column; gap: 10px; }
     .anatomy-row { display: grid; grid-template-columns: minmax(0,1fr) 130px; gap: 10px; align-items: center; padding: 10px 12px; border-radius: 12px; border: 1px solid var(--border); background: var(--bg); }
     .anatomy-controls { display: flex; align-items: center; gap: 8px; justify-content: flex-end; }
@@ -1242,6 +1295,7 @@
         <button class="menu-item active" data-route="today">Сегодня</button>
         <button class="menu-item" data-route="library">Статистика упражнений</button>
         <button class="menu-item" data-route="settings">Настройки</button>
+        <button class="menu-item" data-route="settings" data-section="measurements">Мои замеры</button>
       </nav>
     </div>
   </div>
@@ -1498,6 +1552,17 @@
     </div>
   </div>
 
+  <div id="measurementSheet" class="sheet-backdrop measurement-sheet">
+    <div class="sheet">
+      <div class="sheet-handle"></div>
+      <div class="sheet-content">
+        <div class="sheet-title" id="measurementSheetTitle"></div>
+        <div class="sheet-subtitle" id="measurementSheetSubtitle"></div>
+        <div id="measurementSheetBody"></div>
+      </div>
+    </div>
+  </div>
+
     <div id="sheet" class="sheet-backdrop">
       <div class="sheet" id="sheetBody">
         <div class="sheet-handle"></div>
@@ -1663,6 +1728,7 @@
       },
       settings: {
         view: 'menu',
+        pendingView: null,
         loading: false,
         loaded: false,
         workoutsPerWeek: 0,
@@ -1686,6 +1752,19 @@
           loaded: false,
           text: '',
           copyText: '',
+        },
+        measurements: {
+          loading: false,
+          loaded: false,
+          lastUpdate: '',
+          categories: [],
+          itemsByCode: {},
+          history: {},
+          sheet: {
+            mode: null,
+            code: null,
+            view: 'list',
+          },
         },
       },
       acting: {
@@ -2825,9 +2904,9 @@
     }
 
     function updateSettingsAccess() {
-      const settingsBtn = document.querySelector('.menu-item[data-route="settings"]');
+      const settingsBtns = document.querySelectorAll('.menu-item[data-route="settings"]');
       const restricted = !!state.acting.userId;
-      if (settingsBtn) settingsBtn.classList.toggle('hidden', restricted);
+      settingsBtns.forEach((btn) => btn.classList.toggle('hidden', restricted));
       if (restricted && state.currentRoute === 'settings') {
         toast('Настройки недоступны в режиме тренера');
         navigateTo('today', true);
@@ -2953,7 +3032,6 @@
             <div class="settings-code">${trainerCode}</div>
             <div class="trainer-code-actions">
               <button class="btn small-btn secondary" data-action="trainer-copy-code">Скопировать</button>
-              <button class="btn small-btn primary" data-action="trainer-share-code">Поделиться в Telegram</button>
             </div>
           </div>
         `
@@ -3077,6 +3155,108 @@
       `;
     }
 
+    function formatMeasurementDateLabel(value) {
+      if (!value) return '';
+      const dt = new Date(value);
+      if (Number.isNaN(dt.getTime())) {
+        return String(value).split('T')[0];
+      }
+      return dt.toLocaleDateString('ru-RU');
+    }
+
+    function renderMeasurementsSection() {
+      const measurements = state.settings.measurements || {};
+      if (measurements.loading) {
+        return '<div class="loading">Загружаем замеры…</div>';
+      }
+      const categories = measurements.categories || [];
+      const lastLabel = measurements.lastUpdate ? formatMeasurementDateLabel(measurements.lastUpdate) : 'нет данных';
+      const categoryOptions = categories
+        .map((category) => `<option value="${category.code}">${category.name}</option>`)
+        .join('');
+      const categoryBlocks = categories
+        .map((category) => {
+          const items = category.items || [];
+          const itemsHtml = items
+            .map((item) => {
+              const latestLabel = item.latest?.display || '—';
+              const dateLabel = item.latest?.created_at ? formatMeasurementDateLabel(item.latest.created_at) : '';
+              const deltaLabel = item.delta ? `<span>${item.delta}</span>` : '';
+              const metaChunks = [dateLabel, item.latest ? deltaLabel : null].filter(Boolean).join(' · ');
+              const meta = metaChunks ? `<div class="measurement-meta">${metaChunks}</div>` : '<div class="measurement-meta">Нет данных</div>';
+              const note = item.note ? `<span class="measurement-badge">${item.note}</span>` : '';
+              const derived = item.derived ? '<span class="measurement-badge">Авто</span>' : '';
+              const badges = [note, derived].filter(Boolean).join(' ');
+              const disabledAttr = item.derived ? 'disabled' : '';
+              return `
+                <div class="measurement-item">
+                  <div class="measurement-head">
+                    <div>
+                      <div class="measurement-name">${item.name}</div>
+                      <div class="measurement-value">${latestLabel}</div>
+                      ${meta}
+                    </div>
+                    <div class="measurement-badge">${item.unit || 'значение'}</div>
+                  </div>
+                  ${badges ? `<div class="measurement-meta">${badges}</div>` : ''}
+                  <div class="measurement-actions">
+                    <button class="btn small-btn" data-action="measurement-add" data-code="${item.code}" ${disabledAttr}>Записать</button>
+                    <button class="btn small-btn" data-action="measurement-history" data-code="${item.code}">История</button>
+                  </div>
+                </div>
+              `;
+            })
+            .join('');
+          return `
+            <div class="card">
+              <div class="card-title">${category.name}</div>
+              <div class="measurement-category">${itemsHtml || '<div class="muted-inline">Замеров пока нет.</div>'}</div>
+            </div>
+          `;
+        })
+        .join('');
+      return `
+        <div class="card">
+          <div class="measurements-header">
+            <div class="card-title">Мои замеры</div>
+            <div class="settings-pill">Обновлено: ${lastLabel}</div>
+          </div>
+          <div class="card-summary">Записывайте показатели и отслеживайте историю по каждой метрике.</div>
+        </div>
+        ${categoryBlocks || '<div class="card"><div class="muted-inline">Пока нет замеров.</div></div>'}
+        <div class="card">
+          <div class="card-title">Добавить свой замер</div>
+          <div class="settings-row">
+            <div class="label">Название замера</div>
+            <input class="settings-input" id="measurementCustomName" placeholder="Например: Гибкость">
+          </div>
+          <div class="settings-row">
+            <div class="label">Категория</div>
+            <select class="settings-select" id="measurementCustomCategory">
+              ${categoryOptions}
+            </select>
+          </div>
+          <div class="settings-actions">
+            <button class="btn primary" data-action="measurement-create">Добавить замер</button>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-title">Добавить категорию</div>
+          <div class="settings-row">
+            <div class="label">Буква</div>
+            <input class="settings-input" id="measurementCategoryLetter" placeholder="A">
+          </div>
+          <div class="settings-row">
+            <div class="label">Название</div>
+            <input class="settings-input" id="measurementCategoryName" placeholder="Например: Биомаркеры">
+          </div>
+          <div class="settings-actions">
+            <button class="btn" data-action="measurement-create-category">Добавить категорию</button>
+          </div>
+        </div>
+      `;
+    }
+
     function renderSettings() {
       const container = document.getElementById('settingsContent');
       if (!container) return;
@@ -3097,6 +3277,14 @@
                 </button>
                 <button class="settings-menu-item" data-action="open-settings" data-section="groups">
                   <span>Мои группы мышц</span>
+                  <span class="settings-menu-arrow">›</span>
+                </button>
+              </div>
+              <div class="settings-menu-divider"></div>
+              <div class="settings-menu-group">
+                <div class="settings-menu-title">Показатели</div>
+                <button class="settings-menu-item" data-action="open-settings" data-section="measurements">
+                  <span>Мои замеры</span>
                   <span class="settings-menu-arrow">›</span>
                 </button>
               </div>
@@ -3223,6 +3411,9 @@
             <div class="settings-list">${groupHtml || '<div class="muted-inline">Пользовательских групп нет.</div>'}</div>
           </div>
         `,
+        measurements: `
+          ${renderMeasurementsSection()}
+        `,
         notifications: `
           <div class="card">
             <div class="card-title">Уведомления</div>
@@ -3257,7 +3448,6 @@
             <div class="card-title">Поделиться результатом</div>
             <div class="settings-pre">${shareText}</div>
             <div class="settings-actions">
-              <button class="btn small-btn" data-action="share-telegram">Поделиться</button>
               <button class="btn small-btn" data-action="share-copy">Скопировать текст</button>
               <button class="btn small-btn" data-action="share-shuffle">Сменить упражнения</button>
             </div>
@@ -3354,6 +3544,206 @@
       }
     }
 
+    async function loadMeasurementsOverview({ force = false } = {}) {
+      const measurements = state.settings.measurements;
+      if (measurements.loading || (measurements.loaded && !force)) return;
+      measurements.loading = true;
+      renderSettings();
+      try {
+        const data = await apiFetch('/gymapi/measurements/overview');
+        measurements.categories = data.categories || [];
+        measurements.lastUpdate = data.last_update || '';
+        measurements.itemsByCode = {};
+        (measurements.categories || []).forEach((category) => {
+          (category.items || []).forEach((item) => {
+            measurements.itemsByCode[item.code] = item;
+          });
+        });
+        measurements.loaded = true;
+      } catch (e) {
+        toast('Не удалось загрузить замеры');
+      } finally {
+        measurements.loading = false;
+        renderSettings();
+      }
+    }
+
+    async function loadMeasurementHistory(code) {
+      const measurements = state.settings.measurements;
+      if (!code) return;
+      measurements.history[code] = { loading: true, entries: [], item: null };
+      renderMeasurementSheet();
+      try {
+        const data = await apiFetch(`/gymapi/measurements/history/${encodeURIComponent(code)}`);
+        measurements.history[code] = {
+          loading: false,
+          entries: data.entries || [],
+          item: data.item || null,
+        };
+      } catch (e) {
+        measurements.history[code] = { loading: false, entries: [], item: null };
+        toast('Не удалось загрузить историю');
+      } finally {
+        renderMeasurementSheet();
+      }
+    }
+
+    function openMeasurementSheet(mode, code) {
+      const measurements = state.settings.measurements;
+      measurements.sheet.mode = mode;
+      measurements.sheet.code = code;
+      if (mode === 'history') measurements.sheet.view = 'list';
+      renderMeasurementSheet();
+      document.getElementById('measurementSheet')?.classList.add('show');
+      if (mode === 'history' && (!measurements.history[code] || measurements.history[code].loading)) {
+        loadMeasurementHistory(code).catch(console.error);
+      }
+      if (mode === 'entry') {
+        setTimeout(() => {
+          document.getElementById('measurementValueInput')?.focus();
+        }, 120);
+      }
+    }
+
+    function closeMeasurementSheet() {
+      state.settings.measurements.sheet = { mode: null, code: null, view: 'list' };
+      document.getElementById('measurementSheet')?.classList.remove('show');
+    }
+
+    function buildMeasurementChart(entries) {
+      const ordered = entries.slice().reverse();
+      const values = ordered.map((entry) => Number(entry.value)).filter((val) => Number.isFinite(val));
+      if (values.length < 2) {
+        return '<div class="muted-inline">Недостаточно данных для графика.</div>';
+      }
+      const min = Math.min(...values);
+      const max = Math.max(...values);
+      const span = max - min || 1;
+      const width = 300;
+      const height = 120;
+      const points = values.map((val, idx) => {
+        const x = (idx / (values.length - 1)) * width;
+        const y = height - ((val - min) / span) * height;
+        return `${x.toFixed(2)},${y.toFixed(2)}`;
+      });
+      const dots = points.map((point) => {
+        const [x, y] = point.split(',');
+        return `<circle class="dot" cx="${x}" cy="${y}" r="2.8"></circle>`;
+      }).join('');
+      return `
+        <div class="measurement-chart">
+          <svg viewBox="0 0 ${width} ${height}" preserveAspectRatio="none">
+            <line class="grid-line" x1="0" y1="0" x2="${width}" y2="0"></line>
+            <line class="grid-line" x1="0" y1="${height}" x2="${width}" y2="${height}"></line>
+            <polyline class="line" points="${points.join(' ')}"></polyline>
+            ${dots}
+          </svg>
+        </div>
+      `;
+    }
+
+    function renderMeasurementSheet() {
+      const measurements = state.settings.measurements;
+      const sheet = document.getElementById('measurementSheet');
+      const body = document.getElementById('measurementSheetBody');
+      const titleEl = document.getElementById('measurementSheetTitle');
+      const subtitleEl = document.getElementById('measurementSheetSubtitle');
+      if (!sheet || !body || !titleEl || !subtitleEl) return;
+      const { mode, code, view } = measurements.sheet || {};
+      if (!mode || !code) {
+        titleEl.textContent = '';
+        subtitleEl.textContent = '';
+        body.innerHTML = '';
+        return;
+      }
+      const item = measurements.itemsByCode[code];
+      if (!item) {
+        body.innerHTML = '<div class="muted-inline">Замер не найден.</div>';
+        return;
+      }
+      if (mode === 'entry') {
+        titleEl.textContent = item.name;
+        subtitleEl.textContent = item.prompt || 'Запишите новое значение';
+        const latest = item.latest?.display ? `Последнее значение: ${item.latest.display}` : 'Данных пока нет';
+        if (item.derived) {
+          body.innerHTML = `
+            <div class="muted-inline">Этот показатель рассчитывается автоматически на основе других замеров.</div>
+            <div class="measurement-sheet-actions">
+              <button class="btn" data-action="measurement-history" data-code="${item.code}">История</button>
+            </div>
+          `;
+          return;
+        }
+        body.innerHTML = `
+          <div class="settings-row">
+            <div class="label">Значение</div>
+            <input class="settings-input" id="measurementValueInput" placeholder="${item.prompt || ''}">
+            <div class="hint">${latest}</div>
+          </div>
+          <div class="measurement-sheet-actions">
+            <button class="btn primary" data-action="measurement-save" data-code="${item.code}">Сохранить</button>
+            <button class="btn" data-action="measurement-history" data-code="${item.code}">История</button>
+          </div>
+        `;
+        return;
+      }
+      titleEl.textContent = `${item.name} — история`;
+      subtitleEl.textContent = item.unit ? `Единицы: ${item.unit}` : 'История замеров';
+      const history = measurements.history[code];
+      if (!history || history.loading) {
+        body.innerHTML = '<div class="loading">Загружаем историю…</div>';
+        return;
+      }
+      if (!history.entries.length) {
+        body.innerHTML = `
+          <div class="muted-inline">Пока нет записей.</div>
+          <div class="measurement-sheet-actions">
+            <button class="btn primary" data-action="measurement-add" data-code="${item.code}">Добавить значение</button>
+          </div>
+        `;
+        return;
+      }
+      const toggleLabel = view === 'chart' ? 'Показать списком' : 'Показать график';
+      const toggleIcon = view === 'chart'
+        ? '<path d="M4 6h16M4 12h16M4 18h10"></path>'
+        : '<path d="M4 16l5-5 4 4 7-7"></path>';
+      const headerRow = `
+        <div class="settings-row inline">
+          <div class="label">История</div>
+          <button class="icon-btn small" data-action="measurement-history-toggle" data-code="${item.code}" aria-label="Переключить вид">
+            <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor">${toggleIcon}</svg>
+          </button>
+        </div>
+      `;
+      const listHtml = history.entries
+        .map((entry) => {
+          const delta = entry.delta ? `<span>${entry.delta}</span>` : '';
+          const meta = [entry.date_label, delta].filter(Boolean).join(' · ');
+          return `
+            <div class="history-row">
+              <div>
+                <div class="measurement-value">${entry.display}</div>
+                <div class="history-meta">${meta || '—'}</div>
+              </div>
+            </div>
+          `;
+        })
+        .join('');
+      const content = view === 'chart'
+        ? buildMeasurementChart(history.entries)
+        : `<div class="measurement-history">${listHtml}</div>`;
+      const addButton = item.derived
+        ? ''
+        : `<div class="measurement-sheet-actions">
+            <button class="btn primary" data-action="measurement-add" data-code="${item.code}">Добавить значение</button>
+          </div>`;
+      body.innerHTML = `
+        ${headerRow}
+        ${content}
+        ${addButton}
+      `;
+    }
+
     async function saveRemindersFromUI() {
       const rows = Array.from(document.querySelectorAll('[data-reminder-day]'));
       const reminders = rows
@@ -3411,6 +3801,9 @@
             const section = target.dataset.section || 'menu';
             state.settings.view = section;
             renderSettings();
+            if (section === 'measurements') {
+              await loadMeasurementsOverview();
+            }
             return;
           }
           if (action === 'settings-back') {
@@ -3510,13 +3903,57 @@
             toast('Текст скопирован ✅');
             return;
           }
-          if (action === 'share-telegram') {
-            if (!state.settings.share.loaded) await loadShareResults();
-            await shareTextViaTelegram(state.settings.share.copyText || state.settings.share.text || '');
-            return;
-          }
           if (action === 'share-shuffle') {
             await loadShareResults(true);
+            return;
+          }
+          if (action === 'measurement-add') {
+            const code = target.dataset.code;
+            if (!code) return;
+            openMeasurementSheet('entry', code);
+            return;
+          }
+          if (action === 'measurement-history') {
+            const code = target.dataset.code;
+            if (!code) return;
+            openMeasurementSheet('history', code);
+            return;
+          }
+          if (action === 'measurement-create') {
+            const nameInput = document.getElementById('measurementCustomName');
+            const categorySelect = document.getElementById('measurementCustomCategory');
+            const name = (nameInput?.value || '').trim();
+            const categoryCode = (categorySelect?.value || '').trim();
+            if (!name) {
+              toast('Введите название замера');
+              return;
+            }
+            await apiFetch('/gymapi/measurements/custom', {
+              method: 'POST',
+              body: JSON.stringify({ name, category_code: categoryCode }),
+            });
+            if (nameInput) nameInput.value = '';
+            toast('Замер добавлен ✅');
+            await loadMeasurementsOverview({ force: true });
+            return;
+          }
+          if (action === 'measurement-create-category') {
+            const letterInput = document.getElementById('measurementCategoryLetter');
+            const nameInput = document.getElementById('measurementCategoryName');
+            const letter = (letterInput?.value || '').trim();
+            const name = (nameInput?.value || '').trim();
+            if (!name) {
+              toast('Введите название категории');
+              return;
+            }
+            await apiFetch('/gymapi/measurements/category', {
+              method: 'POST',
+              body: JSON.stringify({ letter, name }),
+            });
+            if (letterInput) letterInput.value = '';
+            if (nameInput) nameInput.value = '';
+            toast('Категория добавлена ✅');
+            await loadMeasurementsOverview({ force: true });
             return;
           }
           if (action === 'trainer-toggle') {
@@ -3614,11 +4051,6 @@
             toast('Код скопирован ✅');
             return;
           }
-          if (action === 'trainer-share-code') {
-            const code = state.settings.trainer.trainerCode || '';
-            const shareText = `Мой код тренера: ${code}`;
-            await shareTextViaTelegram(shareText);
-          }
         } catch (err) {
           toast('Ошибка связи. Попробуй ещё раз.');
         }
@@ -3628,6 +4060,53 @@
         if (!target) return;
         state.settings.timezone = target.value;
         renderSettings();
+      });
+    }
+
+    function setupMeasurementSheetHandlers() {
+      const sheet = document.getElementById('measurementSheet');
+      if (!sheet) return;
+      sheet.addEventListener('click', (event) => {
+        if (event.target.id === 'measurementSheet') {
+          closeMeasurementSheet();
+        }
+      });
+      sheet.addEventListener('click', async (event) => {
+        const target = event.target.closest('[data-action]');
+        if (!target) return;
+        const action = target.dataset.action;
+        const code = target.dataset.code || state.settings.measurements.sheet.code;
+        if (!code) return;
+        if (action === 'measurement-history-toggle') {
+          const sheetState = state.settings.measurements.sheet;
+          sheetState.view = sheetState.view === 'chart' ? 'list' : 'chart';
+          renderMeasurementSheet();
+          return;
+        }
+        if (action === 'measurement-add') {
+          openMeasurementSheet('entry', code);
+          return;
+        }
+        if (action === 'measurement-history') {
+          openMeasurementSheet('history', code);
+          return;
+        }
+        if (action === 'measurement-save') {
+          const input = document.getElementById('measurementValueInput');
+          const value = (input?.value || '').trim();
+          if (!value) {
+            toast('Введите значение');
+            return;
+          }
+          await apiFetch('/gymapi/measurements/entry', {
+            method: 'POST',
+            body: JSON.stringify({ metric: code, value }),
+          });
+          if (input) input.value = '';
+          toast('Замер сохранён ✅');
+          await loadMeasurementsOverview({ force: true });
+          openMeasurementSheet('history', code);
+        }
       });
     }
 
@@ -3808,8 +4287,11 @@
         setManageMenu(false);
         if (state.manage.mode !== 'normal') setManageMode('normal');
       }
+      const activeSettingsView = state.settings.pendingView || state.settings.view;
       document.querySelectorAll('.menu-item').forEach((btn) => {
-        const active = btn.dataset.route === normalized;
+        const routeMatch = btn.dataset.route === normalized;
+        const sectionMatch = !btn.dataset.section || btn.dataset.section === activeSettingsView;
+        const active = routeMatch && (normalized !== 'settings' || sectionMatch);
         btn.classList.toggle('active', active);
         btn.setAttribute('aria-current', active ? 'page' : 'false');
       });
@@ -3821,11 +4303,16 @@
         loadLibraryGroups().catch(console.error);
       }
       if (normalized === 'settings') {
-        state.settings.view = 'menu';
+        const pendingView = state.settings.pendingView || 'menu';
+        state.settings.view = pendingView;
+        state.settings.pendingView = null;
         renderSettings();
         if (!state.settings.loading) loadSettingsOverview();
         if (!state.settings.trainer.loading) loadTrainerOverview();
         if (!state.settings.share.loading) loadShareResults();
+        if (pendingView === 'measurements') {
+          loadMeasurementsOverview().catch(console.error);
+        }
       }
     }
 
@@ -3881,7 +4368,14 @@
       if (traineeBtn) traineeBtn.addEventListener('click', openTraineeSheet);
       document.getElementById('closeDrawer').addEventListener('click', closeDrawer);
       document.getElementById('drawerOverlay').addEventListener('click', (e) => { if (e.target.id === 'drawerOverlay') closeDrawer(); });
-      document.querySelectorAll('.menu-item').forEach((btn) => btn.addEventListener('click', () => navigateTo(btn.dataset.route)));
+      document.querySelectorAll('.menu-item').forEach((btn) => btn.addEventListener('click', () => {
+        const route = btn.dataset.route;
+        const section = btn.dataset.section;
+        if (route === 'settings' && section) {
+          state.settings.pendingView = section;
+        }
+        navigateTo(route);
+      }));
       window.addEventListener('hashchange', handleRouteFromHash);
       if (!location.hash) navigateTo('today', true); else handleRouteFromHash();
     }
@@ -3937,29 +4431,6 @@
         if (text) textEl.textContent = text;
         modal.classList.add('show');
       };
-    }
-
-    async function shareTextViaTelegram(text) {
-      const payload = (text || '').trim();
-      if (!payload) return;
-      const tg = getTg();
-      const shareUrl = `https://t.me/share/url?text=${encodeURIComponent(payload)}`;
-      try {
-        if (tg?.openTelegramLink) {
-          tg.openTelegramLink(shareUrl);
-          return;
-        }
-        if (tg?.openLink) {
-          tg.openLink(shareUrl);
-          return;
-        }
-      } catch (_) {}
-      if (navigator.share) {
-        await navigator.share({ text: payload });
-        return;
-      }
-      await navigator.clipboard.writeText(payload);
-      toast('Текст скопирован ✅');
     }
 
     async function apiFetch(path, options = {}) {
@@ -6135,6 +6606,7 @@
             case 'manageExerciseSheet': closeManageAddSheet(); break;
             case 'manageDaySheet': closeManageDayPicker(); break;
             case 'traineeSheet': closeTraineeSheet(); break;
+            case 'measurementSheet': closeMeasurementSheet(); break;
             default: backdrop.classList.remove('show'); backdrop.classList.remove('open'); break;
           }
         });
@@ -6624,6 +7096,7 @@
     async function init() {
       setupNavigation();
       setupSettingsHandlers();
+      setupMeasurementSheetHandlers();
       openConfirmModal = setupModal();
       bindEvents();
       bindTimer();
