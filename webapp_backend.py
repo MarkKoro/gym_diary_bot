@@ -41,6 +41,13 @@ from db import (
     mark_day_completed,
     mark_exercise_done,
     mark_running_entry_done,
+    add_custom_measurement,
+    add_measurement_category,
+    add_measurement_entry,
+    fetch_measurement_history,
+    get_measurements_last_update,
+    list_custom_measurements,
+    list_measurement_categories,
     reactivate_trainer_links,
     remove_user_muscle_group,
     rename_day,
@@ -49,6 +56,7 @@ from db import (
     set_user_notifications_enabled,
     set_user_timezone,
     set_workouts_per_week,
+    update_last_measurement,
     update_trainer_label,
     update_trainer_link_permissions,
     update_trainer_link_status,
@@ -1663,6 +1671,189 @@ async def body_overall(
     }
 
 
+@app.get("/measurements/overview")
+async def measurements_overview(ctx: AuthCtx = Depends(get_auth_ctx)):
+    user_id = ctx.user_id
+    custom_items = await load_custom_measurements(user_id)
+    user_categories = [
+        {"code": code, "letter": (letter or "").upper(), "name": name}
+        for code, letter, name in await list_measurement_categories(user_id)
+    ]
+    categories = measurement_categories_list(
+        user_categories,
+        include_custom_fallback=True,
+        custom_items=custom_items,
+    )
+    custom_by_category: dict[str, list[dict]] = {}
+    for item in custom_items:
+        custom_by_category.setdefault(item["category"], []).append(item)
+    items_map = {**MEASUREMENT_MAP, **{item["code"]: item for item in custom_items}}
+    cache: dict[str, list[tuple[float, str | None, str]]] = {}
+    rendered_categories: list[dict] = []
+    for category in categories:
+        code = category["code"]
+        base_items = [item for item in MEASUREMENT_ITEMS if item["category"] == code]
+        items = list(base_items)
+        items.extend(custom_by_category.get(code, []))
+        if not items:
+            continue
+        category_items: list[dict] = []
+        for item in items:
+            history = await get_measurement_history(user_id, item["code"], cache, items_map, limit=2)
+            latest_entry = history[0] if history else None
+            previous_entry = history[1] if len(history) > 1 else None
+            display_value = format_measurement_value(item, latest_entry) if latest_entry else "—"
+            delta = None
+            if latest_entry and previous_entry:
+                delta = format_measurement_delta(item, latest_entry, previous_entry)
+            category_items.append(
+                {
+                    "code": item["code"],
+                    "name": item["name"],
+                    "unit": item.get("unit", ""),
+                    "precision": item.get("precision", 1),
+                    "optional": item.get("optional", False),
+                    "type": item.get("type"),
+                    "note": item.get("note"),
+                    "derived": item.get("derived"),
+                    "prompt": item.get("prompt"),
+                    "latest": {
+                        "value": latest_entry[0],
+                        "extra": latest_entry[1],
+                        "created_at": latest_entry[2],
+                        "display": display_value,
+                    }
+                    if latest_entry
+                    else None,
+                    "delta": delta,
+                }
+            )
+        rendered_categories.append(
+            {
+                "code": code,
+                "name": category["name"],
+                "letter": category.get("letter"),
+                "items": category_items,
+            }
+        )
+    last_update = await get_measurements_last_update(user_id)
+    return {
+        "ok": True,
+        "last_update": last_update,
+        "categories": rendered_categories,
+    }
+
+
+@app.get("/measurements/history/{code}")
+async def measurements_history(
+    code: str,
+    limit: int = 10,
+    ctx: AuthCtx = Depends(get_auth_ctx),
+):
+    user_id = ctx.user_id
+    custom_items = await load_custom_measurements(user_id)
+    items_map = {**MEASUREMENT_MAP, **{item["code"]: item for item in custom_items}}
+    item = items_map.get(code)
+    if not item:
+        raise HTTPException(status_code=404, detail="Measurement not found")
+    cache: dict[str, list[tuple[float, str | None, str]]] = {}
+    history = await get_measurement_history(user_id, code, cache, items_map, limit=limit)
+    timezone = await get_user_timezone(user_id)
+    tz = ZoneInfo(timezone or "UTC")
+    entries = []
+    for idx, entry in enumerate(history):
+        prev = history[idx + 1] if idx + 1 < len(history) else None
+        entries.append(
+            {
+                "value": entry[0],
+                "extra": entry[1],
+                "created_at": entry[2],
+                "date_label": format_measurement_date(entry[2], tz),
+                "display": format_measurement_value(item, entry),
+                "delta": format_measurement_delta(item, entry, prev) if prev else None,
+            }
+        )
+    return {
+        "ok": True,
+        "item": {
+            "code": item["code"],
+            "name": item["name"],
+            "unit": item.get("unit", ""),
+            "type": item.get("type"),
+            "precision": item.get("precision", 1),
+            "note": item.get("note"),
+            "prompt": item.get("prompt"),
+        },
+        "entries": entries,
+    }
+
+
+@app.post("/measurements/entry")
+async def measurements_add_entry(
+    payload: dict = Body(default={}),
+    ctx: AuthCtx = Depends(get_auth_ctx),
+):
+    user_id = ctx.user_id
+    metric = (payload.get("metric") or "").strip()
+    value_text = (payload.get("value") or payload.get("text") or "").strip()
+    if not metric or not value_text:
+        raise HTTPException(status_code=400, detail="Metric/value required")
+    custom_items = await load_custom_measurements(user_id)
+    items_map = {**MEASUREMENT_MAP, **{item["code"]: item for item in custom_items}}
+    item = items_map.get(metric)
+    if not item or item.get("derived"):
+        raise HTTPException(status_code=404, detail="Measurement not found")
+    try:
+        value, extra = parse_measurement_input(item, value_text)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    overwrite = bool(payload.get("overwrite"))
+    if overwrite:
+        updated = await update_last_measurement(user_id, metric, value, extra)
+        if not updated:
+            await add_measurement_entry(user_id, metric, value, extra)
+    else:
+        await add_measurement_entry(user_id, metric, value, extra)
+    return {"ok": True}
+
+
+@app.post("/measurements/custom")
+async def measurements_add_custom(
+    payload: dict = Body(default={}),
+    ctx: AuthCtx = Depends(get_auth_ctx),
+):
+    user_id = ctx.user_id
+    name = (payload.get("name") or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Name required")
+    category_code = (payload.get("category_code") or "").strip() or None
+    code = await add_custom_measurement(user_id, name, category_code)
+    return {
+        "ok": True,
+        "code": code,
+        "name": name,
+        "category_code": category_code or MEASUREMENT_CUSTOM_CATEGORY["code"],
+    }
+
+
+@app.post("/measurements/category")
+async def measurements_add_category(
+    payload: dict = Body(default={}),
+    ctx: AuthCtx = Depends(get_auth_ctx),
+):
+    user_id = ctx.user_id
+    name = (payload.get("name") or "").strip()
+    letter = (payload.get("letter") or "").strip().upper()
+    if not name:
+        raise HTTPException(status_code=400, detail="Name required")
+    if not letter:
+        letter = name[:1].upper()
+    if not letter:
+        raise HTTPException(status_code=400, detail="Letter required")
+    code = await add_measurement_category(user_id, letter[:1], name)
+    return {"ok": True, "code": code, "letter": letter[:1], "name": name}
+
+
 FEATURED_MEASUREMENTS_ORDER = ["body_weight", "body_fat", "chest", "hips"]
 FEATURED_MEASUREMENTS_MAP = {
     "body_weight": {"name": "Вес", "unit": "кг", "precision": 1},
@@ -1673,6 +1864,424 @@ FEATURED_MEASUREMENTS_MAP = {
 SHARE_RESULTS_EXERCISE_LIMIT = 5
 SHARE_RESULTS_WINDOW_DAYS = 90
 SHARE_RESULTS_COPY_TEXT_MAX_LENGTH = 4096
+
+
+MEASUREMENT_CUSTOM_CATEGORY = {
+    "code": "custom",
+    "letter": "E",
+    "name": "Свои замеры",
+}
+
+MEASUREMENT_CATEGORIES = [
+    {"code": "body", "letter": "A", "name": "Масса/состав тела"},
+    {"code": "circumference", "letter": "B", "name": "Окружности"},
+    {"code": "records", "letter": "C", "name": "Производные/силовые контрольные"},
+    {"code": "vitals", "letter": "D", "name": "Витальные показатели"},
+]
+
+
+def _measurement_item(
+    code: str,
+    name: str,
+    category: str,
+    unit: str,
+    precision: int = 1,
+    optional: bool = False,
+    prompt: str | None = None,
+    derived: str | None = None,
+    note: str | None = None,
+    item_type: str | None = None,
+):
+    if prompt is None:
+        lower = name.lower()
+        if unit == "см":
+            prompt = f"Введи обхват {lower} в сантиметрах (например: 32.5)."
+        elif unit == "кг":
+            prompt = f"Введи значение в килограммах (например: 50.0)."
+        elif unit == "%":
+            prompt = f"Введи значение в процентах (например: 15.0)."
+        elif unit == "повт.":
+            prompt = f"Укажи количество повторений (например: 12)."
+        elif unit == "уд/мин":
+            prompt = f"Введи значение в ударах в минуту (например: 60)."
+        elif unit == "ч":
+            prompt = f"Укажи количество часов (например: 7.5)."
+        else:
+            prompt = "Введи значение (например: 10)."
+    item = {
+        "code": code,
+        "name": name,
+        "category": category,
+        "unit": unit,
+        "precision": precision,
+        "optional": optional,
+        "prompt": prompt,
+    }
+    if derived:
+        item["derived"] = derived
+    if note:
+        item["note"] = note
+    if item_type:
+        item["type"] = item_type
+    return item
+
+
+MEASUREMENT_ITEMS = [
+    _measurement_item(
+        "body_weight",
+        "Вес тела",
+        "body",
+        "кг",
+        prompt="Введи вес в килограммах (например: 72.5).",
+    ),
+    _measurement_item(
+        "body_fat",
+        "Процент жира",
+        "body",
+        "%",
+        prompt="Введи процент жира (например: 15.8).",
+    ),
+    _measurement_item(
+        "lean_mass",
+        "Безжировая масса",
+        "body",
+        "кг",
+        derived="lean_mass",
+        note="нужны вес и % жира",
+    ),
+    _measurement_item(
+        "water_pct",
+        "Вода",
+        "body",
+        "%",
+        optional=True,
+        prompt="Введи процент воды (например: 52.3).",
+    ),
+    _measurement_item(
+        "bmi",
+        "ИМТ",
+        "body",
+        "",
+        optional=True,
+        prompt="Введи индекс массы тела (например: 22.4).",
+    ),
+    _measurement_item("neck", "Шея", "circumference", "см"),
+    _measurement_item("shoulders", "Плечи", "circumference", "см"),
+    _measurement_item("chest", "Грудь", "circumference", "см"),
+    _measurement_item(
+        "underbust",
+        "Под грудью",
+        "circumference",
+        "см",
+        optional=True,
+    ),
+    _measurement_item("waist_narrow", "Талия (узкая)", "circumference", "см"),
+    _measurement_item("waist_navel", "Талия (пупок)", "circumference", "см"),
+    _measurement_item(
+        "abdomen",
+        "Живот",
+        "circumference",
+        "см",
+        optional=True,
+    ),
+    _measurement_item("hips", "Бёдра/таз", "circumference", "см"),
+    _measurement_item("thigh_upper", "Бедро верхнее", "circumference", "см"),
+    _measurement_item(
+        "thigh_mid",
+        "Бедро среднее",
+        "circumference",
+        "см",
+        optional=True,
+    ),
+    _measurement_item("hamstring", "Бицепс бедра", "circumference", "см"),
+    _measurement_item("calf", "Икроножная", "circumference", "см"),
+    _measurement_item("ankle", "Лодыжка", "circumference", "см", optional=True),
+    _measurement_item(
+        "bicep_relaxed",
+        "Бицепс (расслабл.)",
+        "circumference",
+        "см",
+    ),
+    _measurement_item(
+        "bicep_flexed",
+        "Бицепс (напряж.)",
+        "circumference",
+        "см",
+    ),
+    _measurement_item("forearm", "Предплечье", "circumference", "см"),
+    _measurement_item("wrist", "Запястье", "circumference", "см", optional=True),
+    _measurement_item(
+        "bench_1rm",
+        "1RM Жим лёжа",
+        "records",
+        "кг",
+        optional=True,
+        prompt="Введи одноповторный максимум в жиме лёжа (например: 95).",
+    ),
+    _measurement_item(
+        "squat_1rm",
+        "1RM Присед",
+        "records",
+        "кг",
+        optional=True,
+        prompt="Введи одноповторный максимум в приседе (например: 130).",
+    ),
+    _measurement_item(
+        "deadlift_1rm",
+        "1RM Становая",
+        "records",
+        "кг",
+        optional=True,
+        prompt="Введи одноповторный максимум в становой тяге (например: 160).",
+    ),
+    _measurement_item(
+        "pullups_max",
+        "Подтягивания",
+        "records",
+        "повт.",
+        optional=True,
+        prompt="Укажи максимум подтягиваний (например: 12).",
+    ),
+    _measurement_item(
+        "pushups_2min",
+        "Отжимания за 2 мин",
+        "records",
+        "повт.",
+        optional=True,
+        prompt="Укажи количество отжиманий за 2 минуты (например: 45).",
+    ),
+    _measurement_item(
+        "wod_time_sec",
+        "Время WOD (сек)",
+        "records",
+        "",
+        prompt="Укажи время WOD в формате ММ:СС или ЧЧ:ММ:СС.",
+        item_type="duration",
+    ),
+    _measurement_item(
+        "resting_hr",
+        "Пульс в покое",
+        "vitals",
+        "уд/мин",
+        prompt="Введи пульс в покое (например: 60).",
+    ),
+    _measurement_item(
+        "blood_pressure",
+        "Артериальное давление",
+        "vitals",
+        "мм рт. ст.",
+        precision=0,
+        prompt="Введи давление в формате 120/80.",
+        item_type="blood_pressure",
+    ),
+    _measurement_item(
+        "sleep_hours",
+        "Сон",
+        "vitals",
+        "ч",
+        prompt="Укажи продолжительность сна в часах (например: 7.5).",
+    ),
+]
+
+MEASUREMENT_MAP = {item["code"]: item for item in MEASUREMENT_ITEMS}
+
+
+def parse_duration_input(text: str) -> int:
+    raw = text.strip()
+    if not raw or any(ch not in "0123456789:" for ch in raw):
+        raise ValueError("invalid characters")
+    parts = raw.split(":")
+    if len(parts) not in (2, 3):
+        raise ValueError("invalid format")
+    try:
+        values = [int(part) for part in parts]
+    except ValueError as exc:
+        raise ValueError("invalid number") from exc
+    if any(val < 0 for val in values):
+        raise ValueError("negative value")
+    if len(values) == 2:
+        minutes, seconds = values
+        if seconds >= 60:
+            raise ValueError("seconds range")
+        return minutes * 60 + seconds
+    hours, minutes, seconds = values
+    if minutes >= 60 or seconds >= 60:
+        raise ValueError("time range")
+    return hours * 3600 + minutes * 60 + seconds
+
+
+def format_duration_value(seconds: int) -> str:
+    seconds = max(int(round(seconds)), 0)
+    hours, remainder = divmod(seconds, 3600)
+    minutes, sec = divmod(remainder, 60)
+    if hours:
+        return f"{hours}:{minutes:02d}:{sec:02d}"
+    total_minutes = seconds // 60
+    return f"{total_minutes}:{sec:02d}"
+
+
+def format_duration_delta(delta_seconds: int) -> str:
+    sign = "+" if delta_seconds >= 0 else "-"
+    formatted = format_duration_value(abs(delta_seconds))
+    return f"{sign}{formatted}"
+
+
+def format_measurement_value(item: dict, entry: tuple[float, str | None, str]) -> str:
+    value, extra, _ = entry
+    if value is None:
+        return "—"
+    if item.get("type") == "duration":
+        seconds = int(round(value))
+        unit = item.get("unit", "")
+        return f"{format_duration_value(seconds)} {unit}".strip()
+    if item.get("type") == "blood_pressure":
+        diast = 0.0
+        if extra:
+            try:
+                diast = float(extra)
+            except (TypeError, ValueError):
+                diast = 0.0
+        value_text = f"{value:.0f}/{diast:.0f}" if extra else f"{value:.0f}"
+        unit = item.get("unit", "")
+        return f"{value_text} {unit}".strip()
+    precision = max(int(item.get("precision", 1)), 0)
+    fmt = f"{{:.{precision}f}}" if precision > 0 else "{:.0f}"
+    value_text = fmt.format(value)
+    unit = item.get("unit", "")
+    return f"{value_text} {unit}".strip()
+
+
+def format_measurement_delta(
+    item: dict,
+    current: tuple[float, str | None, str],
+    previous: tuple[float, str | None, str],
+) -> str:
+    if item.get("type") == "blood_pressure":
+        syst = current[0] - previous[0]
+        try:
+            cur_extra = float(current[1]) if current[1] is not None else 0.0
+        except (TypeError, ValueError):
+            cur_extra = 0.0
+        try:
+            prev_extra = float(previous[1]) if previous[1] is not None else 0.0
+        except (TypeError, ValueError):
+            prev_extra = 0.0
+        diast = cur_extra - prev_extra
+        unit = item.get("unit", "")
+        return f"Δ {syst:+.0f}/{diast:+.0f} {unit}".strip()
+    if item.get("type") == "duration":
+        diff = current[0] - previous[0]
+        diff_seconds = int(round(diff))
+        return f"Δ {format_duration_delta(diff_seconds)}"
+    diff = current[0] - previous[0]
+    precision = max(int(item.get("precision", 1)), 0)
+    fmt = f"{{:+.{precision}f}}" if precision > 0 else "{:+.0f}"
+    unit = item.get("unit", "")
+    return f"Δ {fmt.format(diff)} {unit}".strip()
+
+
+def format_measurement_date(value: str, tz: ZoneInfo) -> str:
+    try:
+        dt = datetime.fromisoformat(value)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=ZoneInfo("UTC"))
+        dt = dt.astimezone(tz)
+        return dt.strftime("%d.%m.%Y")
+    except Exception:
+        return value.split("T")[0]
+
+
+def parse_measurement_input(item: dict, text: str) -> tuple[float, str | None]:
+    raw = text.strip()
+    if not raw:
+        raise ValueError("empty")
+    if item.get("type") == "duration":
+        seconds = parse_duration_input(raw)
+        return float(seconds), ""
+    raw = raw.replace(",", ".")
+    if item.get("type") == "blood_pressure":
+        parts = raw.replace("/", " ").split()
+        if len(parts) != 2:
+            raise ValueError("bp format")
+        syst = int(round(float(parts[0])))
+        diast = int(round(float(parts[1])))
+        return float(syst), str(diast)
+    value = float(raw)
+    return value, None
+
+
+def compute_lean_mass_history(
+    weight_history: list[tuple[float, str | None, str]],
+    fat_history: list[tuple[float, str | None, str]],
+) -> list[tuple[float, None, str]]:
+    if not weight_history or not fat_history:
+        return []
+    result: list[tuple[float, None, str]] = []
+    for (w_val, _, w_ts), (f_val, _, f_ts) in zip(weight_history, fat_history):
+        if w_val is None or f_val is None:
+            continue
+        ts = w_ts if w_ts >= f_ts else f_ts
+        result.append((w_val * (1 - f_val / 100.0), None, ts))
+    return result
+
+
+async def load_custom_measurements(user_id: int) -> list[dict]:
+    rows = await list_custom_measurements(user_id)
+    items: list[dict] = []
+    for code, name, category_code in rows:
+        category = (category_code or "").strip() or MEASUREMENT_CUSTOM_CATEGORY["code"]
+        items.append(
+            {
+                "code": code,
+                "name": name,
+                "category": category,
+                "unit": "",
+                "precision": 1,
+                "optional": False,
+                "prompt": f"Введи значение для «{name}» (например: 10).",
+            }
+        )
+    return items
+
+
+def measurement_categories_list(
+    user_categories: list[dict],
+    *,
+    include_custom_fallback: bool,
+    custom_items: list[dict],
+) -> list[dict]:
+    categories: list[dict] = []
+    categories.extend(MEASUREMENT_CATEGORIES)
+    categories.extend(user_categories)
+    custom_codes = {category.get("code") for category in user_categories}
+    if include_custom_fallback and custom_items and MEASUREMENT_CUSTOM_CATEGORY["code"] not in custom_codes:
+        categories.append(MEASUREMENT_CUSTOM_CATEGORY)
+    return categories
+
+
+async def get_measurement_history(
+    user_id: int,
+    code: str,
+    cache: dict[str, list[tuple[float, str | None, str]]],
+    items_map: dict[str, dict],
+    limit: int = 5,
+) -> list[tuple[float, str | None, str]]:
+    cache_key = f"{code}:{limit}"
+    if cache_key in cache:
+        return cache[cache_key]
+    item = items_map.get(code)
+    if not item:
+        cache[cache_key] = []
+        return []
+    if item.get("derived") == "lean_mass":
+        weight_history = await get_measurement_history(user_id, "body_weight", cache, items_map, limit)
+        fat_history = await get_measurement_history(user_id, "body_fat", cache, items_map, limit)
+        history = compute_lean_mass_history(weight_history, fat_history)[:limit]
+    else:
+        rows = await fetch_measurement_history(user_id, code, limit=limit)
+        history = rows or []
+    cache[cache_key] = history
+    return history
 
 
 def _parse_iso_datetime(value: str | None) -> datetime | None:
