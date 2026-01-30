@@ -242,6 +242,43 @@ def resolve_user_zone(tz_name: str | None) -> ZoneInfo:
         return ZoneInfo("UTC")
 
 
+ALLOWED_REMINDER_TIMEZONES = {
+    "Europe/Kaliningrad",
+    "Europe/Moscow",
+    "Europe/Samara",
+    "Asia/Yekaterinburg",
+    "Asia/Omsk",
+    "Asia/Krasnoyarsk",
+    "Asia/Irkutsk",
+    "Asia/Yakutsk",
+    "Asia/Vladivostok",
+    "Asia/Magadan",
+    "Asia/Kamchatka",
+    "Europe/Paris",
+    "UTC",
+    "Atlantic/Azores",
+    "America/Noronha",
+    "America/Montevideo",
+    "America/Barbados",
+    "America/New_York",
+    "America/Chicago",
+    "America/Denver",
+    "America/Los_Angeles",
+    "America/Anchorage",
+    "Pacific/Honolulu",
+}
+
+
+def normalize_reminder_time(hour: int, minute: int) -> tuple[int, int]:
+    hour = max(0, min(23, int(hour)))
+    minute = max(0, min(59, int(minute)))
+    rounded = int(round(minute / 15.0) * 15)
+    if rounded == 60:
+        hour = (hour + 1) % 24
+        rounded = 0
+    return hour, rounded
+
+
 def _training_week_start(local_dt: datetime, first_dow: int):
     offset = (local_dt.weekday() - first_dow) % 7
     return local_dt.date() - timedelta(days=offset)
@@ -2791,8 +2828,11 @@ async def settings_update_reminders(
     enabled = payload.get("enabled", True)
     await set_user_notifications_enabled(user_id, bool(enabled))
     timezone = str(payload.get("timezone") or "").strip()
-    if timezone:
-        await set_user_timezone(user_id, timezone)
+    if timezone and timezone not in ALLOWED_REMINDER_TIMEZONES:
+        timezone = "UTC"
+    if not timezone:
+        timezone = "UTC"
+    await set_user_timezone(user_id, timezone)
     reminders = payload.get("reminders") or []
     await clear_user_reminders(user_id)
     for reminder in reminders:
@@ -2807,6 +2847,9 @@ async def settings_update_reminders(
             continue
         if day_no <= 0:
             continue
+        if not 0 <= dow <= 6:
+            continue
+        hour, minute = normalize_reminder_time(hour, minute)
         await add_user_reminder(user_id, dow, hour, minute, day_no=day_no)
     await set_app_meta("reminders_updated_at", datetime.now(UTC).isoformat())
     return {"ok": True}
