@@ -671,6 +671,39 @@
       color: var(--text);
     }
     .measurements-header { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; justify-content: space-between; }
+    .measurements-layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 2fr); gap: 14px; }
+    .measurements-summary .card-title { font-size: 16px; }
+    .measurements-summary .card-summary { font-size: 13px; }
+    .measurements-actions { display: grid; gap: 12px; }
+    .measurements-actions-grid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); }
+    .measurements-list { display: grid; gap: 14px; margin-top: 14px; }
+    .measurement-card { position: relative; overflow: hidden; }
+    .measurement-card::before {
+      content: '';
+      position: absolute;
+      inset: 0 0 auto 0;
+      height: 3px;
+      background: color-mix(in srgb, var(--accent) 60%, transparent);
+      opacity: 0.9;
+    }
+    .measurement-card[data-category="circumference"]::before { background: #43a047; }
+    .measurement-card[data-category="records"]::before { background: #6d4c41; }
+    .measurement-card[data-category="vitals"]::before { background: #1e88e5; }
+    .measurement-card[data-category="custom"]::before { background: #8e24aa; }
+    .measurement-card-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+    .measurement-card-title { font-weight: 700; }
+    .measurement-card-toggle {
+      border: none;
+      background: none;
+      color: var(--accent);
+      font-weight: 700;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .measurement-card-toggle span { font-size: 12px; color: var(--muted); }
+    .measurement-card.collapsed .measurement-category { display: none; }
     .measurement-category { display: grid; gap: 10px; }
     .measurement-item {
       padding: 12px;
@@ -695,7 +728,15 @@
       border: 1px solid var(--border);
       font-size: 11px;
       color: var(--muted);
-      background: color-mix(in srgb, var(--bg) 80%, transparent);
+      background: color-mix(in srgb, var(--accent) 12%, var(--bg));
+    }
+    .measurement-item .measurement-badge { color: var(--text); border-color: color-mix(in srgb, var(--accent) 30%, var(--border)); }
+    .measurement-item .measurement-badge + .measurement-badge { background: color-mix(in srgb, var(--accent) 8%, var(--bg)); }
+    .measurement-actions .btn { background: color-mix(in srgb, var(--accent) 12%, var(--card)); }
+    .measurement-actions .btn.primary { background: var(--accent); color: #fff; }
+    .measurement-item .measurement-value { color: color-mix(in srgb, var(--accent) 65%, var(--text)); }
+    @media (max-width: 760px) {
+      .measurements-layout { grid-template-columns: 1fr; }
     }
     .measurement-history { display: grid; gap: 8px; margin-top: 12px; }
     .measurement-history .history-row {
@@ -1760,6 +1801,7 @@
           categories: [],
           itemsByCode: {},
           history: {},
+          expanded: {},
           sheet: {
             mode: null,
             code: null,
@@ -2817,8 +2859,7 @@
       return map;
     }
 
-    const FALLBACK_TIMEZONES = [
-      'UTC',
+    const ALLOWED_REMINDER_TIMEZONES = [
       'Europe/Kaliningrad',
       'Europe/Moscow',
       'Europe/Samara',
@@ -2830,22 +2871,25 @@
       'Asia/Vladivostok',
       'Asia/Magadan',
       'Asia/Kamchatka',
+      'Europe/Paris',
+      'UTC',
+      'Atlantic/Azores',
+      'America/Noronha',
+      'America/Montevideo',
+      'America/Barbados',
+      'America/New_York',
+      'America/Chicago',
+      'America/Denver',
+      'America/Los_Angeles',
+      'America/Anchorage',
+      'Pacific/Honolulu',
     ];
     let cachedTimezones = null;
 
     function getTimezones() {
       if (cachedTimezones) return cachedTimezones;
-      let zones = [];
-      try {
-        if (typeof Intl.supportedValuesOf === 'function') {
-          zones = Intl.supportedValuesOf('timeZone');
-        }
-      } catch (_) {}
-      if (!Array.isArray(zones) || !zones.length) {
-        zones = FALLBACK_TIMEZONES.slice();
-      }
-      cachedTimezones = zones;
-      return zones;
+      cachedTimezones = ALLOWED_REMINDER_TIMEZONES.slice();
+      return cachedTimezones;
     }
 
     function getTimezoneOffsetMinutes(timezone) {
@@ -3177,6 +3221,7 @@
       const categoryBlocks = categories
         .map((category) => {
           const items = category.items || [];
+          const expanded = measurements.expanded?.[category.code] ?? category.code === 'body';
           const itemsHtml = items
             .map((item) => {
               const latestLabel = item.latest?.display || '—';
@@ -3207,52 +3252,67 @@
               `;
             })
             .join('');
+          const toggleLabel = expanded ? 'Скрыть' : 'Показать';
+          const toggleCount = items.length ? `${items.length}` : '0';
           return `
-            <div class="card">
-              <div class="card-title">${category.name}</div>
+            <div class="card measurement-card ${expanded ? '' : 'collapsed'}" data-category="${category.code}">
+              <div class="measurement-card-head">
+                <div class="measurement-card-title">${category.name}</div>
+                <button class="measurement-card-toggle" data-action="measurement-toggle" data-code="${category.code}" aria-expanded="${expanded}">
+                  ${toggleLabel} <span>${toggleCount}</span>
+                </button>
+              </div>
               <div class="measurement-category">${itemsHtml || '<div class="muted-inline">Замеров пока нет.</div>'}</div>
             </div>
           `;
         })
         .join('');
       return `
-        <div class="card">
-          <div class="measurements-header">
-            <div class="card-title">Мои замеры</div>
-            <div class="settings-pill">Обновлено: ${lastLabel}</div>
+        <div class="measurements-layout">
+          <div class="card measurements-summary">
+            <div class="measurements-header">
+              <div class="card-title">Мои замеры</div>
+              <div class="settings-pill">Обновлено: ${lastLabel}</div>
+            </div>
+            <div class="card-summary">Записывайте показатели и отслеживайте историю по каждой метрике.</div>
           </div>
-          <div class="card-summary">Записывайте показатели и отслеживайте историю по каждой метрике.</div>
+          <div class="measurements-actions">
+            <div class="measurements-actions-grid">
+              <div class="card">
+                <div class="card-title">Добавить свой замер</div>
+                <div class="settings-row">
+                  <div class="label">Название замера</div>
+                  <input class="settings-input" id="measurementCustomName" placeholder="Например: Гибкость">
+                </div>
+                <div class="settings-row">
+                  <div class="label">Категория</div>
+                  <select class="settings-select" id="measurementCustomCategory">
+                    ${categoryOptions}
+                  </select>
+                </div>
+                <div class="settings-actions">
+                  <button class="btn primary" data-action="measurement-create">Добавить замер</button>
+                </div>
+              </div>
+              <div class="card">
+                <div class="card-title">Добавить категорию</div>
+                <div class="settings-row">
+                  <div class="label">Буква</div>
+                  <input class="settings-input" id="measurementCategoryLetter" placeholder="A">
+                </div>
+                <div class="settings-row">
+                  <div class="label">Название</div>
+                  <input class="settings-input" id="measurementCategoryName" placeholder="Например: Биомаркеры">
+                </div>
+                <div class="settings-actions">
+                  <button class="btn" data-action="measurement-create-category">Добавить категорию</button>
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
-        ${categoryBlocks || '<div class="card"><div class="muted-inline">Пока нет замеров.</div></div>'}
-        <div class="card">
-          <div class="card-title">Добавить свой замер</div>
-          <div class="settings-row">
-            <div class="label">Название замера</div>
-            <input class="settings-input" id="measurementCustomName" placeholder="Например: Гибкость">
-          </div>
-          <div class="settings-row">
-            <div class="label">Категория</div>
-            <select class="settings-select" id="measurementCustomCategory">
-              ${categoryOptions}
-            </select>
-          </div>
-          <div class="settings-actions">
-            <button class="btn primary" data-action="measurement-create">Добавить замер</button>
-          </div>
-        </div>
-        <div class="card">
-          <div class="card-title">Добавить категорию</div>
-          <div class="settings-row">
-            <div class="label">Буква</div>
-            <input class="settings-input" id="measurementCategoryLetter" placeholder="A">
-          </div>
-          <div class="settings-row">
-            <div class="label">Название</div>
-            <input class="settings-input" id="measurementCategoryName" placeholder="Например: Биомаркеры">
-          </div>
-          <div class="settings-actions">
-            <button class="btn" data-action="measurement-create-category">Добавить категорию</button>
-          </div>
+        <div class="measurements-list">
+          ${categoryBlocks || '<div class="card"><div class="muted-inline">Пока нет замеров.</div></div>'}
         </div>
       `;
     }
@@ -3380,7 +3440,7 @@
               </div>
               <div class="settings-row">
                 <select class="settings-select" data-reminder-dow>${options}</select>
-                <input class="settings-input" type="time" data-reminder-time value="${timeValue}">
+                <input class="settings-input" type="time" step="900" data-reminder-time value="${timeValue}">
               </div>
             </div>
           `;
@@ -3558,6 +3618,12 @@
           (category.items || []).forEach((item) => {
             measurements.itemsByCode[item.code] = item;
           });
+        });
+        measurements.expanded = measurements.expanded || {};
+        (measurements.categories || []).forEach((category) => {
+          if (typeof measurements.expanded[category.code] === 'undefined') {
+            measurements.expanded[category.code] = category.code === 'body';
+          }
         });
         measurements.loaded = true;
       } catch (e) {
@@ -3746,17 +3812,33 @@
 
     async function saveRemindersFromUI() {
       const rows = Array.from(document.querySelectorAll('[data-reminder-day]'));
+      const normalizeReminderTime = (value) => {
+        if (!value) return { hour: 9, minute: 0, label: '09:00' };
+        const parts = value.split(':').map((v) => Number(v));
+        let hour = Number.isFinite(parts[0]) ? parts[0] : 9;
+        let minute = Number.isFinite(parts[1]) ? parts[1] : 0;
+        hour = Math.max(0, Math.min(23, hour));
+        minute = Math.max(0, Math.min(59, minute));
+        let rounded = Math.round(minute / 15) * 15;
+        if (rounded === 60) {
+          hour = (hour + 1) % 24;
+          rounded = 0;
+        }
+        const label = `${String(hour).padStart(2, '0')}:${String(rounded).padStart(2, '0')}`;
+        return { hour, minute: rounded, label };
+      };
       const reminders = rows
         .map((row) => {
           const dayNo = Number(row.dataset.reminderDay || 0);
           const dow = Number(row.querySelector('[data-reminder-dow]')?.value ?? 0);
-          const time = row.querySelector('[data-reminder-time]')?.value || '09:00';
-          const [hour, minute] = time.split(':').map((value) => Number(value));
+          const timeInput = row.querySelector('[data-reminder-time]');
+          const normalized = normalizeReminderTime(timeInput?.value || '09:00');
+          if (timeInput) timeInput.value = normalized.label;
           return {
             day_no: dayNo,
             dow: Number.isFinite(dow) ? dow : 0,
-            hour: Number.isFinite(hour) ? hour : 9,
-            minute: Number.isFinite(minute) ? minute : 0,
+            hour: normalized.hour,
+            minute: normalized.minute,
           };
         })
         .filter((item) => item.day_no > 0);
@@ -3890,6 +3972,15 @@
           }
           if (action === 'save-reminders') {
             await saveRemindersFromUI();
+            return;
+          }
+          if (action === 'measurement-toggle') {
+            const code = target.dataset.code;
+            if (!code) return;
+            const expanded = state.settings.measurements.expanded || {};
+            expanded[code] = !expanded[code];
+            state.settings.measurements.expanded = expanded;
+            renderSettings();
             return;
           }
           if (action === 'clear-completions') {
