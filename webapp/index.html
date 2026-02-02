@@ -1824,6 +1824,7 @@
 
     const state = {
       initData: '',
+      startDayIndex: null,
       dayIndex: null,
       date: '',
       dateIso: '',
@@ -1951,6 +1952,28 @@
       } catch (_) {}
 
       return '';
+    }
+
+    function getDayIndexFromUrl() {
+      const paramsList = [];
+      try {
+        if (window.location.search) {
+          paramsList.push(new URLSearchParams(window.location.search));
+        }
+      } catch (_) {}
+      try {
+        const rawHash = (window.location.hash || '').replace(/^#/, '');
+        if (rawHash.includes('day_index=')) {
+          const query = rawHash.includes('?') ? rawHash.split('?')[1] : rawHash;
+          paramsList.push(new URLSearchParams(query));
+        }
+      } catch (_) {}
+      for (const params of paramsList) {
+        const value = params.get('day_index') || params.get('day');
+        const num = Number(value);
+        if (Number.isFinite(num) && num > 0) return Math.floor(num);
+      }
+      return null;
     }
 
     async function waitTelegramInitData(timeoutMs = 15000) {
@@ -2981,81 +3004,47 @@
       return map;
     }
 
-    const ALLOWED_REMINDER_TIMEZONES = [
-      'Europe/Kaliningrad',
-      'Europe/Moscow',
-      'Europe/Samara',
-      'Asia/Yekaterinburg',
-      'Asia/Omsk',
-      'Asia/Krasnoyarsk',
-      'Asia/Irkutsk',
-      'Asia/Yakutsk',
-      'Asia/Vladivostok',
-      'Asia/Magadan',
-      'Asia/Kamchatka',
-      'Europe/Paris',
-      'UTC',
-      'Atlantic/Azores',
-      'America/Noronha',
-      'America/Montevideo',
-      'America/Barbados',
-      'America/New_York',
-      'America/Chicago',
-      'America/Denver',
-      'America/Los_Angeles',
-      'America/Anchorage',
-      'Pacific/Honolulu',
+    const REMINDER_TIMEZONES = [
+      { value: 'Europe/Kaliningrad', label: 'GMT+2 (Калининград)' },
+      { value: 'Europe/Moscow', label: 'GMT+3 (Москва)' },
+      { value: 'Europe/Samara', label: 'GMT+4 (Самара)' },
+      { value: 'Asia/Yekaterinburg', label: 'GMT+5 (Екатеринбург)' },
+      { value: 'Asia/Omsk', label: 'GMT+6 (Омск)' },
+      { value: 'Asia/Krasnoyarsk', label: 'GMT+7 (Красноярск)' },
+      { value: 'Asia/Irkutsk', label: 'GMT+8 (Иркутск)' },
+      { value: 'Asia/Yakutsk', label: 'GMT+9 (Якутск)' },
+      { value: 'Asia/Vladivostok', label: 'GMT+10 (Владивосток)' },
+      { value: 'Asia/Magadan', label: 'GMT+11 (Магадан)' },
+      { value: 'Asia/Kamchatka', label: 'GMT+12 (Камчатка)' },
+      { value: 'Europe/Paris', label: 'GMT+1 (Париж)' },
+      { value: 'UTC', label: 'GMT' },
+      { value: 'Atlantic/Azores', label: 'GMT-1 (Азорские острова)' },
+      { value: 'America/Noronha', label: 'GMT-2 (Фернанду-ди-Норонья)' },
+      { value: 'America/Montevideo', label: 'GMT-3 (Уругвай)' },
+      { value: 'America/Barbados', label: 'GMT-4 (Барбадос)' },
+      { value: 'America/New_York', label: 'GMT-5 (Нью-Йорк, США)' },
+      { value: 'America/Chicago', label: 'GMT-6 (Чикаго, США)' },
+      { value: 'America/Denver', label: 'GMT-7 (Денвер, США)' },
+      { value: 'America/Los_Angeles', label: 'GMT-8 (Лос-Анджелес, США)' },
+      { value: 'America/Anchorage', label: 'GMT-9 (Анкоридж, США)' },
+      { value: 'Pacific/Honolulu', label: 'GMT-10 (Гавайи)' },
     ];
-    let cachedTimezones = null;
+    const REMINDER_TIMEZONE_MAP = new Map(REMINDER_TIMEZONES.map((entry) => [entry.value, entry.label]));
 
-    function getTimezones() {
-      if (cachedTimezones) return cachedTimezones;
-      cachedTimezones = ALLOWED_REMINDER_TIMEZONES.slice();
-      return cachedTimezones;
-    }
-
-    function getTimezoneOffsetMinutes(timezone) {
-      try {
-        const now = new Date();
-        const localeString = now.toLocaleString('en-US', { timeZone: timezone });
-        const tzDate = new Date(localeString);
-        const diffMinutes = Math.round((tzDate - now) / 60000);
-        return Number.isFinite(diffMinutes) ? diffMinutes : 0;
-      } catch (_) {
-        return 0;
-      }
-    }
-
-    function formatTimezoneOffset(offset) {
-      const sign = offset >= 0 ? '+' : '-';
-      const abs = Math.abs(offset);
-      const hours = String(Math.floor(abs / 60)).padStart(2, '0');
-      const minutes = String(abs % 60).padStart(2, '0');
-      if (offset === 0) return 'UTC';
-      return `UTC${sign}${hours}:${minutes}`;
+    function normalizeTimezone(timezone) {
+      return REMINDER_TIMEZONE_MAP.has(timezone) ? timezone : 'UTC';
     }
 
     function formatTimezoneLabel(timezone) {
-      if (!timezone) return 'UTC';
-      const offset = getTimezoneOffsetMinutes(timezone);
-      return formatTimezoneOffset(offset);
+      if (!timezone) return 'GMT';
+      return REMINDER_TIMEZONE_MAP.get(timezone) || 'GMT';
     }
 
     function buildTimezoneOptions(selectedTimezone) {
-      const timezoneList = getTimezones();
-      const byOffset = new Map();
-      timezoneList.forEach((tz) => {
-        const offset = getTimezoneOffsetMinutes(tz);
-        if (!byOffset.has(offset)) byOffset.set(offset, tz);
-      });
-      if (selectedTimezone) {
-        const selectedOffset = getTimezoneOffsetMinutes(selectedTimezone);
-        byOffset.set(selectedOffset, selectedTimezone);
-      }
-      return Array.from(byOffset.entries())
-        .sort((a, b) => a[0] - b[0])
-        .map(([offset, tz]) => (
-          `<option value="${tz}" ${tz === selectedTimezone ? 'selected' : ''}>${formatTimezoneOffset(offset)}</option>`
+      const normalized = normalizeTimezone(selectedTimezone);
+      return REMINDER_TIMEZONES
+        .map(({ value, label }) => (
+          `<option value="${value}" ${value === normalized ? 'selected' : ''}>${label}</option>`
         ))
         .join('');
     }
@@ -3603,8 +3592,8 @@
 
       const shareText = s.share.text || 'Здесь появится текст с вашим прогрессом.';
 
-      const fallbackTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
-      const selectedTimezone = s.timezone || fallbackTimezone;
+      const fallbackTimezone = 'UTC';
+      const selectedTimezone = normalizeTimezone(s.timezone || fallbackTimezone);
       const timezoneOptions = buildTimezoneOptions(selectedTimezone);
       const timezoneLabel = formatTimezoneLabel(selectedTimezone);
 
@@ -4074,11 +4063,11 @@
           };
         })
         .filter((item) => item.day_no > 0);
-      const timezone =
+      const timezone = normalizeTimezone(
         document.querySelector('[data-settings-timezone]')?.value
-        || state.settings.timezone
-        || Intl.DateTimeFormat().resolvedOptions().timeZone
-        || 'UTC';
+          || state.settings.timezone
+          || 'UTC'
+      );
       await apiFetch('/gymapi/settings/reminders', {
         method: 'POST',
         body: JSON.stringify({
@@ -6266,7 +6255,12 @@
         const info = await apiFetch('/gymapi/day/today');
         state.activeDays = info.active_days || [];
         state.completedDays = new Set((info.completed_days || []).map(Number));
-        const targetDay = info.suggested_day_index || (state.activeDays[0]?.day_index);
+        let targetDay = info.suggested_day_index || (state.activeDays[0]?.day_index);
+        if (state.startDayIndex) {
+          const match = state.activeDays.find((d) => Number(d.day_index) === Number(state.startDayIndex));
+          if (match) targetDay = match.day_index;
+          state.startDayIndex = null;
+        }
         renderDayOptions(targetDay);
         if (state.manage.add.open) renderManageDayOptions();
         state.date = info.date || '';
@@ -7481,6 +7475,7 @@
       setupVisibilityRefresh();
       updateActingBanner();
       if (!state.isTelegram) { handleRouteFromHash(); return; }
+      state.startDayIndex = getDayIndexFromUrl();
       loadTrainerOverview().catch(console.error);
       await loadToday();
       ensureSettingsOverviewLoaded({ refreshExercises: true }).catch(console.error);
