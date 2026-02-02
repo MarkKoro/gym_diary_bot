@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, time, timedelta, timezone, tzinfo
 from datetime import datetime as _dt, timedelta as _td, time as _t
 from html import escape
+from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 from zoneinfo import ZoneInfo
 from zoneinfo import ZoneInfo as _Z
 from collections import defaultdict
@@ -265,6 +266,24 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("telegram").setLevel(logging.INFO)
 
 WEBAPP_URL = os.getenv("WEBAPP_URL", "https://telegrambotsforeveryone.duckdns.org/gymapp/")
+
+
+def build_webapp_day_url(day_index: int | None) -> str:
+    if not day_index:
+        return WEBAPP_URL
+    try:
+        day_value = int(day_index)
+    except (TypeError, ValueError):
+        return WEBAPP_URL
+    if day_value <= 0:
+        return WEBAPP_URL
+    try:
+        parsed = urlparse(WEBAPP_URL)
+    except Exception:
+        return WEBAPP_URL
+    query = dict(parse_qsl(parsed.query, keep_blank_values=True))
+    query["day_index"] = str(day_value)
+    return urlunparse(parsed._replace(query=urlencode(query)))
 
 user_locks = defaultdict(asyncio.Lock)
 logger = logging.getLogger(__name__)
@@ -7140,6 +7159,9 @@ async def build_workout_reminder(
         completions = await get_active_day_completions(user_id)
         cheer = format_reminder_cheer(len(completions))
         if day_index:
+            keyboard_rows.append(
+                [InlineKeyboardButton("Открыть день", web_app=WebAppInfo(build_webapp_day_url(day_index)))]
+            )
             keyboard_rows.append(
                 [InlineKeyboardButton("Перейти ко дню", callback_data=f"day:open:{day_index}")]
             )
