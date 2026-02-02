@@ -836,6 +836,26 @@
     .measurement-chart .dot { fill: var(--accent); }
     .measurement-sheet-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 14px; }
     .measurement-sheet-actions .btn { flex: 1; min-width: 120px; }
+    .measurement-sheet-header { display: flex; align-items: flex-start; gap: 10px; margin-bottom: 4px; }
+    .measurement-sheet-titles { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+    .measurement-sheet-header .sheet-title,
+    .measurement-sheet-header .sheet-subtitle { margin: 0; }
+    .measurement-sheet-header .sheet-title { line-height: 1.2; }
+    .measurement-sheet-back {
+      border: 1px solid var(--border);
+      background: var(--card);
+      color: var(--text);
+      font-weight: 700;
+      border-radius: 12px;
+      padding: 8px 10px;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      cursor: pointer;
+      box-shadow: var(--shadow);
+      white-space: nowrap;
+    }
+    .measurement-sheet-back:hover { border-color: var(--accent); color: var(--accent); }
     .anatomy-list { display: flex; flex-direction: column; gap: 10px; }
     .anatomy-row { display: grid; grid-template-columns: minmax(0,1fr) 130px; gap: 10px; align-items: center; padding: 10px 12px; border-radius: 12px; border: 1px solid var(--border); background: var(--bg); }
     .anatomy-controls { display: flex; align-items: center; gap: 8px; justify-content: flex-end; }
@@ -1673,8 +1693,18 @@
     <div class="sheet">
       <div class="sheet-handle"></div>
       <div class="sheet-content">
-        <div class="sheet-title" id="measurementSheetTitle"></div>
-        <div class="sheet-subtitle" id="measurementSheetSubtitle"></div>
+        <div class="measurement-sheet-header">
+          <button class="measurement-sheet-back hidden" id="measurementSheetBack" data-action="measurement-sheet-back" type="button">
+            <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+              <path d="m15 18-6-6 6-6"></path>
+            </svg>
+            <span id="measurementSheetBackLabel">Назад</span>
+          </button>
+          <div class="measurement-sheet-titles">
+            <div class="sheet-title" id="measurementSheetTitle"></div>
+            <div class="sheet-subtitle" id="measurementSheetSubtitle"></div>
+          </div>
+        </div>
         <div id="measurementSheetBody"></div>
       </div>
     </div>
@@ -1886,6 +1916,7 @@
             mode: null,
             code: null,
             view: 'list',
+            source: null,
           },
         },
       },
@@ -3787,6 +3818,7 @@
       measurements.sheet.mode = 'overview';
       measurements.sheet.code = null;
       measurements.sheet.view = 'list';
+      measurements.sheet.source = 'measurements';
       renderMeasurementSheet();
       document.getElementById('measurementSheet')?.classList.add('show');
       document.body.classList.add('drawer-open');
@@ -3798,8 +3830,10 @@
 
     function openMeasurementSheet(mode, code) {
       const measurements = state.settings.measurements;
+      const source = measurements.sheet?.mode === 'overview' ? 'overview' : 'measurements';
       measurements.sheet.mode = mode;
       measurements.sheet.code = code;
+      measurements.sheet.source = source;
       if (mode === 'history') measurements.sheet.view = 'list';
       renderMeasurementSheet();
       document.getElementById('measurementSheet')?.classList.add('show');
@@ -3815,7 +3849,7 @@
     }
 
     function closeMeasurementSheet() {
-      state.settings.measurements.sheet = { mode: null, code: null, view: 'list' };
+      state.settings.measurements.sheet = { mode: null, code: null, view: 'list', source: null };
       document.getElementById('measurementSheet')?.classList.remove('show');
       document.body.classList.remove('drawer-open');
     }
@@ -3858,15 +3892,31 @@
       const body = document.getElementById('measurementSheetBody');
       const titleEl = document.getElementById('measurementSheetTitle');
       const subtitleEl = document.getElementById('measurementSheetSubtitle');
-      if (!sheet || !body || !titleEl || !subtitleEl) return;
-      const { mode, code, view } = measurements.sheet || {};
+      const backBtn = document.getElementById('measurementSheetBack');
+      const backLabel = document.getElementById('measurementSheetBackLabel');
+      if (!sheet || !body || !titleEl || !subtitleEl || !backBtn || !backLabel) return;
+      const { mode, code, view, source } = measurements.sheet || {};
       if (!mode || !code) {
         if (mode !== 'overview') {
           titleEl.textContent = '';
           subtitleEl.textContent = '';
           body.innerHTML = '';
+          backBtn.classList.add('hidden');
           return;
         }
+      }
+      const showBack = mode === 'overview'
+        || (mode === 'history' && view === 'chart')
+        || (mode === 'history' && source === 'overview');
+      backBtn.classList.toggle('hidden', !showBack);
+      if (mode === 'overview') {
+        backLabel.textContent = 'К замерам';
+      } else if (mode === 'history' && view === 'chart') {
+        backLabel.textContent = 'К списку';
+      } else if (mode === 'history' && source === 'overview') {
+        backLabel.textContent = 'К обзору';
+      } else {
+        backLabel.textContent = 'Назад';
       }
       if (mode === 'overview') {
         const allItems = (measurements.categories || [])
@@ -4395,10 +4445,31 @@
         const target = event.target.closest('[data-action]');
         if (!target) return;
         const action = target.dataset.action;
-        const code = target.dataset.code || state.settings.measurements.sheet.code;
+        const sheetState = state.settings.measurements.sheet;
+        if (action === 'measurement-sheet-back') {
+          if (sheetState.mode === 'overview') {
+            closeMeasurementSheet();
+            return;
+          }
+          if (sheetState.mode === 'history') {
+            if (sheetState.view === 'chart') {
+              sheetState.view = 'list';
+              renderMeasurementSheet();
+              return;
+            }
+            if (sheetState.source === 'overview') {
+              openMeasurementsOverview();
+              return;
+            }
+            closeMeasurementSheet();
+            return;
+          }
+          closeMeasurementSheet();
+          return;
+        }
+        const code = target.dataset.code || sheetState.code;
         if (!code) return;
         if (action === 'measurement-history-toggle') {
-          const sheetState = state.settings.measurements.sheet;
           sheetState.view = sheetState.view === 'chart' ? 'list' : 'chart';
           renderMeasurementSheet();
           return;
