@@ -670,12 +670,73 @@
       font-size: 13px;
       color: var(--text);
     }
-    .measurements-header { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; justify-content: space-between; }
-    .measurements-layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 2fr); gap: 14px; }
-    .measurements-summary .card-title { font-size: 16px; }
-    .measurements-summary .card-summary { font-size: 13px; }
-    .measurements-actions { display: grid; gap: 12px; }
-    .measurements-actions-grid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); }
+    .measurements-toolbar { display: grid; gap: 12px; }
+    .measurements-top { display: flex; flex-direction: column; gap: 10px; align-items: flex-start; }
+    .measurements-actions-row { display: flex; gap: 12px; align-items: center; width: 100%; }
+    .measurements-plus-wrap { position: relative; display: inline-flex; }
+    .measurements-plus-btn {
+      width: 52px;
+      height: 52px;
+      border-radius: 16px;
+      background: var(--accent);
+      color: #fff;
+      border: none;
+      box-shadow: var(--shadow);
+      display: grid;
+      place-items: center;
+      font-size: 24px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    .measurements-plus-btn:active { transform: scale(0.97); }
+    .measurements-plus-menu {
+      position: absolute;
+      top: 58px;
+      left: 0;
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 8px;
+      box-shadow: var(--shadow);
+      min-width: 220px;
+      display: none;
+      z-index: 5;
+    }
+    .measurements-plus-menu.open { display: grid; gap: 6px; }
+    .measurements-plus-menu button {
+      width: 100%;
+      text-align: left;
+      border: none;
+      background: var(--bg);
+      color: var(--text);
+      border-radius: 12px;
+      padding: 10px 12px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    .measurements-plus-menu button:hover { background: rgba(0,0,0,0.04); }
+    [data-theme="dark"] .measurements-plus-menu button:hover { background: rgba(255,255,255,0.06); }
+    .measurements-form-card { display: grid; gap: 12px; }
+    .measurement-form-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+    .measurement-overview-grid { display: grid; gap: 12px; }
+    .measurement-overview-card {
+      width: 100%;
+      text-align: left;
+      border: 1px solid var(--border);
+      background: var(--card);
+      border-radius: 16px;
+      padding: 14px;
+      display: grid;
+      gap: 8px;
+      cursor: pointer;
+      color: var(--text);
+    }
+    .measurement-overview-card:hover { background: rgba(0,0,0,0.03); }
+    [data-theme="dark"] .measurement-overview-card:hover { background: rgba(255,255,255,0.05); }
+    .measurement-overview-title { font-weight: 700; font-size: 15px; }
+    .measurement-overview-meta { color: var(--muted); font-size: 12px; }
+    .measurement-overview-chart { min-height: 90px; }
+    .measurement-overview-chart .measurement-chart { height: 120px; }
     .measurements-list { display: grid; gap: 14px; margin-top: 14px; }
     .measurement-card { position: relative; overflow: hidden; }
     .measurement-card::before {
@@ -736,7 +797,7 @@
     .measurement-actions .btn.primary { background: var(--accent); color: #fff; }
     .measurement-item .measurement-value { color: color-mix(in srgb, var(--accent) 65%, var(--text)); }
     @media (max-width: 760px) {
-      .measurements-layout { grid-template-columns: 1fr; }
+      .measurements-actions-row { flex-wrap: wrap; }
     }
     .measurement-history { display: grid; gap: 8px; margin-top: 12px; }
     .measurement-history .history-row {
@@ -1336,7 +1397,7 @@
         <button class="menu-item active" data-route="today">Сегодня</button>
         <button class="menu-item" data-route="library">Статистика упражнений</button>
         <button class="menu-item" data-route="settings">Настройки</button>
-        <button class="menu-item" data-route="settings" data-section="measurements">Мои замеры</button>
+        <button class="menu-item" data-route="measurements">Мои замеры</button>
       </nav>
     </div>
   </div>
@@ -1460,6 +1521,10 @@
           <div class="card-title">Настройки</div>
           <div id="settingsContent" class="settings-section"></div>
         </div>
+      </section>
+
+      <section id="screen-measurements" class="screen" data-route="measurements">
+        <div id="measurementsContent" class="settings-section"></div>
       </section>
 
     </main>
@@ -1712,6 +1777,7 @@
       today: 'Сегодня',
       library: 'Статистика упражнений',
       settings: 'Настройки',
+      measurements: 'Мои замеры',
     };
 
     const state = {
@@ -1802,6 +1868,9 @@
           itemsByCode: {},
           history: {},
           expanded: {},
+          menuOpen: false,
+          formView: null,
+          overviewLoading: false,
           sheet: {
             mode: null,
             code: null,
@@ -3214,7 +3283,6 @@
         return '<div class="loading">Загружаем замеры…</div>';
       }
       const categories = measurements.categories || [];
-      const lastLabel = measurements.lastUpdate ? formatMeasurementDateLabel(measurements.lastUpdate) : 'нет данных';
       const categoryOptions = categories
         .map((category) => `<option value="${category.code}">${category.name}</option>`)
         .join('');
@@ -3267,54 +3335,95 @@
           `;
         })
         .join('');
+      const formView = measurements.formView;
+      const menuOpenClass = measurements.menuOpen ? 'open' : '';
+      const formTitle = formView === 'category' ? 'Добавить категорию' : 'Добавить свой замер';
+      const formBody = formView === 'category'
+        ? `
+            <div class="settings-row">
+              <div class="label">Буква</div>
+              <input class="settings-input" id="measurementCategoryLetter" placeholder="A">
+            </div>
+            <div class="settings-row">
+              <div class="label">Название</div>
+              <input class="settings-input" id="measurementCategoryName" placeholder="Например: Биомаркеры">
+            </div>
+            <div class="settings-actions">
+              <button class="btn" data-action="measurement-create-category">Добавить категорию</button>
+            </div>
+          `
+        : `
+            <div class="settings-row">
+              <div class="label">Название замера</div>
+              <input class="settings-input" id="measurementCustomName" placeholder="Например: Гибкость">
+            </div>
+            <div class="settings-row">
+              <div class="label">Категория</div>
+              <select class="settings-select" id="measurementCustomCategory">
+                ${categoryOptions}
+              </select>
+            </div>
+            <div class="settings-actions">
+              <button class="btn primary" data-action="measurement-create">Добавить замер</button>
+            </div>
+          `;
+      const formCard = formView
+        ? `
+          <div class="card measurements-form-card">
+            <div class="measurement-form-head">
+              <div class="card-title">${formTitle}</div>
+              <button class="icon-btn ghost" data-action="measurement-form-close" aria-label="Скрыть форму">
+                <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                  <path d="m6 6 12 12M18 6 6 18"></path>
+                </svg>
+              </button>
+            </div>
+            ${formBody}
+          </div>
+        `
+        : '';
       return `
-        <div class="measurements-layout">
-          <div class="card measurements-summary">
-            <div class="measurements-header">
-              <div class="card-title">Мои замеры</div>
-              <div class="settings-pill">Обновлено: ${lastLabel}</div>
-            </div>
-            <div class="card-summary">Записывайте показатели и отслеживайте историю по каждой метрике.</div>
-          </div>
-          <div class="measurements-actions">
-            <div class="measurements-actions-grid">
-              <div class="card">
-                <div class="card-title">Добавить свой замер</div>
-                <div class="settings-row">
-                  <div class="label">Название замера</div>
-                  <input class="settings-input" id="measurementCustomName" placeholder="Например: Гибкость">
-                </div>
-                <div class="settings-row">
-                  <div class="label">Категория</div>
-                  <select class="settings-select" id="measurementCustomCategory">
-                    ${categoryOptions}
-                  </select>
-                </div>
-                <div class="settings-actions">
-                  <button class="btn primary" data-action="measurement-create">Добавить замер</button>
+        <div class="measurements-toolbar">
+          <div class="measurements-top">
+            <button class="btn small-btn settings-back" data-action="measurements-back">← К сегодняшнему дню</button>
+            <div class="measurements-actions-row">
+              <div class="measurements-plus-wrap">
+                <button class="measurements-plus-btn" data-action="measurement-plus-toggle" aria-label="Добавить замер или категорию">＋</button>
+                <div class="measurements-plus-menu ${menuOpenClass}">
+                  <button type="button" data-action="measurement-open-form" data-form="custom">Добавить свой замер</button>
+                  <button type="button" data-action="measurement-open-form" data-form="category">Добавить категорию</button>
                 </div>
               </div>
-              <div class="card">
-                <div class="card-title">Добавить категорию</div>
-                <div class="settings-row">
-                  <div class="label">Буква</div>
-                  <input class="settings-input" id="measurementCategoryLetter" placeholder="A">
-                </div>
-                <div class="settings-row">
-                  <div class="label">Название</div>
-                  <input class="settings-input" id="measurementCategoryName" placeholder="Например: Биомаркеры">
-                </div>
-                <div class="settings-actions">
-                  <button class="btn" data-action="measurement-create-category">Добавить категорию</button>
-                </div>
-              </div>
+              <button class="icon-btn" data-action="measurement-overview" aria-label="График всех замеров">
+                <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                  <path d="M4 17l5-6 4 4 7-8"></path>
+                  <path d="M4 19h16"></path>
+                </svg>
+              </button>
             </div>
           </div>
+          ${formCard}
         </div>
         <div class="measurements-list">
           ${categoryBlocks || '<div class="card"><div class="muted-inline">Пока нет замеров.</div></div>'}
         </div>
       `;
+    }
+
+    function renderMeasurementsScreen() {
+      const container = document.getElementById('measurementsContent');
+      if (!container) return;
+      container.innerHTML = renderMeasurementsSection();
+    }
+
+    function renderMeasurementsView() {
+      if (state.currentRoute === 'measurements') {
+        renderMeasurementsScreen();
+        return;
+      }
+      if (state.currentRoute === 'settings' && state.settings.view === 'measurements') {
+        renderSettings();
+      }
     }
 
     function renderSettings() {
@@ -3337,14 +3446,6 @@
                 </button>
                 <button class="settings-menu-item" data-action="open-settings" data-section="groups">
                   <span>Мои группы мышц</span>
-                  <span class="settings-menu-arrow">›</span>
-                </button>
-              </div>
-              <div class="settings-menu-divider"></div>
-              <div class="settings-menu-group">
-                <div class="settings-menu-title">Показатели</div>
-                <button class="settings-menu-item" data-action="open-settings" data-section="measurements">
-                  <span>Мои замеры</span>
                   <span class="settings-menu-arrow">›</span>
                 </button>
               </div>
@@ -3608,7 +3709,7 @@
       const measurements = state.settings.measurements;
       if (measurements.loading || (measurements.loaded && !force)) return;
       measurements.loading = true;
-      renderSettings();
+      renderMeasurementsView();
       try {
         const data = await apiFetch('/gymapi/measurements/overview');
         measurements.categories = data.categories || [];
@@ -3630,7 +3731,7 @@
         toast('Не удалось загрузить замеры');
       } finally {
         measurements.loading = false;
-        renderSettings();
+        renderMeasurementsView();
       }
     }
 
@@ -3652,6 +3753,30 @@
       } finally {
         renderMeasurementSheet();
       }
+    }
+
+    async function loadAllMeasurementHistories() {
+      const measurements = state.settings.measurements;
+      const codes = Object.keys(measurements.itemsByCode || {});
+      if (!codes.length) return;
+      measurements.overviewLoading = true;
+      renderMeasurementSheet();
+      await Promise.all(codes.map((code) => loadMeasurementHistory(code)));
+      measurements.overviewLoading = false;
+      renderMeasurementSheet();
+    }
+
+    function openMeasurementsOverview() {
+      const measurements = state.settings.measurements;
+      measurements.sheet.mode = 'overview';
+      measurements.sheet.code = null;
+      measurements.sheet.view = 'list';
+      renderMeasurementSheet();
+      document.getElementById('measurementSheet')?.classList.add('show');
+      if (!measurements.loaded) {
+        loadMeasurementsOverview().catch(console.error);
+      }
+      loadAllMeasurementHistories().catch(console.error);
     }
 
     function openMeasurementSheet(mode, code) {
@@ -3717,9 +3842,41 @@
       if (!sheet || !body || !titleEl || !subtitleEl) return;
       const { mode, code, view } = measurements.sheet || {};
       if (!mode || !code) {
-        titleEl.textContent = '';
-        subtitleEl.textContent = '';
-        body.innerHTML = '';
+        if (mode !== 'overview') {
+          titleEl.textContent = '';
+          subtitleEl.textContent = '';
+          body.innerHTML = '';
+          return;
+        }
+      }
+      if (mode === 'overview') {
+        const allItems = (measurements.categories || [])
+          .flatMap((category) => (category.items || []).map((item) => ({ ...item, category })));
+        titleEl.textContent = 'График всех замеров';
+        subtitleEl.textContent = 'Нажмите на линию, чтобы открыть историю замера';
+        if (!allItems.length) {
+          body.innerHTML = '<div class="muted-inline">Нет данных для графиков.</div>';
+          return;
+        }
+        const overviewRows = allItems
+          .map((item) => {
+            const history = measurements.history[item.code];
+            const loading = !history || history.loading || measurements.overviewLoading;
+            const latestLabel = item.latest?.display || '—';
+            const deltaLabel = item.delta ? ` · ${item.delta}` : '';
+            const chart = loading
+              ? '<div class="muted-inline">Загружаем историю…</div>'
+              : buildMeasurementChart(history.entries || []);
+            return `
+              <button class="measurement-overview-card" data-action="measurement-history" data-code="${item.code}">
+                <div class="measurement-overview-title">${item.name}</div>
+                <div class="measurement-overview-meta">${latestLabel}${deltaLabel}</div>
+                <div class="measurement-overview-chart">${chart}</div>
+              </button>
+            `;
+          })
+          .join('');
+        body.innerHTML = `<div class="measurement-overview-grid">${overviewRows}</div>`;
         return;
       }
       const item = measurements.itemsByCode[code];
@@ -3861,6 +4018,95 @@
       renderSettings();
     }
 
+    async function handleMeasurementAction(action, target) {
+      const measurements = state.settings.measurements;
+      if (action === 'measurements-back') {
+        navigateTo('today');
+        return true;
+      }
+      if (action === 'measurement-plus-toggle') {
+        measurements.menuOpen = !measurements.menuOpen;
+        renderMeasurementsView();
+        return true;
+      }
+      if (action === 'measurement-open-form') {
+        measurements.formView = target.dataset.form || 'custom';
+        measurements.menuOpen = false;
+        renderMeasurementsView();
+        return true;
+      }
+      if (action === 'measurement-form-close') {
+        measurements.formView = null;
+        renderMeasurementsView();
+        return true;
+      }
+      if (action === 'measurement-overview') {
+        openMeasurementsOverview();
+        return true;
+      }
+      if (action === 'measurement-toggle') {
+        const code = target.dataset.code;
+        if (!code) return true;
+        const expanded = measurements.expanded || {};
+        expanded[code] = !expanded[code];
+        measurements.expanded = expanded;
+        renderMeasurementsView();
+        return true;
+      }
+      if (action === 'measurement-add') {
+        const code = target.dataset.code;
+        if (!code) return true;
+        openMeasurementSheet('entry', code);
+        return true;
+      }
+      if (action === 'measurement-history') {
+        const code = target.dataset.code;
+        if (!code) return true;
+        openMeasurementSheet('history', code);
+        return true;
+      }
+      if (action === 'measurement-create') {
+        const nameInput = document.getElementById('measurementCustomName');
+        const categorySelect = document.getElementById('measurementCustomCategory');
+        const name = (nameInput?.value || '').trim();
+        const categoryCode = (categorySelect?.value || '').trim();
+        if (!name) {
+          toast('Введите название замера');
+          return true;
+        }
+        await apiFetch('/gymapi/measurements/custom', {
+          method: 'POST',
+          body: JSON.stringify({ name, category_code: categoryCode }),
+        });
+        if (nameInput) nameInput.value = '';
+        measurements.formView = null;
+        toast('Замер добавлен ✅');
+        await loadMeasurementsOverview({ force: true });
+        return true;
+      }
+      if (action === 'measurement-create-category') {
+        const letterInput = document.getElementById('measurementCategoryLetter');
+        const nameInput = document.getElementById('measurementCategoryName');
+        const letter = (letterInput?.value || '').trim();
+        const name = (nameInput?.value || '').trim();
+        if (!name) {
+          toast('Введите название категории');
+          return true;
+        }
+        await apiFetch('/gymapi/measurements/category', {
+          method: 'POST',
+          body: JSON.stringify({ letter, name }),
+        });
+        if (letterInput) letterInput.value = '';
+        if (nameInput) nameInput.value = '';
+        measurements.formView = null;
+        toast('Категория добавлена ✅');
+        await loadMeasurementsOverview({ force: true });
+        return true;
+      }
+      return false;
+    }
+
     function setupSettingsHandlers() {
       const container = document.getElementById('settingsContent');
       if (!container) return;
@@ -3886,6 +4132,9 @@
             if (section === 'measurements') {
               await loadMeasurementsOverview();
             }
+            return;
+          }
+          if (await handleMeasurementAction(action, target)) {
             return;
           }
           if (action === 'settings-back') {
@@ -3974,15 +4223,6 @@
             await saveRemindersFromUI();
             return;
           }
-          if (action === 'measurement-toggle') {
-            const code = target.dataset.code;
-            if (!code) return;
-            const expanded = state.settings.measurements.expanded || {};
-            expanded[code] = !expanded[code];
-            state.settings.measurements.expanded = expanded;
-            renderSettings();
-            return;
-          }
           if (action === 'clear-completions') {
             await apiFetch('/gymapi/settings/clear_completions', { method: 'POST', body: JSON.stringify({}) });
             toast('Галочки сброшены');
@@ -3996,55 +4236,6 @@
           }
           if (action === 'share-shuffle') {
             await loadShareResults(true);
-            return;
-          }
-          if (action === 'measurement-add') {
-            const code = target.dataset.code;
-            if (!code) return;
-            openMeasurementSheet('entry', code);
-            return;
-          }
-          if (action === 'measurement-history') {
-            const code = target.dataset.code;
-            if (!code) return;
-            openMeasurementSheet('history', code);
-            return;
-          }
-          if (action === 'measurement-create') {
-            const nameInput = document.getElementById('measurementCustomName');
-            const categorySelect = document.getElementById('measurementCustomCategory');
-            const name = (nameInput?.value || '').trim();
-            const categoryCode = (categorySelect?.value || '').trim();
-            if (!name) {
-              toast('Введите название замера');
-              return;
-            }
-            await apiFetch('/gymapi/measurements/custom', {
-              method: 'POST',
-              body: JSON.stringify({ name, category_code: categoryCode }),
-            });
-            if (nameInput) nameInput.value = '';
-            toast('Замер добавлен ✅');
-            await loadMeasurementsOverview({ force: true });
-            return;
-          }
-          if (action === 'measurement-create-category') {
-            const letterInput = document.getElementById('measurementCategoryLetter');
-            const nameInput = document.getElementById('measurementCategoryName');
-            const letter = (letterInput?.value || '').trim();
-            const name = (nameInput?.value || '').trim();
-            if (!name) {
-              toast('Введите название категории');
-              return;
-            }
-            await apiFetch('/gymapi/measurements/category', {
-              method: 'POST',
-              body: JSON.stringify({ letter, name }),
-            });
-            if (letterInput) letterInput.value = '';
-            if (nameInput) nameInput.value = '';
-            toast('Категория добавлена ✅');
-            await loadMeasurementsOverview({ force: true });
             return;
           }
           if (action === 'trainer-toggle') {
@@ -4151,6 +4342,26 @@
         if (!target) return;
         state.settings.timezone = target.value;
         renderSettings();
+      });
+    }
+
+    function setupMeasurementsHandlers() {
+      const container = document.getElementById('measurementsContent');
+      if (!container) return;
+      container.addEventListener('click', async (event) => {
+        const measurements = state.settings.measurements;
+        if (measurements.menuOpen && !event.target.closest('.measurements-plus-wrap')) {
+          measurements.menuOpen = false;
+          renderMeasurementsView();
+        }
+        const target = event.target.closest('[data-action]');
+        if (!target) return;
+        const action = target.dataset.action;
+        try {
+          if (await handleMeasurementAction(action, target)) return;
+        } catch (err) {
+          toast('Ошибка связи. Попробуй ещё раз.');
+        }
       });
     }
 
@@ -4367,6 +4578,10 @@
         return;
       }
       state.currentRoute = normalized;
+      if (normalized !== 'measurements') {
+        state.settings.measurements.menuOpen = false;
+        state.settings.measurements.formView = null;
+      }
       document.querySelectorAll('.screen').forEach((el) => {
         el.classList.toggle('active', el.dataset.route === normalized);
       });
@@ -4405,6 +4620,10 @@
           loadMeasurementsOverview().catch(console.error);
         }
       }
+      if (normalized === 'measurements') {
+        renderMeasurementsScreen();
+        loadMeasurementsOverview().catch(console.error);
+      }
     }
 
     function navigateTo(route, replace = false) {
@@ -4432,6 +4651,8 @@
     function handleBackAction() {
       const timerSheetOpen = document.getElementById('timerSheet')?.classList.contains('show');
       if (timerSheetOpen) { closeTimerSheet(); return; }
+      const measurementSheetOpen = document.getElementById('measurementSheet')?.classList.contains('show');
+      if (measurementSheetOpen) { closeMeasurementSheet(); return; }
       const manageSheetOpen = document.getElementById('manageExerciseSheet')?.classList.contains('show');
       if (manageSheetOpen) { closeManageAddSheet(); return; }
       const traineeSheetOpen = document.getElementById('traineeSheet')?.classList.contains('show');
@@ -4449,6 +4670,15 @@
         state.settings.view = 'menu';
         renderSettings();
         return;
+      }
+      if (state.currentRoute === 'measurements') {
+        const measurements = state.settings.measurements;
+        if (measurements.menuOpen || measurements.formView) {
+          measurements.menuOpen = false;
+          measurements.formView = null;
+          renderMeasurementsScreen();
+          return;
+        }
       }
       if (state.currentRoute !== 'today') navigateTo('today');
     }
@@ -7187,6 +7417,7 @@
     async function init() {
       setupNavigation();
       setupSettingsHandlers();
+      setupMeasurementsHandlers();
       setupMeasurementSheetHandlers();
       openConfirmModal = setupModal();
       bindEvents();
