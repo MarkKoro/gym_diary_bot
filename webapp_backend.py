@@ -272,11 +272,7 @@ ALLOWED_REMINDER_TIMEZONES = {
 def normalize_reminder_time(hour: int, minute: int) -> tuple[int, int]:
     hour = max(0, min(23, int(hour)))
     minute = max(0, min(59, int(minute)))
-    rounded = int(round(minute / 15.0) * 15)
-    if rounded == 60:
-        hour = (hour + 1) % 24
-        rounded = 0
-    return hour, rounded
+    return hour, minute
 
 
 def _training_week_start(local_dt: datetime, first_dow: int):

@@ -411,6 +411,17 @@
       transform: translateY(35%);
       transition: transform 0.22s ease;
     }
+    .measurement-sheet .sheet {
+      max-height: min(85vh, 640px);
+      display: flex;
+      flex-direction: column;
+    }
+    .measurement-sheet .sheet-content {
+      flex: 1;
+      min-height: 0;
+      overflow-y: auto;
+      -webkit-overflow-scrolling: touch;
+    }
     .sheet-backdrop.show .sheet { transform: translateY(0); }
     .sheet-handle { width: 48px; height: 5px; border-radius: 999px; background: var(--border); margin: 0 auto 12px; cursor: pointer; }
     .sheet-title { font-size: 17px; font-weight: 700; }
@@ -3289,7 +3300,7 @@
       const categoryBlocks = categories
         .map((category) => {
           const items = category.items || [];
-          const expanded = measurements.expanded?.[category.code] ?? category.code === 'body';
+          const expanded = measurements.expanded?.[category.code] ?? false;
           const itemsHtml = items
             .map((item) => {
               const latestLabel = item.latest?.display || '—';
@@ -3541,7 +3552,7 @@
               </div>
               <div class="settings-row">
                 <select class="settings-select" data-reminder-dow>${options}</select>
-                <input class="settings-input" type="time" step="900" data-reminder-time value="${timeValue}">
+                <input class="settings-input" type="time" step="60" data-reminder-time value="${timeValue}">
               </div>
             </div>
           `;
@@ -3721,10 +3732,15 @@
           });
         });
         measurements.expanded = measurements.expanded || {};
-        (measurements.categories || []).forEach((category) => {
-          if (typeof measurements.expanded[category.code] === 'undefined') {
-            measurements.expanded[category.code] = category.code === 'body';
-          }
+        const categoryList = measurements.categories || [];
+        const expandedMap = measurements.expanded;
+        const firstCode = categoryList[0]?.code;
+        let activeCode = categoryList.find((category) => expandedMap[category.code])?.code;
+        if (!activeCode && firstCode) {
+          activeCode = firstCode;
+        }
+        categoryList.forEach((category) => {
+          expandedMap[category.code] = category.code === activeCode;
         });
         measurements.loaded = true;
       } catch (e) {
@@ -3773,6 +3789,7 @@
       measurements.sheet.view = 'list';
       renderMeasurementSheet();
       document.getElementById('measurementSheet')?.classList.add('show');
+      document.body.classList.add('drawer-open');
       if (!measurements.loaded) {
         loadMeasurementsOverview().catch(console.error);
       }
@@ -3786,6 +3803,7 @@
       if (mode === 'history') measurements.sheet.view = 'list';
       renderMeasurementSheet();
       document.getElementById('measurementSheet')?.classList.add('show');
+      document.body.classList.add('drawer-open');
       if (mode === 'history' && (!measurements.history[code] || measurements.history[code].loading)) {
         loadMeasurementHistory(code).catch(console.error);
       }
@@ -3799,6 +3817,7 @@
     function closeMeasurementSheet() {
       state.settings.measurements.sheet = { mode: null, code: null, view: 'list' };
       document.getElementById('measurementSheet')?.classList.remove('show');
+      document.body.classList.remove('drawer-open');
     }
 
     function buildMeasurementChart(entries) {
@@ -3976,13 +3995,8 @@
         let minute = Number.isFinite(parts[1]) ? parts[1] : 0;
         hour = Math.max(0, Math.min(23, hour));
         minute = Math.max(0, Math.min(59, minute));
-        let rounded = Math.round(minute / 15) * 15;
-        if (rounded === 60) {
-          hour = (hour + 1) % 24;
-          rounded = 0;
-        }
-        const label = `${String(hour).padStart(2, '0')}:${String(rounded).padStart(2, '0')}`;
-        return { hour, minute: rounded, label };
+        const label = `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
+        return { hour, minute, label };
       };
       const reminders = rows
         .map((row) => {
@@ -4048,7 +4062,11 @@
         const code = target.dataset.code;
         if (!code) return true;
         const expanded = measurements.expanded || {};
-        expanded[code] = !expanded[code];
+        const isExpanded = Boolean(expanded[code]);
+        Object.keys(expanded).forEach((key) => {
+          expanded[key] = false;
+        });
+        expanded[code] = !isExpanded;
         measurements.expanded = expanded;
         renderMeasurementsView();
         return true;
