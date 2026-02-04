@@ -2765,6 +2765,35 @@ async def settings_overview(ctx: AuthCtx = Depends(get_auth_ctx)):
     }
 
 
+@app.get("/onboarding/status")
+async def onboarding_status(ctx: AuthCtx = Depends(get_auth_ctx)):
+    user_id = ctx.user_id
+    settings = await db.fetch_user_settings(user_id)
+    workouts_per_week = 0
+    if settings and settings[1] is not None:
+        try:
+            workouts_per_week = int(settings[1])
+        except (TypeError, ValueError):
+            workouts_per_week = 0
+    reminders = await list_user_reminders(user_id)
+    notifications_enabled = await get_user_notifications_enabled(user_id)
+    timezone = await get_user_timezone(user_id)
+    active_days: list[tuple[int, str]] = []
+    if workouts_per_week > 0:
+        active_days = await db.list_active_days(user_id)
+    return {
+        "ok": True,
+        "workouts_per_week": workouts_per_week,
+        "days": [{"day_index": int(d), "label": label} for d, label in active_days],
+        "reminders": [
+            {"day_no": int(day_no), "dow": int(dow), "hour": int(hour), "minute": int(minute)}
+            for day_no, dow, hour, minute in reminders
+        ],
+        "notifications_enabled": bool(notifications_enabled),
+        "timezone": timezone,
+    }
+
+
 @app.post("/settings/days/{day_index}/rename")
 async def settings_rename_day(
     day_index: int,
