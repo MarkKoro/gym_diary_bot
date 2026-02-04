@@ -575,6 +575,35 @@
     .sheet-actions { margin-top: 12px; display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 8px; }
     .muted { color: var(--muted); }
     .full-screen-msg { min-height: 100vh; display: flex; align-items: center; justify-content: center; text-align: center; background: var(--bg); color: var(--text); }
+    .onboarding {
+      position: fixed;
+      inset: 0;
+      z-index: 50;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+      background: color-mix(in srgb, var(--bg) 82%, transparent);
+      backdrop-filter: blur(6px);
+    }
+    .onboarding.show { display: flex; }
+    .onboarding-card {
+      width: min(560px, 100%);
+      background: var(--card);
+      border-radius: 22px;
+      border: 1px solid var(--border);
+      box-shadow: var(--shadow);
+      padding: 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+    .onboarding-title { font-size: 20px; font-weight: 800; }
+    .onboarding-text { color: var(--muted); line-height: 1.45; }
+    .onboarding-actions { display: flex; flex-wrap: wrap; gap: 10px; }
+    .onboarding-actions .btn { flex: 1; min-width: 140px; }
+    .onboarding-pill { padding: 8px 12px; border-radius: 999px; background: var(--bg); border: 1px solid var(--border); font-size: 13px; color: var(--muted); }
+    .onboarding-reminder-row { display: grid; gap: 10px; }
     .section-title { font-size: 17px; font-weight: 800; letter-spacing: -0.01em; }
     .subtext { color: var(--muted); font-size: 14px; }
     .legend-card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 12px; box-shadow: var(--shadow); display: grid; gap: 8px; }
@@ -1435,6 +1464,9 @@
   </div>
 
   <div id="not-telegram" class="full-screen-msg" style="display:none; padding:32px; text-align:center;">Открой WebApp из Telegram. В браузере авторизация не работает.</div>
+  <div id="onboarding" class="onboarding">
+    <div class="onboarding-card" id="onboardingCard"></div>
+  </div>
   <div id="app" class="app" style="display:none">
     <header class="app-header">
       <div class="header-row">
@@ -1921,6 +1953,15 @@
             source: null,
           },
         },
+      },
+      onboarding: {
+        active: false,
+        step: 'intro',
+        workoutsPerWeek: 0,
+        remindersEnabled: true,
+        timezone: '',
+        reminders: [],
+        days: [],
       },
       acting: {
         userId: null,
@@ -4780,6 +4821,202 @@
       el._hideTimer = setTimeout(() => el.classList.remove('show'), 2000);
     }
 
+    function buildOnboardingReminders(workoutsPerWeek, reminders) {
+      const normalized = Array.isArray(reminders) ? reminders : [];
+      const map = new Map(normalized.map((rem) => [Number(rem.day_no), rem]));
+      return Array.from({ length: workoutsPerWeek }, (_, idx) => {
+        const dayNo = idx + 1;
+        const existing = map.get(dayNo);
+        if (existing) {
+          return {
+            day_no: dayNo,
+            dow: Number(existing.dow ?? (dayNo - 1) % 7),
+            hour: Number(existing.hour ?? 9),
+            minute: Number(existing.minute ?? 0),
+          };
+        }
+        return { day_no: dayNo, dow: (dayNo - 1) % 7, hour: 9, minute: 0 };
+      });
+    }
+
+    function computeOnboardingStep({ workoutsPerWeek, remindersEnabled, timezone, reminders }) {
+      if (!workoutsPerWeek || workoutsPerWeek <= 0) return 'intro';
+      const normalizedTimezone = (timezone || '').trim();
+      const needsTimezone = !normalizedTimezone || normalizedTimezone === 'UTC';
+      const reminderCount = (reminders || []).length;
+      if (!remindersEnabled) {
+        return needsTimezone ? 'timezone' : 'finish';
+      }
+      if (!reminderCount) return 'reminders';
+      if (reminderCount < workoutsPerWeek) return needsTimezone ? 'timezone' : 'schedule';
+      if (needsTimezone) return 'timezone';
+      return null;
+    }
+
+    function renderOnboarding() {
+      const container = document.getElementById('onboarding');
+      const card = document.getElementById('onboardingCard');
+      if (!container || !card) return;
+      if (!state.onboarding.active) {
+        container.classList.remove('show');
+        card.innerHTML = '';
+        return;
+      }
+      container.classList.add('show');
+      const step = state.onboarding.step;
+      if (step === 'intro') {
+        card.innerHTML = `
+          <div class="onboarding-title">Давайте настроим тренировки</div>
+          <div class="onboarding-text">
+            Привет! 👋 Здесь мы быстро настроим план тренировок и напоминания.
+            Видео-инструкцию можно посмотреть в боте, а в WebApp продолжим без неё.
+          </div>
+          <div class="onboarding-actions">
+            <button class="btn primary" data-onboarding-action="start">Начать</button>
+          </div>
+        `;
+        return;
+      }
+      if (step === 'week') {
+        const chips = Array.from({ length: 7 }, (_, i) => i + 1)
+          .map((count) => `
+            <button class="settings-chip ${count === state.onboarding.workoutsPerWeek ? 'active' : ''}" data-onboarding-action="set-week" data-count="${count}">
+              ${count}
+            </button>
+          `)
+          .join('');
+        const disabled = state.onboarding.workoutsPerWeek ? '' : 'disabled';
+        card.innerHTML = `
+          <div class="onboarding-title">Сколько тренировок в неделю?</div>
+          <div class="settings-chip-row">${chips}</div>
+          <div class="onboarding-actions">
+            <button class="btn primary" data-onboarding-action="week-next" ${disabled}>Продолжить</button>
+          </div>
+        `;
+        return;
+      }
+      if (step === 'reminders') {
+        card.innerHTML = `
+          <div class="onboarding-title">Нужны напоминания о тренировках?</div>
+          <div class="onboarding-text">Если включить — мы будем напоминать о тренировке в выбранные дни и время.</div>
+          <div class="onboarding-actions">
+            <button class="btn primary" data-onboarding-action="reminders-yes">Да, хочу</button>
+            <button class="btn" data-onboarding-action="reminders-no">Нет, не нужно</button>
+          </div>
+        `;
+        return;
+      }
+      if (step === 'timezone') {
+        const fallbackTimezone = 'UTC';
+        const selectedTimezone = normalizeTimezone(state.onboarding.timezone || fallbackTimezone);
+        const timezoneOptions = buildTimezoneOptions(selectedTimezone);
+        card.innerHTML = `
+          <div class="onboarding-title">Выберите часовой пояс</div>
+          <div class="onboarding-text">Нужен для корректного времени уведомлений и статистики.</div>
+          <div class="settings-row">
+            <div class="label">Часовой пояс</div>
+            <select class="settings-select" data-onboarding-timezone>${timezoneOptions}</select>
+          </div>
+          <div class="onboarding-actions">
+            <button class="btn primary" data-onboarding-action="timezone-next">Продолжить</button>
+          </div>
+        `;
+        return;
+      }
+      if (step === 'schedule') {
+        const remindersHtml = (state.onboarding.reminders || [])
+          .map((rem) => {
+            const dayNo = rem.day_no;
+            const timeValue = `${String(rem.hour).padStart(2, '0')}:${String(rem.minute).padStart(2, '0')}`;
+            const options = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс']
+              .map((label, idx) => `<option value="${idx}" ${idx === rem.dow ? 'selected' : ''}>${label}</option>`)
+              .join('');
+            return `
+              <div class="card onboarding-reminder-row" data-onboarding-reminder-day="${dayNo}">
+                <div class="label">День ${dayNo}</div>
+                <div class="settings-row">
+                  <select class="settings-select" data-onboarding-reminder-dow>${options}</select>
+                  <input class="settings-input" type="time" step="60" data-onboarding-reminder-time value="${timeValue}">
+                </div>
+              </div>
+            `;
+          })
+          .join('');
+        card.innerHTML = `
+          <div class="onboarding-title">Когда присылать напоминания?</div>
+          <div class="onboarding-text">Выберите день недели и время для каждой тренировки.</div>
+          <div class="card-list">${remindersHtml}</div>
+          <div class="onboarding-actions">
+            <button class="btn primary" data-onboarding-action="schedule-save">Сохранить</button>
+          </div>
+        `;
+        return;
+      }
+      card.innerHTML = `
+        <div class="onboarding-title">Всё готово!</div>
+        <div class="onboarding-text">
+          План и уведомления настроены. Теперь можно перейти в дневник и добавить упражнения.
+        </div>
+        <div class="onboarding-actions">
+          <button class="btn primary" data-onboarding-action="finish">Перейти в дневник</button>
+        </div>
+      `;
+    }
+
+    function readOnboardingRemindersFromUI() {
+      const rows = Array.from(document.querySelectorAll('[data-onboarding-reminder-day]'));
+      return rows.map((row) => {
+        const dayNo = Number(row.dataset.onboardingReminderDay || 0);
+        const dow = Number(row.querySelector('[data-onboarding-reminder-dow]')?.value ?? 0);
+        const timeValue = row.querySelector('[data-onboarding-reminder-time]')?.value || '09:00';
+        const parts = timeValue.split(':').map((v) => Number(v));
+        let hour = Number.isFinite(parts[0]) ? parts[0] : 9;
+        let minute = Number.isFinite(parts[1]) ? parts[1] : 0;
+        hour = Math.max(0, Math.min(23, hour));
+        minute = Math.max(0, Math.min(59, minute));
+        return { day_no: dayNo, dow, hour, minute };
+      }).filter((item) => item.day_no > 0);
+    }
+
+    async function checkOnboardingStatus() {
+      try {
+        const data = await apiFetch('/gymapi/onboarding/status', { silent: true });
+        const workoutsPerWeek = Number(data.workouts_per_week || 0);
+        const remindersEnabled = data.notifications_enabled !== false;
+        const timezone = data.timezone || '';
+        const reminders = Array.isArray(data.reminders) ? data.reminders : [];
+        state.onboarding.workoutsPerWeek = workoutsPerWeek;
+        state.onboarding.remindersEnabled = remindersEnabled;
+        state.onboarding.timezone = timezone;
+        state.onboarding.reminders = buildOnboardingReminders(workoutsPerWeek, reminders);
+        state.onboarding.days = data.days || [];
+        const step = computeOnboardingStep({
+          workoutsPerWeek,
+          remindersEnabled,
+          timezone,
+          reminders,
+        });
+        if (step) {
+          state.onboarding.active = true;
+          state.onboarding.step = step === 'intro' ? 'intro' : step;
+          renderOnboarding();
+          return true;
+        }
+        state.onboarding.active = false;
+        renderOnboarding();
+        return false;
+      } catch (_) {
+        return false;
+      }
+    }
+
+    async function finalizeOnboarding() {
+      state.onboarding.active = false;
+      renderOnboarding();
+      await loadToday();
+      ensureSettingsOverviewLoaded({ refreshExercises: true }).catch(console.error);
+    }
+
     function setupModal() {
       const modal = document.getElementById('confirmModal');
       const cancelBtn = document.getElementById('cancelConfirm');
@@ -4797,6 +5034,94 @@
         if (text) textEl.textContent = text;
         modal.classList.add('show');
       };
+    }
+
+    function setupOnboardingHandlers() {
+      const container = document.getElementById('onboarding');
+      if (!container) return;
+      container.addEventListener('click', async (event) => {
+        const target = event.target.closest('[data-onboarding-action]');
+        if (!target) return;
+        const action = target.dataset.onboardingAction;
+        if (action === 'start') {
+          state.onboarding.step = 'week';
+          renderOnboarding();
+          return;
+        }
+        if (action === 'set-week') {
+          const count = Number(target.dataset.count || 0);
+          if (!count) return;
+          state.onboarding.workoutsPerWeek = count;
+          renderOnboarding();
+          return;
+        }
+        if (action === 'week-next') {
+          if (!state.onboarding.workoutsPerWeek) return;
+          const data = await apiFetch('/gymapi/settings/workouts_per_week', {
+            method: 'POST',
+            body: JSON.stringify({ value: state.onboarding.workoutsPerWeek }),
+          });
+          const wpw = data.workouts_per_week || state.onboarding.workoutsPerWeek;
+          state.onboarding.workoutsPerWeek = wpw;
+          state.onboarding.reminders = buildOnboardingReminders(wpw, []);
+          state.onboarding.step = 'reminders';
+          renderOnboarding();
+          return;
+        }
+        if (action === 'reminders-yes') {
+          state.onboarding.remindersEnabled = true;
+          const needsTimezone = !state.onboarding.timezone || state.onboarding.timezone === 'UTC';
+          state.onboarding.step = needsTimezone ? 'timezone' : 'schedule';
+          renderOnboarding();
+          return;
+        }
+        if (action === 'reminders-no') {
+          state.onboarding.remindersEnabled = false;
+          const needsTimezone = !state.onboarding.timezone || state.onboarding.timezone === 'UTC';
+          state.onboarding.step = needsTimezone ? 'timezone' : 'finish';
+          renderOnboarding();
+          return;
+        }
+        if (action === 'timezone-next') {
+          const timezone = normalizeTimezone(
+            container.querySelector('[data-onboarding-timezone]')?.value
+              || state.onboarding.timezone
+              || 'UTC'
+          );
+          state.onboarding.timezone = timezone;
+          state.onboarding.step = state.onboarding.remindersEnabled ? 'schedule' : 'finish';
+          renderOnboarding();
+          return;
+        }
+        if (action === 'schedule-save') {
+          const reminders = readOnboardingRemindersFromUI();
+          state.onboarding.reminders = reminders;
+          await apiFetch('/gymapi/settings/reminders', {
+            method: 'POST',
+            body: JSON.stringify({
+              enabled: true,
+              timezone: state.onboarding.timezone || 'UTC',
+              reminders,
+            }),
+          });
+          state.onboarding.step = 'finish';
+          renderOnboarding();
+          return;
+        }
+        if (action === 'finish') {
+          if (!state.onboarding.remindersEnabled) {
+            await apiFetch('/gymapi/settings/reminders', {
+              method: 'POST',
+              body: JSON.stringify({
+                enabled: false,
+                timezone: state.onboarding.timezone || 'UTC',
+                reminders: [],
+              }),
+            });
+          }
+          await finalizeOnboarding();
+        }
+      });
     }
 
     async function apiFetch(path, options = {}) {
@@ -7470,6 +7795,7 @@
       setupMeasurementsHandlers();
       setupMeasurementSheetHandlers();
       openConfirmModal = setupModal();
+      setupOnboardingHandlers();
       bindEvents();
       bindTimer();
       setupVisibilityRefresh();
@@ -7477,6 +7803,8 @@
       if (!state.isTelegram) { handleRouteFromHash(); return; }
       state.startDayIndex = getDayIndexFromUrl();
       loadTrainerOverview().catch(console.error);
+      const onboardingRequired = await checkOnboardingStatus();
+      if (onboardingRequired) return;
       await loadToday();
       ensureSettingsOverviewLoaded({ refreshExercises: true }).catch(console.error);
     }
