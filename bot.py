@@ -246,6 +246,8 @@ from db import (
     fetch_global_stats,
     get_intro_video,
     set_intro_video,
+    set_onboarding_video_message,
+    clear_onboarding_video_message,
 )
 from text_utils import normalize_whitespace
 from ui_texts import t, e, ONBOARDING_TIPS
@@ -7630,9 +7632,20 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         video_id = await get_intro_video()
         if video_id:
             if chat is not None:
-                await context.bot.send_video(chat.id, video_id, reply_markup=intro_video_ack_kb())
+                video_msg = await context.bot.send_video(
+                    chat.id, video_id, reply_markup=intro_video_ack_kb()
+                )
             else:
-                await update.message.reply_video(video_id, reply_markup=intro_video_ack_kb())
+                video_msg = await update.message.reply_video(
+                    video_id, reply_markup=intro_video_ack_kb()
+                )
+            if video_msg is not None:
+                try:
+                    await set_onboarding_video_message(
+                        user_id, video_msg.chat_id, video_msg.message_id
+                    )
+                except Exception as exc:
+                    logger.warning("Failed to store onboarding video message: %s", exc)
             return
 
         if chat is not None:
@@ -8789,6 +8802,10 @@ async def wizard_router(
                     await q.message.edit_reply_markup(reply_markup=None)
             except Exception:
                 pass
+            try:
+                await clear_onboarding_video_message(user_id)
+            except Exception as exc:
+                logger.warning("Failed to clear onboarding video message: %s", exc)
 
             chat_id = q.message.chat_id if (q and q.message) else update.effective_chat.id
             user = update.effective_user

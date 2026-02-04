@@ -1,5 +1,6 @@
 import os
 import random
+import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime, date, time, timedelta
 from math import sqrt
@@ -9,12 +10,14 @@ from fastapi import Body, Depends, FastAPI, Header, HTTPException, Request, Resp
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from settings import BOT_PUBLIC_LINK, TG_TOKEN
+from telegram import Bot
 from telegram_webapp_auth import (
     InitDataError,
     TelegramInitData,
     verify_and_parse_init_data,
 )
 
+from bot import compose_main_menu, prepare_ui_output
 import db
 from keyboards import MG_NAMES
 from db import (
@@ -30,6 +33,7 @@ from db import (
     get_active_trainer_link_for_trainee,
     get_latest_trainer_link_for_trainee,
     get_trainer_link,
+    get_onboarding_video_message,
     add_user_reminder,
     clear_user_reminders,
     list_day_completions,
@@ -62,6 +66,7 @@ from db import (
     update_trainer_link_status,
     update_trainee_label,
     update_running_entry,
+    clear_onboarding_video_message,
 )
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -115,6 +120,7 @@ ANATOMY_MUSCLE_CODES = {
 }
 
 app = FastAPI(title="GymDiary WebApp backend")
+logger = logging.getLogger(__name__)
 
 MAX_INITDATA_AGE_SEC = 24 * 60 * 60
 
@@ -2792,6 +2798,35 @@ async def onboarding_status(ctx: AuthCtx = Depends(get_auth_ctx)):
         "notifications_enabled": bool(notifications_enabled),
         "timezone": timezone,
     }
+
+
+@app.post("/onboarding/finish")
+async def onboarding_finish(ctx: AuthCtx = Depends(get_auth_ctx)):
+    user_id = ctx.user_id
+    tg_id = ctx.tg_id
+    bot = Bot(TG_TOKEN)
+    chat_id, message_id = await get_onboarding_video_message(user_id)
+    if chat_id and message_id:
+        try:
+            await bot.edit_message_reply_markup(
+                chat_id=chat_id, message_id=message_id, reply_markup=None
+            )
+        except Exception as exc:
+            logger.warning(
+                "Failed to remove onboarding video keyboard for user %s: %s",
+                user_id,
+                exc,
+            )
+        await clear_onboarding_video_message(user_id)
+    sent = False
+    try:
+        menu_text, menu_kb, prefs = await compose_main_menu(user_id)
+        menu_text, menu_kb = prepare_ui_output(menu_text, menu_kb, prefs)
+        await bot.send_message(tg_id, menu_text, reply_markup=menu_kb)
+        sent = True
+    except Exception as exc:
+        logger.warning("Failed to send main menu after onboarding for %s: %s", user_id, exc)
+    return {"ok": True, "sent": sent}
 
 
 @app.post("/settings/days/{day_index}/rename")
