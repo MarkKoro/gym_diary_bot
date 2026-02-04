@@ -331,6 +331,8 @@ async def get_app_meta(key: str) -> Optional[str]:
 
 # Специализации для вступительного видео
 INTRO_VIDEO_KEY = "intro_video_file_id"
+ONBOARDING_VIDEO_CHAT_ID_KEY = "onboarding_video_chat_id"
+ONBOARDING_VIDEO_MESSAGE_ID_KEY = "onboarding_video_message_id"
 
 
 async def set_intro_video(file_id: str) -> None:
@@ -339,6 +341,48 @@ async def set_intro_video(file_id: str) -> None:
 
 async def get_intro_video() -> Optional[str]:
     return await get_app_meta(INTRO_VIDEO_KEY)
+
+
+async def set_onboarding_video_message(user_id: int, chat_id: int, message_id: int) -> None:
+    async with connect_db() as db:
+        await db.execute(
+            """
+            UPDATE users
+            SET onboarding_video_chat_id = ?, onboarding_video_message_id = ?
+            WHERE id = ?
+            """,
+            (chat_id, message_id, user_id),
+        )
+        await db.commit()
+
+
+async def get_onboarding_video_message(user_id: int) -> tuple[Optional[int], Optional[int]]:
+    async with connect_db() as db:
+        cur = await db.execute(
+            """
+            SELECT onboarding_video_chat_id, onboarding_video_message_id
+            FROM users
+            WHERE id = ?
+            """,
+            (user_id,),
+        )
+        row = await cur.fetchone()
+    if not row:
+        return None, None
+    return (row[0], row[1])
+
+
+async def clear_onboarding_video_message(user_id: int) -> None:
+    async with connect_db() as db:
+        await db.execute(
+            """
+            UPDATE users
+            SET onboarding_video_chat_id = NULL, onboarding_video_message_id = NULL
+            WHERE id = ?
+            """,
+            (user_id,),
+        )
+        await db.commit()
 
 
 # Глобальная статистика для /stats — всё из текущих таблиц.
@@ -536,7 +580,9 @@ async def init_db():
             day_finish_total INTEGER DEFAULT 0,
             subscription_prompt_total INTEGER DEFAULT 0,
             notifications_enabled INTEGER NOT NULL DEFAULT 1,
-            trainer_accepts_requests INTEGER NOT NULL DEFAULT 1
+            trainer_accepts_requests INTEGER NOT NULL DEFAULT 1,
+            onboarding_video_chat_id INTEGER,
+            onboarding_video_message_id INTEGER
         );
 
         CREATE TABLE IF NOT EXISTS exercises(
@@ -810,6 +856,10 @@ async def init_db():
             )
         except Exception:
             pass
+        if not await _column_exists(db, "users", "onboarding_video_chat_id"):
+            await db.execute("ALTER TABLE users ADD COLUMN onboarding_video_chat_id INTEGER")
+        if not await _column_exists(db, "users", "onboarding_video_message_id"):
+            await db.execute("ALTER TABLE users ADD COLUMN onboarding_video_message_id INTEGER")
         await db.execute(
             "UPDATE user_prefs SET ui_mode = CASE WHEN ui_mode IN ('compact','detailed') THEN ui_mode ELSE COALESCE(day_view_mode, 'detailed') END"
         )

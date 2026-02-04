@@ -580,11 +580,13 @@
       inset: 0;
       z-index: 50;
       display: none;
-      align-items: center;
+      align-items: flex-start;
       justify-content: center;
       padding: 24px;
       background: color-mix(in srgb, var(--bg) 82%, transparent);
       backdrop-filter: blur(6px);
+      overflow-y: auto;
+      -webkit-overflow-scrolling: touch;
     }
     .onboarding.show { display: flex; }
     .onboarding-card {
@@ -597,6 +599,8 @@
       display: flex;
       flex-direction: column;
       gap: 16px;
+      max-height: calc(100vh - 48px);
+      overflow-y: auto;
     }
     .onboarding-title { font-size: 20px; font-weight: 800; }
     .onboarding-text { color: var(--muted); line-height: 1.45; }
@@ -604,6 +608,7 @@
     .onboarding-actions .btn { flex: 1; min-width: 140px; }
     .onboarding-pill { padding: 8px 12px; border-radius: 999px; background: var(--bg); border: 1px solid var(--border); font-size: 13px; color: var(--muted); }
     .onboarding-reminder-row { display: grid; gap: 10px; }
+    .onboarding-active .finish-fab-wrap { display: none; }
     .section-title { font-size: 17px; font-weight: 800; letter-spacing: -0.01em; }
     .subtext { color: var(--muted); font-size: 14px; }
     .legend-card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 12px; box-shadow: var(--shadow); display: grid; gap: 8px; }
@@ -4856,6 +4861,7 @@
     function renderOnboarding() {
       const container = document.getElementById('onboarding');
       const card = document.getElementById('onboardingCard');
+      document.body.classList.toggle('onboarding-active', state.onboarding.active);
       if (!container || !card) return;
       if (!state.onboarding.active) {
         container.classList.remove('show');
@@ -5013,8 +5019,17 @@
     async function finalizeOnboarding() {
       state.onboarding.active = false;
       renderOnboarding();
-      await loadToday();
+      try {
+        await loadToday();
+      } catch (error) {
+        console.error(error);
+      }
       ensureSettingsOverviewLoaded({ refreshExercises: true }).catch(console.error);
+      try {
+        await apiFetch('/gymapi/onboarding/finish', { method: 'POST', silent: true });
+      } catch (error) {
+        console.error(error);
+      }
     }
 
     function setupModal() {
@@ -6601,6 +6616,7 @@
     }
 
     async function refreshTodayData({ keepDay = true } = {}) {
+      if (state.onboarding.active) return;
       try {
         const info = await apiFetch('/gymapi/day/today');
         state.activeDays = info.active_days || [];
@@ -6629,6 +6645,7 @@
       if (now - lastDataRefresh < 5000) return;
       lastDataRefresh = now;
       if (!state.isTelegram) return;
+      if (state.onboarding.active) return;
       if (!state.settings.loading) loadSettingsOverview().catch(console.error);
       if (!state.settings.trainer.loading) loadTrainerOverview().catch(console.error);
       if (state.currentRoute === 'library') loadLibraryGroups().catch(console.error);
