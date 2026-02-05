@@ -17,7 +17,6 @@ from telegram_webapp_auth import (
     verify_and_parse_init_data,
 )
 
-from bot import compose_main_menu, prepare_ui_output
 import db
 from keyboards import MG_NAMES
 from db import (
@@ -2803,7 +2802,6 @@ async def onboarding_status(ctx: AuthCtx = Depends(get_auth_ctx)):
 @app.post("/onboarding/finish")
 async def onboarding_finish(ctx: AuthCtx = Depends(get_auth_ctx)):
     user_id = ctx.user_id
-    tg_id = ctx.tg_id
     bot = Bot(TG_TOKEN)
     chat_id, message_id = await get_onboarding_video_message(user_id)
     if chat_id and message_id:
@@ -2818,15 +2816,7 @@ async def onboarding_finish(ctx: AuthCtx = Depends(get_auth_ctx)):
                 exc,
             )
         await clear_onboarding_video_message(user_id)
-    sent = False
-    try:
-        menu_text, menu_kb, prefs = await compose_main_menu(user_id)
-        menu_text, menu_kb = prepare_ui_output(menu_text, menu_kb, prefs)
-        await bot.send_message(tg_id, menu_text, reply_markup=menu_kb)
-        sent = True
-    except Exception as exc:
-        logger.warning("Failed to send main menu after onboarding for %s: %s", user_id, exc)
-    return {"ok": True, "sent": sent}
+    return {"ok": True, "sent": False}
 
 
 @app.post("/settings/days/{day_index}/rename")
