@@ -102,15 +102,6 @@ def main_menu_kb(
         )
     if extra_rows:
         rows.extend(extra_rows)
-    if show_support:
-        rows.append(
-            [
-                InlineKeyboardButton(
-                    dual("📩 Техподдержка", "Связаться с техподдержкой"),
-                    url=support_url,
-                )
-            ]
-        )
     return InlineKeyboardMarkup(rows)
 
 
