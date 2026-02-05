@@ -7812,7 +7812,6 @@
       setupMeasurementsHandlers();
       setupMeasurementSheetHandlers();
       openConfirmModal = setupModal();
-      setupOnboardingHandlers();
       bindEvents();
       bindTimer();
       setupVisibilityRefresh();
@@ -7820,8 +7819,6 @@
       if (!state.isTelegram) { handleRouteFromHash(); return; }
       state.startDayIndex = getDayIndexFromUrl();
       loadTrainerOverview().catch(console.error);
-      const onboardingRequired = await checkOnboardingStatus();
-      if (onboardingRequired) return;
       await loadToday();
       ensureSettingsOverviewLoaded({ refreshExercises: true }).catch(console.error);
     }
