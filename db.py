@@ -333,6 +333,8 @@ async def get_app_meta(key: str) -> Optional[str]:
 INTRO_VIDEO_KEY = "intro_video_file_id"
 ONBOARDING_VIDEO_CHAT_ID_KEY = "onboarding_video_chat_id"
 ONBOARDING_VIDEO_MESSAGE_ID_KEY = "onboarding_video_message_id"
+ONBOARDING_INTRO_CHAT_ID_KEY = "onboarding_intro_chat_id"
+ONBOARDING_INTRO_MESSAGE_ID_KEY = "onboarding_intro_message_id"
 
 
 async def set_intro_video(file_id: str) -> None:
@@ -378,6 +380,48 @@ async def clear_onboarding_video_message(user_id: int) -> None:
             """
             UPDATE users
             SET onboarding_video_chat_id = NULL, onboarding_video_message_id = NULL
+            WHERE id = ?
+            """,
+            (user_id,),
+        )
+        await db.commit()
+
+
+async def set_onboarding_intro_message(user_id: int, chat_id: int, message_id: int) -> None:
+    async with connect_db() as db:
+        await db.execute(
+            """
+            UPDATE users
+            SET onboarding_intro_chat_id = ?, onboarding_intro_message_id = ?
+            WHERE id = ?
+            """,
+            (chat_id, message_id, user_id),
+        )
+        await db.commit()
+
+
+async def get_onboarding_intro_message(user_id: int) -> tuple[Optional[int], Optional[int]]:
+    async with connect_db() as db:
+        cur = await db.execute(
+            """
+            SELECT onboarding_intro_chat_id, onboarding_intro_message_id
+            FROM users
+            WHERE id = ?
+            """,
+            (user_id,),
+        )
+        row = await cur.fetchone()
+    if not row:
+        return None, None
+    return row[0], row[1]
+
+
+async def clear_onboarding_intro_message(user_id: int) -> None:
+    async with connect_db() as db:
+        await db.execute(
+            """
+            UPDATE users
+            SET onboarding_intro_chat_id = NULL, onboarding_intro_message_id = NULL
             WHERE id = ?
             """,
             (user_id,),
@@ -612,6 +656,8 @@ async def init_db():
             trainer_accepts_requests INTEGER NOT NULL DEFAULT 1,
             onboarding_video_chat_id INTEGER,
             onboarding_video_message_id INTEGER,
+            onboarding_intro_chat_id INTEGER,
+            onboarding_intro_message_id INTEGER,
             onboarding_completed INTEGER NOT NULL DEFAULT 0
         );
 
@@ -890,6 +936,10 @@ async def init_db():
             await db.execute("ALTER TABLE users ADD COLUMN onboarding_video_chat_id INTEGER")
         if not await _column_exists(db, "users", "onboarding_video_message_id"):
             await db.execute("ALTER TABLE users ADD COLUMN onboarding_video_message_id INTEGER")
+        if not await _column_exists(db, "users", "onboarding_intro_chat_id"):
+            await db.execute("ALTER TABLE users ADD COLUMN onboarding_intro_chat_id INTEGER")
+        if not await _column_exists(db, "users", "onboarding_intro_message_id"):
+            await db.execute("ALTER TABLE users ADD COLUMN onboarding_intro_message_id INTEGER")
         if not await _column_exists(db, "users", "onboarding_completed"):
             await db.execute(
                 "ALTER TABLE users ADD COLUMN onboarding_completed INTEGER NOT NULL DEFAULT 0"
@@ -2115,7 +2165,12 @@ async def wipe_user(user_id: int):
                     day_finish_total=0,
                     subscription_prompt_total=0,
                     notifications_enabled=1,
-                    is_trainer=0
+                    is_trainer=0,
+                    onboarding_video_chat_id=NULL,
+                    onboarding_video_message_id=NULL,
+                    onboarding_intro_chat_id=NULL,
+                    onboarding_intro_message_id=NULL,
+                    onboarding_completed=0
                 WHERE id=?
                 """,
                 (user_id,),
