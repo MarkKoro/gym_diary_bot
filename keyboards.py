@@ -69,17 +69,6 @@ def main_menu_kb(
             ]
         )
     rows.append(
-            [
-                InlineKeyboardButton(
-                    dual(
-                        "📘 Статистика упражнений",
-                        "Статистика упражнений — личная библиотека",
-                    ),
-                    callback_data="menu:library",
-                )
-            ]
-        )
-    rows.append(
         [
             InlineKeyboardButton(
                 dual(
@@ -194,6 +183,7 @@ def settings_kb(
     include_notifications: bool = True,
     include_subscription: bool = True,
     trainer_link_active: bool = False,
+    support_url: str | None = None,
     context=None,
 ):
     editing_allowed = _is_editing_allowed(context)
@@ -284,6 +274,15 @@ def settings_kb(
             )
         ]
     )
+    if support_url:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    dual("📩 Техподдержка", "Связаться с техподдержкой"),
+                    url=support_url,
+                )
+            ]
+        )
     rows.append([InlineKeyboardButton(BACK_BTN, callback_data="menu:root")])
     return InlineKeyboardMarkup(rows)
 

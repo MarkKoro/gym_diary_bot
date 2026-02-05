@@ -2529,6 +2529,7 @@ async def build_settings_keyboard_for_user(
         include_notifications=not acting_mode,
         include_subscription=not acting_mode,
         trainer_link_active=link_active,
+        support_url=SUPPORT_DEEPLINK,
         context=context,
     )
 
