@@ -9,7 +9,7 @@ from zoneinfo import ZoneInfo
 from fastapi import Body, Depends, FastAPI, Header, HTTPException, Request, Response
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from settings import BOT_PUBLIC_LINK, SUPPORT_DEEPLINK, TG_TOKEN
+from settings import BOT_PUBLIC_LINK, TG_TOKEN
 from telegram import Bot
 from telegram_webapp_auth import (
     InitDataError,
@@ -18,7 +18,7 @@ from telegram_webapp_auth import (
 )
 
 import db
-from keyboards import MG_NAMES, main_menu_kb
+from keyboards import MG_NAMES
 from db import (
     clear_day_completions,
     create_trainer_request,
@@ -2833,7 +2833,6 @@ async def onboarding_finish(ctx: AuthCtx = Depends(get_auth_ctx)):
     await set_onboarding_completed(user_id, True)
     bot = Bot(TG_TOKEN)
     chat_id, message_id = await get_onboarding_video_message(user_id)
-    sent = False
     if chat_id and message_id:
         try:
             await bot.edit_message_reply_markup(
@@ -2846,28 +2845,7 @@ async def onboarding_finish(ctx: AuthCtx = Depends(get_auth_ctx)):
                 exc,
             )
         await clear_onboarding_video_message(user_id)
-    target_chat_id = chat_id
-    if not target_chat_id:
-        user_row = await find_user_by_id(user_id)
-        if user_row:
-            target_chat_id = user_row[1]
-    if target_chat_id:
-        try:
-            days = await db.list_active_days(user_id)
-            completions = await db.get_active_day_completions(user_id)
-            await bot.send_message(
-                chat_id=target_chat_id,
-                text="Готово! Открываю главное меню 👇",
-                reply_markup=main_menu_kb(days, SUPPORT_DEEPLINK, completions),
-            )
-            sent = True
-        except Exception as exc:
-            logger.warning(
-                "Failed to send main menu after onboarding finish for user %s: %s",
-                user_id,
-                exc,
-            )
-    return {"ok": True, "sent": sent}
+    return {"ok": True, "sent": False}
 
 
 @app.post("/settings/days/{day_index}/rename")
