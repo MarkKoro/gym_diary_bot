@@ -385,6 +385,35 @@ async def clear_onboarding_video_message(user_id: int) -> None:
         await db.commit()
 
 
+async def set_onboarding_completed(user_id: int, completed: bool) -> None:
+    async with connect_db() as db:
+        await db.execute(
+            """
+            UPDATE users
+            SET onboarding_completed = ?
+            WHERE id = ?
+            """,
+            (1 if completed else 0, user_id),
+        )
+        await db.commit()
+
+
+async def is_onboarding_completed(user_id: int) -> bool:
+    async with connect_db() as db:
+        cur = await db.execute(
+            """
+            SELECT onboarding_completed
+            FROM users
+            WHERE id = ?
+            """,
+            (user_id,),
+        )
+        row = await cur.fetchone()
+    if not row:
+        return False
+    return bool(row[0])
+
+
 # Глобальная статистика для /stats — всё из текущих таблиц.
 async def fetch_global_stats(now_iso: str | None = None) -> dict:
     now = datetime.now(timezone.utc) if now_iso is None else datetime.fromisoformat(now_iso)
@@ -582,7 +611,8 @@ async def init_db():
             notifications_enabled INTEGER NOT NULL DEFAULT 1,
             trainer_accepts_requests INTEGER NOT NULL DEFAULT 1,
             onboarding_video_chat_id INTEGER,
-            onboarding_video_message_id INTEGER
+            onboarding_video_message_id INTEGER,
+            onboarding_completed INTEGER NOT NULL DEFAULT 0
         );
 
         CREATE TABLE IF NOT EXISTS exercises(
@@ -860,6 +890,10 @@ async def init_db():
             await db.execute("ALTER TABLE users ADD COLUMN onboarding_video_chat_id INTEGER")
         if not await _column_exists(db, "users", "onboarding_video_message_id"):
             await db.execute("ALTER TABLE users ADD COLUMN onboarding_video_message_id INTEGER")
+        if not await _column_exists(db, "users", "onboarding_completed"):
+            await db.execute(
+                "ALTER TABLE users ADD COLUMN onboarding_completed INTEGER NOT NULL DEFAULT 0"
+            )
         await db.execute(
             "UPDATE user_prefs SET ui_mode = CASE WHEN ui_mode IN ('compact','detailed') THEN ui_mode ELSE COALESCE(day_view_mode, 'detailed') END"
         )

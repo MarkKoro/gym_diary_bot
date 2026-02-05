@@ -248,6 +248,7 @@ from db import (
     set_intro_video,
     set_onboarding_video_message,
     clear_onboarding_video_message,
+    set_onboarding_completed,
 )
 from text_utils import normalize_whitespace
 from ui_texts import t, e, ONBOARDING_TIPS
@@ -7704,7 +7705,10 @@ def broadcast_return_markup() -> InlineKeyboardMarkup:
 
 def intro_video_ack_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
-        [[InlineKeyboardButton("Продолжаем", callback_data="wiz:intro:ok")]]
+        [
+            [InlineKeyboardButton("Продолжаем", callback_data="wiz:intro:ok")],
+            [InlineKeyboardButton("Поехали 🚀", web_app=WebAppInfo(WEBAPP_URL))],
+        ]
     )
 
 
@@ -8755,6 +8759,7 @@ async def finalize_wizard(
                 pass
     if chat_id is None:
         return
+    await set_onboarding_completed(user_id, True)
     menu_text, menu_kb, prefs = await compose_main_menu(user_id)
     prepared_text, prepared_markup = prepare_ui_output(menu_text, menu_kb, prefs)
     await send_main_message_fresh(
