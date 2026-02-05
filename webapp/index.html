@@ -592,6 +592,7 @@
       -webkit-overflow-scrolling: touch;
       overscroll-behavior: contain;
       pointer-events: auto;
+      touch-action: pan-y;
     }
     .onboarding.show { display: flex; }
     .onboarding-card {
@@ -606,6 +607,8 @@
       gap: 16px;
       max-height: calc(100vh - 48px);
       overflow-y: auto;
+      -webkit-overflow-scrolling: touch;
+      touch-action: pan-y;
     }
     .onboarding-title { font-size: 20px; font-weight: 800; }
     .onboarding-text { color: var(--muted); line-height: 1.45; }
@@ -7816,6 +7819,7 @@
 
     async function init() {
       setupNavigation();
+      setupOnboardingHandlers();
       setupSettingsHandlers();
       setupMeasurementsHandlers();
       setupMeasurementSheetHandlers();
