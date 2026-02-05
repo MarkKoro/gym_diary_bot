@@ -110,7 +110,6 @@ from keyboards import (
     reminder_prompt_kb,
     trainer_manage_trainee_kb,
     onboarding_tips_kb,
-    instruction_row,
 )
 from settings import (
     TG_TOKEN,
@@ -951,9 +950,7 @@ async def compose_main_menu(
             text = "\n".join([text, "", *notice_lines])
     profile = await _fetch_trainer_profile(user_id)
     is_trainer = bool(profile and profile[0])
-    extra_instruction_rows = instruction_row(INSTRUCTION_URL)
-    if extra_rows:
-        extra_instruction_rows.extend(extra_rows)
+    menu_extra_rows = list(extra_rows) if extra_rows else None
     kb = main_menu_kb(
         days,
         SUPPORT_DEEPLINK,
@@ -961,7 +958,7 @@ async def compose_main_menu(
         show_trainer=is_trainer,
         show_support=show_support,
         include_settings=include_settings,
-        extra_rows=extra_instruction_rows,
+        extra_rows=menu_extra_rows,
     )
     return text, kb, prefs
 
@@ -2530,6 +2527,7 @@ async def build_settings_keyboard_for_user(
         include_subscription=not acting_mode,
         trainer_link_active=link_active,
         support_url=SUPPORT_DEEPLINK,
+        instruction_url=INSTRUCTION_URL,
         context=context,
     )
 

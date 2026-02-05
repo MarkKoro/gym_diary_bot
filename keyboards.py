@@ -184,6 +184,7 @@ def settings_kb(
     include_subscription: bool = True,
     trainer_link_active: bool = False,
     support_url: str | None = None,
+    instruction_url: str | None = None,
     context=None,
 ):
     editing_allowed = _is_editing_allowed(context)
@@ -274,6 +275,8 @@ def settings_kb(
             )
         ]
     )
+    if instruction_url:
+        rows.append([InlineKeyboardButton("📖 Инструкция", url=instruction_url)])
     if support_url:
         rows.append(
             [
