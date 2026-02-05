@@ -575,10 +575,13 @@
     .sheet-actions { margin-top: 12px; display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 8px; }
     .muted { color: var(--muted); }
     .full-screen-msg { min-height: 100vh; display: flex; align-items: center; justify-content: center; text-align: center; background: var(--bg); color: var(--text); }
+    body.onboarding-active {
+      overflow: hidden;
+    }
     .onboarding {
       position: fixed;
       inset: 0;
-      z-index: 50;
+      z-index: 90;
       display: none;
       align-items: flex-start;
       justify-content: center;
@@ -587,6 +590,8 @@
       backdrop-filter: blur(6px);
       overflow-y: auto;
       -webkit-overflow-scrolling: touch;
+      overscroll-behavior: contain;
+      pointer-events: auto;
     }
     .onboarding.show { display: flex; }
     .onboarding-card {
@@ -7825,8 +7830,8 @@
       const onboardingActive = await checkOnboardingStatus();
       if (!onboardingActive) {
         await loadToday();
+        ensureSettingsOverviewLoaded({ refreshExercises: true }).catch(console.error);
       }
-      ensureSettingsOverviewLoaded({ refreshExercises: true }).catch(console.error);
     }
 
     window.BODY_MUSCLES = window.BODY_MUSCLES || {
