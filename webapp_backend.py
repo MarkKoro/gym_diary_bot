@@ -66,6 +66,8 @@ from db import (
     update_trainee_label,
     update_running_entry,
     clear_onboarding_video_message,
+    is_onboarding_completed,
+    set_onboarding_completed,
 )
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -2770,6 +2772,30 @@ async def settings_overview(ctx: AuthCtx = Depends(get_auth_ctx)):
     }
 
 
+async def _has_onboarding_activity(user_id: int) -> bool:
+    async with db.connect_db() as conn:
+        checks = (
+            "SELECT 1 FROM sessions WHERE user_id=? LIMIT 1",
+            "SELECT 1 FROM user_exercises WHERE user_id=? AND COALESCE(is_archived,0)=0 LIMIT 1",
+            "SELECT 1 FROM day_completions WHERE user_id=? LIMIT 1",
+        )
+        for query in checks:
+            cur = await conn.execute(query, (user_id,))
+            row = await cur.fetchone()
+            if row:
+                return True
+    return False
+
+
+async def _resolve_onboarding_completed(user_id: int, workouts_per_week: int) -> bool:
+    completed = await is_onboarding_completed(user_id)
+    if completed:
+        return True
+    if workouts_per_week <= 0:
+        return False
+    return await _has_onboarding_activity(user_id)
+
+
 @app.get("/onboarding/status")
 async def onboarding_status(ctx: AuthCtx = Depends(get_auth_ctx)):
     user_id = ctx.user_id
@@ -2786,6 +2812,7 @@ async def onboarding_status(ctx: AuthCtx = Depends(get_auth_ctx)):
     active_days: list[tuple[int, str]] = []
     if workouts_per_week > 0:
         active_days = await db.list_active_days(user_id)
+    onboarding_completed = await _resolve_onboarding_completed(user_id, workouts_per_week)
     return {
         "ok": True,
         "workouts_per_week": workouts_per_week,
@@ -2796,12 +2823,14 @@ async def onboarding_status(ctx: AuthCtx = Depends(get_auth_ctx)):
         ],
         "notifications_enabled": bool(notifications_enabled),
         "timezone": timezone,
+        "onboarding_completed": onboarding_completed,
     }
 
 
 @app.post("/onboarding/finish")
 async def onboarding_finish(ctx: AuthCtx = Depends(get_auth_ctx)):
     user_id = ctx.user_id
+    await set_onboarding_completed(user_id, True)
     bot = Bot(TG_TOKEN)
     chat_id, message_id = await get_onboarding_video_message(user_id)
     if chat_id and message_id:

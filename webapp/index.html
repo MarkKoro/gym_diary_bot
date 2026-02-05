@@ -4844,7 +4844,8 @@
       });
     }
 
-    function computeOnboardingStep({ workoutsPerWeek, remindersEnabled, timezone, reminders }) {
+    function computeOnboardingStep({ workoutsPerWeek, remindersEnabled, timezone, reminders, onboardingCompleted }) {
+      if (onboardingCompleted) return null;
       if (!workoutsPerWeek || workoutsPerWeek <= 0) return 'intro';
       const normalizedTimezone = (timezone || '').trim();
       const needsTimezone = !normalizedTimezone || normalizedTimezone === 'UTC';
@@ -4991,6 +4992,7 @@
         const remindersEnabled = data.notifications_enabled !== false;
         const timezone = data.timezone || '';
         const reminders = Array.isArray(data.reminders) ? data.reminders : [];
+        const onboardingCompleted = data.onboarding_completed === true;
         state.onboarding.workoutsPerWeek = workoutsPerWeek;
         state.onboarding.remindersEnabled = remindersEnabled;
         state.onboarding.timezone = timezone;
@@ -5001,6 +5003,7 @@
           remindersEnabled,
           timezone,
           reminders,
+          onboardingCompleted,
         });
         if (step) {
           state.onboarding.active = true;
@@ -7819,7 +7822,10 @@
       if (!state.isTelegram) { handleRouteFromHash(); return; }
       state.startDayIndex = getDayIndexFromUrl();
       loadTrainerOverview().catch(console.error);
-      await loadToday();
+      const onboardingActive = await checkOnboardingStatus();
+      if (!onboardingActive) {
+        await loadToday();
+      }
       ensureSettingsOverviewLoaded({ refreshExercises: true }).catch(console.error);
     }
 
