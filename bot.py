@@ -247,6 +247,9 @@ from db import (
     get_intro_video,
     set_intro_video,
     set_onboarding_video_message,
+    get_onboarding_intro_message,
+    set_onboarding_intro_message,
+    clear_onboarding_intro_message,
     clear_onboarding_video_message,
     set_onboarding_completed,
 )
@@ -7629,6 +7632,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 intro_msg.chat_id,
                 intro_msg.message_id,
             )
+            try:
+                await set_onboarding_intro_message(
+                    user_id,
+                    intro_msg.chat_id,
+                    intro_msg.message_id,
+                )
+            except Exception as exc:
+                logger.warning("Failed to store onboarding intro message: %s", exc)
 
         video_id = await get_intro_video()
         if video_id:
@@ -8750,13 +8761,20 @@ async def finalize_wizard(
         message = getattr(q, "message", None)
         chat = getattr(message, "chat", None) if message else None
         chat_id = getattr(chat, "id", None) if chat else getattr(message, "chat_id", None)
+    intro_chat_id = intro_message_id = None
     if intro_info:
         intro_chat_id, intro_message_id = intro_info
-        if intro_chat_id and intro_message_id:
-            try:
-                await context.bot.delete_message(intro_chat_id, intro_message_id)
-            except (BadRequest, Forbidden):
-                pass
+    if not intro_chat_id or not intro_message_id:
+        intro_chat_id, intro_message_id = await get_onboarding_intro_message(user_id)
+    if intro_chat_id and intro_message_id:
+        try:
+            await context.bot.delete_message(intro_chat_id, intro_message_id)
+        except (BadRequest, Forbidden):
+            pass
+    try:
+        await clear_onboarding_intro_message(user_id)
+    except Exception as exc:
+        logger.warning("Failed to clear onboarding intro message: %s", exc)
     if chat_id is None:
         return
     await set_onboarding_completed(user_id, True)
@@ -8813,18 +8831,24 @@ async def wizard_router(
                 logger.warning("Failed to clear onboarding video message: %s", exc)
 
             chat_id = q.message.chat_id if (q and q.message) else update.effective_chat.id
-            user = update.effective_user
-            user_id = user.id if user else None
 
-            # 2) Удаляем старое «привет»-сообщение, если мы его сохраняли
+            # 2) Удаляем старое «привет»-сообщение (ищем и в context, и в БД)
             tup = context.user_data.get("wizard_intro_message")
+            old_chat_id = old_msg_id = None
             if tup and isinstance(tup, tuple) and len(tup) == 2:
                 old_chat_id, old_msg_id = tup
+            if not old_chat_id or not old_msg_id:
+                old_chat_id, old_msg_id = await get_onboarding_intro_message(user_id)
+            if old_chat_id and old_msg_id:
                 try:
                     await context.bot.delete_message(old_chat_id, old_msg_id)
                 except Exception:
                     pass
-                context.user_data.pop("wizard_intro_message", None)
+            context.user_data.pop("wizard_intro_message", None)
+            try:
+                await clear_onboarding_intro_message(user_id)
+            except Exception as exc:
+                logger.warning("Failed to clear onboarding intro message: %s", exc)
 
             # 3) Пересылаем «привет» и первый вопрос визарда как два новых сообщения
             #    (поведение становится идентичным старому онбордингу, только после видео)
@@ -8836,6 +8860,14 @@ async def wizard_router(
                     intro_msg.chat_id,
                     intro_msg.message_id,
                 )
+                try:
+                    await set_onboarding_intro_message(
+                        user_id,
+                        intro_msg.chat_id,
+                        intro_msg.message_id,
+                    )
+                except Exception as exc:
+                    logger.warning("Failed to store onboarding intro message: %s", exc)
 
                 prompt = "Сколько тренировок в неделю?"
                 kb = week_count_kb()

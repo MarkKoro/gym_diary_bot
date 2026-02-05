@@ -10,7 +10,7 @@ from fastapi import Body, Depends, FastAPI, Header, HTTPException, Request, Resp
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from settings import BOT_PUBLIC_LINK, TG_TOKEN
-from telegram import Bot
+from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram_webapp_auth import (
     InitDataError,
     TelegramInitData,
@@ -33,6 +33,7 @@ from db import (
     get_latest_trainer_link_for_trainee,
     get_trainer_link,
     get_onboarding_video_message,
+    get_onboarding_intro_message,
     add_user_reminder,
     clear_user_reminders,
     list_day_completions,
@@ -66,6 +67,7 @@ from db import (
     update_trainee_label,
     update_running_entry,
     clear_onboarding_video_message,
+    clear_onboarding_intro_message,
     is_onboarding_completed,
     set_onboarding_completed,
 )
@@ -2832,6 +2834,7 @@ async def onboarding_finish(ctx: AuthCtx = Depends(get_auth_ctx)):
     user_id = ctx.user_id
     await set_onboarding_completed(user_id, True)
     bot = Bot(TG_TOKEN)
+
     chat_id, message_id = await get_onboarding_video_message(user_id)
     if chat_id and message_id:
         try:
@@ -2844,8 +2847,35 @@ async def onboarding_finish(ctx: AuthCtx = Depends(get_auth_ctx)):
                 user_id,
                 exc,
             )
-        await clear_onboarding_video_message(user_id)
-    return {"ok": True, "sent": False}
+    await clear_onboarding_video_message(user_id)
+
+    intro_chat_id, intro_message_id = await get_onboarding_intro_message(user_id)
+    if intro_chat_id and intro_message_id:
+        try:
+            await bot.delete_message(chat_id=intro_chat_id, message_id=intro_message_id)
+        except Exception as exc:
+            logger.warning(
+                "Failed to remove onboarding intro message for user %s: %s",
+                user_id,
+                exc,
+            )
+    await clear_onboarding_intro_message(user_id)
+
+    sent = False
+    menu_chat_id = chat_id or intro_chat_id
+    if menu_chat_id:
+        try:
+            await bot.send_message(
+                chat_id=menu_chat_id,
+                text="✅ Онбординг завершён. Открываю главное меню.",
+                reply_markup=InlineKeyboardMarkup(
+                    [[InlineKeyboardButton("Открыть главное меню", callback_data="menu:root")]]
+                ),
+            )
+            sent = True
+        except Exception as exc:
+            logger.warning("Failed to send main menu prompt for user %s: %s", user_id, exc)
+    return {"ok": True, "sent": sent}
 
 
 @app.post("/settings/days/{day_index}/rename")
