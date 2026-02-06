@@ -67,7 +67,6 @@
       padding: 6px 0 8px;
       display: grid;
       gap: 10px;
-      backdrop-filter: blur(8px);
     }
     .header-row {
       display: grid;
@@ -217,7 +216,7 @@
         flex-direction: column;
         gap: 10px;
       }
-      .exercise-card { cursor: pointer; position: relative; }
+      .exercise-card { cursor: pointer; position: relative; background: color-mix(in srgb, var(--card) 92%, var(--bg)); }
     .exercise-card.delete-mode { cursor: default; }
     .exercise-delete-btn {
         width: 44px;
@@ -636,10 +635,10 @@
     .settings-row .hint { color: var(--muted); font-size: 13px; }
     .settings-panel {
       border-radius: 14px;
-      border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--border));
-      background: color-mix(in srgb, var(--card) 78%, var(--bg));
+      border: 1px solid var(--border);
+      background: transparent;
       padding: 12px;
-      box-shadow: 0 10px 20px rgba(0, 122, 255, 0.12);
+      box-shadow: none;
     }
     .settings-input, .settings-select {
       width: 100%;
@@ -1170,6 +1169,123 @@
         radial-gradient(ellipse at 82% 66%, color-mix(in srgb, var(--system-tint-color, transparent) 56%, transparent) 0 16%, transparent 24%),
         radial-gradient(ellipse at 64% 86%, color-mix(in srgb, var(--system-tint-color, transparent) 36%, transparent) 0 14%, transparent 22%);
     }
+    .training-tint-layer {
+      position: absolute;
+      display: none;
+      background-repeat: no-repeat;
+      background-size: 100% 100%;
+    }
+    .training-tint.mode-top-bottom .training-tint-top,
+    .training-tint.mode-frame .training-tint-top {
+      display: block;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: min(14vw, 56px);
+      background-image: linear-gradient(180deg,
+        color-mix(in srgb, var(--system-tint-color, transparent) 84%, transparent) 0%,
+        color-mix(in srgb, var(--system-tint-color, transparent) 34%, transparent) 54%,
+        transparent 100%);
+    }
+    .training-tint.mode-top-bottom .training-tint-bottom,
+    .training-tint.mode-frame .training-tint-bottom {
+      display: block;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      height: min(14vw, 56px);
+      background-image: linear-gradient(0deg,
+        color-mix(in srgb, var(--system-tint-color, transparent) 84%, transparent) 0%,
+        color-mix(in srgb, var(--system-tint-color, transparent) 34%, transparent) 54%,
+        transparent 100%);
+    }
+    .training-tint.mode-corners .training-tint-corners {
+      display: block;
+      inset: 0;
+      background-image:
+        radial-gradient(circle at 0% 0%, color-mix(in srgb, var(--system-tint-color, transparent) 78%, transparent) 0 13%, transparent 26%),
+        radial-gradient(circle at 100% 0%, color-mix(in srgb, var(--system-tint-color, transparent) 78%, transparent) 0 13%, transparent 26%),
+        radial-gradient(circle at 0% 100%, color-mix(in srgb, var(--system-tint-color, transparent) 78%, transparent) 0 13%, transparent 26%),
+        radial-gradient(circle at 100% 100%, color-mix(in srgb, var(--system-tint-color, transparent) 78%, transparent) 0 13%, transparent 26%);
+    }
+    .training-tint.mode-frame {
+      box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--system-tint-color, transparent) 46%, transparent);
+    }
+    .training-tint.mode-top-bottom::before,
+    .training-tint.mode-top-bottom::after,
+    .training-tint.mode-corners::before,
+    .training-tint.mode-corners::after { display: none; }
+    .training-tint-glyph {
+      position: absolute;
+      left: 50%;
+      bottom: 30%;
+      transform: translateX(-50%);
+      font-weight: 900;
+      font-size: clamp(54px, 16vw, 130px);
+      line-height: 1;
+      letter-spacing: 0.04em;
+      color: color-mix(in srgb, var(--system-tint-color, transparent) 70%, transparent);
+      text-shadow: 0 8px 24px color-mix(in srgb, var(--system-tint-color, transparent) 38%, transparent);
+      display: none;
+    }
+    .training-tint.show-p .training-tint-glyph { display: block; }
+    .tint-hub { display: grid; gap: 10px; }
+    .tint-modes { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 8px; }
+    .tint-mode {
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 8px;
+      background: var(--bg);
+      display: grid;
+      gap: 7px;
+      cursor: pointer;
+    }
+    .tint-mode.active { border-color: var(--accent); box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 40%, transparent); }
+    .tint-preview {
+      height: 44px;
+      border-radius: 8px;
+      border: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
+      position: relative;
+      background: color-mix(in srgb, var(--card) 70%, var(--bg));
+      overflow: hidden;
+    }
+    .tint-preview::before,
+    .tint-preview::after { content: ''; position: absolute; }
+    .tint-preview[data-mode="sides"]::before,
+    .tint-preview[data-mode="sides"]::after {
+      top: 0; bottom: 0; width: 14%;
+      background: linear-gradient(90deg, color-mix(in srgb, var(--accent) 42%, transparent), transparent);
+    }
+    .tint-preview[data-mode="sides"]::before { left: 0; }
+    .tint-preview[data-mode="sides"]::after { right: 0; transform: scaleX(-1); }
+    .tint-preview[data-mode="top-bottom"]::before,
+    .tint-preview[data-mode="top-bottom"]::after {
+      left: 0; right: 0; height: 28%;
+      background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 42%, transparent), transparent);
+    }
+    .tint-preview[data-mode="top-bottom"]::before { top: 0; }
+    .tint-preview[data-mode="top-bottom"]::after { bottom: 0; transform: scaleY(-1); }
+    .tint-preview[data-mode="frame"] { box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--accent) 42%, transparent); }
+    .tint-preview[data-mode="corners"]::before {
+      inset: 0;
+      background:
+        radial-gradient(circle at 0% 0%, color-mix(in srgb, var(--accent) 48%, transparent) 0 10%, transparent 22%),
+        radial-gradient(circle at 100% 0%, color-mix(in srgb, var(--accent) 48%, transparent) 0 10%, transparent 22%),
+        radial-gradient(circle at 0% 100%, color-mix(in srgb, var(--accent) 48%, transparent) 0 10%, transparent 22%),
+        radial-gradient(circle at 100% 100%, color-mix(in srgb, var(--accent) 48%, transparent) 0 10%, transparent 22%);
+    }
+    .tint-preview-p {
+      position: absolute;
+      left: 50%;
+      bottom: 8%;
+      transform: translateX(-50%);
+      font-size: 15px;
+      font-weight: 900;
+      color: color-mix(in srgb, var(--accent) 68%, transparent);
+      display: none;
+    }
+    .tint-preview.show-p .tint-preview-p { display: block; }
+    .toggle-icon { min-width: 92px; }
     body.route-today .training-tint.show { opacity: 1; }
 
     .leaderboard-head { margin-top: 12px; display: flex; justify-content: space-between; align-items: center; gap: 10px; }
@@ -1605,7 +1721,12 @@
     <div class="onboarding-card" id="onboardingCard"></div>
   </div>
   <div id="app" class="app" style="display:none">
-    <div id="trainingTint" class="training-tint"></div>
+    <div id="trainingTint" class="training-tint">
+      <div class="training-tint-layer training-tint-top"></div>
+      <div class="training-tint-layer training-tint-bottom"></div>
+      <div class="training-tint-layer training-tint-corners"></div>
+      <div class="training-tint-glyph">P</div>
+    </div>
     <header class="app-header">
       <div class="header-row">
         <div class="header-left">
@@ -2168,6 +2289,9 @@
         ui: {
           showTimerButton: true,
           showProductivityButton: true,
+          tintEnabled: true,
+          tintMode: 'sides',
+          tintGlyphEnabled: false,
         },
         productivity: {
           score: 0,
@@ -2645,7 +2769,8 @@
       endAt: null,
     };
 
-    const PRODUCTIVITY_STORAGE_KEY = 'gd_productivity_ui_v1';
+    const PRODUCTIVITY_STORAGE_KEY = 'gd_productivity_ui_v2';
+    const TINT_MODES = ['sides', 'top-bottom', 'frame', 'corners'];
 
     function clamp01(value) {
       const num = Number(value) || 0;
@@ -2660,6 +2785,9 @@
         if (parsed && typeof parsed === 'object') {
           state.settings.ui.showTimerButton = parsed.showTimerButton !== false;
           state.settings.ui.showProductivityButton = parsed.showProductivityButton !== false;
+          state.settings.ui.tintEnabled = parsed.tintEnabled !== false;
+          state.settings.ui.tintGlyphEnabled = parsed.tintGlyphEnabled === true;
+          state.settings.ui.tintMode = TINT_MODES.includes(parsed.tintMode) ? parsed.tintMode : 'sides';
         }
       } catch (e) {
         console.warn('UI preferences load failed', e);
@@ -2991,14 +3119,19 @@
       const tint = document.getElementById('trainingTint');
       if (!tint) return;
       const active = (state.settings.systems.items || []).find((s) => Number(s.id) === Number(state.settings.systems.activeSystemId));
-      if (!active || !active.color) {
+      const ui = state.settings.ui || {};
+      const mode = TINT_MODES.includes(ui.tintMode) ? ui.tintMode : 'sides';
+      tint.classList.remove('mode-sides', 'mode-top-bottom', 'mode-frame', 'mode-corners');
+      tint.classList.remove('show-p');
+      if (!active || !active.color || ui.tintEnabled === false) {
         tint.classList.remove('show');
         tint.style.background = 'transparent';
         return;
       }
       tint.style.background = 'transparent';
       tint.style.setProperty('--system-tint-color', `color-mix(in srgb, ${active.color} 48%, transparent)`);
-      tint.classList.add('show');
+      tint.classList.add('show', `mode-${mode}`);
+      if (ui.tintGlyphEnabled) tint.classList.add('show-p');
     }
 
     function renderSystemsHub() {
@@ -4312,7 +4445,7 @@
       const s = state.settings;
       const trainer = s.trainer || {};
       const view = s.view || 'menu';
-      const ui = s.ui || { showTimerButton: true, showProductivityButton: true };
+      const ui = s.ui || { showTimerButton: true, showProductivityButton: true, tintEnabled: true, tintMode: 'sides', tintGlyphEnabled: false };
       const backButton = '<button class="btn small-btn settings-back" data-action="settings-back">← К списку настроек</button>';
       if (view === 'menu') {
         container.innerHTML = `
@@ -4330,7 +4463,7 @@
                   <span class="settings-menu-arrow">›</span>
                 </button>
                 <button class="settings-menu-item" data-action="open-settings" data-section="widgets">
-                  <span>Виджеты верхней панели</span>
+                  <span>Главный экран</span>
                   <span class="settings-menu-arrow">›</span>
                 </button>
               </div>
@@ -4459,20 +4592,20 @@
         `,
         widgets: `
           <div class="card">
-            <div class="card-title">Виджеты верхней панели</div>
+            <div class="card-title">Главный экран</div>
             <div class="settings-row settings-panel inline">
               <div>
                 <div class="label">Кнопка таймера</div>
                 <div class="hint">Показать или скрыть кнопку таймера в шапке.</div>
               </div>
-              <button class="btn small-btn" data-action="toggle-timer-widget">${ui.showTimerButton ? 'Включено' : 'Выключено'}</button>
+              <button class="btn small-btn toggle-icon" data-action="toggle-timer-widget">${ui.showTimerButton ? '🟢 Включено' : '⚪ Выключено'}</button>
             </div>
             <div class="settings-row settings-panel inline">
               <div>
                 <div class="label">Спидометр продуктивности</div>
                 <div class="hint">Показывает твой текущий топ и открывает подробный хаб.</div>
               </div>
-              <button class="btn small-btn" data-action="toggle-productivity-widget">${ui.showProductivityButton ? 'Включено' : 'Выключено'}</button>
+              <button class="btn small-btn toggle-icon" data-action="toggle-productivity-widget">${ui.showProductivityButton ? '🟢 Включено' : '⚪ Выключено'}</button>
             </div>
             <div class="settings-row settings-panel inline">
               <div>
@@ -4481,6 +4614,41 @@
               </div>
               <button class="btn small-btn" data-action="toggle-leaderboard-visibility">${s.leaderboardVisible ? 'Показываться' : 'Анонимно'}</button>
             </div>
+            <div class="settings-row settings-panel inline">
+              <div>
+                <div class="label">Цветовая подкраска</div>
+                <div class="hint">Полностью включает/выключает цветовую гамму тренировочной системы.</div>
+              </div>
+              <button class="btn small-btn toggle-icon" data-action="toggle-tint-enabled">${ui.tintEnabled ? '🟢 Включено' : '⚪ Выключено'}</button>
+            </div>
+            ${ui.tintEnabled ? `
+              <div class="settings-row settings-panel inline">
+                <div>
+                  <div class="label">Буква P (Progresor)</div>
+                  <div class="hint">Показывать декоративную букву P снизу на 30% высоты экрана.</div>
+                </div>
+                <button class="btn small-btn toggle-icon" data-action="toggle-tint-glyph">${ui.tintGlyphEnabled ? '🟢 Включено' : '⚪ Выключено'}</button>
+              </div>
+              <div class="settings-row settings-panel tint-hub">
+                <div>
+                  <div class="label">Режим цветовой гаммы</div>
+                  <div class="hint">Мини-превью ниже показывает будущий вид подсветки.</div>
+                </div>
+                <div class="tint-modes">
+                  ${[
+                    { id: 'sides', title: 'По бокам' },
+                    { id: 'top-bottom', title: 'Сверху/снизу' },
+                    { id: 'frame', title: 'Полная рамка' },
+                    { id: 'corners', title: 'Углы' },
+                  ].map((mode) => `
+                    <button class="tint-mode ${ui.tintMode === mode.id ? 'active' : ''}" data-action="set-tint-mode" data-mode="${mode.id}">
+                      <span class="tint-preview ${ui.tintGlyphEnabled ? 'show-p' : ''}" data-mode="${mode.id}"><span class="tint-preview-p">P</span></span>
+                      <span class="hint">${mode.title}</span>
+                    </button>
+                  `).join('')}
+                </div>
+              </div>
+            ` : ''}
           </div>
         `,
         measurements: `
@@ -5174,6 +5342,29 @@
             saveUiPreferences();
             applyHeaderWidgetVisibility();
             renderProductivityHub();
+            renderSettings();
+            return;
+          }
+          if (action === 'toggle-tint-enabled') {
+            state.settings.ui.tintEnabled = !state.settings.ui.tintEnabled;
+            saveUiPreferences();
+            applyTrainingTint();
+            renderSettings();
+            return;
+          }
+          if (action === 'toggle-tint-glyph') {
+            state.settings.ui.tintGlyphEnabled = !state.settings.ui.tintGlyphEnabled;
+            saveUiPreferences();
+            applyTrainingTint();
+            renderSettings();
+            return;
+          }
+          if (action === 'set-tint-mode') {
+            const mode = target.dataset.mode;
+            if (!TINT_MODES.includes(mode)) return;
+            state.settings.ui.tintMode = mode;
+            saveUiPreferences();
+            applyTrainingTint();
             renderSettings();
             return;
           }
