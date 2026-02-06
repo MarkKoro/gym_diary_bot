@@ -533,10 +533,11 @@ async def _should_clear_day_completions(user_id: int, latest: datetime | None) -
 
 
 async def get_active_day_completions(user_id: int) -> set[int]:
-    rows = await list_day_completions(user_id)
+    active_system_id = await get_active_training_system_id(user_id)
+    rows = await list_day_completions(user_id, active_system_id)
     parsed, latest = _parse_completion_rows(rows)
     if await _should_clear_day_completions(user_id, latest):
-        await clear_day_completions(user_id)
+        await clear_day_completions(user_id, active_system_id)
         return set()
     return {day for day, _ in parsed}
 
@@ -774,10 +775,10 @@ async def day_sheet(
     user_id = ctx.user_id
     await _validate_day(user_id, day_index)
     completed_days = await get_active_day_completions(user_id)
-    last_completed_at = await db.get_day_completion(user_id, day_index)
+    active_system_id = await get_active_training_system_id(user_id)
+    last_completed_at = await db.get_day_completion(user_id, day_index, active_system_id)
     target_date = _parse_date_param(date)
     iso_date = _iso_date(target_date)
-    active_system_id = await get_active_training_system_id(user_id)
     session_id = await db.get_or_create_today_session(user_id, iso_date, day_index, active_system_id)
     day_label = await db.get_day_label(user_id, day_index)
     exercises_rows = await db.fetch_day_exercises(user_id, day_index, iso_date, active_system_id)
@@ -958,13 +959,14 @@ async def complete_day(
     await _validate_day(user_id, day_index)
     target_date = _parse_date_param(date)
     completed_at = datetime.combine(target_date, time.min, tzinfo=UTC).isoformat()
-    await mark_day_completed(user_id, day_index, completed_at)
+    active_system_id = await get_active_training_system_id(user_id)
+    await mark_day_completed(user_id, day_index, completed_at, active_system_id)
     completed = await get_active_day_completions(user_id)
     return {
         "ok": True,
         "day_index": day_index,
         "completed_days": sorted(int(d) for d in completed),
-        "last_completed_at": await db.get_day_completion(user_id, day_index),
+        "last_completed_at": await db.get_day_completion(user_id, day_index, active_system_id),
     }
 
 
@@ -1162,10 +1164,10 @@ async def complete_running_state(
     completed_days = await get_active_day_completions(user_id)
     day_completed = False
     if all_done and day_index not in completed_days:
-        await mark_day_completed(user_id, day_index, datetime.now(UTC).isoformat())
+        await mark_day_completed(user_id, day_index, datetime.now(UTC).isoformat(), active_system_id)
         completed_days = await get_active_day_completions(user_id)
         day_completed = True
-    last_completed_at = await db.get_day_completion(user_id, day_index)
+    last_completed_at = await db.get_day_completion(user_id, day_index, active_system_id)
     state = await _build_running_state(user_id, day_index, ue_id, target_date, history_limit=30)
     return {
         "ok": True,
@@ -1198,11 +1200,11 @@ async def mark_exercise_done_fast(
     completed_days = await get_active_day_completions(user_id)
     day_completed = False
     if all_done and day_index not in completed_days:
-        await mark_day_completed(user_id, day_index, datetime.now(UTC).isoformat())
+        await mark_day_completed(user_id, day_index, datetime.now(UTC).isoformat(), active_system_id)
         completed_days = await get_active_day_completions(user_id)
         day_completed = True
 
-    last_completed_at = await db.get_day_completion(user_id, day_index)
+    last_completed_at = await db.get_day_completion(user_id, day_index, active_system_id)
     return {
         "ok": True,
         "user_exercise_id": user_exercise_id,
