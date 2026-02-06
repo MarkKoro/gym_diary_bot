@@ -73,6 +73,7 @@ from db import (
     fetch_productivity_leaderboard,
     fetch_public_training_plan,
     copy_training_plan_from_user,
+    ensure_training_system_defaults,
 )
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
