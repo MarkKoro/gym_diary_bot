@@ -1066,6 +1066,63 @@
     }
     .empty-day-title { font-weight: 800; font-size: 16px; }
     .empty-day-text { color: var(--muted); font-size: 14px; line-height: 1.4; }
+
+    .productivity-btn {
+      position: relative;
+      overflow: hidden;
+      color: var(--accent);
+    }
+    .productivity-btn .gauge-ring { opacity: 0.28; }
+    .productivity-btn .gauge-arrow {
+      transform-origin: 12px 12px;
+      transition: transform 0.3s ease;
+    }
+    .productivity-sheet .sheet { max-width: 620px; max-height: min(88vh, 760px); overflow: auto; }
+    .productivity-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 10px; }
+    .productivity-main { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 16px; align-items: center; padding: 14px; border: 1px solid var(--border); border-radius: 14px; background: var(--card); }
+    .productivity-score-line { display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .productivity-top-pill { padding: 6px 10px; border-radius: 999px; background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent); font-weight: 800; font-size: 13px; }
+    .productivity-help-btn {
+      border: 1px solid var(--border); background: var(--bg); color: var(--muted); width: 24px; height: 24px; border-radius: 50%; font-weight: 800; cursor: pointer;
+    }
+    .productivity-help { margin-top: 8px; padding: 10px; border: 1px solid var(--border); border-radius: 12px; font-size: 13px; color: var(--muted); background: color-mix(in srgb, var(--bg) 78%, transparent); }
+    .productivity-gauge-large { width: 140px; height: 140px; }
+    .productivity-gauge-large .gauge-arrow { transform-origin: 50px 50px; transition: transform 0.35s ease; }
+    .productivity-cards { margin-top: 12px; display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px; }
+    .productivity-mini-card { border: 1px solid var(--border); border-radius: 12px; padding: 10px; background: color-mix(in srgb, var(--bg) 80%, transparent); display: grid; gap: 4px; }
+    .productivity-mini-label { color: var(--muted); font-size: 12px; }
+    .productivity-mini-rank { font-weight: 800; }
+    .productivity-space { min-height: 120px; border-radius: 12px; border: 1px dashed var(--border); margin-top: 12px; padding: 10px; color: var(--muted); font-size: 13px; }
+
+    .system-btn { color: var(--muted); }
+    .system-sheet .sheet { max-width: 620px; max-height: min(88vh, 760px); overflow: auto; }
+    .system-list { display: grid; gap: 8px; margin-top: 10px; }
+    .system-row { border: 1px solid var(--border); border-radius: 12px; padding: 10px; background: var(--bg); display: grid; gap: 8px; }
+    .system-row.active { border-color: var(--accent); box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 60%, transparent); }
+    .system-row-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+    .system-color-dot { width: 14px; height: 14px; border-radius: 50%; border: 1px solid var(--border); display: inline-block; }
+    .system-row-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+    .training-tint { position: fixed; inset: 0; pointer-events: none; z-index: 2; opacity: 0; transition: opacity .2s ease; }
+    body.route-today .training-tint.show { opacity: 1; }
+
+    .leaderboard-head { margin-top: 12px; display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+    .leaderboard-list { display: grid; gap: 8px; margin-top: 10px; }
+    .leader-row { border: 1px solid var(--border); border-radius: 12px; padding: 10px; display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 10px; background: var(--bg); cursor: pointer; }
+    .leader-rank { font-weight: 900; width: 34px; text-align: center; }
+    .leader-rank.medal-gold { color: #f59e0b; }
+    .leader-rank.medal-silver { color: #94a3b8; }
+    .leader-rank.medal-bronze { color: #b45309; }
+    .leader-name { font-weight: 700; }
+    .leader-score { font-size: 12px; color: var(--muted); }
+    .leader-pagination { display: flex; justify-content: space-between; gap: 10px; margin-top: 10px; }
+    .leader-profile { margin-top: 12px; border: 1px solid var(--border); border-radius: 12px; padding: 10px; }
+    .leader-profile-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 8px; }
+    .leader-profile-days { display: grid; gap: 8px; max-height: 300px; overflow: auto; }
+    .leader-day-card { border: 1px solid var(--border); border-radius: 10px; padding: 8px; background: var(--bg); }
+    .leader-day-title { font-weight: 800; margin-bottom: 6px; }
+    .leader-ex-item { display: flex; justify-content: space-between; gap: 8px; padding: 4px 0; border-bottom: 1px dashed color-mix(in srgb, var(--border) 80%, transparent); }
+    .leader-ex-item:last-child { border-bottom: none; }
+
       .timer-pill{
         position: fixed;
         top: calc(12px + env(safe-area-inset-top));
@@ -1481,6 +1538,7 @@
     <div class="onboarding-card" id="onboardingCard"></div>
   </div>
   <div id="app" class="app" style="display:none">
+    <div id="trainingTint" class="training-tint"></div>
     <header class="app-header">
       <div class="header-row">
         <div class="header-left">
@@ -1497,9 +1555,18 @@
               <path d="M13 19a4.5 4.5 0 0 1 8.5 0"></path>
             </svg>
           </button>
+          <button id="systemOpenBtn" class="icon-btn system-btn" aria-label="Система тренировок">⚙️</button>
         </div>
         <div class="header-title" id="headerTitle">Сегодня</div>
         <div class="header-right">
+          <button id="productivityBtn" class="icon-btn productivity-btn" aria-label="Открыть хаб продуктивности">
+            <svg class="icon productivity-gauge-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
+              <path class="gauge-ring" d="M4 14a8 8 0 1 1 16 0"></path>
+              <path d="M6.5 14a5.5 5.5 0 1 1 11 0"></path>
+              <path class="gauge-arrow" id="productivityNeedleSmall" d="M12 14l4.6-4.6"></path>
+              <circle cx="12" cy="14" r="1.5" fill="currentColor" stroke="none"></circle>
+            </svg>
+          </button>
           <button id="timerOpenBtn" class="icon-btn" aria-label="Открыть таймер">
             <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
               <path d="M12 8v5l3 2"></path>
@@ -1637,6 +1704,72 @@
       <div class="sheet-handle"></div>
       <div class="day-sheet-title">Выбери тренировочный день</div>
       <div id="dayOptions" class="card-list"></div>
+    </div>
+  </div>
+
+  <div id="systemSheet" class="sheet-backdrop system-sheet">
+    <div class="sheet">
+      <div class="sheet-content">
+        <div class="productivity-head">
+          <div>
+            <div class="sheet-title">Системы тренировок</div>
+            <div class="timer-hint">Выбери активную систему, задай цвет и переход к уведомлениям.</div>
+          </div>
+          <button id="systemCloseBtn" class="icon-btn" aria-label="Закрыть">
+            <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="m6 6 12 12M18 6 6 18"></path></svg>
+          </button>
+        </div>
+        <div class="settings-row inline">
+          <input id="systemNewName" class="settings-input" placeholder="Название системы">
+          <button id="systemAddBtn" class="btn primary">Добавить</button>
+        </div>
+        <div id="systemList" class="system-list"></div>
+      </div>
+    </div>
+  </div>
+
+  <div id="productivitySheet" class="sheet-backdrop productivity-sheet">
+    <div class="sheet">
+      <div class="sheet-content">
+        <div class="productivity-head">
+          <div>
+            <div class="sheet-title">Хаб продуктивности</div>
+            <div class="timer-hint">Твоя позиция относительно других пользователей Progressor.</div>
+          </div>
+          <button id="productivityCloseBtn" class="icon-btn" aria-label="Закрыть хаб продуктивности">
+            <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
+              <path d="m6 6 12 12M18 6 6 18"></path>
+            </svg>
+          </button>
+        </div>
+        <div class="productivity-main">
+          <div>
+            <div class="productivity-score-line">
+              <div class="card-title">Оценка шкалы: <span id="productivityScoreText">0/100</span></div>
+              <span id="productivityTopText" class="productivity-top-pill">Топ 100%</span>
+              <button id="productivityHelpBtn" class="productivity-help-btn" aria-label="Как считается рейтинг">?</button>
+            </div>
+            <div id="productivityHelp" class="productivity-help hidden"></div>
+          </div>
+          <svg class="productivity-gauge-large" viewBox="0 0 100 100" fill="none" stroke="currentColor" aria-hidden="true">
+            <path class="gauge-ring" d="M10 62a40 40 0 1 1 80 0" stroke-width="5"></path>
+            <path d="M18 62a32 32 0 1 1 64 0" stroke-width="4"></path>
+            <path id="productivityNeedleLarge" class="gauge-arrow" d="M50 62l27-27" stroke-width="4"></path>
+            <circle cx="50" cy="62" r="4" fill="currentColor" stroke="none"></circle>
+          </svg>
+        </div>
+        <div id="productivityMetrics" class="productivity-cards"></div>
+        <div class="leaderboard-head">
+          <div class="card-title">Лидеры продуктивности</div>
+          <div id="leaderboardPageLabel" class="timer-hint"></div>
+        </div>
+        <div id="leaderboardList" class="leaderboard-list"></div>
+        <div class="leader-pagination">
+          <button id="leaderboardPrevBtn" class="btn">← Назад</button>
+          <button id="leaderboardNextBtn" class="btn">Вперёд →</button>
+        </div>
+        <div id="leaderProfile" class="leader-profile hidden"></div>
+      </div>
     </div>
   </div>
 
@@ -1932,6 +2065,31 @@
         reminders: [],
         notificationsEnabled: true,
         timezone: '',
+        ui: {
+          showTimerButton: true,
+          showProductivityButton: true,
+        },
+        productivity: {
+          score: 0,
+          topPercent: 100,
+          metrics: [],
+          helpOpen: false,
+          leaderboard: {
+            loading: false,
+            items: [],
+            total: 0,
+            offset: 0,
+            limit: 10,
+            selectedUserId: null,
+            profileLoading: false,
+            profile: null,
+          },
+        },
+        systems: {
+          activeSystemId: null,
+          items: [],
+          loading: false,
+        },
         trainer: {
           loading: false,
           loaded: false,
@@ -2385,6 +2543,408 @@
       endAt: null,
     };
 
+    const PRODUCTIVITY_STORAGE_KEY = 'gd_productivity_ui_v1';
+
+    function clamp01(value) {
+      const num = Number(value) || 0;
+      return Math.max(0, Math.min(1, num));
+    }
+
+    function loadUiPreferences() {
+      try {
+        const raw = localStorage.getItem(PRODUCTIVITY_STORAGE_KEY);
+        if (!raw) return;
+        const parsed = JSON.parse(raw);
+        if (parsed && typeof parsed === 'object') {
+          state.settings.ui.showTimerButton = parsed.showTimerButton !== false;
+          state.settings.ui.showProductivityButton = parsed.showProductivityButton !== false;
+        }
+      } catch (e) {
+        console.warn('UI preferences load failed', e);
+      }
+    }
+
+    function saveUiPreferences() {
+      try {
+        localStorage.setItem(PRODUCTIVITY_STORAGE_KEY, JSON.stringify(state.settings.ui));
+      } catch (e) {
+        console.warn('UI preferences save failed', e);
+      }
+    }
+
+    function collectProductivityFacts() {
+      const list = Array.from(state.exercises.values());
+      let volume = 0;
+      let sets = 0;
+      let repsTotal = 0;
+      let weightedSignals = 0;
+      let bodyweightLike = 0;
+      const exerciseNames = new Set();
+      list.forEach((ex) => {
+        exerciseNames.add((ex.name || '').trim().toLowerCase());
+        (ex.sets || []).forEach((set) => {
+          const reps = Number(set?.reps || 0);
+          const sec = Number(set?.seconds || 0);
+          const weight = Number(set?.weight_kg || 0);
+          sets += 1;
+          repsTotal += Math.max(0, reps);
+          volume += Math.max(0, reps) * Math.max(0, weight);
+          if (weight > 0 && reps >= 5) weightedSignals += 1;
+          if (sec > 0 && weight <= 0) bodyweightLike += 1;
+        });
+      });
+      const completedInWeek = state.completedDays?.size || 0;
+      const activeDays = (state.activeDays || []).length || 1;
+      const attendance = clamp01(completedInWeek / Math.max(1, activeDays));
+      const weeklyFrequency = clamp01(completedInWeek / 6);
+      const strengthLoad = clamp01(volume / 28000);
+      const setDensity = clamp01(sets / 36);
+      const repCapacity = clamp01(repsTotal / 420);
+      const progress = clamp01(weightedSignals / 28 + strengthLoad * 0.45);
+      const creativity = clamp01(exerciseNames.size / 14);
+      const bodyControl = clamp01(bodyweightLike / 20);
+      const consistency = clamp01((attendance + weeklyFrequency) / 2);
+      return {
+        volume,
+        sets,
+        exerciseCount: exerciseNames.size,
+        attendance,
+        weeklyFrequency,
+        strengthLoad,
+        setDensity,
+        repCapacity,
+        progress,
+        creativity,
+        bodyControl,
+        consistency,
+      };
+    }
+
+    function toTopPercent(score) {
+      const clamped = Math.max(0, Math.min(100, Math.round(score)));
+      if (clamped >= 96) return 1;
+      if (clamped >= 90) return 3;
+      if (clamped >= 82) return 5;
+      if (clamped >= 70) return 10;
+      if (clamped >= 55) return 25;
+      if (clamped >= 40) return 40;
+      if (clamped >= 25) return 60;
+      return 100;
+    }
+
+    function computeProductivityScore() {
+      const facts = collectProductivityFacts();
+      const weighted = (
+        facts.attendance * 0.14
+        + facts.weeklyFrequency * 0.10
+        + facts.strengthLoad * 0.13
+        + facts.setDensity * 0.09
+        + facts.repCapacity * 0.08
+        + facts.progress * 0.17
+        + facts.creativity * 0.10
+        + facts.bodyControl * 0.07
+        + facts.consistency * 0.12
+      );
+      const score = Math.max(0, Math.min(100, Math.round(weighted * 100)));
+      const metrics = [
+        { key: 'attendance', label: 'Топ по посещаемости', topPercent: toTopPercent(Math.round((facts.attendance * 0.7 + facts.weeklyFrequency * 0.3) * 100)), detail: `${state.completedDays?.size || 0} завершённых тренировок` },
+        { key: 'progress', label: 'Топ по прогрессу в весах', topPercent: toTopPercent(Math.round((facts.progress * 0.65 + facts.strengthLoad * 0.35) * 100)), detail: `${Math.round(facts.volume)} кг тренировочного объёма` },
+        { key: 'creativity', label: 'Топ по креативности', topPercent: toTopPercent(Math.round((facts.creativity * 0.75 + facts.bodyControl * 0.25) * 100)), detail: `${facts.exerciseCount} разных упражнений` },
+      ];
+      state.settings.productivity.score = score;
+      state.settings.productivity.topPercent = toTopPercent(score);
+      state.settings.productivity.metrics = metrics;
+    }
+
+    function gaugeAngleFromScore(score) {
+      const normalized = Math.max(0, Math.min(100, Number(score) || 0));
+      return -80 + normalized * 1.6;
+    }
+
+    function renderProductivityButton() {
+      const btn = document.getElementById('productivityBtn');
+      if (!btn) return;
+      btn.classList.toggle('hidden', !state.settings.ui.showProductivityButton || state.manage.mode === 'delete');
+      const angle = gaugeAngleFromScore(state.settings.productivity.score);
+      const needle = document.getElementById('productivityNeedleSmall');
+      if (needle) needle.style.transform = `rotate(${angle}deg)`;
+      btn.title = `Топ ${state.settings.productivity.topPercent}%`;
+    }
+
+    function applyHeaderWidgetVisibility() {
+      const hideForDelete = state.manage.mode === 'delete';
+      const timerBtn = document.getElementById('timerOpenBtn');
+      const productivityBtn = document.getElementById('productivityBtn');
+      if (timerBtn) timerBtn.classList.toggle('hidden', hideForDelete || !state.settings.ui.showTimerButton);
+      if (productivityBtn) productivityBtn.classList.toggle('hidden', hideForDelete || !state.settings.ui.showProductivityButton);
+    }
+
+    function renderProductivityHub() {
+      const score = state.settings.productivity.score;
+      const topPercent = state.settings.productivity.topPercent;
+      const scoreText = document.getElementById('productivityScoreText');
+      const topText = document.getElementById('productivityTopText');
+      const help = document.getElementById('productivityHelp');
+      const helpBtn = document.getElementById('productivityHelpBtn');
+      const largeNeedle = document.getElementById('productivityNeedleLarge');
+      const metrics = document.getElementById('productivityMetrics');
+      if (scoreText) scoreText.textContent = `${score}/100`;
+      if (topText) topText.textContent = `Топ ${topPercent}%`;
+      if (help) {
+        help.textContent = 'Индекс собирается из частоты тренировок, прогрессии рабочих весов и разнообразия упражнений. Мы нормализуем твои показатели и сравниваем их с глобальной выборкой пользователей.';
+        help.classList.toggle('hidden', !state.settings.productivity.helpOpen);
+      }
+      if (helpBtn) helpBtn.setAttribute('aria-expanded', state.settings.productivity.helpOpen ? 'true' : 'false');
+      if (largeNeedle) largeNeedle.style.transform = `rotate(${gaugeAngleFromScore(score)}deg)`;
+      if (metrics) {
+        metrics.innerHTML = (state.settings.productivity.metrics || []).map((metric) => `
+          <div class="productivity-mini-card">
+            <div class="productivity-mini-label">${metric.label}</div>
+            <div class="productivity-mini-rank">Топ ${metric.topPercent}%</div>
+            <div class="timer-hint">${metric.detail}</div>
+          </div>
+        `).join('');
+      }
+      renderProductivityButton();
+      applyHeaderWidgetVisibility();
+      renderLeaderboardSection();
+    }
+
+    function openProductivitySheet() {
+      renderProductivityHub();
+      document.getElementById('productivitySheet')?.classList.add('show');
+      loadProductivityLeaderboard().catch(console.error);
+    }
+
+    function closeProductivitySheet() {
+      document.getElementById('productivitySheet')?.classList.remove('show');
+      state.settings.productivity.leaderboard.selectedUserId = null;
+      state.settings.productivity.leaderboard.profile = null;
+      state.settings.productivity.leaderboard.profileLoading = false;
+    }
+
+    function renderLeaderboardSection() {
+      const lb = state.settings.productivity.leaderboard;
+      const listEl = document.getElementById('leaderboardList');
+      const pageEl = document.getElementById('leaderboardPageLabel');
+      const prevBtn = document.getElementById('leaderboardPrevBtn');
+      const nextBtn = document.getElementById('leaderboardNextBtn');
+      const profileEl = document.getElementById('leaderProfile');
+      if (!listEl || !pageEl || !prevBtn || !nextBtn || !profileEl) return;
+      const start = lb.offset + 1;
+      const end = Math.min(lb.total || 0, lb.offset + lb.limit);
+      pageEl.textContent = lb.total ? `${start}-${end} из ${lb.total}` : '—';
+      prevBtn.disabled = lb.loading || lb.offset <= 0;
+      nextBtn.disabled = lb.loading || (lb.offset + lb.limit >= lb.total);
+      if (lb.loading) {
+        listEl.innerHTML = '<div class="muted-inline">Загружаем лидеров…</div>';
+      } else if (!lb.items.length) {
+        listEl.innerHTML = '<div class="muted-inline">Пока нет данных лидерборда.</div>';
+      } else {
+        listEl.innerHTML = lb.items.map((item) => {
+          const medalClass = item.rank === 1 ? 'medal-gold' : (item.rank === 2 ? 'medal-silver' : (item.rank === 3 ? 'medal-bronze' : ''));
+          return `
+            <button class="leader-row" data-action="leader-open" data-user-id="${item.user_id}">
+              <div class="leader-rank ${medalClass}">#${item.rank}</div>
+              <div>
+                <div class="leader-name">@${item.username}</div>
+                <div class="leader-score">Топ ${item.top_percent}% · score ${item.score}/100</div>
+              </div>
+              <div class="timer-hint">Открыть</div>
+            </button>
+          `;
+        }).join('');
+      }
+
+      if (lb.profileLoading) {
+        profileEl.classList.remove('hidden');
+        profileEl.innerHTML = '<div class="muted-inline">Загружаем тренировочный план лидера…</div>';
+        return;
+      }
+      if (!lb.profile) {
+        profileEl.classList.add('hidden');
+        profileEl.innerHTML = '';
+        return;
+      }
+      const daysHtml = (lb.profile.days || []).map((day) => {
+        const exercises = (day.exercises || []).map((ex) => `
+          <div class="leader-ex-item">
+            <span>${ex.name}</span>
+            <span class="timer-hint">сеты ${ex.avg_sets || 0} · повт ${ex.avg_reps || 0}</span>
+          </div>
+        `).join('') || '<div class="timer-hint">Нет упражнений</div>';
+        return `
+          <div class="leader-day-card">
+            <div class="leader-day-title">${day.label || `День ${day.day_index}`}</div>
+            ${exercises}
+          </div>
+        `;
+      }).join('') || '<div class="timer-hint">У этого лидера пока нет публичного расписания.</div>';
+      profileEl.classList.remove('hidden');
+      profileEl.innerHTML = `
+        <div class="leader-profile-head">
+          <div>
+            <div class="card-title">План лидера @${lb.profile.username || 'athlete'}</div>
+            <div class="timer-hint">Можно посмотреть структуру и скопировать её себе.</div>
+          </div>
+          <div style="display:flex; gap:8px;">
+            <button class="btn" data-action="leader-profile-close">Закрыть</button>
+            <button class="btn primary" data-action="leader-copy-plan" data-user-id="${lb.profile.leader_user_id}">Скопировать режим</button>
+          </div>
+        </div>
+        <div class="leader-profile-days">${daysHtml}</div>
+      `;
+    }
+
+    async function loadProductivityLeaderboard() {
+      const lb = state.settings.productivity.leaderboard;
+      lb.loading = true;
+      renderLeaderboardSection();
+      try {
+        const data = await apiFetch(`/gymapi/leaderboard/productivity?limit=${lb.limit}&offset=${lb.offset}`);
+        lb.items = data.items || [];
+        lb.total = Number(data.total || 0);
+        if (Number.isFinite(Number(data.my_score)) && Number(data.my_score) >= 0) {
+          state.settings.productivity.score = Number(data.my_score);
+          state.settings.productivity.topPercent = Number(data.my_top_percent || state.settings.productivity.topPercent || 100);
+        }
+      } catch (e) {
+        toast('Не удалось загрузить лидерборд');
+      } finally {
+        lb.loading = false;
+        renderProductivityHub();
+      }
+    }
+
+    async function openLeaderProfile(leaderUserId) {
+      const lb = state.settings.productivity.leaderboard;
+      lb.selectedUserId = Number(leaderUserId) || null;
+      lb.profileLoading = true;
+      lb.profile = null;
+      renderLeaderboardSection();
+      try {
+        const data = await apiFetch(`/gymapi/leaderboard/productivity/${leaderUserId}/plan`);
+        const row = (lb.items || []).find((item) => Number(item.user_id) === Number(leaderUserId));
+        lb.profile = {
+          leader_user_id: Number(leaderUserId),
+          username: row?.username || `athlete_${leaderUserId}`,
+          days: data.days || [],
+        };
+      } catch (e) {
+        toast('Не удалось открыть профиль лидера');
+      } finally {
+        lb.profileLoading = false;
+        renderLeaderboardSection();
+      }
+    }
+
+    async function copyLeaderPlan(leaderUserId) {
+      if (!openConfirmModal) return;
+      openConfirmModal(async () => {
+        await apiFetch(`/gymapi/leaderboard/productivity/${leaderUserId}/copy`, { method: 'POST', body: JSON.stringify({}) });
+        toast('План лидера скопирован ✅');
+        await refreshTodayData({ keepDay: true });
+      }, 'Скопировать режим тренировок?', 'Скопируются упражнения и структура тренировочных дней без подходов и весов. Продолжить?');
+    }
+
+    async function loadSystems() {
+      const systems = state.settings.systems;
+      systems.loading = true;
+      renderSystemsHub();
+      try {
+        const data = await apiFetch('/gymapi/systems');
+        systems.activeSystemId = data.active_system_id;
+        systems.items = data.systems || [];
+      } catch (e) {
+        toast('Не удалось загрузить системы');
+      } finally {
+        systems.loading = false;
+        renderSystemsHub();
+        applyTrainingTint();
+      }
+    }
+
+    function applyTrainingTint() {
+      const tint = document.getElementById('trainingTint');
+      if (!tint) return;
+      const active = (state.settings.systems.items || []).find((s) => Number(s.id) === Number(state.settings.systems.activeSystemId));
+      if (!active || !active.color) {
+        tint.classList.remove('show');
+        tint.style.background = 'transparent';
+        return;
+      }
+      tint.style.background = `color-mix(in srgb, ${active.color} 6%, transparent)`;
+      tint.classList.add('show');
+    }
+
+    function renderSystemsHub() {
+      const systems = state.settings.systems;
+      const list = document.getElementById('systemList');
+      if (!list) return;
+      if (systems.loading) {
+        list.innerHTML = '<div class="muted-inline">Загружаем системы…</div>';
+        return;
+      }
+      list.innerHTML = (systems.items || []).map((sys) => `
+        <div class="system-row ${Number(sys.id) === Number(systems.activeSystemId) ? 'active' : ''}">
+          <div class="system-row-head">
+            <div style="display:flex; align-items:center; gap:8px;">
+              <span class="system-color-dot" style="background:${sys.color || '#2ea6ff'}"></span>
+              <div class="label">${sys.name}</div>
+            </div>
+            <div class="timer-hint">#${sys.id}</div>
+          </div>
+          <div class="system-row-actions">
+            <button class="btn small-btn" data-action="system-select" data-system-id="${sys.id}">Выбрать</button>
+            <button class="btn small-btn" data-action="system-rename" data-system-id="${sys.id}">Переименовать</button>
+            <input type="color" data-action="system-color" data-system-id="${sys.id}" value="${sys.color || '#2ea6ff'}" title="Цвет системы">
+            <button class="btn small-btn" data-action="system-notifications" data-system-id="${sys.id}">Уведомления</button>
+            <button class="btn small-btn danger" data-action="system-delete" data-system-id="${sys.id}">Удалить</button>
+          </div>
+        </div>
+      `).join('') || '<div class="muted-inline">Систем пока нет.</div>';
+    }
+
+    async function openSystemSheet() {
+      document.getElementById('systemSheet')?.classList.add('show');
+      await loadSystems();
+    }
+
+    function closeSystemSheet() {
+      document.getElementById('systemSheet')?.classList.remove('show');
+    }
+
+    async function handleSystemAction(action, target) {
+      const id = Number(target.dataset.systemId || 0);
+      if (action === 'system-select' && id > 0) {
+        await apiFetch(`/gymapi/systems/${id}/select`, { method: 'POST', body: JSON.stringify({}) });
+        await loadSystems();
+        await refreshTodayData({ keepDay: true });
+        return;
+      }
+      if (action === 'system-rename' && id > 0) {
+        const name = prompt('Название системы', '');
+        if (name === null) return;
+        await apiFetch(`/gymapi/systems/${id}/rename`, { method: 'POST', body: JSON.stringify({ name }) });
+        await loadSystems();
+        return;
+      }
+      if (action === 'system-delete' && id > 0) {
+        openConfirmModal?.(async () => {
+          await apiFetch(`/gymapi/systems/${id}`, { method: 'DELETE' });
+          await loadSystems();
+          await refreshTodayData({ keepDay: true });
+        }, 'Удалить систему?', 'Система тренировок будет удалена. Продолжить?');
+        return;
+      }
+      if (action === 'system-notifications' && id > 0) {
+        state.settings.view = 'notifications';
+        closeSystemSheet();
+        navigateTo('settings');
+        return;
+      }
+    }
+
     function clampTimer(sec){
       sec = Math.max(0, Math.min(TIMER_MAX_SEC, Number(sec)||0));
       return Math.round(sec);
@@ -2571,8 +3131,26 @@
       // open button (clock icon) – adapt to your existing element id if different
       const openBtn = document.getElementById('timerOpenBtn');
       if (openBtn) openBtn.addEventListener('click', (e)=>{ e.stopPropagation(); openTimerSheet(); });
+      const productivityBtn = document.getElementById('productivityBtn');
+      if (productivityBtn) productivityBtn.addEventListener('click', (e) => { e.stopPropagation(); openProductivitySheet(); });
+      const systemBtn = document.getElementById('systemOpenBtn');
+      if (systemBtn) systemBtn.addEventListener('click', (e) => { e.stopPropagation(); openSystemSheet().catch(console.error); });
 
       document.getElementById('timerCloseBtn')?.addEventListener('click', closeTimerSheet);
+      document.getElementById('productivityCloseBtn')?.addEventListener('click', closeProductivitySheet);
+      document.getElementById('systemCloseBtn')?.addEventListener('click', closeSystemSheet);
+      document.getElementById('systemAddBtn')?.addEventListener('click', async () => {
+        const input = document.getElementById('systemNewName');
+        const name = (input?.value || '').trim() || 'Новая система';
+        await apiFetch('/gymapi/systems', { method: 'POST', body: JSON.stringify({ name }) });
+        if (input) input.value = '';
+        await loadSystems();
+      });
+      document.getElementById('productivityHelpBtn')?.addEventListener('click', (e) => {
+        e.stopPropagation();
+        state.settings.productivity.helpOpen = !state.settings.productivity.helpOpen;
+        renderProductivityHub();
+      });
 
       // steppers
       const minMinus = document.getElementById('timerMinMinus');
@@ -2877,6 +3455,8 @@
         empty.className = 'library-empty';
         empty.textContent = 'Пока нет сохранённых пробежек для этого упражнения.';
         container.appendChild(empty);
+        computeProductivityScore();
+        renderProductivityHub();
         return;
       }
       const exerciseId = state.library.history?.exercise_id || state.library.currentExerciseId;
@@ -3528,6 +4108,7 @@
       const s = state.settings;
       const trainer = s.trainer || {};
       const view = s.view || 'menu';
+      const ui = s.ui || { showTimerButton: true, showProductivityButton: true };
       const backButton = '<button class="btn small-btn settings-back" data-action="settings-back">← К списку настроек</button>';
       if (view === 'menu') {
         container.innerHTML = `
@@ -3542,6 +4123,10 @@
                 </button>
                 <button class="settings-menu-item" data-action="open-settings" data-section="groups">
                   <span>Мои группы мышц</span>
+                  <span class="settings-menu-arrow">›</span>
+                </button>
+                <button class="settings-menu-item" data-action="open-settings" data-section="widgets">
+                  <span>Виджеты верхней панели</span>
                   <span class="settings-menu-arrow">›</span>
                 </button>
               </div>
@@ -3668,12 +4253,32 @@
             <div class="settings-list">${groupHtml || '<div class="muted-inline">Пользовательских групп нет.</div>'}</div>
           </div>
         `,
+        widgets: `
+          <div class="card">
+            <div class="card-title">Виджеты верхней панели</div>
+            <div class="settings-row settings-panel inline">
+              <div>
+                <div class="label">Кнопка таймера</div>
+                <div class="hint">Показать или скрыть кнопку таймера в шапке.</div>
+              </div>
+              <button class="btn small-btn" data-action="toggle-timer-widget">${ui.showTimerButton ? 'Включено' : 'Выключено'}</button>
+            </div>
+            <div class="settings-row settings-panel inline">
+              <div>
+                <div class="label">Спидометр продуктивности</div>
+                <div class="hint">Показывает твой текущий топ и открывает подробный хаб.</div>
+              </div>
+              <button class="btn small-btn" data-action="toggle-productivity-widget">${ui.showProductivityButton ? 'Включено' : 'Выключено'}</button>
+            </div>
+          </div>
+        `,
         measurements: `
           ${renderMeasurementsSection()}
         `,
         notifications: `
           <div class="card">
             <div class="card-title">Уведомления</div>
+            <div class="settings-row settings-panel inline"><div><div class="label">Система тренировок</div><div class="hint">Уведомления редактируются для выбранной сейчас системы.</div></div><button class="btn small-btn" data-action="open-system-hub">⚙️ Системы</button></div>
             <div class="settings-row settings-panel">
               <div class="label">Уведомления</div>
               <div class="settings-pill">Статус: ${s.notificationsEnabled ? 'включены' : 'выключены'}</div>
@@ -4336,8 +4941,27 @@
             await performDelete();
             return;
           }
+          if (action === 'open-system-hub') {
+            openSystemSheet().catch(console.error);
+            return;
+          }
           if (action === 'toggle-notifications') {
             state.settings.notificationsEnabled = !state.settings.notificationsEnabled;
+            renderSettings();
+            return;
+          }
+          if (action === 'toggle-timer-widget') {
+            state.settings.ui.showTimerButton = !state.settings.ui.showTimerButton;
+            saveUiPreferences();
+            applyHeaderWidgetVisibility();
+            renderSettings();
+            return;
+          }
+          if (action === 'toggle-productivity-widget') {
+            state.settings.ui.showProductivityButton = !state.settings.ui.showProductivityButton;
+            saveUiPreferences();
+            applyHeaderWidgetVisibility();
+            renderProductivityHub();
             renderSettings();
             return;
           }
@@ -4684,6 +5308,7 @@
       document.querySelectorAll('.screen').forEach((el) => {
         el.classList.toggle('active', el.dataset.route === normalized);
       });
+      document.body.classList.toggle('route-today', normalized === 'today');
       document.getElementById('headerTitle').textContent = ROUTE_TITLES[normalized] || ROUTE_TITLES.today;
       setVisible(document.getElementById('todayHeader'), normalized === 'today');
       updateAddButtonVisibility();
@@ -6309,6 +6934,8 @@
         });
         empty.append(title, text, btn);
         container.appendChild(empty);
+        computeProductivityScore();
+        renderProductivityHub();
         return;
       }
       const order = state.workout.order && state.workout.order.length ? state.workout.order : Array.from(exercisesMap.keys());
@@ -6322,6 +6949,8 @@
       });
       syncExpandedCards();
       applyWorkoutAnimations(container);
+      computeProductivityScore();
+      renderProductivityHub();
     }
 
     function applyWorkoutAnimations(container) {
@@ -6698,7 +7327,7 @@
       document.body.classList.toggle('delete-mode', isDelete);
       document.getElementById('deleteModeHeaderText')?.classList.toggle('hidden', !isDelete);
       document.getElementById('deleteModeFooter')?.classList.toggle('hidden', !isDelete);
-      document.getElementById('timerOpenBtn')?.classList.toggle('hidden', isDelete);
+      applyHeaderWidgetVisibility();
       document.getElementById('finishFabWrap')?.classList.toggle('hidden', isDelete || state.manage.add.open);
     }
 
@@ -7313,6 +7942,63 @@
       });
       document.getElementById('textPrompt').addEventListener('click', (e) => { if (e.target.id === 'textPrompt') closeTextPrompt(); });
       document.getElementById('timerSheet').addEventListener('click', (e) => { if (e.target.id === 'timerSheet') closeTimerSheet(); });
+      document.getElementById('systemSheet').addEventListener('click', async (e) => {
+        if (e.target.id === 'systemSheet') { closeSystemSheet(); return; }
+        const colorInput = e.target.closest('input[type="color"][data-action="system-color"]');
+        if (colorInput) {
+          const id = Number(colorInput.dataset.systemId || 0);
+          if (id > 0) {
+            await apiFetch(`/gymapi/systems/${id}/color`, { method: 'POST', body: JSON.stringify({ color: colorInput.value }) });
+            await loadSystems();
+          }
+          return;
+        }
+        const target = e.target.closest('[data-action]');
+        if (!target) return;
+        await handleSystemAction(target.dataset.action, target);
+      });
+      document.getElementById('systemSheet').addEventListener('change', async (e) => {
+        const colorInput = e.target.closest('input[type="color"][data-action="system-color"]');
+        if (!colorInput) return;
+        const id = Number(colorInput.dataset.systemId || 0);
+        if (id > 0) {
+          await apiFetch(`/gymapi/systems/${id}/color`, { method: 'POST', body: JSON.stringify({ color: colorInput.value }) });
+          await loadSystems();
+        }
+      });
+      document.getElementById('productivitySheet').addEventListener('click', (e) => {
+        if (e.target.id === 'productivitySheet') { closeProductivitySheet(); return; }
+        const target = e.target.closest('[data-action]');
+        if (!target) return;
+        const action = target.dataset.action;
+        if (action === 'leader-open') {
+          const userId = Number(target.dataset.userId || 0);
+          if (userId > 0) openLeaderProfile(userId).catch(console.error);
+          return;
+        }
+        if (action === 'leader-profile-close') {
+          state.settings.productivity.leaderboard.profile = null;
+          state.settings.productivity.leaderboard.selectedUserId = null;
+          renderLeaderboardSection();
+          return;
+        }
+        if (action === 'leader-copy-plan') {
+          const userId = Number(target.dataset.userId || 0);
+          if (userId > 0) copyLeaderPlan(userId).catch(console.error);
+          return;
+        }
+      });
+      document.getElementById('leaderboardPrevBtn')?.addEventListener('click', () => {
+        const lb = state.settings.productivity.leaderboard;
+        lb.offset = Math.max(0, lb.offset - lb.limit);
+        loadProductivityLeaderboard().catch(console.error);
+      });
+      document.getElementById('leaderboardNextBtn')?.addEventListener('click', () => {
+        const lb = state.settings.productivity.leaderboard;
+        if (lb.offset + lb.limit >= lb.total) return;
+        lb.offset = lb.offset + lb.limit;
+        loadProductivityLeaderboard().catch(console.error);
+      });
       document.getElementById('editorClose').addEventListener('click', closeEditor);
       document.getElementById('editorAddSet').addEventListener('click', () => queueExerciseAction(state.editor.ueId, () => addSet(state.editor.ueId, { toastOnSave: true })));
       document.getElementById('editorRemoveSet').addEventListener('click', () => queueExerciseAction(state.editor.ueId, () => removeSet(state.editor.ueId)));
@@ -7326,6 +8012,8 @@
           switch (backdrop.id) {
             case 'daySheet': closeDayPicker(); break;
             case 'timerSheet': closeTimerSheet(); break;
+            case 'systemSheet': closeSystemSheet(); break;
+            case 'productivitySheet': closeProductivitySheet(); break;
             case 'sheet': closeEditor(); break;
             case 'manageExerciseSheet': closeManageAddSheet(); break;
             case 'manageDaySheet': closeManageDayPicker(); break;
@@ -7818,6 +8506,9 @@
     }
 
     async function init() {
+      loadUiPreferences();
+      computeProductivityScore();
+      renderProductivityHub();
       setupNavigation();
       setupOnboardingHandlers();
       setupSettingsHandlers();
@@ -7828,7 +8519,9 @@
       bindTimer();
       setupVisibilityRefresh();
       updateActingBanner();
+      applyHeaderWidgetVisibility();
       if (!state.isTelegram) { handleRouteFromHash(); return; }
+      loadSystems().catch(console.error);
       state.startDayIndex = getDayIndexFromUrl();
       loadTrainerOverview().catch(console.error);
       const onboardingActive = await checkOnboardingStatus();
