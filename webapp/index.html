@@ -1070,7 +1070,15 @@
     .productivity-btn {
       position: relative;
       overflow: hidden;
-      color: var(--accent);
+      color: #fff;
+      border-color: color-mix(in srgb, var(--text) 16%, transparent);
+      background: var(--productivity-btn-bg, #4b5563);
+      transition: background 0.28s ease, border-color 0.28s ease, box-shadow 0.28s ease;
+    }
+    .productivity-btn .productivity-gauge-icon {
+      width: 100%;
+      height: 100%;
+      padding: 8px;
     }
     .productivity-btn .gauge-ring { opacity: 0.28; }
     .productivity-btn .gauge-arrow {
@@ -1095,6 +1103,11 @@
     .productivity-space { min-height: 120px; border-radius: 12px; border: 1px dashed var(--border); margin-top: 12px; padding: 10px; color: var(--muted); font-size: 13px; }
 
     .system-btn { color: var(--muted); }
+    .system-btn .icon {
+      width: 100%;
+      height: 100%;
+      padding: 7px;
+    }
     .system-sheet .sheet { max-width: 620px; max-height: min(88vh, 760px); overflow: auto; }
     .system-create { margin: 12px 0; padding: 12px; border: 1px solid var(--border); border-radius: 14px; background: color-mix(in srgb, var(--bg) 82%, transparent); display: grid; gap: 10px; }
     .system-create-days { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
@@ -1575,11 +1588,11 @@
             <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="none" aria-hidden="true">
               <rect x="3" y="3" width="18" height="18" rx="5" fill="currentColor" opacity="0.12"></rect>
               <rect x="6" y="14" width="4" height="4" rx="1" fill="#22c55e"></rect>
-              <rect x="10" y="14" width="4" height="4" rx="1" fill="#22c55e"></rect>
-              <rect x="14" y="14" width="4" height="4" rx="1" fill="#22c55e"></rect>
-              <rect x="6" y="10" width="8" height="4" rx="1" fill="#3b82f6"></rect>
-              <rect x="14" y="10" width="4" height="4" rx="1" fill="#f59e0b"></rect>
-              <rect x="8" y="6" width="8" height="4" rx="1" fill="#ef4444"></rect>
+              <rect x="10" y="14" width="4" height="4" rx="1" fill="#f59e0b"></rect>
+              <rect x="14" y="14" width="4" height="4" rx="1" fill="#3b82f6"></rect>
+              <rect x="10" y="10" width="4" height="4" rx="1" fill="#a855f7"></rect>
+              <rect x="14" y="10" width="4" height="4" rx="1" fill="#ef4444"></rect>
+              <rect x="10" y="6" width="4" height="4" rx="1" fill="#facc15"></rect>
             </svg>
           </button>
         </div>
@@ -2069,6 +2082,8 @@
       currentRoute: 'today',
       drawerOpen: false,
       isTelegram: false,
+      systemSheetOpen: false,
+      productivitySheetOpen: false,
       muscleLoad: { groups: [], selectedKey: null, showAll: false, detailsOpen: true, byMuscle: {}, loading: false },
       manage: {
         mode: 'normal',
@@ -2708,13 +2723,23 @@
       return -80 + normalized * 1.6;
     }
 
+    function productivityColorFromScore(score) {
+      const normalized = Math.max(0, Math.min(100, Number(score) || 0));
+      const hue = 210 - normalized * 0.9;
+      const sat = 22 + normalized * 0.55;
+      const light = 42 + normalized * 0.1;
+      return `hsl(${hue.toFixed(1)}deg ${sat.toFixed(1)}% ${light.toFixed(1)}%)`;
+    }
+
     function renderProductivityButton() {
       const btn = document.getElementById('productivityBtn');
       if (!btn) return;
       btn.classList.toggle('hidden', !state.settings.ui.showProductivityButton || !state.settings.leaderboardVisible || state.manage.mode === 'delete');
-      const angle = gaugeAngleFromScore(state.settings.productivity.score);
+      const score = Number(state.settings.productivity.score) || 0;
+      const angle = gaugeAngleFromScore(score);
       const needle = document.getElementById('productivityNeedleSmall');
       if (needle) needle.style.transform = `rotate(${angle}deg)`;
+      btn.style.setProperty('--productivity-btn-bg', productivityColorFromScore(score));
       btn.title = `Топ ${state.settings.productivity.topPercent}%`;
     }
 
@@ -2763,15 +2788,19 @@
         return;
       }
       renderProductivityHub();
+      state.productivitySheetOpen = true;
       document.getElementById('productivitySheet')?.classList.add('show');
+      syncFinishFabVisibility();
       loadProductivityLeaderboard().catch(console.error);
     }
 
     function closeProductivitySheet() {
+      state.productivitySheetOpen = false;
       document.getElementById('productivitySheet')?.classList.remove('show');
       state.settings.productivity.leaderboard.selectedUserId = null;
       state.settings.productivity.leaderboard.profile = null;
       state.settings.productivity.leaderboard.profileLoading = false;
+      syncFinishFabVisibility();
     }
 
     function renderLeaderboardSection() {
@@ -2976,13 +3005,17 @@
     }
 
     async function openSystemSheet() {
+      state.systemSheetOpen = true;
       document.getElementById('systemSheet')?.classList.add('show');
+      syncFinishFabVisibility();
       setSystemCreateButtonState();
       await loadSystems();
     }
 
     function closeSystemSheet() {
+      state.systemSheetOpen = false;
       document.getElementById('systemSheet')?.classList.remove('show');
+      syncFinishFabVisibility();
     }
 
     function openSystemDaysModal() {
@@ -7144,17 +7177,22 @@
     async function handleExerciseDelete(exercise) {
       if (!state.dayIndex) return;
       const card = document.querySelector(`.card[data-ueid="${exercise.user_exercise_id}"]`);
+      if (card?.dataset.deleting === '1') return;
+      if (card) card.dataset.deleting = '1';
+      removeExerciseFromState(exercise.user_exercise_id, card);
       try {
         const data = await apiFetch(`/gymapi/day/${state.dayIndex}/exercise/${exercise.exercise_id}/toggle`, { method: 'POST' });
         if (!data?.enabled) {
-          removeExerciseFromState(exercise.user_exercise_id, card);
           toast('Упражнение удалено');
         } else {
           toast('Упражнение возвращено');
-          loadSheet(state.dayIndex).catch(console.error);
+          await loadSheet(state.dayIndex);
         }
       } catch (_) {
         toast('Ошибка связи');
+        await loadSheet(state.dayIndex);
+      } finally {
+        if (card) delete card.dataset.deleting;
       }
     }
 
@@ -7479,7 +7517,7 @@
       document.getElementById('deleteModeHeaderText')?.classList.toggle('hidden', !isDelete);
       document.getElementById('deleteModeFooter')?.classList.toggle('hidden', !isDelete);
       applyHeaderWidgetVisibility();
-      document.getElementById('finishFabWrap')?.classList.toggle('hidden', isDelete || state.manage.add.open || state.currentRoute !== 'today');
+      syncFinishFabVisibility();
     }
 
     function updateAddModeUI() {
@@ -7487,7 +7525,7 @@
       document.body.classList.toggle('add-mode', isAdd);
       document.body.classList.toggle('manage-add-open', state.manage.add.open);
       document.getElementById('addModeHeaderText')?.classList.toggle('hidden', !isAdd);
-      document.getElementById('finishFabWrap')?.classList.toggle('hidden', isAdd || state.manage.mode === 'delete' || state.currentRoute !== 'today');
+      syncFinishFabVisibility();
     }
 
     function setManageMode(mode) {
@@ -7683,7 +7721,9 @@
 
     async function handleManageAddExercise(exerciseId, row) {
       const dayIndex = state.manage.add.dayIndex;
-      if (!dayIndex) return;
+      if (!dayIndex || !exerciseId) return;
+      if (state.manage.add.selectedIds.has(exerciseId) || row?.dataset.adding === '1') return;
+      if (row) row.dataset.adding = '1';
       try {
         await apiFetch(`/gymapi/day/${dayIndex}/exercise`, {
           method: 'POST',
@@ -7700,11 +7740,13 @@
           }
         }
         if (Number(dayIndex) === Number(state.dayIndex)) {
-          loadSheet(state.dayIndex).catch(console.error);
+          await loadSheet(state.dayIndex);
         }
         toast('Добавлено ✅');
       } catch (_) {
         toast('Ошибка связи');
+      } finally {
+        if (row) delete row.dataset.adding;
       }
     }
 
@@ -7967,11 +8009,28 @@
       renderFinishPopoverStats();
     }
 
+    function shouldHideFinishFab() {
+      return state.currentRoute !== 'today'
+        || state.manage.mode === 'delete'
+        || state.manage.add.open
+        || state.editor.open
+        || !!state.systemSheetOpen
+        || !!state.productivitySheetOpen;
+    }
+
+    function syncFinishFabVisibility() {
+      const wrap = document.getElementById('finishFabWrap');
+      if (!wrap) return;
+      const hidden = shouldHideFinishFab();
+      wrap.classList.toggle('hidden', hidden);
+      if (hidden) closeFinishPopover();
+    }
+
     function setFinishFabVisible(visible) {
       const wrap = document.getElementById('finishFabWrap');
       if (!wrap) return;
-      wrap.classList.toggle('hidden', !visible || state.currentRoute !== 'today');
-      if (!visible) closeFinishPopover();
+      wrap.classList.toggle('hidden', !visible || shouldHideFinishFab());
+      if (!visible || shouldHideFinishFab()) closeFinishPopover();
     }
 
     function closeFinishPopover() {
@@ -8664,6 +8723,7 @@
       setupMeasurementSheetHandlers();
       openConfirmModal = setupModal();
       bindEvents();
+      syncFinishFabVisibility();
       bindTimer();
       setupVisibilityRefresh();
       updateActingBanner();
