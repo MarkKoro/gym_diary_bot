@@ -70,6 +70,9 @@ from db import (
     clear_onboarding_intro_message,
     is_onboarding_completed,
     set_onboarding_completed,
+    fetch_productivity_leaderboard,
+    fetch_public_training_plan,
+    copy_training_plan_from_user,
 )
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -196,6 +199,8 @@ async def get_auth_ctx(
             if request.method != "GET" and not acting_can_edit:
                 raise HTTPException(status_code=403, detail="No edit permission for trainee")
             internal_user_id = acting_user_id
+
+    await ensure_training_system_defaults(internal_user_id)
 
     return AuthCtx(
         tg_id=tg.user.id,
@@ -445,7 +450,7 @@ async def _build_running_state(
         info = await db.get_exercise_info(ue_id)
         ex_id = int(info[0]) if info else None
     iso_date = _iso_date(target_date)
-    session_id = await db.get_or_create_today_session(user_id, iso_date, day_index)
+    session_id = await db.get_or_create_today_session(user_id, iso_date, day_index, await get_active_training_system_id(user_id))
     entry = await get_running_entry(
         user_id,
         ue_id,
@@ -761,7 +766,7 @@ async def day_sheet(
     last_completed_at = await db.get_day_completion(user_id, day_index)
     target_date = _parse_date_param(date)
     iso_date = _iso_date(target_date)
-    session_id = await db.get_or_create_today_session(user_id, iso_date, day_index)
+    session_id = await db.get_or_create_today_session(user_id, iso_date, day_index, await get_active_training_system_id(user_id))
     day_label = await db.get_day_label(user_id, day_index)
     exercises_rows = await db.fetch_day_exercises(user_id, day_index, iso_date)
     exercises: list[dict] = []
@@ -914,6 +919,7 @@ async def create_catalog_exercise(
     await _validate_day(user_id, int(day_index))
     exercise_id = await db.create_catalog_exercise(str(name_raw).strip(), muscle_raw if isinstance(muscle_raw, str) else None)
     await db.add_user_exercise(user_id, int(day_index), exercise_id)
+    await sync_current_plan_to_system(user_id, await get_active_training_system_id(user_id))
     return {"ok": True, "exercise_id": exercise_id}
 
 
@@ -963,7 +969,7 @@ async def add_set_fast(
     await _ensure_user_exercise(user_id, user_exercise_id, day_index)
     target_date = _parse_date_param(date)
     iso_date = _iso_date(target_date)
-    session_id = await db.get_or_create_today_session(user_id, iso_date, day_index)
+    session_id = await db.get_or_create_today_session(user_id, iso_date, day_index, await get_active_training_system_id(user_id))
     sets_rows = await db.fetch_exercise_sets(session_id, user_exercise_id)
     last = sets_rows[-1] if sets_rows else None
     reps = (payload or {}).get("reps") if payload else None
@@ -994,7 +1000,7 @@ async def remove_last_set_fast(
     await _ensure_user_exercise(user_id, user_exercise_id, day_index)
     target_date = _parse_date_param(date)
     iso_date = _iso_date(target_date)
-    session_id = await db.get_or_create_today_session(user_id, iso_date, day_index)
+    session_id = await db.get_or_create_today_session(user_id, iso_date, day_index, await get_active_training_system_id(user_id))
     await db.remove_last_set(user_exercise_id, session_id)
     new_sets = await db.fetch_exercise_sets(session_id, user_exercise_id)
     return {"ok": True, "sets": _serialize_sets(new_sets)}
@@ -1024,7 +1030,7 @@ async def inc_last_set_fast(
 
     target_date = _parse_date_param(date)
     iso_date = _iso_date(target_date)
-    session_id = await db.get_or_create_today_session(user_id, iso_date, day_index)
+    session_id = await db.get_or_create_today_session(user_id, iso_date, day_index, await get_active_training_system_id(user_id))
 
     if set_no is not None:
         await db.inc_specific_set(user_exercise_id, session_id, int(set_no), db_field, float(delta))
@@ -1063,7 +1069,7 @@ async def update_running_state(
     await _ensure_user_exercise(user_id, ue_id, day_index)
     target_date = _parse_date_param(date)
     iso_date = _iso_date(target_date)
-    session_id = await db.get_or_create_today_session(user_id, iso_date, day_index)
+    session_id = await db.get_or_create_today_session(user_id, iso_date, day_index, await get_active_training_system_id(user_id))
     entry = await get_running_entry(
         user_id,
         ue_id,
@@ -1117,7 +1123,7 @@ async def complete_running_state(
     await _ensure_user_exercise(user_id, ue_id, day_index)
     target_date = _parse_date_param(date)
     iso_date = _iso_date(target_date)
-    session_id = await db.get_or_create_today_session(user_id, iso_date, day_index)
+    session_id = await db.get_or_create_today_session(user_id, iso_date, day_index, await get_active_training_system_id(user_id))
     entry = await get_running_entry(
         user_id,
         ue_id,
@@ -1160,7 +1166,7 @@ async def mark_exercise_done_fast(
     await _ensure_user_exercise(user_id, user_exercise_id, day_index)
     target_date = _parse_date_param(date)
     iso_date = _iso_date(target_date)
-    session_id = await db.get_or_create_today_session(user_id, iso_date, day_index)
+    session_id = await db.get_or_create_today_session(user_id, iso_date, day_index, await get_active_training_system_id(user_id))
     await mark_exercise_done(session_id, user_exercise_id)
 
     exercises_rows = await db.fetch_day_exercises(user_id, day_index, iso_date)
@@ -1195,7 +1201,7 @@ async def exercise_context(
     exercise_id = await _resolve_user_exercise_id(user_id, ue_id, day_index)
     target_date = _parse_date_param(date)
     iso_date = _iso_date(target_date)
-    session_id = await db.get_or_create_today_session(user_id, iso_date, day_index)
+    session_id = await db.get_or_create_today_session(user_id, iso_date, day_index, await get_active_training_system_id(user_id))
 
     current_note = await db.get_exercise_note(session_id, ue_id)
     _prev_note_session_id, previous_note = await db.get_latest_completed_note(
@@ -1203,9 +1209,9 @@ async def exercise_context(
     )
     previous_date = await _get_previous_done_date(user_id, ue_id, session_id)
     previous_summary = _format_prev_summary(
-        await db.get_last_session_summary(user_id, day_index, ue_id, iso_date)
+        await db.get_last_session_summary(user_id, day_index, ue_id, iso_date, await get_active_training_system_id(user_id))
     )
-    previous_sets_rows = await db.fetch_last_session_sets(user_id, day_index, ue_id, iso_date)
+    previous_sets_rows = await db.fetch_last_session_sets(user_id, day_index, ue_id, iso_date, await get_active_training_system_id(user_id))
 
     return {
         "ok": True,
@@ -1239,7 +1245,7 @@ async def update_exercise_note(
 
     target_date = _parse_date_param(date)
     iso_date = _iso_date(target_date)
-    session_id = await db.get_or_create_today_session(user_id, iso_date, day_index)
+    session_id = await db.get_or_create_today_session(user_id, iso_date, day_index, await get_active_training_system_id(user_id))
     await db.set_exercise_note(session_id, ue_id, note_value)
 
     return {"ok": True, "current_note": note_value}
@@ -1666,7 +1672,7 @@ async def body_day_load(
     target_date = _parse_date_param(date)
     iso_date = _iso_date(target_date)
 
-    session_id = await db.get_or_create_today_session(user_id, iso_date, day_index)
+    session_id = await db.get_or_create_today_session(user_id, iso_date, day_index, await get_active_training_system_id(user_id))
     sets = await db.fetch_session_sets_with_exercises(user_id, session_id)
     exercise_ids = [row["exercise_id"] for row in sets]
     mapping = await db.resolve_exercise_muscles(user_id, exercise_ids)
@@ -2890,6 +2896,7 @@ async def settings_rename_day(
     if not label:
         label = f"День {day_index}"
     await rename_day(user_id, day_index, label)
+    await sync_current_plan_to_system(user_id, await get_active_training_system_id(user_id))
     wpw, active_days = await _load_user_settings(user_id)
     return {
         "ok": True,
@@ -2961,6 +2968,7 @@ async def settings_update_reminders(
         hour, minute = normalize_reminder_time(hour, minute)
         await add_user_reminder(user_id, dow, hour, minute, day_no=day_no)
     await set_app_meta("reminders_updated_at", datetime.now(UTC).isoformat())
+    await sync_reminders_to_system(user_id, await get_active_training_system_id(user_id))
     return {"ok": True}
 
 
@@ -3190,3 +3198,112 @@ async def settings_trainer_trainee_detach(
         raise HTTPException(status_code=404, detail="Link not found")
     await update_trainer_link_status(int(link[0]), "removed")
     return {"ok": True}
+
+
+@app.get('/systems')
+async def systems_overview(ctx: AuthCtx = Depends(get_auth_ctx)):
+    user_id = ctx.user_id
+    active_id = await get_active_training_system_id(user_id)
+    systems = await list_training_systems(user_id)
+    return {
+        'active_system_id': int(active_id),
+        'systems': systems,
+    }
+
+
+@app.post('/systems')
+async def systems_create(payload: dict = Body(default={}), ctx: AuthCtx = Depends(get_auth_ctx)):
+    user_id = ctx.user_id
+    name = (payload.get('name') or '').strip() or 'Новая система'
+    color = (payload.get('color') or '#2ea6ff').strip()
+    system_id = await create_training_system(user_id, name, color)
+    return {'ok': True, 'system_id': int(system_id)}
+
+
+@app.post('/systems/{system_id}/select')
+async def systems_select(system_id: int, ctx: AuthCtx = Depends(get_auth_ctx)):
+    user_id = ctx.user_id
+    await sync_current_plan_to_system(user_id, await get_active_training_system_id(user_id))
+    await sync_reminders_to_system(user_id, await get_active_training_system_id(user_id))
+    await apply_system_to_current_plan(user_id, int(system_id))
+    return {'ok': True}
+
+
+@app.post('/systems/{system_id}/rename')
+async def systems_rename(system_id: int, payload: dict = Body(default={}), ctx: AuthCtx = Depends(get_auth_ctx)):
+    await rename_training_system(ctx.user_id, int(system_id), (payload.get('name') or '').strip())
+    return {'ok': True}
+
+
+@app.post('/systems/{system_id}/color')
+async def systems_color(system_id: int, payload: dict = Body(default={}), ctx: AuthCtx = Depends(get_auth_ctx)):
+    await set_training_system_color(ctx.user_id, int(system_id), (payload.get('color') or '#2ea6ff').strip())
+    return {'ok': True}
+
+
+@app.delete('/systems/{system_id}')
+async def systems_delete(system_id: int, ctx: AuthCtx = Depends(get_auth_ctx)):
+    ok = await delete_training_system(ctx.user_id, int(system_id))
+    if not ok:
+        raise HTTPException(status_code=400, detail='Нельзя удалить единственную систему')
+    return {'ok': True}
+
+
+@app.get('/leaderboard/productivity')
+async def leaderboard_productivity(
+    limit: int = 10,
+    offset: int = 0,
+    ctx: AuthCtx = Depends(get_auth_ctx),
+):
+    _ = ctx.user_id
+    safe_limit = max(1, min(int(limit or 10), 25))
+    safe_offset = max(0, int(offset or 0))
+    page, total, full = await fetch_productivity_leaderboard(limit=safe_limit, offset=safe_offset)
+    my_item = next((item for item in full if int(item['user_id']) == int(ctx.user_id)), None)
+    return {
+        'items': [
+            {
+                'rank': int(item['rank']),
+                'user_id': int(item['user_id']),
+                'username': item['username'],
+                'score': int(item['score']),
+                'top_percent': int(item['top_percent']),
+            }
+            for item in page
+        ],
+        'total': int(total),
+        'limit': safe_limit,
+        'offset': safe_offset,
+        'my_rank': int(my_item['rank']) if my_item else None,
+        'my_score': int(my_item['score']) if my_item else None,
+        'my_top_percent': int(my_item['top_percent']) if my_item else None,
+    }
+
+
+@app.get('/leaderboard/productivity/{leader_user_id}/plan')
+async def leaderboard_productivity_plan(
+    leader_user_id: int,
+    ctx: AuthCtx = Depends(get_auth_ctx),
+):
+    _ = ctx.user_id
+    if leader_user_id <= 0:
+        raise HTTPException(status_code=400, detail='Некорректный пользователь')
+    plan_days = await fetch_public_training_plan(int(leader_user_id))
+    return {
+        'leader_user_id': int(leader_user_id),
+        'days': plan_days,
+    }
+
+
+@app.post('/leaderboard/productivity/{leader_user_id}/copy')
+async def leaderboard_productivity_copy(
+    leader_user_id: int,
+    ctx: AuthCtx = Depends(get_auth_ctx),
+):
+    user_id = ctx.user_id
+    if leader_user_id <= 0:
+        raise HTTPException(status_code=400, detail='Некорректный пользователь')
+    if int(leader_user_id) == int(user_id):
+        raise HTTPException(status_code=400, detail='Нельзя копировать план у себя')
+    result = await copy_training_plan_from_user(int(leader_user_id), int(user_id))
+    return {'ok': True, **result}
