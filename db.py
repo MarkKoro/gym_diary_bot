@@ -1409,8 +1409,14 @@ async def get_session_for_day(user_id: int, date_str: str, day_index: int) -> in
         row = await cur.fetchone()
         return row[0] if row else None
 
-async def fetch_day_exercises(user_id: int, day_index: int = 1, date_str: str | None = None):
+async def fetch_day_exercises(
+    user_id: int,
+    day_index: int = 1,
+    date_str: str | None = None,
+    system_id: int | None = 0,
+):
     date_str = date_str or datetime.now(UTC).strftime("%Y-%m-%d")
+    resolved_system_id = 0 if system_id is None else int(system_id)
     async with connect_db() as db:
         cur = await db.execute(
             """
@@ -1421,14 +1427,51 @@ async def fetch_day_exercises(user_id: int, day_index: int = 1, date_str: str | 
           ON s.user_id=ue.user_id
          AND s.date=?
          AND s.day_index=ue.day_index
-         AND s.system_id=0
+         AND s.system_id=?
         LEFT JOIN session_exercises se ON se.session_id=s.id AND se.user_exercise_id=ue.id
         WHERE ue.user_id=? AND ue.day_index=? AND ue.is_archived=0
         ORDER BY ue.id
         """,
-            (date_str, user_id, day_index),
+            (date_str, resolved_system_id, user_id, day_index),
         )
         return await cur.fetchall()
+
+
+async def get_latest_set_values_for_exercise(
+    user_id: int,
+    user_exercise_id: int,
+    exclude_session_id: int | None = None,
+):
+    async with connect_db() as db:
+        cur = await db.execute(
+            "SELECT exercise_id FROM user_exercises WHERE id=? AND user_id=?",
+            (user_exercise_id, user_id),
+        )
+        ex_row = await cur.fetchone()
+        if not ex_row:
+            return None
+        exercise_id = int(ex_row[0])
+        params: tuple[object, ...] = (user_id, exercise_id)
+        exclude_clause = ""
+        if exclude_session_id is not None:
+            exclude_clause = " AND s.id<>?"
+            params = (user_id, exercise_id, int(exclude_session_id))
+        cur = await db.execute(
+            f"""
+            SELECT st.reps, st.seconds, st.weight_kg
+            FROM sessions s
+            JOIN sets st ON st.session_id=s.id
+            JOIN user_exercises ue ON ue.id=st.user_exercise_id
+            WHERE s.user_id=? AND ue.exercise_id=? {exclude_clause}
+            ORDER BY s.date DESC, s.id DESC, st.set_no DESC
+            LIMIT 1
+            """,
+            params,
+        )
+        row = await cur.fetchone()
+        if not row:
+            return None
+        return int(row[0] or 0), int(row[1] or 0), float(row[2] or 0.0)
 
 async def fetch_sets_table(session_id: int):
     async with connect_db() as db:

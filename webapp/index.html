@@ -1128,10 +1128,45 @@
     .system-menu.open { display: grid; gap: 6px; }
     .system-menu button, .system-menu label { width: 100%; border: none; background: var(--bg); border-radius: 10px; padding: 9px 10px; text-align: left; font-weight: 700; color: var(--text); cursor: pointer; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
     .system-menu label input[type="color"] { width: 34px; height: 24px; border: none; background: transparent; padding: 0; }
-    .training-tint { position: fixed; inset: 0; pointer-events: none; z-index: 2; opacity: 0; transition: opacity .2s ease; }
-    .training-tint::before, .training-tint::after { content: ''; position: absolute; top: 0; bottom: 0; width: 14px; opacity: 0.9; }
-    .training-tint::before { left: 0; background: linear-gradient(90deg, var(--system-tint-color, transparent), transparent); }
-    .training-tint::after { right: 0; background: linear-gradient(-90deg, var(--system-tint-color, transparent), transparent); }
+    .training-tint { position: fixed; inset: 0; pointer-events: none; z-index: 2; opacity: 0; transition: opacity .24s ease; }
+    .training-tint::before, .training-tint::after {
+      content: '';
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      width: min(16vw, 68px);
+      opacity: 0.95;
+      background-repeat: no-repeat;
+      background-size: 100% 100%;
+    }
+    .training-tint::before {
+      left: 0;
+      background-image:
+        linear-gradient(90deg,
+          color-mix(in srgb, var(--system-tint-color, transparent) 100%, transparent) 0%,
+          color-mix(in srgb, var(--system-tint-color, transparent) 68%, transparent) 14%,
+          color-mix(in srgb, var(--system-tint-color, transparent) 42%, transparent) 31%,
+          color-mix(in srgb, var(--system-tint-color, transparent) 22%, transparent) 52%,
+          rgba(0,0,0,0) 100%),
+        radial-gradient(ellipse at 10% 8%, color-mix(in srgb, var(--system-tint-color, transparent) 58%, transparent) 0 20%, transparent 24%),
+        radial-gradient(ellipse at 28% 36%, color-mix(in srgb, var(--system-tint-color, transparent) 44%, transparent) 0 17%, transparent 23%),
+        radial-gradient(ellipse at 18% 68%, color-mix(in srgb, var(--system-tint-color, transparent) 56%, transparent) 0 16%, transparent 24%),
+        radial-gradient(ellipse at 35% 84%, color-mix(in srgb, var(--system-tint-color, transparent) 36%, transparent) 0 14%, transparent 22%);
+    }
+    .training-tint::after {
+      right: 0;
+      background-image:
+        linear-gradient(-90deg,
+          color-mix(in srgb, var(--system-tint-color, transparent) 100%, transparent) 0%,
+          color-mix(in srgb, var(--system-tint-color, transparent) 68%, transparent) 14%,
+          color-mix(in srgb, var(--system-tint-color, transparent) 42%, transparent) 31%,
+          color-mix(in srgb, var(--system-tint-color, transparent) 22%, transparent) 52%,
+          rgba(0,0,0,0) 100%),
+        radial-gradient(ellipse at 90% 12%, color-mix(in srgb, var(--system-tint-color, transparent) 58%, transparent) 0 20%, transparent 24%),
+        radial-gradient(ellipse at 72% 36%, color-mix(in srgb, var(--system-tint-color, transparent) 44%, transparent) 0 17%, transparent 23%),
+        radial-gradient(ellipse at 82% 66%, color-mix(in srgb, var(--system-tint-color, transparent) 56%, transparent) 0 16%, transparent 24%),
+        radial-gradient(ellipse at 64% 86%, color-mix(in srgb, var(--system-tint-color, transparent) 36%, transparent) 0 14%, transparent 22%);
+    }
     body.route-today .training-tint.show { opacity: 1; }
 
     .leaderboard-head { margin-top: 12px; display: flex; justify-content: space-between; align-items: center; gap: 10px; }
@@ -2149,6 +2184,7 @@
         },
         systems: {
           activeSystemId: null,
+          activeSystemName: '',
           items: [],
           loading: false,
           newDays: 3,
@@ -2936,12 +2972,15 @@
         const data = await apiFetch('/gymapi/systems');
         systems.activeSystemId = data.active_system_id;
         systems.items = data.systems || [];
+        const active = (systems.items || []).find((it) => Number(it.id) === Number(systems.activeSystemId));
+        systems.activeSystemName = active?.name || '';
       } catch (e) {
         toast('Не удалось загрузить системы');
       } finally {
         systems.loading = false;
         renderSystemsHub();
         applyTrainingTint();
+        syncHeaderTitle();
       }
     }
 
@@ -2955,7 +2994,7 @@
         return;
       }
       tint.style.background = 'transparent';
-      tint.style.setProperty('--system-tint-color', `color-mix(in srgb, ${active.color} 12%, transparent)`);
+      tint.style.setProperty('--system-tint-color', `color-mix(in srgb, ${active.color} 48%, transparent)`);
       tint.classList.add('show');
     }
 
@@ -5477,6 +5516,20 @@
       else tg.BackButton.show();
     }
 
+
+    function getTodayHeaderTitle() {
+      const name = (state.settings.systems.activeSystemName || '').trim();
+      return name || ROUTE_TITLES.today;
+    }
+
+    function syncHeaderTitle() {
+      const header = document.getElementById('headerTitle');
+      if (!header) return;
+      header.textContent = state.currentRoute === 'today'
+        ? getTodayHeaderTitle()
+        : (ROUTE_TITLES[state.currentRoute] || ROUTE_TITLES.today);
+    }
+
     function applyRoute(route) {
       const normalized = ROUTE_TITLES[route] ? route : 'today';
       if (normalized === 'settings' && state.acting.userId) {
@@ -5493,7 +5546,7 @@
         el.classList.toggle('active', el.dataset.route === normalized);
       });
       document.body.classList.toggle('route-today', normalized === 'today');
-      document.getElementById('headerTitle').textContent = ROUTE_TITLES[normalized] || ROUTE_TITLES.today;
+      syncHeaderTitle();
       setVisible(document.getElementById('todayHeader'), normalized === 'today');
       updateAddButtonVisibility();
       if (normalized !== 'today') {
