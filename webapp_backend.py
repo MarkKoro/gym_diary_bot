@@ -220,6 +220,11 @@ def _today_date() -> date:
     return datetime.now(UTC).date()
 
 
+async def get_active_training_system_id(user_id: int) -> int:
+    """Возвращает id активной системы тренировок пользователя."""
+    return await db.get_active_training_system_id(user_id)
+
+
 def _iso_date(d: date | None) -> str:
     return (d or _today_date()).strftime("%Y-%m-%d")
 
