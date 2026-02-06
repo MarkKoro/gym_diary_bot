@@ -1417,7 +1417,11 @@ async def fetch_day_exercises(user_id: int, day_index: int = 1, date_str: str | 
         SELECT ue.id, e.name, e.muscle_group, IFNULL(se.is_done,0), ue.exercise_id
         FROM user_exercises ue
         JOIN exercises e ON e.id = ue.exercise_id
-        LEFT JOIN sessions s ON s.user_id=ue.user_id AND s.date=? AND s.day_index=ue.day_index
+        LEFT JOIN sessions s
+          ON s.user_id=ue.user_id
+         AND s.date=?
+         AND s.day_index=ue.day_index
+         AND s.system_id=0
         LEFT JOIN session_exercises se ON se.session_id=s.id AND se.user_exercise_id=ue.id
         WHERE ue.user_id=? AND ue.day_index=? AND ue.is_archived=0
         ORDER BY ue.id
