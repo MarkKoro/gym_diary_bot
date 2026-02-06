@@ -553,6 +553,35 @@ async def _has_unique_index(
     return False
 
 
+
+async def _ensure_day_completions_system_scope(db) -> None:
+    cur = await db.execute("PRAGMA table_info(day_completions)")
+    cols = await cur.fetchall()
+    col_names = {str(row[1]) for row in cols}
+    if "system_id" in col_names:
+        await db.execute("UPDATE day_completions SET system_id=0 WHERE system_id IS NULL")
+        return
+    await db.execute("ALTER TABLE day_completions RENAME TO day_completions_old")
+    await db.execute(
+        """
+        CREATE TABLE day_completions(
+            user_id INTEGER,
+            system_id INTEGER NOT NULL DEFAULT 0,
+            day_index INTEGER,
+            completed_at TEXT,
+            PRIMARY KEY(user_id, system_id, day_index)
+        )
+        """
+    )
+    await db.execute(
+        """
+        INSERT INTO day_completions(user_id, system_id, day_index, completed_at)
+        SELECT user_id, 0, day_index, completed_at
+        FROM day_completions_old
+        """
+    )
+    await db.execute("DROP TABLE day_completions_old")
+
 async def _ensure_sessions_unique_by_day_and_system(db) -> None:
     desired = ("user_id", "date", "day_index", "system_id")
     if await _has_unique_index(db, "sessions", desired):
@@ -709,9 +738,10 @@ async def init_db():
 
         CREATE TABLE IF NOT EXISTS day_completions(
             user_id INTEGER,
+            system_id INTEGER NOT NULL DEFAULT 0,
             day_index INTEGER,
             completed_at TEXT,
-            PRIMARY KEY(user_id, day_index)
+            PRIMARY KEY(user_id, system_id, day_index)
         );
 
         CREATE TABLE IF NOT EXISTS session_exercises(
@@ -1065,6 +1095,7 @@ async def init_db():
             await db.commit()
         await db.commit()
         await _ensure_sessions_unique_by_day_and_system(db)
+        await _ensure_day_completions_system_scope(db)
         await _migrate_duration_metrics(db)
         await db.commit()
 
@@ -1258,7 +1289,7 @@ async def apply_system_to_current_plan(user_id: int, system_id: int):
     async with connect_db() as db:
         await db.execute("UPDATE users SET active_system_id=? WHERE id=?", (system_id, user_id))
         await db.execute("DELETE FROM user_days WHERE user_id=?", (user_id,))
-        await db.execute("DELETE FROM user_exercises WHERE user_id=?", (user_id,))
+        await db.execute("UPDATE user_exercises SET is_archived=1 WHERE user_id=?", (user_id,))
         await db.execute("DELETE FROM user_reminders WHERE user_id=?", (user_id,))
         cur = await db.execute(
             "SELECT day_index, label, is_active FROM training_system_days WHERE system_id=? ORDER BY day_index",
@@ -1283,6 +1314,10 @@ async def apply_system_to_current_plan(user_id: int, system_id: int):
         for day_index, exercise_id in await cur.fetchall():
             await db.execute(
                 "INSERT OR IGNORE INTO user_exercises(user_id, exercise_id, day_index, is_archived) VALUES(?,?,?,0)",
+                (user_id, int(exercise_id), int(day_index)),
+            )
+            await db.execute(
+                "UPDATE user_exercises SET is_archived=0 WHERE user_id=? AND exercise_id=? AND day_index=?",
                 (user_id, int(exercise_id), int(day_index)),
             )
         cur = await db.execute(
@@ -1400,11 +1435,14 @@ async def get_or_create_today_session(
         cur = await db.execute("SELECT last_insert_rowid()")
         return (await cur.fetchone())[0]
 
-async def get_session_for_day(user_id: int, date_str: str, day_index: int) -> int | None:
+async def get_session_for_day(
+    user_id: int, date_str: str, day_index: int, system_id: int | None = None
+) -> int | None:
+    resolved_system_id = int(system_id) if system_id is not None else 0
     async with connect_db() as db:
         cur = await db.execute(
-            "SELECT id FROM sessions WHERE user_id=? AND date=? AND day_index=?",
-            (user_id, date_str, day_index),
+            "SELECT id FROM sessions WHERE user_id=? AND date=? AND day_index=? AND system_id=?",
+            (user_id, date_str, day_index, resolved_system_id),
         )
         row = await cur.fetchone()
         return row[0] if row else None
@@ -1716,13 +1754,14 @@ async def set_workouts_per_week(user_id: int, n: int) -> list[tuple[int, int, in
                 f"DELETE FROM exercise_baseline WHERE user_id=? AND day_index IN ({placeholders})",
                 (user_id, *day_params),
             )
+            active_system_id = await get_active_training_system_id(user_id)
             await db.execute(
-                f"DELETE FROM day_completions WHERE user_id=? AND day_index IN ({placeholders})",
-                (user_id, *day_params),
+                f"DELETE FROM day_completions WHERE user_id=? AND system_id=? AND day_index IN ({placeholders})",
+                (user_id, int(active_system_id), *day_params),
             )
             await db.execute(
-                f"DELETE FROM sessions WHERE user_id=? AND day_index IN ({placeholders})",
-                (user_id, *day_params),
+                f"DELETE FROM sessions WHERE user_id=? AND system_id=? AND day_index IN ({placeholders})",
+                (user_id, int(active_system_id), *day_params),
             )
         if removed_ue_ids:
             ue_placeholders = ",".join("?" for _ in removed_ue_ids)
@@ -2860,62 +2899,73 @@ async def list_active_days(user_id: int):
         return await cur.fetchall()
 
 
-async def list_day_completions(user_id: int):
+async def list_day_completions(user_id: int, system_id: int | None = None):
+    resolved_system_id = 0 if system_id is None else int(system_id)
     async with connect_db() as db:
         cur = await db.execute(
-            "SELECT day_index, completed_at FROM day_completions WHERE user_id=?",
-            (user_id,),
+            "SELECT day_index, completed_at FROM day_completions WHERE user_id=? AND system_id=?",
+            (user_id, resolved_system_id),
         )
         return await cur.fetchall()
 
 
-async def get_day_completion(user_id: int, day_index: int) -> str | None:
+async def get_day_completion(user_id: int, day_index: int, system_id: int | None = None) -> str | None:
+    resolved_system_id = 0 if system_id is None else int(system_id)
     async with connect_db() as db:
         cur = await db.execute(
             """
             SELECT completed_at
             FROM day_completions
-            WHERE user_id=? AND day_index=?
+            WHERE user_id=? AND system_id=? AND day_index=?
             ORDER BY completed_at DESC
             LIMIT 1
             """,
-            (user_id, day_index),
+            (user_id, resolved_system_id, day_index),
         )
         row = await cur.fetchone()
         return row[0] if row and row[0] else None
 
 
-async def get_last_completion_for_user(user_id: int):
+async def get_last_completion_for_user(user_id: int, system_id: int | None = None):
+    resolved_system_id = 0 if system_id is None else int(system_id)
     async with connect_db() as db:
         cur = await db.execute(
             """
             SELECT day_index, completed_at
             FROM day_completions
-            WHERE user_id = ?
+            WHERE user_id = ? AND system_id=?
             ORDER BY completed_at DESC
             LIMIT 1
             """,
-            (user_id,),
+            (user_id, resolved_system_id),
         )
         return await cur.fetchone()
 
 
-async def mark_day_completed(user_id: int, day_index: int, completed_at: str):
+async def mark_day_completed(user_id: int, day_index: int, completed_at: str, system_id: int | None = None):
+    resolved_system_id = 0 if system_id is None else int(system_id)
     async with connect_db() as db:
         await db.execute(
-            "DELETE FROM day_completions WHERE user_id=? AND day_index<>?",
-            (user_id, day_index),
+            "DELETE FROM day_completions WHERE user_id=? AND system_id=? AND day_index<>?",
+            (user_id, resolved_system_id, day_index),
         )
         await db.execute(
-            "REPLACE INTO day_completions(user_id, day_index, completed_at) VALUES(?,?,?)",
-            (user_id, day_index, completed_at),
+            "REPLACE INTO day_completions(user_id, system_id, day_index, completed_at) VALUES(?,?,?,?)",
+            (user_id, resolved_system_id, day_index, completed_at),
         )
         await db.commit()
 
 
-async def clear_day_completions(user_id: int):
+async def clear_day_completions(user_id: int, system_id: int | None = None):
+    resolved_system_id = None if system_id is None else int(system_id)
     async with connect_db() as db:
-        await db.execute("DELETE FROM day_completions WHERE user_id=?", (user_id,))
+        if resolved_system_id is None:
+            await db.execute("DELETE FROM day_completions WHERE user_id=?", (user_id,))
+        else:
+            await db.execute(
+                "DELETE FROM day_completions WHERE user_id=? AND system_id=?",
+                (user_id, resolved_system_id),
+            )
         await db.commit()
 
 
