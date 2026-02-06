@@ -671,6 +671,7 @@
     .settings-badge { font-size: 12px; padding: 4px 8px; border-radius: 999px; background: rgba(0,0,0,0.04); color: var(--muted); }
     [data-theme="dark"] .settings-badge { background: rgba(255,255,255,0.06); }
     .settings-pill { display: inline-flex; align-items: center; gap: 6px; padding: 6px 10px; border-radius: 999px; border: 1px solid var(--border); background: var(--bg); font-size: 12px; color: var(--muted); }
+    .settings-pill-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
     .settings-actions { display: flex; gap: 8px; flex-wrap: wrap; }
     .settings-actions .btn { flex: 1; min-width: 140px; }
     .settings-back { align-self: flex-start; }
@@ -1108,7 +1109,7 @@
     .system-btn .icon {
       width: 100%;
       height: 100%;
-      padding: 2px;
+      padding: 0;
     }
     .system-sheet .sheet { max-width: 620px; max-height: min(88vh, 760px); overflow: auto; }
     .system-create { margin: 12px 0; padding: 12px; border: 1px solid var(--border); border-radius: 14px; background: color-mix(in srgb, var(--bg) 82%, transparent); display: grid; gap: 10px; }
@@ -1126,6 +1127,7 @@
     .system-menu-btn:hover { border-color: var(--accent); color: var(--accent); }
     .system-select-btn { border: 1px solid var(--border); background: var(--bg); color: var(--text); border-radius: 10px; padding: 7px 11px; font-weight: 700; cursor: pointer; }
     .system-select-btn.active { border-color: color-mix(in srgb, var(--accent) 60%, var(--border)); color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, var(--bg)); }
+    .system-select-btn.quick { font-size: 13px; padding: 8px 10px; border-radius: 999px; }
     .system-menu { position: absolute; right: 0; top: 44px; min-width: 200px; padding: 8px; border-radius: 12px; border: 1px solid var(--border); background: var(--card); box-shadow: var(--shadow); display: none; z-index: 5; }
     .system-menu.open { display: grid; gap: 6px; }
     .system-menu button, .system-menu label { width: 100%; border: none; background: var(--bg); border-radius: 10px; padding: 9px 10px; text-align: left; font-weight: 700; color: var(--text); cursor: pointer; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
@@ -1745,13 +1747,13 @@
           </button>
           <button id="systemOpenBtn" class="icon-btn system-btn" aria-label="Система тренировок">
             <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="none" aria-hidden="true">
-              <rect x="3" y="3" width="18" height="18" rx="5" fill="currentColor" opacity="0.12"></rect>
-              <rect x="6" y="14" width="4" height="4" rx="1" fill="#22c55e"></rect>
-              <rect x="10" y="14" width="4" height="4" rx="1" fill="#f59e0b"></rect>
-              <rect x="14" y="14" width="4" height="4" rx="1" fill="#3b82f6"></rect>
-              <rect x="10" y="10" width="4" height="4" rx="1" fill="#a855f7"></rect>
-              <rect x="14" y="10" width="4" height="4" rx="1" fill="#ef4444"></rect>
-              <rect x="10" y="6" width="4" height="4" rx="1" fill="#facc15"></rect>
+              <rect x="1" y="1" width="22" height="22" rx="6" fill="currentColor" opacity="0.12"></rect>
+              <rect x="4" y="16" width="5" height="5" rx="1.2" fill="#22c55e"></rect>
+              <rect x="9.5" y="16" width="5" height="5" rx="1.2" fill="#f59e0b"></rect>
+              <rect x="15" y="16" width="5" height="5" rx="1.2" fill="#3b82f6"></rect>
+              <rect x="9.5" y="10.5" width="5" height="5" rx="1.2" fill="#a855f7"></rect>
+              <rect x="15" y="10.5" width="5" height="5" rx="1.2" fill="#ef4444"></rect>
+              <rect x="9.5" y="5" width="5" height="5" rx="1.2" fill="#facc15"></rect>
             </svg>
           </button>
         </div>
@@ -3180,12 +3182,17 @@
       btn.disabled = !(input.value || '').trim();
     }
 
-    async function openSystemSheet() {
+    async function openSystemSheet({ focusNotifications = false } = {}) {
       state.systemSheetOpen = true;
       document.getElementById('systemSheet')?.classList.add('show');
       syncFinishFabVisibility();
       setSystemCreateButtonState();
       await loadSystems();
+      if (focusNotifications) {
+        state.settings.view = 'notifications';
+        await loadSettingsOverview();
+        navigateTo('settings');
+      }
     }
 
     function closeSystemSheet() {
@@ -3235,6 +3242,10 @@
       if (action === 'system-select' && id > 0) {
         await apiFetch(`/gymapi/systems/${id}/select`, { method: 'POST', body: JSON.stringify({}) });
         await loadSystems();
+        if (state.currentRoute === 'settings' && state.settings.view === 'notifications') {
+          await loadSettingsOverview();
+          renderSettings();
+        }
         await refreshTodayData({ keepDay: true });
         return;
       }
@@ -3256,9 +3267,13 @@
       if (action === 'system-notifications' && id > 0) {
         await apiFetch(`/gymapi/systems/${id}/select`, { method: 'POST', body: JSON.stringify({}) });
         await loadSystems();
+        await loadSettingsOverview();
         state.settings.view = 'notifications';
         closeSystemSheet();
         navigateTo('settings');
+        setTimeout(() => {
+          document.querySelector('[data-settings-timezone]')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }, 20);
         return;
       }
     }
@@ -4657,7 +4672,19 @@
         notifications: `
           <div class="card">
             <div class="card-title">Уведомления</div>
-            <div class="settings-row settings-panel inline"><div><div class="label">Система тренировок</div><div class="hint">Уведомления редактируются для выбранной сейчас системы.</div></div><button class="btn small-btn" data-action="open-system-hub">🧩 Системы</button></div>
+            <div class="settings-row settings-panel">
+              <div class="label">Система тренировок</div>
+              <div class="hint">Сейчас активна: <b>${escapeHtml(s.systems.activeSystemName || '—')}</b>. Выбор ниже сразу обновляет дни под выбранную систему.</div>
+              <div class="settings-pill-row">
+                ${(s.systems.items || []).map((sys) => {
+                  const isActive = Number(sys.id) === Number(s.systems.activeSystemId);
+                  return `<button class="system-select-btn quick ${isActive ? 'active' : ''}" data-action="system-select" data-system-id="${sys.id}">${isActive ? '✅ ' : ''}${escapeHtml(sys.name || 'Система')}</button>`;
+                }).join('') || '<span class="settings-pill">Системы ещё не созданы</span>'}
+              </div>
+              <div class="settings-actions">
+                <button class="btn small-btn" data-action="open-system-hub">⚙️ Управлять системами</button>
+              </div>
+            </div>
             <div class="settings-row settings-panel">
               <div class="label">Уведомления</div>
               <div class="settings-pill">Статус: ${s.notificationsEnabled ? 'включены' : 'выключены'}</div>
@@ -4667,7 +4694,7 @@
                 </button>
               </div>
             </div>
-            <div class="settings-row settings-panel">
+            <div class="settings-row settings-panel" id="timezonePanel">
               <div class="label">Часовой пояс</div>
               <div class="hint">Используется для времени уведомлений: ${timezoneLabel}</div>
               <select class="settings-select" data-settings-timezone>${timezoneOptions}</select>
@@ -5323,6 +5350,10 @@
           }
           if (action === 'open-system-hub') {
             openSystemSheet().catch(console.error);
+            return;
+          }
+          if (action === 'system-select') {
+            await handleSystemAction('system-select', target);
             return;
           }
           if (action === 'toggle-notifications') {
