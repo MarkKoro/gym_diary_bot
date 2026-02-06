@@ -777,9 +777,10 @@ async def day_sheet(
     last_completed_at = await db.get_day_completion(user_id, day_index)
     target_date = _parse_date_param(date)
     iso_date = _iso_date(target_date)
-    session_id = await db.get_or_create_today_session(user_id, iso_date, day_index, await get_active_training_system_id(user_id))
+    active_system_id = await get_active_training_system_id(user_id)
+    session_id = await db.get_or_create_today_session(user_id, iso_date, day_index, active_system_id)
     day_label = await db.get_day_label(user_id, day_index)
-    exercises_rows = await db.fetch_day_exercises(user_id, day_index, iso_date)
+    exercises_rows = await db.fetch_day_exercises(user_id, day_index, iso_date, active_system_id)
     exercises: list[dict] = []
     for ue_id, name, muscle_group, is_done, exercise_id in exercises_rows:
         normalized_group = _normalize_group(muscle_group)
@@ -980,9 +981,18 @@ async def add_set_fast(
     await _ensure_user_exercise(user_id, user_exercise_id, day_index)
     target_date = _parse_date_param(date)
     iso_date = _iso_date(target_date)
-    session_id = await db.get_or_create_today_session(user_id, iso_date, day_index, await get_active_training_system_id(user_id))
+    active_system_id = await get_active_training_system_id(user_id)
+    session_id = await db.get_or_create_today_session(user_id, iso_date, day_index, active_system_id)
     sets_rows = await db.fetch_exercise_sets(session_id, user_exercise_id)
     last = sets_rows[-1] if sets_rows else None
+    if not last:
+        latest_any = await db.get_latest_set_values_for_exercise(
+            user_id,
+            user_exercise_id,
+            exclude_session_id=session_id,
+        )
+        if latest_any:
+            last = (0, int(latest_any[0]), int(latest_any[1]), float(latest_any[2]), 0)
     reps = (payload or {}).get("reps") if payload else None
     seconds = (payload or {}).get("seconds") if payload else None
     weight = (payload or {}).get("weight_kg") if payload else None
@@ -1146,7 +1156,8 @@ async def complete_running_state(
     await mark_running_entry_done(entry_id)
     if session_id:
         await mark_exercise_done(session_id, ue_id)
-    exercises_rows = await db.fetch_day_exercises(user_id, day_index, iso_date)
+    active_system_id = await get_active_training_system_id(user_id)
+    exercises_rows = await db.fetch_day_exercises(user_id, day_index, iso_date, active_system_id)
     all_done = bool(exercises_rows) and all(bool(row[3]) for row in exercises_rows)
     completed_days = await get_active_day_completions(user_id)
     day_completed = False
@@ -1177,10 +1188,11 @@ async def mark_exercise_done_fast(
     await _ensure_user_exercise(user_id, user_exercise_id, day_index)
     target_date = _parse_date_param(date)
     iso_date = _iso_date(target_date)
-    session_id = await db.get_or_create_today_session(user_id, iso_date, day_index, await get_active_training_system_id(user_id))
+    active_system_id = await get_active_training_system_id(user_id)
+    session_id = await db.get_or_create_today_session(user_id, iso_date, day_index, active_system_id)
     await mark_exercise_done(session_id, user_exercise_id)
 
-    exercises_rows = await db.fetch_day_exercises(user_id, day_index, iso_date)
+    exercises_rows = await db.fetch_day_exercises(user_id, day_index, iso_date, active_system_id)
     all_done = bool(exercises_rows) and all(bool(row[3]) for row in exercises_rows)
 
     completed_days = await get_active_day_completions(user_id)
