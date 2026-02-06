@@ -1096,12 +1096,23 @@
 
     .system-btn { color: var(--muted); }
     .system-sheet .sheet { max-width: 620px; max-height: min(88vh, 760px); overflow: auto; }
-    .system-list { display: grid; gap: 8px; margin-top: 10px; }
-    .system-row { border: 1px solid var(--border); border-radius: 12px; padding: 10px; background: var(--bg); display: grid; gap: 8px; }
-    .system-row.active { border-color: var(--accent); box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 60%, transparent); }
-    .system-row-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+    .system-create { margin: 12px 0; padding: 12px; border: 1px solid var(--border); border-radius: 14px; background: color-mix(in srgb, var(--bg) 82%, transparent); display: grid; gap: 10px; }
+    .system-create-days { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+    .system-list { display: grid; gap: 10px; margin-top: 10px; }
+    .system-row { border: 1px solid var(--border); border-radius: 14px; padding: 12px; background: linear-gradient(160deg, color-mix(in srgb, var(--card) 82%, transparent), color-mix(in srgb, var(--bg) 78%, transparent)); display: grid; gap: 10px; box-shadow: var(--shadow); }
+    .system-row.active { border-color: color-mix(in srgb, var(--accent) 65%, var(--border)); box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 40%, transparent), var(--shadow); }
+    .system-row-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; }
+    .system-title-wrap { display: flex; align-items: center; gap: 10px; min-width: 0; }
     .system-color-dot { width: 14px; height: 14px; border-radius: 50%; border: 1px solid var(--border); display: inline-block; }
-    .system-row-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+    .system-name { font-weight: 800; letter-spacing: -0.01em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .system-status { font-size: 12px; color: var(--muted); margin-top: 2px; }
+    .system-menu-wrap { position: relative; }
+    .system-menu-btn { width: 38px; height: 38px; border-radius: 12px; border: 1px solid var(--border); background: var(--bg); color: var(--text); cursor: pointer; }
+    .system-menu-btn:hover { border-color: var(--accent); color: var(--accent); }
+    .system-menu { position: absolute; right: 0; top: 44px; min-width: 200px; padding: 8px; border-radius: 12px; border: 1px solid var(--border); background: var(--card); box-shadow: var(--shadow); display: none; z-index: 5; }
+    .system-menu.open { display: grid; gap: 6px; }
+    .system-menu button, .system-menu label { width: 100%; border: none; background: var(--bg); border-radius: 10px; padding: 9px 10px; text-align: left; font-weight: 700; color: var(--text); cursor: pointer; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+    .system-menu label input[type="color"] { width: 34px; height: 24px; border: none; background: transparent; padding: 0; }
     .training-tint { position: fixed; inset: 0; pointer-events: none; z-index: 2; opacity: 0; transition: opacity .2s ease; }
     body.route-today .training-tint.show { opacity: 1; }
 
@@ -1729,9 +1740,22 @@
             <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="m6 6 12 12M18 6 6 18"></path></svg>
           </button>
         </div>
-        <div class="settings-row inline">
-          <input id="systemNewName" class="settings-input" placeholder="Название системы">
-          <button id="systemAddBtn" class="btn primary">Добавить</button>
+        <div class="system-create">
+          <div class="settings-row inline">
+            <input id="systemNewName" class="settings-input" placeholder="Название системы">
+            <button id="systemAddBtn" class="btn primary" disabled>Добавить</button>
+          </div>
+          <div class="system-create-days">
+            <div>
+              <div class="label">Тренировочных дней</div>
+              <div class="timer-hint">Можно изменить позже в настройках дней.</div>
+            </div>
+            <div class="stepper" id="systemDaysStepper">
+              <button type="button" id="systemDaysMinus">−</button>
+              <span id="systemDaysValue">3</span>
+              <button type="button" id="systemDaysPlus">+</button>
+            </div>
+          </div>
         </div>
         <div id="systemList" class="system-list"></div>
       </div>
@@ -2074,6 +2098,7 @@
         customGroups: [],
         reminders: [],
         notificationsEnabled: true,
+        leaderboardVisible: true,
         timezone: '',
         ui: {
           showTimerButton: true,
@@ -2099,6 +2124,7 @@
           activeSystemId: null,
           items: [],
           loading: false,
+          newDays: 3,
         },
         trainer: {
           loading: false,
@@ -2674,7 +2700,7 @@
     function renderProductivityButton() {
       const btn = document.getElementById('productivityBtn');
       if (!btn) return;
-      btn.classList.toggle('hidden', !state.settings.ui.showProductivityButton || state.manage.mode === 'delete');
+      btn.classList.toggle('hidden', !state.settings.ui.showProductivityButton || !state.settings.leaderboardVisible || state.manage.mode === 'delete');
       const angle = gaugeAngleFromScore(state.settings.productivity.score);
       const needle = document.getElementById('productivityNeedleSmall');
       if (needle) needle.style.transform = `rotate(${angle}deg)`;
@@ -2686,7 +2712,7 @@
       const timerBtn = document.getElementById('timerOpenBtn');
       const productivityBtn = document.getElementById('productivityBtn');
       if (timerBtn) timerBtn.classList.toggle('hidden', hideForDelete || !state.settings.ui.showTimerButton);
-      if (productivityBtn) productivityBtn.classList.toggle('hidden', hideForDelete || !state.settings.ui.showProductivityButton);
+      if (productivityBtn) productivityBtn.classList.toggle('hidden', hideForDelete || !state.settings.ui.showProductivityButton || !state.settings.leaderboardVisible);
     }
 
     function renderProductivityHub() {
@@ -2721,6 +2747,10 @@
     }
 
     function openProductivitySheet() {
+      if (!state.settings.leaderboardVisible) {
+        toast('Режим анонимности включён');
+        return;
+      }
       renderProductivityHub();
       document.getElementById('productivitySheet')?.classList.add('show');
       loadProductivityLeaderboard().catch(console.error);
@@ -2895,28 +2925,49 @@
         list.innerHTML = '<div class="muted-inline">Загружаем системы…</div>';
         return;
       }
-      list.innerHTML = (systems.items || []).map((sys) => `
-        <div class="system-row ${Number(sys.id) === Number(systems.activeSystemId) ? 'active' : ''}">
-          <div class="system-row-head">
-            <div style="display:flex; align-items:center; gap:8px;">
-              <span class="system-color-dot" style="background:${sys.color || '#2ea6ff'}"></span>
-              <div class="label">${sys.name}</div>
+      list.innerHTML = (systems.items || []).map((sys) => {
+        const isActive = Number(sys.id) === Number(systems.activeSystemId);
+        return `
+          <div class="system-row ${isActive ? 'active' : ''}">
+            <div class="system-row-head">
+              <div class="system-title-wrap">
+                <span class="system-color-dot" style="background:${sys.color || '#2ea6ff'}"></span>
+                <div>
+                  <div class="system-name">${sys.name}</div>
+                  <div class="system-status">${isActive ? 'Активная система' : 'Нажми «Выбрать» в меню'}</div>
+                </div>
+              </div>
+              <div class="system-menu-wrap">
+                <button class="system-menu-btn" data-action="system-menu-toggle" data-system-id="${sys.id}" aria-label="Меню системы">⚙️</button>
+                <div class="system-menu" id="system-menu-${sys.id}">
+                  <button data-action="system-select" data-system-id="${sys.id}">Выбрать</button>
+                  <button data-action="system-rename" data-system-id="${sys.id}">Переименовать</button>
+                  <button data-action="system-notifications" data-system-id="${sys.id}">Уведомления</button>
+                  <label>
+                    Цвет
+                    <input type="color" data-action="system-color" data-system-id="${sys.id}" value="${sys.color || '#2ea6ff'}" title="Цвет системы">
+                  </label>
+                  <button class="danger" data-action="system-delete" data-system-id="${sys.id}">Удалить</button>
+                </div>
+              </div>
             </div>
-            <div class="timer-hint">#${sys.id}</div>
           </div>
-          <div class="system-row-actions">
-            <button class="btn small-btn" data-action="system-select" data-system-id="${sys.id}">Выбрать</button>
-            <button class="btn small-btn" data-action="system-rename" data-system-id="${sys.id}">Переименовать</button>
-            <input type="color" data-action="system-color" data-system-id="${sys.id}" value="${sys.color || '#2ea6ff'}" title="Цвет системы">
-            <button class="btn small-btn" data-action="system-notifications" data-system-id="${sys.id}">Уведомления</button>
-            <button class="btn small-btn danger" data-action="system-delete" data-system-id="${sys.id}">Удалить</button>
-          </div>
-        </div>
-      `).join('') || '<div class="muted-inline">Систем пока нет.</div>';
+        `;
+      }).join('') || '<div class="muted-inline">Систем пока нет.</div>';
+    }
+
+    function setSystemCreateButtonState() {
+      const input = document.getElementById('systemNewName');
+      const btn = document.getElementById('systemAddBtn');
+      if (!btn || !input) return;
+      btn.disabled = !(input.value || '').trim();
     }
 
     async function openSystemSheet() {
       document.getElementById('systemSheet')?.classList.add('show');
+      const daysEl = document.getElementById('systemDaysValue');
+      if (daysEl) daysEl.textContent = String(state.settings.systems.newDays || 3);
+      setSystemCreateButtonState();
       await loadSystems();
     }
 
@@ -2926,6 +2977,13 @@
 
     async function handleSystemAction(action, target) {
       const id = Number(target.dataset.systemId || 0);
+      if (action === 'system-menu-toggle' && id > 0) {
+        document.querySelectorAll('.system-menu.open').forEach((menu) => {
+          if (menu.id !== `system-menu-${id}`) menu.classList.remove('open');
+        });
+        document.getElementById(`system-menu-${id}`)?.classList.toggle('open');
+        return;
+      }
       if (action === 'system-select' && id > 0) {
         await apiFetch(`/gymapi/systems/${id}/select`, { method: 'POST', body: JSON.stringify({}) });
         await loadSystems();
@@ -2948,6 +3006,8 @@
         return;
       }
       if (action === 'system-notifications' && id > 0) {
+        await apiFetch(`/gymapi/systems/${id}/select`, { method: 'POST', body: JSON.stringify({}) });
+        await loadSystems();
         state.settings.view = 'notifications';
         closeSystemSheet();
         navigateTo('settings');
@@ -3149,12 +3209,27 @@
       document.getElementById('timerCloseBtn')?.addEventListener('click', closeTimerSheet);
       document.getElementById('productivityCloseBtn')?.addEventListener('click', closeProductivitySheet);
       document.getElementById('systemCloseBtn')?.addEventListener('click', closeSystemSheet);
+      document.getElementById('systemNewName')?.addEventListener('input', () => setSystemCreateButtonState());
+      document.getElementById('systemDaysMinus')?.addEventListener('click', () => {
+        state.settings.systems.newDays = Math.max(1, Number(state.settings.systems.newDays || 3) - 1);
+        const valueEl = document.getElementById('systemDaysValue');
+        if (valueEl) valueEl.textContent = String(state.settings.systems.newDays);
+      });
+      document.getElementById('systemDaysPlus')?.addEventListener('click', () => {
+        state.settings.systems.newDays = Math.min(7, Number(state.settings.systems.newDays || 3) + 1);
+        const valueEl = document.getElementById('systemDaysValue');
+        if (valueEl) valueEl.textContent = String(state.settings.systems.newDays);
+      });
       document.getElementById('systemAddBtn')?.addEventListener('click', async () => {
         const input = document.getElementById('systemNewName');
-        const name = (input?.value || '').trim() || 'Новая система';
-        await apiFetch('/gymapi/systems', { method: 'POST', body: JSON.stringify({ name }) });
+        const name = (input?.value || '').trim();
+        if (!name) return;
+        const workoutsPerWeek = Math.max(1, Math.min(7, Number(state.settings.systems.newDays || 3)));
+        await apiFetch('/gymapi/systems', { method: 'POST', body: JSON.stringify({ name, workouts_per_week: workoutsPerWeek }) });
         if (input) input.value = '';
+        setSystemCreateButtonState();
         await loadSystems();
+        await refreshTodayData({ keepDay: false });
       });
       document.getElementById('productivityHelpBtn')?.addEventListener('click', (e) => {
         e.stopPropagation();
@@ -4280,6 +4355,13 @@
               </div>
               <button class="btn small-btn" data-action="toggle-productivity-widget">${ui.showProductivityButton ? 'Включено' : 'Выключено'}</button>
             </div>
+            <div class="settings-row settings-panel inline">
+              <div>
+                <div class="label">Участие в рейтинге</div>
+                <div class="hint">Если выключить — ты исчезнешь из лидерборда и твой профиль станет недоступен для просмотра другим.</div>
+              </div>
+              <button class="btn small-btn" data-action="toggle-leaderboard-visibility">${s.leaderboardVisible ? 'Показываться' : 'Анонимно'}</button>
+            </div>
           </div>
         `,
         measurements: `
@@ -4349,6 +4431,7 @@
         state.settings.customGroups = data.custom_groups || [];
         state.settings.reminders = data.reminders || [];
         state.settings.notificationsEnabled = data.notifications_enabled !== false;
+        state.settings.leaderboardVisible = data.leaderboard_visible !== false;
         state.settings.timezone = data.timezone || '';
         state.settings.loaded = true;
       } catch (e) {
@@ -4973,6 +5056,20 @@
             applyHeaderWidgetVisibility();
             renderProductivityHub();
             renderSettings();
+            return;
+          }
+          if (action === 'toggle-leaderboard-visibility') {
+            const visible = !state.settings.leaderboardVisible;
+            await apiFetch('/gymapi/settings/leaderboard_visibility', {
+              method: 'POST',
+              body: JSON.stringify({ visible }),
+            });
+            state.settings.leaderboardVisible = visible;
+            applyHeaderWidgetVisibility();
+            if (!visible) closeProductivitySheet();
+            renderProductivityHub();
+            renderSettings();
+            toast(visible ? 'Участие в рейтинге включено' : 'Режим анонимности включён');
             return;
           }
           if (action === 'save-reminders') {
@@ -7954,14 +8051,8 @@
       document.getElementById('timerSheet').addEventListener('click', (e) => { if (e.target.id === 'timerSheet') closeTimerSheet(); });
       document.getElementById('systemSheet').addEventListener('click', async (e) => {
         if (e.target.id === 'systemSheet') { closeSystemSheet(); return; }
-        const colorInput = e.target.closest('input[type="color"][data-action="system-color"]');
-        if (colorInput) {
-          const id = Number(colorInput.dataset.systemId || 0);
-          if (id > 0) {
-            await apiFetch(`/gymapi/systems/${id}/color`, { method: 'POST', body: JSON.stringify({ color: colorInput.value }) });
-            await loadSystems();
-          }
-          return;
+        if (!e.target.closest('.system-menu-wrap')) {
+          document.querySelectorAll('.system-menu.open').forEach((menu) => menu.classList.remove('open'));
         }
         const target = e.target.closest('[data-action]');
         if (!target) return;
@@ -8054,6 +8145,9 @@
       document.addEventListener('click', (e) => {
         if (!e.target.closest('.card-menu') && !e.target.closest('.menu-button')) closeMenus();
         if (!e.target.closest('#manageMenu') && !e.target.closest('#manageExerciseBtn')) setManageMenu(false);
+        if (!e.target.closest('.system-menu-wrap')) {
+          document.querySelectorAll('.system-menu.open').forEach((menu) => menu.classList.remove('open'));
+        }
       });
     }
 

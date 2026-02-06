@@ -29,6 +29,7 @@ from db import (
     get_day_completion,
     get_user_timezone,
     get_user_notifications_enabled,
+    get_user_leaderboard_visible,
     get_active_trainer_link_for_trainee,
     get_latest_trainer_link_for_trainee,
     get_trainer_link,
@@ -58,6 +59,7 @@ from db import (
     set_trainer_accepting_requests,
     set_app_meta,
     set_user_notifications_enabled,
+    set_user_leaderboard_visible,
     set_user_timezone,
     set_workouts_per_week,
     update_last_measurement,
@@ -2779,6 +2781,7 @@ async def settings_overview(ctx: AuthCtx = Depends(get_auth_ctx)):
     custom_groups = await list_user_muscle_groups(user_id)
     reminders = await list_user_reminders(user_id)
     notifications_enabled = await get_user_notifications_enabled(user_id)
+    leaderboard_visible = await get_user_leaderboard_visible(user_id)
     timezone = await get_user_timezone(user_id)
     return {
         "ok": True,
@@ -2790,6 +2793,7 @@ async def settings_overview(ctx: AuthCtx = Depends(get_auth_ctx)):
             for day_no, dow, hour, minute in reminders
         ],
         "notifications_enabled": bool(notifications_enabled),
+        "leaderboard_visible": bool(leaderboard_visible),
         "timezone": timezone,
     }
 
@@ -2830,6 +2834,7 @@ async def onboarding_status(ctx: AuthCtx = Depends(get_auth_ctx)):
             workouts_per_week = 0
     reminders = await list_user_reminders(user_id)
     notifications_enabled = await get_user_notifications_enabled(user_id)
+    leaderboard_visible = await get_user_leaderboard_visible(user_id)
     timezone = await get_user_timezone(user_id)
     active_days: list[tuple[int, str]] = []
     if workouts_per_week > 0:
@@ -2844,6 +2849,7 @@ async def onboarding_status(ctx: AuthCtx = Depends(get_auth_ctx)):
             for day_no, dow, hour, minute in reminders
         ],
         "notifications_enabled": bool(notifications_enabled),
+        "leaderboard_visible": bool(leaderboard_visible),
         "timezone": timezone,
         "onboarding_completed": onboarding_completed,
     }
@@ -2984,6 +2990,17 @@ async def settings_update_reminders(
     await set_app_meta("reminders_updated_at", datetime.now(UTC).isoformat())
     await sync_reminders_to_system(user_id, await get_active_training_system_id(user_id))
     return {"ok": True}
+
+
+@app.post("/settings/leaderboard_visibility")
+async def settings_leaderboard_visibility(
+    payload: dict = Body(default_factory=dict),
+    ctx: AuthCtx = Depends(get_auth_ctx),
+):
+    user_id = ctx.user_id
+    visible = payload.get("visible", True)
+    await set_user_leaderboard_visible(user_id, bool(visible))
+    return {"ok": True, "leaderboard_visible": bool(visible)}
 
 
 @app.post("/settings/clear_completions")
@@ -3230,7 +3247,16 @@ async def systems_create(payload: dict = Body(default={}), ctx: AuthCtx = Depend
     user_id = ctx.user_id
     name = (payload.get('name') or '').strip() or 'Новая система'
     color = (payload.get('color') or '#2ea6ff').strip()
-    system_id = await create_training_system(user_id, name, color)
+    try:
+        workouts_per_week = int(payload.get('workouts_per_week') or 0)
+    except (TypeError, ValueError):
+        workouts_per_week = 0
+    workouts_per_week = max(1, min(7, workouts_per_week)) if workouts_per_week else None
+    system_id = await create_training_system(user_id, name, color, workouts_per_week=workouts_per_week)
+    if workouts_per_week:
+        await apply_system_to_current_plan(user_id, int(system_id))
+        await set_workouts_per_week(user_id, workouts_per_week)
+        await sync_current_plan_to_system(user_id, int(system_id))
     return {'ok': True, 'system_id': int(system_id)}
 
 
@@ -3302,6 +3328,10 @@ async def leaderboard_productivity_plan(
     _ = ctx.user_id
     if leader_user_id <= 0:
         raise HTTPException(status_code=400, detail='Некорректный пользователь')
+    if int(leader_user_id) != int(ctx.user_id):
+        visible = await get_user_leaderboard_visible(int(leader_user_id))
+        if not visible:
+            raise HTTPException(status_code=404, detail='Профиль недоступен')
     plan_days = await fetch_public_training_plan(int(leader_user_id))
     return {
         'leader_user_id': int(leader_user_id),
@@ -3319,5 +3349,8 @@ async def leaderboard_productivity_copy(
         raise HTTPException(status_code=400, detail='Некорректный пользователь')
     if int(leader_user_id) == int(user_id):
         raise HTTPException(status_code=400, detail='Нельзя копировать план у себя')
+    visible = await get_user_leaderboard_visible(int(leader_user_id))
+    if not visible:
+        raise HTTPException(status_code=404, detail='Профиль недоступен')
     result = await copy_training_plan_from_user(int(leader_user_id), int(user_id))
     return {'ok': True, **result}

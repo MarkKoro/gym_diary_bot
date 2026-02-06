@@ -654,6 +654,7 @@ async def init_db():
             day_finish_total INTEGER DEFAULT 0,
             subscription_prompt_total INTEGER DEFAULT 0,
             notifications_enabled INTEGER NOT NULL DEFAULT 1,
+            leaderboard_visible INTEGER NOT NULL DEFAULT 1,
             trainer_accepts_requests INTEGER NOT NULL DEFAULT 1,
             onboarding_video_chat_id INTEGER,
             onboarding_video_message_id INTEGER,
@@ -960,6 +961,10 @@ async def init_db():
             )
         except Exception:
             pass
+        if not await _column_exists(db, "users", "leaderboard_visible"):
+            await db.execute(
+                "ALTER TABLE users ADD COLUMN leaderboard_visible INTEGER NOT NULL DEFAULT 1"
+            )
         if not await _column_exists(db, "users", "trainer_accepts_requests"):
             await db.execute(
                 "ALTER TABLE users ADD COLUMN trainer_accepts_requests INTEGER NOT NULL DEFAULT 1"
@@ -1287,10 +1292,16 @@ async def apply_system_to_current_plan(user_id: int, system_id: int):
         await db.commit()
 
 
-async def create_training_system(user_id: int, name: str, color: str = '#2ea6ff'):
+async def create_training_system(
+    user_id: int,
+    name: str,
+    color: str = '#2ea6ff',
+    workouts_per_week: int | None = None,
+):
     system_name = (name or '').strip() or 'Новая система'
     now = datetime.now(UTC).isoformat()
     active_id = await get_active_training_system_id(user_id)
+    default_days = max(1, min(7, int(workouts_per_week or 0) or 3))
     async with connect_db() as db:
         cur = await db.execute(
             "INSERT INTO training_systems(user_id, name, color, created_at) VALUES(?,?,?,?)",
@@ -1299,11 +1310,18 @@ async def create_training_system(user_id: int, name: str, color: str = '#2ea6ff'
         system_id = int(cur.lastrowid)
         # clone active template
         cur = await db.execute("SELECT day_index, label, is_active FROM training_system_days WHERE system_id=?", (active_id,))
-        for day_index, label, is_active in await cur.fetchall():
+        copied_days = await cur.fetchall()
+        for day_index, label, is_active in copied_days:
             await db.execute(
                 "INSERT INTO training_system_days(system_id, day_index, label, is_active) VALUES(?,?,?,?)",
                 (system_id, int(day_index), label, int(is_active or 0)),
             )
+        if not copied_days:
+            for day_index in range(1, 8):
+                await db.execute(
+                    "INSERT INTO training_system_days(system_id, day_index, label, is_active) VALUES(?,?,?,?)",
+                    (system_id, day_index, f"День {day_index}", 1 if day_index <= default_days else 0),
+                )
         cur = await db.execute("SELECT day_index, exercise_id FROM training_system_exercises WHERE system_id=?", (active_id,))
         for day_index, exercise_id in await cur.fetchall():
             await db.execute(
@@ -2299,6 +2317,24 @@ async def set_user_notifications_enabled(user_id: int, enabled: bool) -> None:
         )
         await db.commit()
 
+async def get_user_leaderboard_visible(user_id: int) -> bool:
+    async with connect_db() as db:
+        cur = await db.execute(
+            "SELECT COALESCE(leaderboard_visible, 1) FROM users WHERE id=?",
+            (user_id,),
+        )
+        row = await cur.fetchone()
+        return bool((row[0] if row else 1) or 0)
+
+
+async def set_user_leaderboard_visible(user_id: int, visible: bool) -> None:
+    async with connect_db() as db:
+        await db.execute(
+            "UPDATE users SET leaderboard_visible=? WHERE id=?",
+            (1 if visible else 0, user_id),
+        )
+        await db.commit()
+
 
 async def add_user_reminder(
     user_id: int, dow: int, hour: int, minute: int, day_no: int | None = None
@@ -2411,6 +2447,7 @@ async def wipe_user(user_id: int):
                     day_finish_total=0,
                     subscription_prompt_total=0,
                     notifications_enabled=1,
+                    leaderboard_visible=1,
                     is_trainer=0,
                     onboarding_video_chat_id=NULL,
                     onboarding_video_message_id=NULL,
@@ -4407,6 +4444,7 @@ async def fetch_productivity_leaderboard(limit: int = 10, offset: int = 0):
                 SELECT id, username
                 FROM users
                 WHERE COALESCE(onboarding_completed, 0) = 1
+                  AND COALESCE(leaderboard_visible, 1) = 1
             ),
             recent_sessions AS (
                 SELECT s.user_id,
