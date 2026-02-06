@@ -1109,11 +1109,16 @@
     .system-menu-wrap { position: relative; }
     .system-menu-btn { width: 38px; height: 38px; border-radius: 12px; border: 1px solid var(--border); background: var(--bg); color: var(--text); cursor: pointer; }
     .system-menu-btn:hover { border-color: var(--accent); color: var(--accent); }
+    .system-select-btn { border: 1px solid var(--border); background: var(--bg); color: var(--text); border-radius: 10px; padding: 7px 11px; font-weight: 700; cursor: pointer; }
+    .system-select-btn.active { border-color: color-mix(in srgb, var(--accent) 60%, var(--border)); color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, var(--bg)); }
     .system-menu { position: absolute; right: 0; top: 44px; min-width: 200px; padding: 8px; border-radius: 12px; border: 1px solid var(--border); background: var(--card); box-shadow: var(--shadow); display: none; z-index: 5; }
     .system-menu.open { display: grid; gap: 6px; }
     .system-menu button, .system-menu label { width: 100%; border: none; background: var(--bg); border-radius: 10px; padding: 9px 10px; text-align: left; font-weight: 700; color: var(--text); cursor: pointer; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
     .system-menu label input[type="color"] { width: 34px; height: 24px; border: none; background: transparent; padding: 0; }
     .training-tint { position: fixed; inset: 0; pointer-events: none; z-index: 2; opacity: 0; transition: opacity .2s ease; }
+    .training-tint::before, .training-tint::after { content: ''; position: absolute; top: 0; bottom: 0; width: 14px; opacity: 0.9; }
+    .training-tint::before { left: 0; background: linear-gradient(90deg, var(--system-tint-color, transparent), transparent); }
+    .training-tint::after { right: 0; background: linear-gradient(-90deg, var(--system-tint-color, transparent), transparent); }
     body.route-today .training-tint.show { opacity: 1; }
 
     .leaderboard-head { margin-top: 12px; display: flex; justify-content: space-between; align-items: center; gap: 10px; }
@@ -1745,19 +1750,25 @@
             <input id="systemNewName" class="settings-input" placeholder="Название системы">
             <button id="systemAddBtn" class="btn primary" disabled>Добавить</button>
           </div>
-          <div class="system-create-days">
-            <div>
-              <div class="label">Тренировочных дней</div>
-              <div class="timer-hint">Можно изменить позже в настройках дней.</div>
-            </div>
-            <div class="stepper" id="systemDaysStepper">
-              <button type="button" id="systemDaysMinus">−</button>
-              <span id="systemDaysValue">3</span>
-              <button type="button" id="systemDaysPlus">+</button>
-            </div>
-          </div>
         </div>
         <div id="systemList" class="system-list"></div>
+      </div>
+    </div>
+  </div>
+
+
+  <div id="systemDaysModal" class="modal-backdrop">
+    <div class="modal">
+      <div class="modal-title">Сколько тренировочных дней в неделе?</div>
+      <div class="modal-text">Выберите количество дней для новой системы.</div>
+      <div class="stepper" id="systemDaysStepper">
+        <button type="button" id="systemDaysMinus">−</button>
+        <span id="systemDaysValue">3</span>
+        <button type="button" id="systemDaysPlus">+</button>
+      </div>
+      <div class="modal-actions">
+        <button id="systemDaysCancelBtn" class="btn">Отмена</button>
+        <button id="systemDaysConfirmBtn" class="btn primary">Создать</button>
       </div>
     </div>
   </div>
@@ -2913,7 +2924,8 @@
         tint.style.background = 'transparent';
         return;
       }
-      tint.style.background = `color-mix(in srgb, ${active.color} 6%, transparent)`;
+      tint.style.background = 'transparent';
+      tint.style.setProperty('--system-tint-color', `color-mix(in srgb, ${active.color} 12%, transparent)`);
       tint.classList.add('show');
     }
 
@@ -2934,13 +2946,13 @@
                 <span class="system-color-dot" style="background:${sys.color || '#2ea6ff'}"></span>
                 <div>
                   <div class="system-name">${sys.name}</div>
-                  <div class="system-status">${isActive ? 'Активная система' : 'Нажми «Выбрать» в меню'}</div>
+                  <div class="system-status">${isActive ? 'Активная система' : 'Система не активна'}</div>
                 </div>
               </div>
               <div class="system-menu-wrap">
+                <button class="system-select-btn ${isActive ? 'active' : ''}" data-action="system-select" data-system-id="${sys.id}">${isActive ? 'Включена' : 'Включить'}</button>
                 <button class="system-menu-btn" data-action="system-menu-toggle" data-system-id="${sys.id}" aria-label="Меню системы">⚙️</button>
                 <div class="system-menu" id="system-menu-${sys.id}">
-                  <button data-action="system-select" data-system-id="${sys.id}">Выбрать</button>
                   <button data-action="system-rename" data-system-id="${sys.id}">Переименовать</button>
                   <button data-action="system-notifications" data-system-id="${sys.id}">Уведомления</button>
                   <label>
@@ -2965,14 +2977,41 @@
 
     async function openSystemSheet() {
       document.getElementById('systemSheet')?.classList.add('show');
-      const daysEl = document.getElementById('systemDaysValue');
-      if (daysEl) daysEl.textContent = String(state.settings.systems.newDays || 3);
       setSystemCreateButtonState();
       await loadSystems();
     }
 
     function closeSystemSheet() {
       document.getElementById('systemSheet')?.classList.remove('show');
+    }
+
+    function openSystemDaysModal() {
+      const modal = document.getElementById('systemDaysModal');
+      const daysEl = document.getElementById('systemDaysValue');
+      if (!modal || !daysEl) return;
+      daysEl.textContent = String(state.settings.systems.newDays || 3);
+      modal.classList.add('show');
+    }
+
+    function closeSystemDaysModal() {
+      document.getElementById('systemDaysModal')?.classList.remove('show');
+    }
+
+    async function confirmCreateSystem() {
+      const input = document.getElementById('systemNewName');
+      const name = (input?.value || '').trim();
+      if (!name) return;
+      const days = Math.max(1, Math.min(7, Number(state.settings.systems.newDays) || 3));
+      await apiFetch('/gymapi/systems', {
+        method: 'POST',
+        body: JSON.stringify({ name, workouts_per_week: days }),
+      });
+      if (input) input.value = '';
+      state.settings.systems.newDays = days;
+      setSystemCreateButtonState();
+      closeSystemDaysModal();
+      await loadSystems();
+      await refreshTodayData({ keepDay: true });
     }
 
     async function handleSystemAction(action, target) {
@@ -3220,16 +3259,20 @@
         const valueEl = document.getElementById('systemDaysValue');
         if (valueEl) valueEl.textContent = String(state.settings.systems.newDays);
       });
-      document.getElementById('systemAddBtn')?.addEventListener('click', async () => {
+      document.getElementById('systemAddBtn')?.addEventListener('click', () => {
         const input = document.getElementById('systemNewName');
         const name = (input?.value || '').trim();
         if (!name) return;
-        const workoutsPerWeek = Math.max(1, Math.min(7, Number(state.settings.systems.newDays || 3)));
-        await apiFetch('/gymapi/systems', { method: 'POST', body: JSON.stringify({ name, workouts_per_week: workoutsPerWeek }) });
-        if (input) input.value = '';
-        setSystemCreateButtonState();
-        await loadSystems();
-        await refreshTodayData({ keepDay: false });
+        openSystemDaysModal();
+      });
+      document.getElementById('systemDaysCancelBtn')?.addEventListener('click', closeSystemDaysModal);
+      document.getElementById('systemDaysConfirmBtn')?.addEventListener('click', () => {
+        confirmCreateSystem().catch((e) => {
+          toast(e?.message || 'Не удалось создать систему');
+        });
+      });
+      document.getElementById('systemDaysModal')?.addEventListener('click', (e) => {
+        if (e.target?.id === 'systemDaysModal') closeSystemDaysModal();
       });
       document.getElementById('productivityHelpBtn')?.addEventListener('click', (e) => {
         e.stopPropagation();
@@ -5422,6 +5465,7 @@
       if (normalized !== 'today') {
         closeManageAddSheet();
         setManageMenu(false);
+        closeFinishPopover();
         if (state.manage.mode !== 'normal') setManageMode('normal');
       }
       const activeSettingsView = state.settings.pendingView || state.settings.view;
@@ -7435,7 +7479,7 @@
       document.getElementById('deleteModeHeaderText')?.classList.toggle('hidden', !isDelete);
       document.getElementById('deleteModeFooter')?.classList.toggle('hidden', !isDelete);
       applyHeaderWidgetVisibility();
-      document.getElementById('finishFabWrap')?.classList.toggle('hidden', isDelete || state.manage.add.open);
+      document.getElementById('finishFabWrap')?.classList.toggle('hidden', isDelete || state.manage.add.open || state.currentRoute !== 'today');
     }
 
     function updateAddModeUI() {
@@ -7443,7 +7487,7 @@
       document.body.classList.toggle('add-mode', isAdd);
       document.body.classList.toggle('manage-add-open', state.manage.add.open);
       document.getElementById('addModeHeaderText')?.classList.toggle('hidden', !isAdd);
-      document.getElementById('finishFabWrap')?.classList.toggle('hidden', isAdd || state.manage.mode === 'delete');
+      document.getElementById('finishFabWrap')?.classList.toggle('hidden', isAdd || state.manage.mode === 'delete' || state.currentRoute !== 'today');
     }
 
     function setManageMode(mode) {
@@ -7926,7 +7970,7 @@
     function setFinishFabVisible(visible) {
       const wrap = document.getElementById('finishFabWrap');
       if (!wrap) return;
-      wrap.classList.toggle('hidden', !visible);
+      wrap.classList.toggle('hidden', !visible || state.currentRoute !== 'today');
       if (!visible) closeFinishPopover();
     }
 

@@ -549,22 +549,17 @@ async def _load_user_settings(user_id: int):
             detail="Пожалуйста, открой бота и настрой количество тренировок в неделю, затем вернись в WebApp.",
         )
     system, workouts_per_week = settings
-    wpw = int(workouts_per_week) if workouts_per_week is not None else 0
-    if wpw <= 0:
-        raise HTTPException(
-            status_code=400,
-            detail="Пожалуйста, открой бота и настрой количество тренировок в неделю, затем вернись в WebApp.",
-        )
     active_days = await db.list_active_days(user_id)
     if not active_days:
         raise HTTPException(status_code=400, detail="Активные дни не найдены")
+    wpw = int(workouts_per_week) if workouts_per_week is not None else len(active_days)
+    if wpw <= 0:
+        wpw = len(active_days)
     return wpw, active_days
 
 
 async def _validate_day(user_id: int, day_index: int) -> tuple[int, list[tuple[int, str]]]:
     wpw, active_days = await _load_user_settings(user_id)
-    if not 1 <= day_index <= wpw:
-        raise HTTPException(status_code=404, detail="День вне диапазона плана")
     active_map = {d: label for d, label in active_days}
     if day_index not in active_map:
         raise HTTPException(status_code=404, detail="День не активен")

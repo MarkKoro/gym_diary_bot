@@ -1265,12 +1265,17 @@ async def apply_system_to_current_plan(user_id: int, system_id: int):
             (system_id,),
         )
         days = await cur.fetchall()
+        active_days_count = 0
         if days:
             for day_index, label, is_active in days:
+                active_flag = int(is_active or 0)
+                active_days_count += 1 if active_flag else 0
                 await db.execute(
                     "INSERT INTO user_days(user_id, day_index, label, is_active) VALUES(?,?,?,?)",
-                    (user_id, int(day_index), label, int(is_active or 0)),
+                    (user_id, int(day_index), label, active_flag),
                 )
+        if active_days_count > 0:
+            await db.execute("UPDATE users SET workouts_per_week=? WHERE id=?", (active_days_count, user_id))
         cur = await db.execute(
             "SELECT day_index, exercise_id FROM training_system_exercises WHERE system_id=?",
             (system_id,),
