@@ -553,8 +553,8 @@ async def _has_unique_index(
     return False
 
 
-async def _ensure_sessions_unique_by_day(db) -> None:
-    desired = ("user_id", "date", "day_index")
+async def _ensure_sessions_unique_by_day_and_system(db) -> None:
+    desired = ("user_id", "date", "day_index", "system_id")
     if await _has_unique_index(db, "sessions", desired):
         return
     await db.execute("PRAGMA foreign_keys=OFF")
@@ -568,14 +568,15 @@ async def _ensure_sessions_unique_by_day(db) -> None:
                 user_id INTEGER,
                 date TEXT,
                 day_index INTEGER,
-                UNIQUE(user_id, date, day_index)
+                system_id INTEGER NOT NULL DEFAULT 0,
+                UNIQUE(user_id, date, day_index, system_id)
             )
             """
         )
         await db.execute(
             """
-            INSERT INTO sessions(id, user_id, date, day_index)
-            SELECT id, user_id, date, day_index FROM sessions_old
+            INSERT INTO sessions(id, user_id, date, day_index, system_id)
+            SELECT id, user_id, date, day_index, COALESCE(system_id, 0) FROM sessions_old
             """
         )
         await db.execute("DROP TABLE sessions_old")
@@ -690,7 +691,8 @@ async def init_db():
             user_id INTEGER,
             date TEXT,                    -- 'YYYY-MM-DD' (локально для юзера)
             day_index INTEGER,
-            UNIQUE(user_id, date, day_index)
+            system_id INTEGER NOT NULL DEFAULT 0,
+            UNIQUE(user_id, date, day_index, system_id)
         );
 
         CREATE TABLE IF NOT EXISTS sets(
@@ -984,6 +986,7 @@ async def init_db():
             await db.execute("ALTER TABLE users ADD COLUMN active_system_id INTEGER")
         if not await _column_exists(db, "sessions", "system_id"):
             await db.execute("ALTER TABLE sessions ADD COLUMN system_id INTEGER")
+        await db.execute("UPDATE sessions SET system_id=0 WHERE system_id IS NULL")
         await db.execute(
             "UPDATE user_prefs SET ui_mode = CASE WHEN ui_mode IN ('compact','detailed') THEN ui_mode ELSE COALESCE(day_view_mode, 'detailed') END"
         )
@@ -1056,7 +1059,7 @@ async def init_db():
                 )
             await db.commit()
         await db.commit()
-        await _ensure_sessions_unique_by_day(db)
+        await _ensure_sessions_unique_by_day_and_system(db)
         await _migrate_duration_metrics(db)
         await db.commit()
 
@@ -1358,22 +1361,17 @@ async def get_or_create_today_session(
     user_id: int, date_str: str, day_index: int = 1, system_id: int | None = None
 ):
     async with connect_db() as db:
-        if system_id is None:
-            cur = await db.execute(
-                "SELECT id FROM sessions WHERE user_id=? AND date=? AND day_index=? ORDER BY id DESC LIMIT 1",
-                (user_id, date_str, day_index),
-            )
-        else:
-            cur = await db.execute(
-                "SELECT id FROM sessions WHERE user_id=? AND date=? AND day_index=? AND COALESCE(system_id,0)=?",
-                (user_id, date_str, day_index, int(system_id)),
-            )
+        resolved_system_id = int(system_id) if system_id is not None else 0
+        cur = await db.execute(
+            "SELECT id FROM sessions WHERE user_id=? AND date=? AND day_index=? AND system_id=?",
+            (user_id, date_str, day_index, resolved_system_id),
+        )
         row = await cur.fetchone()
         if row:
             return row[0]
         await db.execute(
             "INSERT INTO sessions(user_id, date, day_index, system_id) VALUES(?,?,?,?)",
-            (user_id, date_str, day_index, int(system_id) if system_id is not None else None),
+            (user_id, date_str, day_index, resolved_system_id),
         )
         await db.commit()
         cur = await db.execute("SELECT last_insert_rowid()")
