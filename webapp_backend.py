@@ -74,7 +74,9 @@ from db import (
     set_onboarding_completed,
     fetch_productivity_leaderboard,
     fetch_public_training_plan,
+    fetch_public_training_systems,
     copy_training_plan_from_user,
+    copy_training_system_from_user,
     ensure_training_system_defaults,
     list_training_systems,
     create_training_system,
@@ -1155,6 +1157,12 @@ async def complete_running_state(
         create=True,
     )
     entry_id = entry[0]
+    distance_val = float(entry[1] or 0.0)
+    duration_ms_val = int(entry[3] or 0)
+    if not duration_ms_val and entry[2]:
+        duration_ms_val = int(entry[2]) * 1000
+    if distance_val <= 0 or duration_ms_val <= 0:
+        raise HTTPException(status_code=400, detail='Добавь дистанцию и время перед сохранением.')
     await mark_running_entry_done(entry_id)
     if session_id:
         await mark_exercise_done(session_id, ue_id)
@@ -1192,6 +1200,30 @@ async def mark_exercise_done_fast(
     iso_date = _iso_date(target_date)
     active_system_id = await get_active_training_system_id(user_id)
     session_id = await db.get_or_create_today_session(user_id, iso_date, day_index, active_system_id)
+
+    sets_rows = await db.fetch_exercise_sets(session_id, user_exercise_id)
+    work_sets = [row for row in (sets_rows or []) if int(row[4] or 0) == 0]
+    if not work_sets:
+        defaults = await db.get_session_last_values(session_id, user_exercise_id)
+        if defaults is None:
+            defaults = await db.get_latest_set_values_for_exercise(
+                user_id,
+                user_exercise_id,
+                exclude_session_id=session_id,
+            )
+        reps_v = int(defaults[0]) if defaults else 0
+        sec_v = int(defaults[1]) if defaults else 0
+        weight_v = float(defaults[2]) if defaults else 0.0
+        if reps_v > 0 or sec_v > 0 or weight_v > 0:
+            await db.add_set(
+                session_id,
+                user_exercise_id,
+                reps=max(reps_v, 0),
+                seconds=max(sec_v, 0),
+                weight=max(weight_v, 0.0),
+                is_warmup=False,
+            )
+
     await mark_exercise_done(session_id, user_exercise_id)
 
     exercises_rows = await db.fetch_day_exercises(user_id, day_index, iso_date, active_system_id)
@@ -3332,6 +3364,7 @@ async def leaderboard_productivity(
 @app.get('/leaderboard/productivity/{leader_user_id}/plan')
 async def leaderboard_productivity_plan(
     leader_user_id: int,
+    system_id: int | None = None,
     ctx: AuthCtx = Depends(get_auth_ctx),
 ):
     _ = ctx.user_id
@@ -3341,16 +3374,25 @@ async def leaderboard_productivity_plan(
         visible = await get_user_leaderboard_visible(int(leader_user_id))
         if not visible:
             raise HTTPException(status_code=404, detail='Профиль недоступен')
-    plan_days = await fetch_public_training_plan(int(leader_user_id))
+    systems = await fetch_public_training_systems(int(leader_user_id))
+    selected = None
+    if system_id is not None:
+        selected = next((it for it in systems if int(it.get('system_id') or 0) == int(system_id)), None)
+    if selected is None and systems:
+        selected = systems[0]
+    plan_days = selected.get('days') if selected else await fetch_public_training_plan(int(leader_user_id))
     return {
         'leader_user_id': int(leader_user_id),
+        'system_id': int(selected.get('system_id')) if selected else None,
         'days': plan_days,
+        'systems': systems,
     }
 
 
 @app.post('/leaderboard/productivity/{leader_user_id}/copy')
 async def leaderboard_productivity_copy(
     leader_user_id: int,
+    payload: dict = Body(default_factory=dict),
     ctx: AuthCtx = Depends(get_auth_ctx),
 ):
     user_id = ctx.user_id
@@ -3361,5 +3403,13 @@ async def leaderboard_productivity_copy(
     visible = await get_user_leaderboard_visible(int(leader_user_id))
     if not visible:
         raise HTTPException(status_code=404, detail='Профиль недоступен')
-    result = await copy_training_plan_from_user(int(leader_user_id), int(user_id))
+    source_system_id = None
+    if isinstance(payload, dict) and payload.get('system_id') is not None:
+        try:
+            source_system_id = int(payload.get('system_id'))
+        except (TypeError, ValueError):
+            source_system_id = None
+    result = await copy_training_system_from_user(int(leader_user_id), int(user_id), source_system_id)
+    if not result.get('system_id'):
+        result = await copy_training_plan_from_user(int(leader_user_id), int(user_id))
     return {'ok': True, **result}
