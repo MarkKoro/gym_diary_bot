@@ -3025,6 +3025,8 @@
         profileEl.innerHTML = '';
         return;
       }
+      const systems = Array.isArray(lb.profile.systems) ? lb.profile.systems : [];
+      const selectedSystemId = Number(lb.profile.system_id || systems[0]?.system_id || 0);
       const daysHtml = (lb.profile.days || []).map((day) => {
         const exercises = (day.exercises || []).map((ex) => `
           <div class="leader-ex-item">
@@ -3039,18 +3041,24 @@
           </div>
         `;
       }).join('') || '<div class="timer-hint">У этого лидера пока нет публичного расписания.</div>';
+      const systemsHtml = systems.map((sys) => {
+        const sid = Number(sys.system_id || 0);
+        const active = sid === selectedSystemId;
+        return `<button class="btn small-btn ${active ? 'primary' : ''}" data-action="leader-system-select" data-user-id="${lb.profile.leader_user_id}" data-system-id="${sid}">${sys.name || ('Система ' + sid)}</button>`;
+      }).join('');
       profileEl.classList.remove('hidden');
       profileEl.innerHTML = `
         <div class="leader-profile-head">
           <div>
             <div class="card-title">План лидера @${lb.profile.username || 'athlete'}</div>
-            <div class="timer-hint">Можно посмотреть структуру и скопировать её себе.</div>
+            <div class="timer-hint">Можно переключать системы и копировать выбранную себе.</div>
           </div>
           <div style="display:flex; gap:8px;">
             <button class="btn" data-action="leader-profile-close">Закрыть</button>
-            <button class="btn primary" data-action="leader-copy-plan" data-user-id="${lb.profile.leader_user_id}">Скопировать режим</button>
+            <button class="btn primary" data-action="leader-copy-plan" data-user-id="${lb.profile.leader_user_id}" data-system-id="${selectedSystemId}">Скопировать систему</button>
           </div>
         </div>
+        ${systemsHtml ? `<div style="display:flex; gap:8px; flex-wrap:wrap; margin: 8px 0;">${systemsHtml}</div>` : ''}
         <div class="leader-profile-days">${daysHtml}</div>
       `;
     }
@@ -3075,18 +3083,23 @@
       }
     }
 
-    async function openLeaderProfile(leaderUserId) {
+    async function openLeaderProfile(leaderUserId, systemId = null) {
       const lb = state.settings.productivity.leaderboard;
       lb.selectedUserId = Number(leaderUserId) || null;
       lb.profileLoading = true;
       lb.profile = null;
       renderLeaderboardSection();
       try {
-        const data = await apiFetch(`/gymapi/leaderboard/productivity/${leaderUserId}/plan`);
+        const params = new URLSearchParams();
+        if (systemId !== null && systemId !== undefined) params.set('system_id', String(systemId));
+        const suffix = params.toString() ? `?${params.toString()}` : '';
+        const data = await apiFetch(`/gymapi/leaderboard/productivity/${leaderUserId}/plan${suffix}`);
         const row = (lb.items || []).find((item) => Number(item.user_id) === Number(leaderUserId));
         lb.profile = {
           leader_user_id: Number(leaderUserId),
           username: row?.username || `athlete_${leaderUserId}`,
+          system_id: data.system_id,
+          systems: data.systems || [],
           days: data.days || [],
         };
       } catch (e) {
@@ -3097,13 +3110,17 @@
       }
     }
 
-    async function copyLeaderPlan(leaderUserId) {
+    async function copyLeaderPlan(leaderUserId, systemId = null) {
       if (!openConfirmModal) return;
       openConfirmModal(async () => {
-        await apiFetch(`/gymapi/leaderboard/productivity/${leaderUserId}/copy`, { method: 'POST', body: JSON.stringify({}) });
-        toast('План лидера скопирован ✅');
+        await apiFetch(`/gymapi/leaderboard/productivity/${leaderUserId}/copy`, {
+          method: 'POST',
+          body: JSON.stringify(systemId ? { system_id: Number(systemId) } : {}),
+        });
+        toast('Система лидера скопирована ✅');
+        await loadSystems();
         await refreshTodayData({ keepDay: true });
-      }, 'Скопировать режим тренировок?', 'Скопируются упражнения и структура тренировочных дней без подходов и весов. Продолжить?');
+      }, 'Скопировать систему тренировок?', 'Скопируется выбранная система с днями и упражнениями. Продолжить?');
     }
 
     async function loadSystems() {
@@ -8483,7 +8500,14 @@
         }
         if (action === 'leader-copy-plan') {
           const userId = Number(target.dataset.userId || 0);
-          if (userId > 0) copyLeaderPlan(userId).catch(console.error);
+          const systemId = Number(target.dataset.systemId || 0) || null;
+          if (userId > 0) copyLeaderPlan(userId, systemId).catch(console.error);
+          return;
+        }
+        if (action === 'leader-system-select') {
+          const userId = Number(target.dataset.userId || 0);
+          const systemId = Number(target.dataset.systemId || 0) || null;
+          if (userId > 0) openLeaderProfile(userId, systemId).catch(console.error);
           return;
         }
       });

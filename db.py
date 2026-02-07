@@ -802,6 +802,7 @@ async def init_db():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id INTEGER,
             user_exercise_id INTEGER,
+            exercise_id INTEGER,
             session_id INTEGER,
             day_index INTEGER,
             distance_km REAL DEFAULT 0,
@@ -977,6 +978,20 @@ async def init_db():
             await db.execute("ALTER TABLE running_entries ADD COLUMN heart_rate INTEGER DEFAULT 0")
         if not await _column_exists(db, "running_entries", "duration_ms"):
             await db.execute("ALTER TABLE running_entries ADD COLUMN duration_ms INTEGER DEFAULT 0")
+        if not await _column_exists(db, "running_entries", "exercise_id"):
+            await db.execute("ALTER TABLE running_entries ADD COLUMN exercise_id INTEGER")
+            await db.execute(
+                """
+                UPDATE running_entries
+                SET exercise_id=(
+                    SELECT ue.exercise_id
+                    FROM user_exercises ue
+                    WHERE ue.id=running_entries.user_exercise_id
+                    LIMIT 1
+                )
+                WHERE exercise_id IS NULL
+                """
+            )
         try:
             await db.execute("ALTER TABLE users ADD COLUMN is_trainer INTEGER NOT NULL DEFAULT 0")
         except Exception:
@@ -3781,14 +3796,20 @@ async def get_running_entry(
         if row or not create:
             return row
         created_at = _now_iso()
+        cur = await db.execute(
+            "SELECT exercise_id FROM user_exercises WHERE id=? LIMIT 1",
+            (user_exercise_id,),
+        )
+        exercise_row = await cur.fetchone()
+        exercise_id = int(exercise_row[0]) if exercise_row and exercise_row[0] is not None else None
         await db.execute(
             """
             INSERT INTO running_entries(
-                user_id, user_exercise_id, session_id, day_index,
+                user_id, user_exercise_id, exercise_id, session_id, day_index,
                 distance_km, duration_sec, duration_ms, calories, heart_rate, is_draft, created_at
-            ) VALUES(?,?,?,?,0,0,0,0,0,1,?)
+            ) VALUES(?,?,?,?,?,0,0,0,0,0,1,?)
             """,
-            (user_id, user_exercise_id, session_id, day_index, created_at),
+            (user_id, user_exercise_id, exercise_id, session_id, day_index, created_at),
         )
         await db.commit()
         cur = await db.execute("SELECT last_insert_rowid()")
@@ -3874,7 +3895,7 @@ async def list_running_history(
         params.append(end_date)
     params.extend([limit, offset])
     where_clause = (
-        "re.user_id=? AND ue.exercise_id=?" if use_exercise else "re.user_id=? AND re.user_exercise_id=?"
+        "re.user_id=? AND re.exercise_id=?" if use_exercise else "re.user_id=? AND re.user_exercise_id=?"
     )
     if start_date:
         where_clause += " AND DATE(re.created_at) >= DATE(?)"
@@ -3885,18 +3906,119 @@ async def list_running_history(
             """
             SELECT re.id, re.distance_km, re.duration_sec, re.duration_ms, re.calories, re.heart_rate, re.created_at, re.day_index
             FROM running_entries re
-            JOIN user_exercises ue ON ue.id=re.user_exercise_id
             WHERE """
             + where_clause
             + """
               AND re.is_draft=0
-              AND ue.user_id=re.user_id
             ORDER BY re.created_at DESC
             LIMIT ? OFFSET ?
             """,
             tuple(params),
         )
         return await cur.fetchall()
+
+
+async def fetch_public_training_systems(user_id: int):
+    async with connect_db() as db:
+        systems_cur = await db.execute(
+            "SELECT id, name, color FROM training_systems WHERE user_id=? ORDER BY id",
+            (user_id,),
+        )
+        systems_rows = await systems_cur.fetchall()
+        if not systems_rows:
+            return []
+        exercise_stats_cur = await db.execute(
+            """
+            SELECT ue.exercise_id,
+                   COALESCE(AVG(per_session.sets_count), 0) AS sets_avg,
+                   COALESCE(AVG(per_session.reps_avg), 0) AS reps_avg,
+                   COALESCE(AVG(per_session.seconds_avg), 0) AS seconds_avg,
+                   COALESCE(AVG(per_session.weight_avg), 0) AS weight_avg
+            FROM (
+                SELECT ue.exercise_id,
+                       s.id AS session_id,
+                       COUNT(st.id) AS sets_count,
+                       AVG(st.reps) AS reps_avg,
+                       AVG(st.seconds) AS seconds_avg,
+                       AVG(st.weight_kg) AS weight_avg
+                FROM sessions s
+                JOIN sets st ON st.session_id=s.id
+                JOIN user_exercises ue ON ue.id=st.user_exercise_id
+                WHERE s.user_id=?
+                GROUP BY ue.exercise_id, s.id
+            ) per_session
+            JOIN user_exercises ue ON ue.exercise_id=per_session.exercise_id AND ue.user_id=?
+            GROUP BY ue.exercise_id
+            """,
+            (user_id, user_id),
+        )
+        stats_rows = await exercise_stats_cur.fetchall()
+        stats_map = {
+            int(r[0]): {
+                "avg_sets": round(float(r[1] or 0), 1),
+                "avg_reps": round(float(r[2] or 0), 1),
+                "avg_seconds": round(float(r[3] or 0), 1),
+                "avg_weight": round(float(r[4] or 0), 1),
+            }
+            for r in stats_rows
+        }
+        result = []
+        for system_id, system_name, color in systems_rows:
+            days_cur = await db.execute(
+                """
+                SELECT day_index, label
+                FROM training_system_days
+                WHERE system_id=? AND is_active=1
+                ORDER BY day_index
+                """,
+                (int(system_id),),
+            )
+            day_rows = await days_cur.fetchall()
+            ex_cur = await db.execute(
+                """
+                SELECT tse.day_index, tse.exercise_id, e.name
+                FROM training_system_exercises tse
+                JOIN exercises e ON e.id=tse.exercise_id
+                WHERE tse.system_id=?
+                ORDER BY tse.day_index, e.name COLLATE NOCASE
+                """,
+                (int(system_id),),
+            )
+            exercises_rows = await ex_cur.fetchall()
+            grouped: dict[int, list[dict]] = {}
+            for day_index, exercise_id, ex_name in exercises_rows:
+                ex_id = int(exercise_id)
+                grouped.setdefault(int(day_index), []).append(
+                    {
+                        "exercise_id": ex_id,
+                        "name": ex_name,
+                        **stats_map.get(
+                            ex_id,
+                            {
+                                "avg_sets": 0.0,
+                                "avg_reps": 0.0,
+                                "avg_seconds": 0.0,
+                                "avg_weight": 0.0,
+                            },
+                        ),
+                    }
+                )
+            result.append(
+                {
+                    "system_id": int(system_id),
+                    "name": (system_name or "").strip() or "Система",
+                    "color": (color or "#2ea6ff").strip() or "#2ea6ff",
+                    "days": [
+                        {
+                            "day_index": int(day_index),
+                            "label": label or f"День {int(day_index)}",
+                            "exercises": grouped.get(int(day_index), []),
+                        }
+                        for day_index, label in day_rows
+                    ],
+                }
+            )
+        return result
 
 
 async def get_running_entry_by_id(entry_id: int) -> tuple | None:
@@ -4543,10 +4665,14 @@ async def fetch_productivity_leaderboard(limit: int = 10, offset: int = 0):
         cur = await db.execute(
             """
             WITH users_base AS (
-                SELECT id, username
-                FROM users
-                WHERE COALESCE(onboarding_completed, 0) = 1
-                  AND COALESCE(leaderboard_visible, 1) = 1
+                SELECT u.id, u.username
+                FROM users u
+                WHERE COALESCE(u.leaderboard_visible, 1) = 1
+                  AND (
+                      EXISTS (SELECT 1 FROM sessions s WHERE s.user_id=u.id)
+                      OR EXISTS (SELECT 1 FROM sets st JOIN sessions s2 ON s2.id=st.session_id WHERE s2.user_id=u.id)
+                      OR EXISTS (SELECT 1 FROM user_exercises ue WHERE ue.user_id=u.id AND COALESCE(ue.is_archived,0)=0)
+                  )
             ),
             recent_sessions AS (
                 SELECT s.user_id,
@@ -4793,3 +4919,50 @@ async def copy_training_plan_from_user(source_user_id: int, target_user_id: int)
                 copied += 1
         await db.commit()
     return {"days": len(day_map), "exercises": copied}
+
+
+async def copy_training_system_from_user(source_user_id: int, target_user_id: int, source_system_id: int | None = None):
+    systems = await fetch_public_training_systems(source_user_id)
+    if not systems:
+        return {"system_id": None, "days": 0, "exercises": 0}
+    selected = None
+    if source_system_id is not None:
+        for item in systems:
+            if int(item.get("system_id") or 0) == int(source_system_id):
+                selected = item
+                break
+    if selected is None:
+        selected = systems[0]
+    name = (selected.get("name") or "Скопированная система").strip() or "Скопированная система"
+    color = (selected.get("color") or "#2ea6ff").strip() or "#2ea6ff"
+    async with connect_db() as db:
+        now = datetime.now(UTC).isoformat()
+        cur = await db.execute(
+            "INSERT INTO training_systems(user_id, name, color, created_at) VALUES(?,?,?,?)",
+            (target_user_id, name, color, now),
+        )
+        new_system_id = int(cur.lastrowid)
+        day_count = 0
+        ex_count = 0
+        for day in selected.get("days") or []:
+            day_index = int(day.get("day_index") or 0)
+            if day_index <= 0:
+                continue
+            day_count += 1
+            label = (day.get("label") or f"День {day_index}").strip() or f"День {day_index}"
+            await db.execute(
+                "INSERT INTO training_system_days(system_id, day_index, label, is_active) VALUES(?,?,?,1)",
+                (new_system_id, day_index, label),
+            )
+            for ex in day.get("exercises") or []:
+                ex_id = int(ex.get("exercise_id") or 0)
+                if ex_id <= 0:
+                    continue
+                await db.execute(
+                    "INSERT OR IGNORE INTO training_system_exercises(system_id, day_index, exercise_id) VALUES(?,?,?)",
+                    (new_system_id, day_index, ex_id),
+                )
+                ex_count += 1
+        await db.commit()
+    await apply_system_to_current_plan(target_user_id, new_system_id)
+    return {"system_id": int(new_system_id), "days": day_count, "exercises": ex_count}
