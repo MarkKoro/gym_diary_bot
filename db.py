@@ -1210,6 +1210,8 @@ async def ensure_default_plan(user_id: int):
 
 async def ensure_training_system_defaults(user_id: int) -> int:
     now = datetime.now(UTC).isoformat()
+    created_new = False
+    needs_sync = False
     async with connect_db() as db:
         cur = await db.execute("SELECT id, active_system_id FROM users WHERE id=?", (user_id,))
         row = await cur.fetchone()
@@ -1225,15 +1227,25 @@ async def ensure_training_system_defaults(user_id: int) -> int:
         existing = await cur.fetchone()
         if existing:
             system_id = int(existing[0])
+            cur = await db.execute("SELECT 1 FROM training_system_days WHERE system_id=? LIMIT 1", (system_id,))
+            if not await cur.fetchone():
+                needs_sync = True
         else:
             cur = await db.execute(
                 "INSERT INTO training_systems(user_id, name, color, created_at) VALUES(?,?,?,?)",
                 (user_id, 'Своя система', '#2ea6ff', now),
             )
             system_id = int(cur.lastrowid)
+            created_new = True
+            needs_sync = True
         await db.execute("UPDATE users SET active_system_id=? WHERE id=?", (system_id, user_id))
         await db.commit()
-        return system_id
+    if needs_sync:
+        await sync_current_plan_to_system(user_id, system_id)
+        await sync_reminders_to_system(user_id, system_id)
+    if created_new:
+        return int(system_id)
+    return int(system_id)
 
 
 async def get_active_training_system_id(user_id: int) -> int:
@@ -3926,7 +3938,15 @@ async def fetch_public_training_systems(user_id: int):
         )
         systems_rows = await systems_cur.fetchall()
         if not systems_rows:
-            return []
+            fallback_plan = await fetch_public_training_plan(user_id)
+            if not fallback_plan:
+                return []
+            return [{
+                "system_id": 0,
+                "name": "Система",
+                "color": "#2ea6ff",
+                "days": fallback_plan,
+            }]
         exercise_stats_cur = await db.execute(
             """
             SELECT ue.exercise_id,
@@ -4939,7 +4959,47 @@ async def copy_training_system_from_user(source_user_id: int, target_user_id: in
         )
         systems = await systems_cur.fetchall()
         if not systems:
-            return {"system_id": None, "days": 0, "exercises": 0}
+            now = datetime.now(UTC).isoformat()
+            fallback_name = (fallback_system_name or "").strip() or "Скопированная система"
+            cur = await db.execute(
+                "INSERT INTO training_systems(user_id, name, color, created_at) VALUES(?,?,?,?)",
+                (target_user_id, fallback_name, "#2ea6ff", now),
+            )
+            new_system_id = int(cur.lastrowid)
+            day_map = await fetch_public_training_plan(source_user_id)
+            ex_count = 0
+            for day in day_map:
+                day_index = int(day.get("day_index") or 0)
+                if day_index <= 0:
+                    continue
+                day_label = (day.get("label") or f"День {day_index}").strip() or f"День {day_index}"
+                await db.execute(
+                    "INSERT INTO training_system_days(system_id, day_index, label, is_active) VALUES(?,?,?,?)",
+                    (new_system_id, day_index, day_label, 1),
+                )
+                for ex in (day.get("exercises") or []):
+                    ex_name = (ex.get("name") or "").strip()
+                    if not ex_name:
+                        continue
+                    ex_cur = await db.execute("SELECT id FROM exercises WHERE LOWER(name)=LOWER(?) LIMIT 1", (ex_name,))
+                    ex_row = await ex_cur.fetchone()
+                    if ex_row:
+                        ex_id = int(ex_row[0])
+                    else:
+                        created_ex = await db.execute("INSERT INTO exercises(name, muscle_group) VALUES(?,?)", (ex_name, "other"))
+                        ex_id = int(created_ex.lastrowid)
+                    await db.execute(
+                        "INSERT OR IGNORE INTO training_system_exercises(system_id, day_index, exercise_id) VALUES(?,?,?)",
+                        (new_system_id, day_index, ex_id),
+                    )
+                    ex_count += 1
+            if ex_count == 0:
+                await db.execute("DELETE FROM training_systems WHERE id=?", (new_system_id,))
+                await db.commit()
+                return {"system_id": None, "days": 0, "exercises": 0}
+            await db.commit()
+            await apply_system_to_current_plan(target_user_id, new_system_id)
+            return {"system_id": int(new_system_id), "days": len(day_map), "exercises": ex_count}
 
         selected = None
         if source_system_id is not None:

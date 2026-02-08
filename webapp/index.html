@@ -90,19 +90,19 @@
     .manage-minus { stroke: #ef4444; stroke-width: 3.6; stroke-linecap: round; }
     .manage-timer-mini {
       position: absolute;
-      top: 2px;
-      right: -8px;
-      width: 26px;
-      height: 26px;
+      top: -2px;
+      right: -4px;
+      width: 18px;
+      height: 18px;
       border-radius: 999px;
-      border: 2px solid color-mix(in srgb, var(--bg) 65%, transparent);
+      border: 1.5px solid color-mix(in srgb, var(--bg) 65%, transparent);
       background: color-mix(in srgb, var(--accent) 55%, var(--card));
       box-shadow: 0 2px 6px rgba(0,0,0,0.24);
       display: grid;
       place-items: center;
       pointer-events: none;
     }
-    .manage-timer-mini svg { width: 15px; height: 15px; stroke-width: 2.2; }
+    .manage-timer-mini svg { width: 10px; height: 10px; stroke-width: 2.2; }
     .manage-menu {
       position: absolute;
       top: 52px;
@@ -1154,6 +1154,7 @@
     .system-select-btn.active { border-color: color-mix(in srgb, var(--accent) 60%, var(--border)); color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, var(--bg)); }
     .system-select-btn.quick { font-size: 13px; padding: 8px 10px; border-radius: 999px; }
     .system-menu { position: absolute; right: 0; bottom: 44px; min-width: 200px; padding: 8px; border-radius: 12px; border: 1px solid var(--border); background: var(--card); box-shadow: var(--shadow); display: none; z-index: 5; }
+    .system-menu.open-down { top: 44px; bottom: auto; }
     .system-menu.open { display: grid; gap: 6px; }
     .system-menu button, .system-menu label { width: 100%; border: none; background: var(--bg); border-radius: 10px; padding: 9px 10px; text-align: left; font-weight: 700; color: var(--text); cursor: pointer; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
     .system-menu label input[type="color"] { width: 34px; height: 24px; border: none; background: transparent; padding: 0; }
@@ -1436,7 +1437,11 @@
         border: 1px solid rgba(255,255,255,0.12);
         background: rgba(20,25,35,0.90);
         box-shadow: 0 16px 45px rgba(0,0,0,0.40);
+        touch-action: none;
+        -webkit-user-select: none;
+        user-select: none;
       }
+      body.timer-pill-dragging { overflow: hidden; overscroll-behavior: none; }
       [data-theme="light"] .timer-pill { color: #fff; }
 
       .timer-pill.show{ display:flex; }
@@ -3391,9 +3396,26 @@
       const id = Number(target.dataset.systemId || 0);
       if (action === 'system-menu-toggle' && id > 0) {
         document.querySelectorAll('.system-menu.open').forEach((menu) => {
-          if (menu.id !== `system-menu-${id}`) menu.classList.remove('open');
+          if (menu.id !== `system-menu-${id}`) {
+            menu.classList.remove('open');
+            menu.classList.remove('open-down');
+          }
         });
-        document.getElementById(`system-menu-${id}`)?.classList.toggle('open');
+        const menuEl = document.getElementById(`system-menu-${id}`);
+        if (!menuEl) return;
+        const isOpening = !menuEl.classList.contains('open');
+        menuEl.classList.toggle('open');
+        menuEl.classList.remove('open-down');
+        if (isOpening) {
+          const triggerRect = target.getBoundingClientRect();
+          const viewportH = window.innerHeight || document.documentElement.clientHeight || 0;
+          const menuHeight = Math.max(menuEl.offsetHeight || 0, 220);
+          const roomAbove = triggerRect.top;
+          const roomBelow = viewportH - triggerRect.bottom;
+          if (roomBelow >= menuHeight || roomBelow >= roomAbove) {
+            menuEl.classList.add('open-down');
+          }
+        }
         return;
       }
       if (action === 'system-select' && id > 0) {
@@ -3772,10 +3794,12 @@
 
       pill.addEventListener('pointerdown', (e) => {
         if (e.button !== undefined && e.button !== 0) return;
+        e.preventDefault();
         timerState.drag.active = true;
         timerState.drag.pointerId = e.pointerId;
         timerState.drag.startX = e.clientX;
         timerState.drag.startY = e.clientY;
+        document.body.classList.add('timer-pill-dragging');
         const rect = pill.getBoundingClientRect();
         const initialX = Number.isFinite(timerState.position?.x) ? timerState.position.x : rect.left;
         const initialY = Number.isFinite(timerState.position?.y) ? timerState.position.y : rect.top;
@@ -3790,6 +3814,7 @@
       pill.addEventListener('pointermove', (e) => {
         if (!timerState.drag.active) return;
         if (timerState.drag.pointerId !== null && e.pointerId !== timerState.drag.pointerId) return;
+        e.preventDefault();
         const dx = e.clientX - timerState.drag.startX;
         const dy = e.clientY - timerState.drag.startY;
         if (!timerState.drag.moved && (Math.abs(dx) > 4 || Math.abs(dy) > 4)) timerState.drag.moved = true;
@@ -3804,6 +3829,7 @@
         if (timerState.drag.pointerId !== null && e.pointerId !== timerState.drag.pointerId) return;
         timerState.drag.active = false;
         timerState.drag.pointerId = null;
+        document.body.classList.remove('timer-pill-dragging');
         if (pill.releasePointerCapture) {
           try { pill.releasePointerCapture(e.pointerId); } catch (_) {}
         }
@@ -7409,6 +7435,14 @@
 
     async function handleExerciseDone(ueId) {
       if (!state.dayIndex) return;
+      const exercise = state.exercises.get(ueId);
+      if (exercise && !isRunningExercise(exercise) && (exercise.sets?.length || 0) === 0) {
+        const draft = ensureDraft(ueId);
+        const hasDraftData = Number(draft.weight_kg || 0) > 0 || Number(draft.reps || 0) > 0 || Number(draft.seconds || 0) > 0;
+        if (hasDraftData) {
+          await queueExerciseAction(ueId, () => addSet(ueId, { payload: { ...draft }, selectLast: false, toastOnSave: false }));
+        }
+      }
       const previousDone = state.workout.doneIds instanceof Set ? new Set(state.workout.doneIds) : new Set();
       const doneIds = new Set(previousDone);
       state.workout.doneIds = doneIds;
