@@ -744,6 +744,14 @@ async def init_db():
             PRIMARY KEY(user_id, system_id, day_index)
         );
 
+        CREATE TABLE IF NOT EXISTS day_completion_history(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            system_id INTEGER NOT NULL DEFAULT 0,
+            day_index INTEGER NOT NULL,
+            completed_at TEXT NOT NULL
+        );
+
         CREATE TABLE IF NOT EXISTS session_exercises(
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             session_id INTEGER,
@@ -1755,6 +1763,7 @@ async def set_workouts_per_week(user_id: int, n: int) -> list[tuple[int, int, in
         inactive. Each entry contains ``(day_no, dow, hour, minute)``.
     """
 
+    active_system_id = await get_active_training_system_id(user_id)
     async with connect_db() as db:
         await db.execute("UPDATE users SET workouts_per_week=? WHERE id=?", (n, user_id))
         removed_days: list[int] = []
@@ -1788,7 +1797,6 @@ async def set_workouts_per_week(user_id: int, n: int) -> list[tuple[int, int, in
                 f"DELETE FROM exercise_baseline WHERE user_id=? AND day_index IN ({placeholders})",
                 (user_id, *day_params),
             )
-            active_system_id = await get_active_training_system_id(user_id)
             await db.execute(
                 f"DELETE FROM day_completions WHERE user_id=? AND system_id=? AND day_index IN ({placeholders})",
                 (user_id, int(active_system_id), *day_params),
@@ -3011,11 +3019,19 @@ async def mark_day_completed(user_id: int, day_index: int, completed_at: str, sy
     resolved_system_id = 0 if system_id is None else int(system_id)
     async with connect_db() as db:
         await db.execute(
-            "DELETE FROM day_completions WHERE user_id=? AND system_id=? AND day_index<>?",
-            (user_id, resolved_system_id, day_index),
+            """
+            INSERT INTO day_completion_history(user_id, system_id, day_index, completed_at)
+            VALUES(?,?,?,?)
+            """,
+            (user_id, resolved_system_id, day_index, completed_at),
         )
         await db.execute(
-            "REPLACE INTO day_completions(user_id, system_id, day_index, completed_at) VALUES(?,?,?,?)",
+            """
+            INSERT INTO day_completions(user_id, system_id, day_index, completed_at)
+            VALUES(?,?,?,?)
+            ON CONFLICT(user_id, system_id, day_index)
+            DO UPDATE SET completed_at=excluded.completed_at
+            """,
             (user_id, resolved_system_id, day_index, completed_at),
         )
         await db.commit()
