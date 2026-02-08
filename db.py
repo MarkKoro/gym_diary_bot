@@ -2960,6 +2960,37 @@ async def get_day_completion(user_id: int, day_index: int, system_id: int | None
         return row[0] if row and row[0] else None
 
 
+async def get_day_completion_volume_kg(
+    user_id: int,
+    day_index: int,
+    system_id: int | None = None,
+    completed_at: str | None = None,
+) -> int:
+    resolved_system_id = 0 if system_id is None else int(system_id)
+    resolved_completed_at = completed_at or await get_day_completion(user_id, day_index, resolved_system_id)
+    if not resolved_completed_at:
+        return 0
+    try:
+        completed_date = datetime.fromisoformat(str(resolved_completed_at)).date().isoformat()
+    except Exception:
+        completed_date = str(resolved_completed_at)[:10]
+    async with connect_db() as db:
+        cur = await db.execute(
+            """
+            SELECT COALESCE(SUM(MAX(st.reps, 0) * MAX(st.weight_kg, 0)), 0)
+            FROM sessions s
+            LEFT JOIN sets st ON st.session_id=s.id
+            WHERE s.user_id=?
+              AND s.day_index=?
+              AND s.system_id=?
+              AND s.date=?
+            """,
+            (int(user_id), int(day_index), int(resolved_system_id), completed_date),
+        )
+        row = await cur.fetchone()
+    return int(round(float(row[0] or 0)))
+
+
 async def get_last_completion_for_user(user_id: int, system_id: int | None = None):
     resolved_system_id = 0 if system_id is None else int(system_id)
     async with connect_db() as db:

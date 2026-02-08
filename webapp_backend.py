@@ -780,6 +780,12 @@ async def day_sheet(
     completed_days = await get_active_day_completions(user_id)
     active_system_id = await get_active_training_system_id(user_id)
     last_completed_at = await db.get_day_completion(user_id, day_index, active_system_id)
+    last_completed_volume_kg = await db.get_day_completion_volume_kg(
+        user_id,
+        day_index,
+        active_system_id,
+        completed_at=last_completed_at,
+    )
     target_date = _parse_date_param(date)
     iso_date = _iso_date(target_date)
     session_id = await db.get_or_create_today_session(user_id, iso_date, day_index, active_system_id)
@@ -839,6 +845,7 @@ async def day_sheet(
         "is_completed": day_index in completed_days,
         "completed_days": sorted(int(d) for d in completed_days),
         "last_completed_at": last_completed_at,
+        "last_completed_volume_kg": int(last_completed_volume_kg or 0),
     }
 
 
@@ -977,11 +984,19 @@ async def complete_day(
     active_system_id = await get_active_training_system_id(user_id)
     await mark_day_completed(user_id, day_index, completed_at, active_system_id)
     completed = await get_active_day_completions(user_id)
+    last_completed_at = await db.get_day_completion(user_id, day_index, active_system_id)
+    last_completed_volume_kg = await db.get_day_completion_volume_kg(
+        user_id,
+        day_index,
+        active_system_id,
+        completed_at=last_completed_at,
+    )
     return {
         "ok": True,
         "day_index": day_index,
         "completed_days": sorted(int(d) for d in completed),
-        "last_completed_at": await db.get_day_completion(user_id, day_index, active_system_id),
+        "last_completed_at": last_completed_at,
+        "last_completed_volume_kg": int(last_completed_volume_kg or 0),
     }
 
 
@@ -1215,6 +1230,12 @@ async def complete_running_state(
         completed_days = await get_active_day_completions(user_id)
         day_completed = True
     last_completed_at = await db.get_day_completion(user_id, day_index, active_system_id)
+    last_completed_volume_kg = await db.get_day_completion_volume_kg(
+        user_id,
+        day_index,
+        active_system_id,
+        completed_at=last_completed_at,
+    )
     state = await _build_running_state(user_id, day_index, ue_id, target_date, history_limit=30)
     return {
         "ok": True,
@@ -1222,6 +1243,7 @@ async def complete_running_state(
         "day_completed": day_completed,
         "completed_days": sorted(int(d) for d in completed_days),
         "last_completed_at": last_completed_at,
+        "last_completed_volume_kg": int(last_completed_volume_kg or 0),
     }
 
 
@@ -1276,12 +1298,19 @@ async def mark_exercise_done_fast(
         day_completed = True
 
     last_completed_at = await db.get_day_completion(user_id, day_index, active_system_id)
+    last_completed_volume_kg = await db.get_day_completion_volume_kg(
+        user_id,
+        day_index,
+        active_system_id,
+        completed_at=last_completed_at,
+    )
     return {
         "ok": True,
         "user_exercise_id": user_exercise_id,
         "day_completed": day_completed,
         "completed_days": sorted(int(d) for d in completed_days),
         "last_completed_at": last_completed_at,
+        "last_completed_volume_kg": int(last_completed_volume_kg or 0),
     }
 
 

@@ -2404,6 +2404,7 @@
       daySubtitle: '',
       lastCompletedAt: null,
       lastCompletedLabel: '',
+      lastCompletedVolumeKg: 0,
       showLastCompleted: true,
       activeDays: [],
       completedDays: new Set(),
@@ -7583,6 +7584,7 @@
         renderDayOptions(state.dayIndex);
         renderDayHeader();
         updateFinishButton();
+        if (Number.isFinite(Number(data?.last_completed_volume_kg))) state.lastCompletedVolumeKg = Number(data.last_completed_volume_kg) || 0;
         if (data?.last_completed_at) updateLastCompleted(data.last_completed_at);
         if (data?.day_completed) toast('День отмечен завершённым ✅');
       } catch (e) {
@@ -7795,6 +7797,26 @@
       }
       info.append(titleWrap, meta);
       header.appendChild(info);
+
+      if (!isDeleteMode && hasExerciseSourceMeta(exercise)) {
+        const sourceWrap = document.createElement('div');
+        sourceWrap.className = 'source-meta-wrap';
+        const sourceBtn = document.createElement('button');
+        sourceBtn.type = 'button';
+        sourceBtn.className = 'source-meta-btn';
+        sourceBtn.title = 'Данные источника';
+        sourceBtn.textContent = '👻';
+        const sourcePop = document.createElement('div');
+        sourcePop.className = 'source-meta-pop';
+        sourcePop.innerHTML = buildSourceMetaContent(exercise);
+        sourceBtn.addEventListener('click', (ev) => {
+          ev.preventDefault();
+          ev.stopPropagation();
+          toggleSourceMetaPopover(exercise.user_exercise_id, sourceBtn, sourcePop);
+        });
+        sourceWrap.append(sourceBtn, sourcePop);
+        header.appendChild(sourceWrap);
+      }
       if (isDeleteMode) {
         const delBtn = document.createElement('button');
         delBtn.type = 'button';
@@ -8107,6 +8129,7 @@
         renderDayOptions(state.dayIndex);
         renderDayHeader();
         updateFinishButton();
+        if (Number.isFinite(Number(data?.last_completed_volume_kg))) state.lastCompletedVolumeKg = Number(data.last_completed_volume_kg) || 0;
         if (data?.last_completed_at) updateLastCompleted(data.last_completed_at);
         closeFinishPopover();
         triggerHaptic();
@@ -8149,6 +8172,7 @@
         state.daySubtitle = active?.subtitle || (dayIndex ? `День ${dayIndex}` : '');
         state.date = sheet.date;
         state.dateIso = toIsoDate(sheet.date);
+        state.lastCompletedVolumeKg = Number(sheet.last_completed_volume_kg || 0) || 0;
         updateLastCompleted(sheet.last_completed_at || null);
         state.workout.order = (sheet.exercises || []).map((ex) => ex.user_exercise_id);
         const doneIdsFromServer = new Set();
@@ -8714,7 +8738,7 @@
         if (lastLabel) lastLabel.textContent = text;
         if (lastTotal) {
           if (completed && text) {
-            const total = getTotalVolumeTodayKg();
+            const total = Number(state.lastCompletedVolumeKg || 0);
             const formatted = Number.isFinite(total) ? total.toLocaleString('ru-RU') : '0';
             lastTotal.textContent = `${formatted} кг`;
             lastTotal.style.display = '';
