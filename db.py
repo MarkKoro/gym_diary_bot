@@ -4922,47 +4922,201 @@ async def copy_training_plan_from_user(source_user_id: int, target_user_id: int)
 
 
 async def copy_training_system_from_user(source_user_id: int, target_user_id: int, source_system_id: int | None = None):
-    systems = await fetch_public_training_systems(source_user_id)
-    if not systems:
-        return {"system_id": None, "days": 0, "exercises": 0}
-    selected = None
-    if source_system_id is not None:
-        for item in systems:
-            if int(item.get("system_id") or 0) == int(source_system_id):
-                selected = item
-                break
-    if selected is None:
-        selected = systems[0]
-    name = (selected.get("name") or "Скопированная система").strip() or "Скопированная система"
-    color = (selected.get("color") or "#2ea6ff").strip() or "#2ea6ff"
+    def _custom_group_id(group_code: str | None) -> int | None:
+        raw = (group_code or "").strip().lower()
+        if not raw.startswith("u"):
+            return None
+        try:
+            value = int(raw[1:])
+        except ValueError:
+            return None
+        return value if value > 0 else None
+
     async with connect_db() as db:
+        systems_cur = await db.execute(
+            "SELECT id, name, color FROM training_systems WHERE user_id=? ORDER BY id",
+            (source_user_id,),
+        )
+        systems = await systems_cur.fetchall()
+        if not systems:
+            return {"system_id": None, "days": 0, "exercises": 0}
+
+        selected = None
+        if source_system_id is not None:
+            for row in systems:
+                if int(row[0]) == int(source_system_id):
+                    selected = row
+                    break
+        if selected is None:
+            selected = systems[0]
+
+        selected_system_id = int(selected[0])
+        name = (selected[1] or "Скопированная система").strip() or "Скопированная система"
+        color = (selected[2] or "#2ea6ff").strip() or "#2ea6ff"
+
+        days_cur = await db.execute(
+            """
+            SELECT day_index, label, is_active
+            FROM training_system_days
+            WHERE system_id=?
+            ORDER BY day_index
+            """,
+            (selected_system_id,),
+        )
+        source_days = await days_cur.fetchall()
+
+        reminders_cur = await db.execute(
+            """
+            SELECT day_no, dow, hour, minute
+            FROM training_system_reminders
+            WHERE system_id=?
+            ORDER BY day_no
+            """,
+            (selected_system_id,),
+        )
+        source_reminders = await reminders_cur.fetchall()
+
+        ex_cur = await db.execute(
+            """
+            SELECT tse.day_index, e.name, e.muscle_group
+            FROM training_system_exercises tse
+            JOIN exercises e ON e.id=tse.exercise_id
+            WHERE tse.system_id=?
+            ORDER BY tse.day_index, e.name COLLATE NOCASE
+            """,
+            (selected_system_id,),
+        )
+        source_exercises = await ex_cur.fetchall()
+
         now = datetime.now(UTC).isoformat()
         cur = await db.execute(
             "INSERT INTO training_systems(user_id, name, color, created_at) VALUES(?,?,?,?)",
             (target_user_id, name, color, now),
         )
         new_system_id = int(cur.lastrowid)
+
+        custom_groups_cache: dict[str, str] = {}
+
+        async def ensure_target_custom_group(group_code: str | None) -> str:
+            code = (group_code or "").strip().lower()
+            cached = custom_groups_cache.get(code)
+            if cached:
+                return cached
+            src_group_id = _custom_group_id(code)
+            if src_group_id is None:
+                custom_groups_cache[code] = code
+                return code
+            src_group_cur = await db.execute(
+                "SELECT name FROM user_muscle_groups WHERE id=? AND user_id=?",
+                (src_group_id, source_user_id),
+            )
+            src_group_row = await src_group_cur.fetchone()
+            if not src_group_row:
+                custom_groups_cache[code] = code
+                return code
+            group_name = (src_group_row[0] or "").strip()
+            if not group_name:
+                custom_groups_cache[code] = code
+                return code
+            trg_group_cur = await db.execute(
+                "SELECT id FROM user_muscle_groups WHERE user_id=? AND LOWER(name)=LOWER(?)",
+                (target_user_id, group_name),
+            )
+            trg_group_row = await trg_group_cur.fetchone()
+            if trg_group_row:
+                target_code = f"u{int(trg_group_row[0])}"
+                custom_groups_cache[code] = target_code
+                return target_code
+            insert_group = await db.execute(
+                "INSERT INTO user_muscle_groups(user_id, name) VALUES(?,?)",
+                (target_user_id, group_name),
+            )
+            target_code = f"u{int(insert_group.lastrowid)}"
+            custom_groups_cache[code] = target_code
+            return target_code
+
+        exercise_cache: dict[tuple[str, str], int] = {}
+
+        async def ensure_target_exercise(ex_name: str, muscle_group: str | None) -> int:
+            normalized_name = (ex_name or "").strip()
+            normalized_group = (muscle_group or "other").strip().lower() or "other"
+            key = (normalized_name.casefold(), normalized_group)
+            cached = exercise_cache.get(key)
+            if cached:
+                return int(cached)
+            cur_find = await db.execute(
+                "SELECT id FROM exercises WHERE LOWER(name)=LOWER(?) AND COALESCE(muscle_group,'')=? LIMIT 1",
+                (normalized_name, normalized_group),
+            )
+            row_find = await cur_find.fetchone()
+            if row_find:
+                ex_id = int(row_find[0])
+                exercise_cache[key] = ex_id
+                return ex_id
+            cur_new = await db.execute(
+                "INSERT INTO exercises(name, muscle_group) VALUES(?, ?)",
+                (normalized_name, normalized_group),
+            )
+            ex_id = int(cur_new.lastrowid)
+            exercise_cache[key] = ex_id
+            return ex_id
+
         day_count = 0
-        ex_count = 0
-        for day in selected.get("days") or []:
-            day_index = int(day.get("day_index") or 0)
+        for day_index, label, is_active in source_days:
+            day_index = int(day_index or 0)
             if day_index <= 0:
                 continue
             day_count += 1
-            label = (day.get("label") or f"День {day_index}").strip() or f"День {day_index}"
+            day_label = (label or f"День {day_index}").strip() or f"День {day_index}"
             await db.execute(
-                "INSERT INTO training_system_days(system_id, day_index, label, is_active) VALUES(?,?,?,1)",
-                (new_system_id, day_index, label),
+                "INSERT INTO training_system_days(system_id, day_index, label, is_active) VALUES(?,?,?,?)",
+                (new_system_id, day_index, day_label, int(is_active or 0)),
             )
-            for ex in day.get("exercises") or []:
-                ex_id = int(ex.get("exercise_id") or 0)
-                if ex_id <= 0:
-                    continue
+
+        ex_count = 0
+        copied_exercise_ids: set[int] = set()
+        for day_index, ex_name, muscle_group in source_exercises:
+            day_no = int(day_index or 0)
+            if day_no <= 0:
+                continue
+            name_raw = (ex_name or "").strip()
+            if not name_raw:
+                continue
+            target_group = await ensure_target_custom_group(muscle_group)
+            exercise_id = await ensure_target_exercise(name_raw, target_group)
+            await db.execute(
+                "INSERT OR IGNORE INTO training_system_exercises(system_id, day_index, exercise_id) VALUES(?,?,?)",
+                (new_system_id, day_no, exercise_id),
+            )
+            ex_count += 1
+            copied_exercise_ids.add(exercise_id)
+
+        for day_no, dow, hour, minute in source_reminders:
+            if int(day_no or 0) <= 0:
+                continue
+            await db.execute(
+                "INSERT OR REPLACE INTO training_system_reminders(system_id, day_no, dow, hour, minute) VALUES(?,?,?,?,?)",
+                (new_system_id, int(day_no), int(dow), int(hour), int(minute)),
+            )
+
+        for ex_id in copied_exercise_ids:
+            await db.execute(
+                """
+                INSERT INTO user_exercises(user_id, exercise_id, day_index, is_archived)
+                VALUES(?,?,0,0)
+                ON CONFLICT(user_id, exercise_id, day_index)
+                DO UPDATE SET is_archived=0
+                """,
+                (target_user_id, int(ex_id)),
+            )
+
+        if not day_count:
+            for day_index in range(1, 8):
                 await db.execute(
-                    "INSERT OR IGNORE INTO training_system_exercises(system_id, day_index, exercise_id) VALUES(?,?,?)",
-                    (new_system_id, day_index, ex_id),
+                    "INSERT INTO training_system_days(system_id, day_index, label, is_active) VALUES(?,?,?,?)",
+                    (new_system_id, day_index, f"День {day_index}", 1 if day_index <= 3 else 0),
                 )
-                ex_count += 1
+
         await db.commit()
     await apply_system_to_current_plan(target_user_id, new_system_id)
     return {"system_id": int(new_system_id), "days": day_count, "exercises": ex_count}

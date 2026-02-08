@@ -1210,27 +1210,77 @@
         radial-gradient(circle at 0% 100%, color-mix(in srgb, var(--system-tint-color, transparent) 78%, transparent) 0 13%, transparent 26%),
         radial-gradient(circle at 100% 100%, color-mix(in srgb, var(--system-tint-color, transparent) 78%, transparent) 0 13%, transparent 26%);
     }
+    .training-tint.mode-left-top .training-tint-corners {
+      display: block;
+      inset: 0;
+      background-image:
+        radial-gradient(circle at 0% 0%, color-mix(in srgb, var(--system-tint-color, transparent) 88%, transparent) 0 22%, transparent 54%),
+        linear-gradient(145deg, color-mix(in srgb, var(--system-tint-color, transparent) 44%, transparent) 0 30%, transparent 66%);
+    }
+    .training-tint.mode-right-top .training-tint-corners {
+      display: block;
+      inset: 0;
+      background-image:
+        radial-gradient(circle at 100% 0%, color-mix(in srgb, var(--system-tint-color, transparent) 88%, transparent) 0 22%, transparent 54%),
+        linear-gradient(-145deg, color-mix(in srgb, var(--system-tint-color, transparent) 44%, transparent) 0 30%, transparent 66%);
+    }
+    .training-tint.mode-diagonal .training-tint-corners {
+      display: block;
+      inset: 0;
+      background-image: linear-gradient(135deg,
+        color-mix(in srgb, var(--system-tint-color, transparent) 62%, transparent) 0%,
+        color-mix(in srgb, var(--system-tint-color, transparent) 38%, transparent) 22%,
+        transparent 58%,
+        color-mix(in srgb, var(--system-tint-color, transparent) 42%, transparent) 100%);
+    }
+    .training-tint.mode-spotlight .training-tint-corners {
+      display: block;
+      inset: 0;
+      background-image:
+        radial-gradient(circle at 50% 52%, color-mix(in srgb, var(--system-tint-color, transparent) 68%, transparent) 0 14%, transparent 36%),
+        radial-gradient(circle at 20% 80%, color-mix(in srgb, var(--system-tint-color, transparent) 34%, transparent) 0 11%, transparent 32%),
+        radial-gradient(circle at 80% 20%, color-mix(in srgb, var(--system-tint-color, transparent) 34%, transparent) 0 11%, transparent 32%);
+    }
     .training-tint.mode-frame {
       box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--system-tint-color, transparent) 46%, transparent);
     }
     .training-tint.mode-top-bottom::before,
     .training-tint.mode-top-bottom::after,
     .training-tint.mode-corners::before,
-    .training-tint.mode-corners::after { display: none; }
+    .training-tint.mode-corners::after,
+    .training-tint.mode-left-top::before,
+    .training-tint.mode-left-top::after,
+    .training-tint.mode-right-top::before,
+    .training-tint.mode-right-top::after,
+    .training-tint.mode-diagonal::before,
+    .training-tint.mode-diagonal::after,
+    .training-tint.mode-spotlight::before,
+    .training-tint.mode-spotlight::after { display: none; }
     .training-tint-glyph {
       position: absolute;
       left: 50%;
       bottom: 30%;
       transform: translateX(-50%);
       font-weight: 900;
-      font-size: clamp(54px, 16vw, 130px);
+      font-size: clamp(84px, 24vw, 190px);
       line-height: 1;
       letter-spacing: 0.04em;
       color: color-mix(in srgb, var(--system-tint-color, transparent) 70%, transparent);
       text-shadow: 0 8px 24px color-mix(in srgb, var(--system-tint-color, transparent) 38%, transparent);
       display: none;
     }
+    .training-tint-immersion {
+      position: absolute;
+      inset: 0;
+      display: none;
+      background:
+        radial-gradient(circle at 50% 64%, color-mix(in srgb, var(--system-tint-color, transparent) 38%, transparent) 0 7%, transparent 16%),
+        repeating-conic-gradient(from 200deg at 50% 64%, color-mix(in srgb, var(--system-tint-color, transparent) 16%, transparent) 0deg 2.4deg, transparent 2.4deg 11deg);
+      mask: radial-gradient(circle at 50% 64%, black 0 38%, transparent 80%);
+      opacity: 0.85;
+    }
     .training-tint.show-p .training-tint-glyph { display: block; }
+    .training-tint.show-immersion .training-tint-immersion { display: block; }
     .tint-hub { display: grid; gap: 10px; }
     .tint-modes { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 8px; }
     .tint-mode {
@@ -1276,6 +1326,33 @@
         radial-gradient(circle at 0% 100%, color-mix(in srgb, var(--accent) 48%, transparent) 0 10%, transparent 22%),
         radial-gradient(circle at 100% 100%, color-mix(in srgb, var(--accent) 48%, transparent) 0 10%, transparent 22%);
     }
+    .tint-preview[data-mode="left-top"]::before {
+      inset: 0;
+      background:
+        radial-gradient(circle at 0% 0%, color-mix(in srgb, var(--accent) 58%, transparent) 0 18%, transparent 46%),
+        linear-gradient(145deg, color-mix(in srgb, var(--accent) 32%, transparent) 0 32%, transparent 66%);
+    }
+    .tint-preview[data-mode="right-top"]::before {
+      inset: 0;
+      background:
+        radial-gradient(circle at 100% 0%, color-mix(in srgb, var(--accent) 58%, transparent) 0 18%, transparent 46%),
+        linear-gradient(-145deg, color-mix(in srgb, var(--accent) 32%, transparent) 0 32%, transparent 66%);
+    }
+    .tint-preview[data-mode="diagonal"]::before {
+      inset: 0;
+      background: linear-gradient(135deg,
+        color-mix(in srgb, var(--accent) 44%, transparent) 0%,
+        color-mix(in srgb, var(--accent) 25%, transparent) 24%,
+        transparent 56%,
+        color-mix(in srgb, var(--accent) 32%, transparent) 100%);
+    }
+    .tint-preview[data-mode="spotlight"]::before {
+      inset: 0;
+      background:
+        radial-gradient(circle at 50% 50%, color-mix(in srgb, var(--accent) 54%, transparent) 0 18%, transparent 48%),
+        radial-gradient(circle at 24% 78%, color-mix(in srgb, var(--accent) 22%, transparent) 0 14%, transparent 40%),
+        radial-gradient(circle at 76% 22%, color-mix(in srgb, var(--accent) 22%, transparent) 0 14%, transparent 40%);
+    }
     .tint-preview-p {
       position: absolute;
       left: 50%;
@@ -1287,6 +1364,16 @@
       display: none;
     }
     .tint-preview.show-p .tint-preview-p { display: block; }
+    .tint-preview-immersion {
+      position: absolute;
+      inset: 0;
+      display: none;
+      background:
+        radial-gradient(circle at 50% 62%, color-mix(in srgb, var(--accent) 36%, transparent) 0 8%, transparent 20%),
+        repeating-conic-gradient(from 200deg at 50% 62%, color-mix(in srgb, var(--accent) 22%, transparent) 0deg 4deg, transparent 4deg 12deg);
+      mask: radial-gradient(circle at 50% 62%, black 0 34%, transparent 68%);
+    }
+    .tint-preview.show-immersion .tint-preview-immersion { display: block; }
     .toggle-icon { min-width: 92px; }
     body.route-today .training-tint.show { opacity: 1; }
 
@@ -1727,6 +1814,7 @@
       <div class="training-tint-layer training-tint-top"></div>
       <div class="training-tint-layer training-tint-bottom"></div>
       <div class="training-tint-layer training-tint-corners"></div>
+      <div class="training-tint-immersion"></div>
       <div class="training-tint-glyph">P</div>
     </div>
     <header class="app-header">
@@ -1894,7 +1982,7 @@
       <div class="modal-text" id="confirmText">Отметим день как завершённый. Можно продолжать редактировать сеты позже.</div>
       <div class="modal-actions">
         <button id="cancelConfirm" class="btn">Отмена</button>
-        <button id="confirmAction" class="btn primary">Завершить</button>
+        <button id="confirmAction" class="btn primary">Скопировать</button>
       </div>
     </div>
   </div>
@@ -2300,9 +2388,10 @@
         ui: {
           showTimerButton: true,
           showProductivityButton: true,
-          tintEnabled: true,
+          tintEnabled: false,
           tintMode: 'sides',
           tintGlyphEnabled: false,
+          tintImmersionEnabled: false,
         },
         productivity: {
           score: 0,
@@ -2781,7 +2870,7 @@
     };
 
     const PRODUCTIVITY_STORAGE_KEY = 'gd_productivity_ui_v2';
-    const TINT_MODES = ['sides', 'top-bottom', 'frame', 'corners'];
+    const TINT_MODES = ['sides', 'top-bottom', 'frame', 'corners', 'left-top', 'right-top', 'diagonal', 'spotlight'];
 
     function clamp01(value) {
       const num = Number(value) || 0;
@@ -2796,8 +2885,9 @@
         if (parsed && typeof parsed === 'object') {
           state.settings.ui.showTimerButton = parsed.showTimerButton !== false;
           state.settings.ui.showProductivityButton = parsed.showProductivityButton !== false;
-          state.settings.ui.tintEnabled = parsed.tintEnabled !== false;
+          state.settings.ui.tintEnabled = parsed.tintEnabled === true;
           state.settings.ui.tintGlyphEnabled = parsed.tintGlyphEnabled === true;
+          state.settings.ui.tintImmersionEnabled = parsed.tintImmersionEnabled === true;
           state.settings.ui.tintMode = TINT_MODES.includes(parsed.tintMode) ? parsed.tintMode : 'sides';
         }
       } catch (e) {
@@ -3120,7 +3210,7 @@
         toast('Система лидера скопирована ✅');
         await loadSystems();
         await refreshTodayData({ keepDay: true });
-      }, 'Скопировать систему тренировок?', 'Скопируется выбранная система с днями и упражнениями. Продолжить?');
+      }, 'Скопировать систему тренировок?', 'Скопируется выбранная система с днями и упражнениями. Продолжить?', 'Скопировать');
     }
 
     async function loadSystems() {
@@ -3149,8 +3239,9 @@
       const active = (state.settings.systems.items || []).find((s) => Number(s.id) === Number(state.settings.systems.activeSystemId));
       const ui = state.settings.ui || {};
       const mode = TINT_MODES.includes(ui.tintMode) ? ui.tintMode : 'sides';
-      tint.classList.remove('mode-sides', 'mode-top-bottom', 'mode-frame', 'mode-corners');
+      tint.classList.remove('mode-sides', 'mode-top-bottom', 'mode-frame', 'mode-corners', 'mode-left-top', 'mode-right-top', 'mode-diagonal', 'mode-spotlight');
       tint.classList.remove('show-p');
+      tint.classList.remove('show-immersion');
       if (!active || !active.color || ui.tintEnabled === false) {
         tint.classList.remove('show');
         tint.style.background = 'transparent';
@@ -3160,6 +3251,7 @@
       tint.style.setProperty('--system-tint-color', `color-mix(in srgb, ${active.color} 48%, transparent)`);
       tint.classList.add('show', `mode-${mode}`);
       if (ui.tintGlyphEnabled) tint.classList.add('show-p');
+      if (ui.tintGlyphEnabled && ui.tintImmersionEnabled) tint.classList.add('show-immersion');
     }
 
     function renderSystemsHub() {
@@ -4670,6 +4762,15 @@
                 </div>
                 <button class="btn small-btn toggle-icon" data-action="toggle-tint-glyph">${ui.tintGlyphEnabled ? '🟢 Включено' : '⚪ Выключено'}</button>
               </div>
+              ${ui.tintGlyphEnabled ? `
+                <div class="settings-row settings-panel inline">
+                  <div>
+                    <div class="label">P-огружение</div>
+                    <div class="hint">Добавляет паутинные лучи от буквы P для более объёмного эффекта.</div>
+                  </div>
+                  <button class="btn small-btn toggle-icon" data-action="toggle-tint-immersion">${ui.tintImmersionEnabled ? '🟢 Включено' : '⚪ Выключено'}</button>
+                </div>
+              ` : ''}
               <div class="settings-row settings-panel tint-hub">
                 <div>
                   <div class="label">Режим цветовой гаммы</div>
@@ -4681,9 +4782,13 @@
                     { id: 'top-bottom', title: 'Сверху/снизу' },
                     { id: 'frame', title: 'Полная рамка' },
                     { id: 'corners', title: 'Углы' },
+                    { id: 'left-top', title: 'Левый верх' },
+                    { id: 'right-top', title: 'Правый верх' },
+                    { id: 'diagonal', title: 'Диагональ' },
+                    { id: 'spotlight', title: 'Прожектор' },
                   ].map((mode) => `
                     <button class="tint-mode ${ui.tintMode === mode.id ? 'active' : ''}" data-action="set-tint-mode" data-mode="${mode.id}">
-                      <span class="tint-preview ${ui.tintGlyphEnabled ? 'show-p' : ''}" data-mode="${mode.id}"><span class="tint-preview-p">P</span></span>
+                      <span class="tint-preview ${ui.tintGlyphEnabled ? 'show-p' : ''} ${ui.tintGlyphEnabled && ui.tintImmersionEnabled ? 'show-immersion' : ''}" data-mode="${mode.id}"><span class="tint-preview-immersion"></span><span class="tint-preview-p">P</span></span>
                       <span class="hint">${mode.title}</span>
                     </button>
                   `).join('')}
@@ -5411,6 +5516,15 @@
           }
           if (action === 'toggle-tint-glyph') {
             state.settings.ui.tintGlyphEnabled = !state.settings.ui.tintGlyphEnabled;
+            if (!state.settings.ui.tintGlyphEnabled) state.settings.ui.tintImmersionEnabled = false;
+            saveUiPreferences();
+            applyTrainingTint();
+            renderSettings();
+            return;
+          }
+          if (action === 'toggle-tint-immersion') {
+            if (!state.settings.ui.tintGlyphEnabled) return;
+            state.settings.ui.tintImmersionEnabled = !state.settings.ui.tintImmersionEnabled;
             saveUiPreferences();
             applyTrainingTint();
             renderSettings();
@@ -6164,14 +6278,19 @@
       const titleEl = document.getElementById('confirmTitle');
       const textEl = document.getElementById('confirmText');
       let handler = null;
-      function hide() { modal.classList.remove('show'); handler = null; }
+      function hide() {
+        modal.classList.remove('show');
+        handler = null;
+        okBtn.textContent = 'Завершить';
+      }
       cancelBtn.addEventListener('click', hide);
       modal.addEventListener('click', (e) => { if (e.target === modal) hide(); });
       okBtn.addEventListener('click', () => { if (handler) handler(); hide(); });
-      return function open(fn, title, text) {
+      return function open(fn, title, text, confirmLabel) {
         handler = fn;
         if (title) titleEl.textContent = title;
         if (text) textEl.textContent = text;
+        okBtn.textContent = (confirmLabel || 'Завершить').trim() || 'Завершить';
         modal.classList.add('show');
       };
     }
