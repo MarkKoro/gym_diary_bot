@@ -64,9 +64,9 @@
       top: 0;
       z-index: 16;
       background: transparent;
-      padding: 6px 0 8px;
+      padding: 5px 0 7px;
       display: grid;
-      gap: 10px;
+      gap: 9px;
     }
     .header-row {
       display: grid;
@@ -74,9 +74,9 @@
       align-items: center;
       gap: 10px;
     }
-    .header-left { display: flex; align-items: center; gap: 8px; }
-    .header-right { display: flex; align-items: center; gap: 8px; justify-content: flex-end; }
-    .header-title { font-size: 20px; font-weight: 800; letter-spacing: -0.02em; }
+    .header-left { display: flex; align-items: center; gap: 7px; }
+    .header-right { display: flex; align-items: center; gap: 7px; justify-content: flex-end; }
+    .header-title { font-size: 18px; font-weight: 800; letter-spacing: -0.02em; }
     .header-title { justify-self: center; text-align: center; }
     .status { display: inline-flex; align-items: center; gap: 6px; padding: 8px 12px; border-radius: 12px; background: var(--glass-surface); border: 1px solid var(--border); color: var(--muted); font-size: 13px; box-shadow: var(--shadow); white-space: nowrap; backdrop-filter: blur(12px); }
     .status .dot { width: 10px; height: 10px; border-radius: 50%; background: #9ca3af; box-shadow: 0 0 0 2px color-mix(in srgb, var(--bg) 70%, transparent); }
@@ -85,9 +85,24 @@
     .status .status-text { color: var(--muted); }
     .manage-menu-wrap { position: relative; display: inline-flex; align-items: center; }
     .manage-trigger { position: relative; }
-    .manage-icon { width: 24px; height: 24px; }
+    .manage-icon { width: 22px; height: 22px; }
     .manage-plus { stroke: #22c55e; stroke-width: 3.4; stroke-linecap: round; }
     .manage-minus { stroke: #ef4444; stroke-width: 3.6; stroke-linecap: round; }
+    .manage-timer-mini {
+      position: absolute;
+      top: -2px;
+      right: -2px;
+      width: 11px;
+      height: 11px;
+      border-radius: 999px;
+      border: 1px solid color-mix(in srgb, var(--bg) 65%, transparent);
+      background: color-mix(in srgb, var(--accent) 55%, var(--card));
+      box-shadow: 0 2px 6px rgba(0,0,0,0.24);
+      display: grid;
+      place-items: center;
+      pointer-events: none;
+    }
+    .manage-timer-mini svg { width: 7px; height: 7px; stroke-width: 2; }
     .manage-menu {
       position: absolute;
       top: 52px;
@@ -120,7 +135,7 @@
       .status { padding: 8px; }
       .status .status-text { display: none; }
     }
-    .today-header { display: grid; gap: 4px; padding: 12px; border-radius: 16px; border: 1px solid var(--border); background: var(--glass-surface); box-shadow: var(--shadow); backdrop-filter: blur(12px); }
+    .today-header { display: grid; gap: 4px; padding: 11px; border-radius: 16px; border: 1px solid var(--border); background: var(--glass-surface); box-shadow: var(--shadow); backdrop-filter: blur(12px); }
     .day-line { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 10px; }
     .day-title { font-weight: 700; font-size: 17px; letter-spacing: -0.01em; display: flex; align-items: center; gap: 8px; min-width: 0; }
     .day-title .main-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -129,9 +144,9 @@
     [data-theme="dark"] .day-badge { background: rgba(76,217,100,0.15); color: #9be9b7; }
     .day-nav { display: inline-flex; align-items: center; gap: 6px; }
     .icon-btn {
-      width: 44px;
-      height: 44px;
-      min-width: 44px;
+      width: 40px;
+      height: 40px;
+      min-width: 40px;
       border-radius: 14px;
       border: 1px solid var(--border);
       background: var(--glass-surface);
@@ -143,7 +158,7 @@
       transition: transform 0.12s ease, box-shadow 0.15s ease, background 0.15s ease, opacity 0.15s ease;
       backdrop-filter: blur(12px);
     }
-    .icon-btn.small { width: 44px; height: 44px; min-width: 44px; }
+    .icon-btn.small { width: 40px; height: 40px; min-width: 40px; }
     .icon-btn:hover { background: rgba(0,0,0,0.03); }
     [data-theme="dark"] .icon-btn:hover { background: rgba(255,255,255,0.05); }
     .icon-btn:active { transform: scale(0.97); opacity: 0.9; }
@@ -1088,7 +1103,7 @@
       transform-origin: 12px 12px;
       transition: transform 0.3s ease;
     }
-    .productivity-sheet .sheet { max-width: 620px; max-height: min(88vh, 760px); overflow: auto; }
+    .productivity-sheet .sheet { max-width: 620px; max-height: min(88vh, 760px); overflow: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
     .productivity-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 10px; }
     .productivity-main { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 16px; align-items: center; padding: 14px; border: 1px solid var(--border); border-radius: 14px; background: var(--card); }
     .productivity-score-line { display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; }
@@ -1379,7 +1394,9 @@
 
     .leaderboard-head { margin-top: 12px; display: flex; justify-content: space-between; align-items: center; gap: 10px; }
     .leaderboard-list { display: grid; gap: 8px; margin-top: 10px; }
+    .leader-item { display: grid; gap: 6px; }
     .leader-row { border: 1px solid var(--border); border-radius: 12px; padding: 10px; display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 10px; background: var(--bg); cursor: pointer; }
+    .leader-row.active { border-color: color-mix(in srgb, var(--accent) 50%, var(--border)); }
     .leader-rank { font-weight: 900; width: 34px; text-align: center; }
     .leader-rank.medal-gold { color: #f59e0b; }
     .leader-rank.medal-silver { color: #94a3b8; }
@@ -1394,6 +1411,7 @@
     .leader-day-title { font-weight: 800; margin-bottom: 6px; }
     .leader-ex-item { display: flex; justify-content: space-between; gap: 8px; padding: 4px 0; border-bottom: 1px dashed color-mix(in srgb, var(--border) 80%, transparent); }
     .leader-ex-item:last-child { border-bottom: none; }
+    body.productivity-open { overflow: hidden; }
 
       .timer-pill{
         position: fixed;
@@ -1855,26 +1873,27 @@
               <circle cx="12" cy="14" r="1.5" fill="currentColor" stroke="none"></circle>
             </svg>
           </button>
-          <button id="timerOpenBtn" class="icon-btn" aria-label="Открыть таймер">
-            <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
-              <path d="M12 8v5l3 2"></path>
-              <path d="M16 3H8"></path>
-              <circle cx="12" cy="13" r="7"></circle>
-            </svg>
-          </button>
           <div id="addModeHeaderText" class="add-mode-banner hidden">Вы находитесь в меню добавления</div>
           <div id="deleteModeHeaderText" class="delete-mode-banner hidden">Вы находитесь в меню удаления</div>
           <div id="actingHeaderText" class="acting-banner hidden"></div>
           <div id="manageMenuWrap" class="manage-menu-wrap">
-            <button id="manageExerciseBtn" class="icon-btn manage-trigger" aria-label="Добавить или удалить упражнения">
+            <button id="manageExerciseBtn" class="icon-btn manage-trigger" aria-label="Добавить, удалить упражнения и включить таймер">
               <svg class="manage-icon" viewBox="0 0 24 24" aria-hidden="true">
                 <path class="manage-plus" d="M12 5v14M5 12h14"></path>
                 <path class="manage-minus" d="M8 12h8"></path>
               </svg>
+              <span class="manage-timer-mini" aria-hidden="true">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                  <path d="M12 8v4l2.5 1.8"></path>
+                  <path d="M15.5 4.5h-7"></path>
+                  <circle cx="12" cy="13" r="6"></circle>
+                </svg>
+              </span>
             </button>
             <div id="manageMenu" class="manage-menu" role="menu" aria-hidden="true">
               <button type="button" data-action="add">Добавить упражнение</button>
               <button type="button" data-action="delete">Удалить упражнение</button>
+              <button type="button" data-action="timer">Включить таймер</button>
             </div>
           </div>
           <button id="deleteModeDone" class="btn primary header-done-btn hidden" type="button">Готово</button>
@@ -2075,7 +2094,6 @@
           <button id="leaderboardPrevBtn" class="btn">← Назад</button>
           <button id="leaderboardNextBtn" class="btn">Вперёд →</button>
         </div>
-        <div id="leaderProfile" class="leader-profile hidden"></div>
       </div>
     </div>
   </div>
@@ -3014,9 +3032,7 @@
 
     function applyHeaderWidgetVisibility() {
       const hideForDelete = state.manage.mode === 'delete';
-      const timerBtn = document.getElementById('timerOpenBtn');
       const productivityBtn = document.getElementById('productivityBtn');
-      if (timerBtn) timerBtn.classList.toggle('hidden', hideForDelete || !state.settings.ui.showTimerButton);
       if (productivityBtn) productivityBtn.classList.toggle('hidden', hideForDelete || !state.settings.ui.showProductivityButton || !state.settings.leaderboardVisible);
     }
 
@@ -3058,6 +3074,7 @@
       }
       renderProductivityHub();
       state.productivitySheetOpen = true;
+      document.body.classList.add('productivity-open');
       document.getElementById('productivitySheet')?.classList.add('show');
       syncFinishFabVisibility();
       loadProductivityLeaderboard().catch(console.error);
@@ -3065,6 +3082,7 @@
 
     function closeProductivitySheet() {
       state.productivitySheetOpen = false;
+      document.body.classList.remove('productivity-open');
       document.getElementById('productivitySheet')?.classList.remove('show');
       state.settings.productivity.leaderboard.selectedUserId = null;
       state.settings.productivity.leaderboard.profile = null;
@@ -3072,49 +3090,11 @@
       syncFinishFabVisibility();
     }
 
-    function renderLeaderboardSection() {
-      const lb = state.settings.productivity.leaderboard;
-      const listEl = document.getElementById('leaderboardList');
-      const pageEl = document.getElementById('leaderboardPageLabel');
-      const prevBtn = document.getElementById('leaderboardPrevBtn');
-      const nextBtn = document.getElementById('leaderboardNextBtn');
-      const profileEl = document.getElementById('leaderProfile');
-      if (!listEl || !pageEl || !prevBtn || !nextBtn || !profileEl) return;
-      const start = lb.offset + 1;
-      const end = Math.min(lb.total || 0, lb.offset + lb.limit);
-      pageEl.textContent = lb.total ? `${start}-${end} из ${lb.total}` : '—';
-      prevBtn.disabled = lb.loading || lb.offset <= 0;
-      nextBtn.disabled = lb.loading || (lb.offset + lb.limit >= lb.total);
-      if (lb.loading) {
-        listEl.innerHTML = '<div class="muted-inline">Загружаем лидеров…</div>';
-      } else if (!lb.items.length) {
-        listEl.innerHTML = '<div class="muted-inline">Пока нет данных лидерборда.</div>';
-      } else {
-        listEl.innerHTML = lb.items.map((item) => {
-          const medalClass = item.rank === 1 ? 'medal-gold' : (item.rank === 2 ? 'medal-silver' : (item.rank === 3 ? 'medal-bronze' : ''));
-          return `
-            <button class="leader-row" data-action="leader-open" data-user-id="${item.user_id}">
-              <div class="leader-rank ${medalClass}">#${item.rank}</div>
-              <div>
-                <div class="leader-name">@${item.username}</div>
-                <div class="leader-score">Топ ${item.top_percent}% · score ${item.score}/100</div>
-              </div>
-              <div class="timer-hint">Открыть</div>
-            </button>
-          `;
-        }).join('');
-      }
-
+    function renderLeaderProfileMarkup(lb) {
       if (lb.profileLoading) {
-        profileEl.classList.remove('hidden');
-        profileEl.innerHTML = '<div class="muted-inline">Загружаем тренировочный план лидера…</div>';
-        return;
+        return '<div class="leader-profile"><div class="muted-inline">Загружаем тренировочный план лидера…</div></div>';
       }
-      if (!lb.profile) {
-        profileEl.classList.add('hidden');
-        profileEl.innerHTML = '';
-        return;
-      }
+      if (!lb.profile) return '';
       const systems = Array.isArray(lb.profile.systems) ? lb.profile.systems : [];
       const selectedSystemId = Number(lb.profile.system_id || systems[0]?.system_id || 0);
       const daysHtml = (lb.profile.days || []).map((day) => {
@@ -3136,21 +3116,63 @@
         const active = sid === selectedSystemId;
         return `<button class="btn small-btn ${active ? 'primary' : ''}" data-action="leader-system-select" data-user-id="${lb.profile.leader_user_id}" data-system-id="${sid}">${sys.name || ('Система ' + sid)}</button>`;
       }).join('');
-      profileEl.classList.remove('hidden');
-      profileEl.innerHTML = `
-        <div class="leader-profile-head">
-          <div>
-            <div class="card-title">План лидера @${lb.profile.username || 'athlete'}</div>
-            <div class="timer-hint">Можно переключать системы и копировать выбранную себе.</div>
+      return `
+        <div class="leader-profile" id="leaderProfileInline">
+          <div class="leader-profile-head">
+            <div>
+              <div class="card-title">План лидера @${lb.profile.username || 'athlete'}</div>
+              <div class="timer-hint">Можно переключать системы и копировать выбранную себе.</div>
+            </div>
+            <div style="display:flex; gap:8px;">
+              <button class="btn" data-action="leader-profile-close">Закрыть</button>
+              <button class="btn primary" data-action="leader-copy-plan" data-user-id="${lb.profile.leader_user_id}" data-system-id="${selectedSystemId}">Скопировать систему</button>
+            </div>
           </div>
-          <div style="display:flex; gap:8px;">
-            <button class="btn" data-action="leader-profile-close">Закрыть</button>
-            <button class="btn primary" data-action="leader-copy-plan" data-user-id="${lb.profile.leader_user_id}" data-system-id="${selectedSystemId}">Скопировать систему</button>
-          </div>
+          ${systemsHtml ? `<div style="display:flex; gap:8px; flex-wrap:wrap; margin: 8px 0;">${systemsHtml}</div>` : ''}
+          <div class="leader-profile-days">${daysHtml}</div>
         </div>
-        ${systemsHtml ? `<div style="display:flex; gap:8px; flex-wrap:wrap; margin: 8px 0;">${systemsHtml}</div>` : ''}
-        <div class="leader-profile-days">${daysHtml}</div>
       `;
+    }
+
+    function renderLeaderboardSection() {
+      const lb = state.settings.productivity.leaderboard;
+      const listEl = document.getElementById('leaderboardList');
+      const pageEl = document.getElementById('leaderboardPageLabel');
+      const prevBtn = document.getElementById('leaderboardPrevBtn');
+      const nextBtn = document.getElementById('leaderboardNextBtn');
+      if (!listEl || !pageEl || !prevBtn || !nextBtn) return;
+      const start = lb.offset + 1;
+      const end = Math.min(lb.total || 0, lb.offset + lb.limit);
+      pageEl.textContent = lb.total ? `${start}-${end} из ${lb.total}` : '—';
+      prevBtn.disabled = lb.loading || lb.offset <= 0;
+      nextBtn.disabled = lb.loading || (lb.offset + lb.limit >= lb.total);
+      if (lb.loading) {
+        listEl.innerHTML = '<div class="muted-inline">Загружаем лидеров…</div>';
+        return;
+      }
+      if (!lb.items.length) {
+        listEl.innerHTML = '<div class="muted-inline">Пока нет данных лидерборда.</div>';
+        return;
+      }
+
+      const profileHtml = renderLeaderProfileMarkup(lb);
+      listEl.innerHTML = lb.items.map((item) => {
+        const medalClass = item.rank === 1 ? 'medal-gold' : (item.rank === 2 ? 'medal-silver' : (item.rank === 3 ? 'medal-bronze' : ''));
+        const isActive = Number(lb.selectedUserId) === Number(item.user_id);
+        return `
+          <div class="leader-item" id="leaderItem-${item.user_id}">
+            <button class="leader-row ${isActive ? 'active' : ''}" data-action="leader-open" data-user-id="${item.user_id}">
+              <div class="leader-rank ${medalClass}">#${item.rank}</div>
+              <div>
+                <div class="leader-name">@${item.username}</div>
+                <div class="leader-score">Топ ${item.top_percent}% · score ${item.score}/100</div>
+              </div>
+              <div class="timer-hint">Открыть</div>
+            </button>
+            ${isActive ? profileHtml : ''}
+          </div>
+        `;
+      }).join('');
     }
 
     async function loadProductivityLeaderboard() {
@@ -3197,6 +3219,10 @@
       } finally {
         lb.profileLoading = false;
         renderLeaderboardSection();
+        const activeItem = lb.selectedUserId ? document.getElementById(`leaderItem-${lb.selectedUserId}`) : null;
+        if (activeItem) {
+          setTimeout(() => activeItem.scrollIntoView({ behavior: 'smooth', block: 'start' }), 80);
+        }
       }
     }
 
@@ -3579,9 +3605,6 @@
     }
 
     function bindTimer(){
-      // open button (clock icon) – adapt to your existing element id if different
-      const openBtn = document.getElementById('timerOpenBtn');
-      if (openBtn) openBtn.addEventListener('click', (e)=>{ e.stopPropagation(); openTimerSheet(); });
       const productivityBtn = document.getElementById('productivityBtn');
       if (productivityBtn) productivityBtn.addEventListener('click', (e) => { e.stopPropagation(); openProductivitySheet(); });
       const systemBtn = document.getElementById('systemOpenBtn');
@@ -8559,6 +8582,7 @@
           if (state.manage.add.open) closeManageAddSheet({ keepMode: true });
           setManageMode('delete');
         }
+        if (action === 'timer') openTimerSheet();
       });
       document.getElementById('deleteModeDone').addEventListener('click', () => setManageMode('normal'));
       document.getElementById('manageDoneBtn').addEventListener('click', closeManageAddSheet);
