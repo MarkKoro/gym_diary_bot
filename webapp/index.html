@@ -392,8 +392,15 @@
     }
     [data-theme="dark"] .toast { background: rgba(255,255,255,0.92); color: #0f1115; }
     .toast.show { transform: translateX(-50%) translateY(0); opacity: 1; }
-    .error-overlay { position: fixed; top: 12px; right: 12px; max-width: min(360px, 90vw); background: rgba(0,0,0,0.8); color: #fff; padding: 10px 12px; border-radius: 12px; box-shadow: 0 10px 30px rgba(0,0,0,0.35); font-size: 13px; line-height: 1.4; z-index: 60; display: none; }
-    [data-theme="dark"] .error-overlay { background: rgba(255,255,255,0.1); color: #e7eefc; }
+    .error-overlay { position: fixed; top: 12px; right: 12px; max-width: min(380px, 92vw); background: rgba(0,0,0,0.82); color: #fff; padding: 12px 14px; border-radius: 13px; box-shadow: 0 10px 30px rgba(0,0,0,0.35); font-size: 13px; line-height: 1.4; z-index: 60; display: none; cursor: pointer; user-select: none; }
+    .error-overlay[data-variant="soft"] { background: color-mix(in srgb, var(--card) 93%, rgba(0,0,0,0.18)); color: var(--text); border: 1px solid var(--border); }
+    .error-overlay[data-variant="soft"] .error-overlay-title { color: var(--text); }
+    .error-overlay[data-variant="soft"] .error-overlay-body { color: var(--muted); }
+    .error-overlay[data-variant="soft"] .error-overlay-hint { color: color-mix(in srgb, var(--muted) 82%, transparent); }
+    [data-theme="dark"] .error-overlay { background: rgba(20,24,35,0.94); color: #e7eefc; }
+    .error-overlay-title { font-weight: 750; margin-bottom: 2px; }
+    .error-overlay-body { font-size: 12px; opacity: 0.95; }
+    .error-overlay-hint { margin-top: 4px; font-size: 11px; opacity: 0.78; }
     .modal-backdrop {
       position: fixed;
       inset: 0;
@@ -2411,6 +2418,7 @@
       currentRoute: 'today',
       drawerOpen: false,
       isTelegram: false,
+      isAdmin: false,
       systemSheetOpen: false,
       productivitySheetOpen: false,
       muscleLoad: { groups: [], selectedKey: null, showAll: false, detailsOpen: true, byMuscle: {}, loading: false },
@@ -2893,15 +2901,33 @@
       console.error(err);
     }
 
-    function showErrorOverlay(message) {
+    function showErrorOverlay(message, options = {}) {
       const overlay = document.getElementById('errorOverlay');
       if (!overlay) return;
-      const text = normalizeError(message || 'Ошибка').split('\n').slice(0, 2).join(' ').slice(0, 280);
-      overlay.textContent = text || 'Ошибка';
+      const {
+        title = 'Что-то пошло не так',
+        details = '',
+        variant = 'soft',
+        durationMs = 6500,
+      } = options || {};
+      const text = normalizeError(message || 'Ошибка').split('\n').slice(0, 2).join(' ').slice(0, 320);
+      const body = details || text || 'Попробуйте ещё раз.';
+      overlay.setAttribute('data-variant', variant);
+      overlay.innerHTML = `
+        <div class="error-overlay-title">${escapeHtml(title)}</div>
+        <div class="error-overlay-body">${escapeHtml(body)}</div>
+        <div class="error-overlay-hint">Нажмите в любом месте, чтобы закрыть</div>
+      `;
       overlay.style.display = 'block';
+      const hide = () => {
+        overlay.style.display = 'none';
+        overlay.removeEventListener('click', hide);
+      };
       clearTimeout(overlay._hideTimer);
-      overlay._hideTimer = setTimeout(() => { overlay.style.display = 'none'; }, 6500);
+      overlay.addEventListener('click', hide);
+      overlay._hideTimer = setTimeout(hide, durationMs);
     }
+
 
     async function copyFatalText() {
       const textEl = document.getElementById('fatalText');
@@ -2928,8 +2954,24 @@
       if (reloadBtn) reloadBtn.addEventListener('click', () => location.reload());
     }
 
-    window.addEventListener('error', (e) => showFatal(e.error || e.message || e, 'window.error'));
-    window.addEventListener('unhandledrejection', (e) => showFatal(e.reason || e, 'unhandledrejection'));
+    function reportRuntimeError(kind, payload) {
+      const msg = payload?.message || normalizeError(payload);
+      if (state.isAdmin) {
+        showFatal(payload, kind);
+        showErrorOverlay(msg, { title: 'Критическая ошибка', details: msg, variant: 'hard', durationMs: 9000 });
+      } else {
+        showErrorOverlay('Не удалось выполнить действие. Попробуйте ещё раз или откройте приложение заново.', {
+          title: 'Упс, возникла ошибка',
+          details: 'Мы уже записали технические детали. Если проблема повторяется — просто перезапустите экран.',
+          variant: 'soft',
+          durationMs: 8000,
+        });
+      }
+      console.error(payload);
+    }
+
+    window.addEventListener('error', (e) => reportRuntimeError('window.error', e?.error || e?.message || e));
+    window.addEventListener('unhandledrejection', (e) => reportRuntimeError('unhandledrejection', e?.reason || e));
     bindFatalActions();
 
     const timerState = {
@@ -6595,6 +6637,27 @@
       });
     }
 
+
+    function parseApiErrorText(rawText, status) {
+      const safeText = String(rawText || '').trim();
+      if (!safeText) return `Ошибка ${status || ''}`.trim();
+      try {
+        const parsed = JSON.parse(safeText);
+        const detail = parsed?.detail || parsed?.message || parsed?.error;
+        if (typeof detail === 'string' && detail.trim()) return detail.trim();
+      } catch (_) {}
+      return safeText.slice(0, 200).trim();
+    }
+
+    async function loadViewerRole() {
+      try {
+        const me = await apiFetch('/gymapi/whoami', { silent: true });
+        state.isAdmin = !!me?.is_admin;
+      } catch (_) {
+        state.isAdmin = false;
+      }
+    }
+
     async function apiFetch(path, options = {}) {
       const appPath = (window.location && window.location.pathname) ? window.location.pathname : '';
       const apiPrefix = appPath.startsWith('/gymapp_prod') ? '/gymapi_prod' : '/gymapi';
@@ -6639,7 +6702,7 @@
         res = await fetch(path, init);
       } catch (e) {
         setStatus('error');
-        if (!silent) showErrorOverlay('Сеть недоступна. Попробуйте снова.');
+        if (!silent) showErrorOverlay('Сеть недоступна. Попробуйте снова.', { title: 'Нет соединения', details: 'Проверьте интернет и повторите действие.' });
         throw e;
       } finally {
         clearTimeout(timeout);
@@ -6648,9 +6711,16 @@
       if (!res.ok) {
         setStatus('error');
         const text = await res.text();
-        const snippet = (text || '').slice(0, 140);
-        if (!silent) showErrorOverlay(`Ошибка: ${res.status} ${snippet}`.trim());
-        const err = new Error(text || 'error');
+        const parsedMessage = parseApiErrorText(text, res.status);
+        const userFriendly = parsedMessage || 'Не удалось выполнить действие.';
+        if (!silent) {
+          showErrorOverlay(userFriendly, {
+            title: res.status >= 500 ? 'Сервер временно недоступен' : 'Не получилось выполнить действие',
+            details: userFriendly,
+            variant: 'soft',
+          });
+        }
+        const err = new Error(parsedMessage || text || 'error');
         err.status = res.status;
         throw err;
       }
@@ -9356,6 +9426,17 @@
     }
 
 
+    function hasExerciseSourceMeta(exercise) {
+      const meta = exercise?.source_meta || {};
+      return Number(meta.source_user_id || 0) > 0
+        || Number(meta.source_system_id || 0) > 0
+        || Number(meta.source_exercise_id || 0) > 0
+        || String(meta.source_exercise_name || '').trim().length > 0
+        || Number(meta.sets_count || 0) > 0
+        || Number(meta.reps || 0) > 0
+        || Number(meta.weight_kg || 0) > 0;
+    }
+
     function buildSourceMetaContent(exercise) {
       const meta = exercise?.source_meta || {};
       const setsCount = Number(meta.sets_count || 0);
@@ -9375,7 +9456,7 @@
       const btn = document.getElementById('sheetSourceMetaBtn');
       const pop = document.getElementById('sheetSourceMetaPop');
       if (!wrap || !btn || !pop) return;
-      const hasSourceMeta = Number(exercise?.source_meta?.source_user_id || 0) > 0;
+      const hasSourceMeta = hasExerciseSourceMeta(exercise);
       if (!hasSourceMeta) {
         wrap.style.display = 'none';
         btn.classList.remove('active');
@@ -9481,6 +9562,7 @@
       setupSettingsHandlers();
       setupMeasurementsHandlers();
       setupMeasurementSheetHandlers();
+      await loadViewerRole();
       openConfirmModal = setupModal();
       bindEvents();
       syncFinishFabVisibility();
@@ -9504,18 +9586,6 @@
       chest: 0, back: 0, legs: 0, shoulders: 0, core: 0, biceps: 0, triceps: 0,
     };
 
-    window.addEventListener('error', (event) => {
-      const msg = event?.message || event?.error?.message || normalizeError(event.error || event);
-      showErrorOverlay(`Ошибка: ${msg}`);
-      console.error(event.error || event.message || event);
-    });
-
-    window.addEventListener('unhandledrejection', (event) => {
-      const reason = event?.reason || event;
-      const msg = reason?.message || normalizeError(reason);
-      showErrorOverlay(`Критическая ошибка: ${msg}`);
-      console.error(event);
-    });
 
     async function boot() {
       setStatus('booting');
