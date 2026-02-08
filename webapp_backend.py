@@ -9,7 +9,7 @@ from zoneinfo import ZoneInfo
 from fastapi import Body, Depends, FastAPI, Header, HTTPException, Request, Response
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from settings import BOT_PUBLIC_LINK, TG_TOKEN
+from settings import ADMIN_IDS, BOT_PUBLIC_LINK, TG_TOKEN
 from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram_webapp_auth import (
     InitDataError,
@@ -744,6 +744,7 @@ async def whoami(ctx: AuthCtx = Depends(get_auth_ctx)):
         "first_name": ctx.first_name,
         "last_name": ctx.last_name,
         "auth_date": ctx.auth_date,
+        "is_admin": int(ctx.tg_id) in ADMIN_IDS,
     }
 
 
