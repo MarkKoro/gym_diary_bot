@@ -283,6 +283,13 @@
       .exercise-head { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 10px; align-items: flex-start; }
       .exercise-info { display: grid; gap: 6px; min-width: 0; }
       .exercise-meta { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+      .source-meta-wrap { position: relative; margin-left: auto; }
+      .source-meta-btn { width: 24px; height: 24px; border-radius: 999px; border: 1px solid var(--border); background: color-mix(in srgb, var(--card) 85%, transparent); color: var(--muted); font-size: 13px; cursor: pointer; }
+      .source-meta-btn.active { border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); color: var(--accent); }
+      .source-meta-pop { position: absolute; z-index: 20; right: 0; top: calc(100% + 8px); min-width: 220px; max-width: 280px; border: 1px solid var(--border); border-radius: 12px; padding: 10px; background: var(--card); box-shadow: var(--shadow); display: none; font-size: 12px; color: var(--muted); }
+      .source-meta-pop.show { display: grid; gap: 6px; }
+      .source-meta-title { font-size: 13px; font-weight: 700; color: var(--text); }
+      .source-meta-row { display: flex; justify-content: space-between; gap: 8px; }
       .finish-flag { font-size: 18px; filter: drop-shadow(0 4px 10px rgba(52,199,89,0.35)); }
       .exercise-card:not(.is-done) .finish-flag { display: none; }
       .exercise-summary { font-size: 14px; color: var(--muted); display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
@@ -2500,6 +2507,7 @@
       },
       menu: { openId: null },
       prompt: null,
+      sourceMetaOpenFor: null,
     };
 
     let openConfirmModal = null;
@@ -7021,6 +7029,7 @@
     function toggleMenu(ueId, menuEl) {
       if (state.menu.openId === ueId) {
         closeMenus();
+        closeSourceMetaPopover();
         return;
       }
       closeMenus();
@@ -7592,6 +7601,22 @@
       state.workout.order = next;
     }
 
+    function closeSourceMetaPopover() {
+      state.sourceMetaOpenFor = null;
+      document.querySelectorAll('.source-meta-pop.show').forEach((pop) => pop.classList.remove('show'));
+      document.querySelectorAll('.source-meta-btn.active').forEach((btn) => btn.classList.remove('active'));
+    }
+
+    function toggleSourceMetaPopover(ueId, btn, pop) {
+      if (!btn || !pop) return;
+      const opening = state.sourceMetaOpenFor !== ueId;
+      closeSourceMetaPopover();
+      if (!opening) return;
+      state.sourceMetaOpenFor = ueId;
+      btn.classList.add('active');
+      pop.classList.add('show');
+    }
+
     function renderExerciseCard(exercise) {
       const card = document.createElement('div');
       card.className = 'card exercise-card';
@@ -7646,6 +7671,33 @@
       }
       info.append(titleWrap, meta);
       header.appendChild(info);
+      if (!isDeleteMode && exercise.source_meta && Number(exercise.source_meta.source_user_id || 0) > 0) {
+        const srcWrap = document.createElement('div');
+        srcWrap.className = 'source-meta-wrap';
+        const srcBtn = document.createElement('button');
+        srcBtn.type = 'button';
+        srcBtn.className = 'source-meta-btn';
+        srcBtn.textContent = '👻';
+        srcBtn.title = 'Данные источника';
+        const srcPop = document.createElement('div');
+        srcPop.className = 'source-meta-pop';
+        const setsCount = Number(exercise.source_meta.sets_count || 0);
+        const reps = Number(exercise.source_meta.reps || 0);
+        const weight = Number(exercise.source_meta.weight_kg || 0);
+        srcPop.innerHTML = `
+          <div class="source-meta-title">Источник упражнения</div>
+          <div class="source-meta-row"><span>Упражнение</span><b>${escapeHtml(exercise.source_meta.source_exercise_name || exercise.name || '—')}</b></div>
+          <div class="source-meta-row"><span>Подходы</span><b>${setsCount || '—'}</b></div>
+          <div class="source-meta-row"><span>Повторы</span><b>${reps || '—'}</b></div>
+          <div class="source-meta-row"><span>Вес, кг</span><b>${weight ? Number(weight).toFixed(1).replace(/\.0$/, '') : '—'}</b></div>
+        `;
+        srcBtn.addEventListener('click', (ev) => {
+          ev.stopPropagation();
+          toggleSourceMetaPopover(exercise.user_exercise_id, srcBtn, srcPop);
+        });
+        srcWrap.append(srcBtn, srcPop);
+        header.appendChild(srcWrap);
+      }
       if (isDeleteMode) {
         const delBtn = document.createElement('button');
         delBtn.type = 'button';
@@ -7688,6 +7740,7 @@
       const container = document.getElementById('cards');
       container.innerHTML = '';
       closeMenus();
+      closeSourceMetaPopover();
       const doneIds = state.workout.doneIds || (state.workout.doneIds = new Set());
       syncWorkoutOrder(list);
       const exercisesMap = new Map();
@@ -8049,7 +8102,9 @@
         const info = await apiFetch('/gymapi/day/today');
         state.activeDays = info.active_days || [];
         state.completedDays = new Set((info.completed_days || []).map(Number));
-        const targetDay = (keepDay && state.dayIndex)
+        const keepCurrentDay = keepDay && state.dayIndex
+          && state.activeDays.some((d) => Number(d.day_index) === Number(state.dayIndex));
+        const targetDay = keepCurrentDay
           ? state.dayIndex
           : (info.suggested_day_index || state.activeDays[0]?.day_index);
         if (targetDay) {
@@ -8722,7 +8777,7 @@
         openConfirmModal?.(() => completeDay(), 'Завершить день?', 'Ты больше не будешь добавлять подходы в этот день?');
       });
       fab.addEventListener('click', (e) => { e.stopPropagation(); toggleFinishPopover(); });
-      document.addEventListener('click', () => closeFinishPopover());
+      document.addEventListener('click', () => { closeFinishPopover(); closeSourceMetaPopover(); });
       pop.addEventListener('click', (e) => e.stopPropagation());
       document.getElementById('manageExerciseBtn').addEventListener('click', (e) => { e.stopPropagation(); toggleManageMenu(); });
       document.getElementById('manageMenu').addEventListener('click', (e) => {

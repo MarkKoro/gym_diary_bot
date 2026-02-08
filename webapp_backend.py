@@ -75,6 +75,7 @@ from db import (
     fetch_productivity_leaderboard,
     fetch_public_training_plan,
     fetch_public_training_systems,
+    fetch_training_system_exercise_sources,
     copy_training_system_from_user,
     ensure_training_system_defaults,
     list_training_systems,
@@ -783,6 +784,7 @@ async def day_sheet(
     session_id = await db.get_or_create_today_session(user_id, iso_date, day_index, active_system_id)
     day_label = await db.get_day_label(user_id, day_index)
     exercises_rows = await db.fetch_day_exercises(user_id, day_index, iso_date, active_system_id)
+    exercise_sources = await fetch_training_system_exercise_sources(active_system_id, day_index)
     exercises: list[dict] = []
     for ue_id, name, muscle_group, is_done, exercise_id in exercises_rows:
         normalized_group = _normalize_group(muscle_group)
@@ -793,6 +795,17 @@ async def day_sheet(
             "muscle_group": muscle_group,
             "is_done": bool(is_done),
         }
+        source_meta = exercise_sources.get(int(exercise_id), {}) if exercise_sources else {}
+        if source_meta:
+            exercise_payload["source_meta"] = {
+                "source_user_id": int(source_meta.get("source_user_id") or 0),
+                "source_system_id": int(source_meta.get("source_system_id") or 0),
+                "source_exercise_id": int(source_meta.get("source_exercise_id") or 0),
+                "source_exercise_name": (source_meta.get("source_exercise_name") or name or "").strip(),
+                "sets_count": int(source_meta.get("sets_count") or 0),
+                "reps": int(source_meta.get("reps") or 0),
+                "weight_kg": float(source_meta.get("weight_kg") or 0.0),
+            }
         if normalized_group == "run":
             running_state = await _build_running_state(
                 user_id,
