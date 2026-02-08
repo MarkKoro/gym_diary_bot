@@ -90,19 +90,19 @@
     .manage-minus { stroke: #ef4444; stroke-width: 3.6; stroke-linecap: round; }
     .manage-timer-mini {
       position: absolute;
-      top: -2px;
-      right: -2px;
-      width: 11px;
-      height: 11px;
+      top: 2px;
+      right: -8px;
+      width: 26px;
+      height: 26px;
       border-radius: 999px;
-      border: 1px solid color-mix(in srgb, var(--bg) 65%, transparent);
+      border: 2px solid color-mix(in srgb, var(--bg) 65%, transparent);
       background: color-mix(in srgb, var(--accent) 55%, var(--card));
       box-shadow: 0 2px 6px rgba(0,0,0,0.24);
       display: grid;
       place-items: center;
       pointer-events: none;
     }
-    .manage-timer-mini svg { width: 7px; height: 7px; stroke-width: 2; }
+    .manage-timer-mini svg { width: 15px; height: 15px; stroke-width: 2.2; }
     .manage-menu {
       position: absolute;
       top: 52px;
@@ -1126,7 +1126,17 @@
       height: 100%;
       padding: 0;
     }
-    .system-sheet .sheet { max-width: 620px; max-height: min(88vh, 760px); overflow: auto; }
+    .system-sheet .sheet { max-width: 620px; max-height: min(94vh, 840px); overflow: auto; }
+    .system-sheet .sheet-content { display: flex; flex-direction: column; min-height: min(78vh, 720px); }
+    .system-sheet .system-list { flex: 1; min-height: 0; }
+    .system-sheet .system-create {
+      position: sticky;
+      bottom: 0;
+      padding-top: 10px;
+      margin-top: 12px;
+      background: linear-gradient(to top, var(--card) 74%, transparent);
+      z-index: 3;
+    }
     .system-create { margin: 12px 0; padding: 12px; border: 1px solid var(--border); border-radius: 14px; background: color-mix(in srgb, var(--bg) 82%, transparent); display: grid; gap: 10px; }
     .system-create-days { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
     .system-list { display: grid; gap: 10px; margin-top: 10px; }
@@ -1143,7 +1153,7 @@
     .system-select-btn { border: 1px solid var(--border); background: var(--bg); color: var(--text); border-radius: 10px; padding: 7px 11px; font-weight: 700; cursor: pointer; }
     .system-select-btn.active { border-color: color-mix(in srgb, var(--accent) 60%, var(--border)); color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, var(--bg)); }
     .system-select-btn.quick { font-size: 13px; padding: 8px 10px; border-radius: 999px; }
-    .system-menu { position: absolute; right: 0; top: 44px; min-width: 200px; padding: 8px; border-radius: 12px; border: 1px solid var(--border); background: var(--card); box-shadow: var(--shadow); display: none; z-index: 5; }
+    .system-menu { position: absolute; right: 0; bottom: 44px; min-width: 200px; padding: 8px; border-radius: 12px; border: 1px solid var(--border); background: var(--card); box-shadow: var(--shadow); display: none; z-index: 5; }
     .system-menu.open { display: grid; gap: 6px; }
     .system-menu button, .system-menu label { width: 100%; border: none; background: var(--bg); border-radius: 10px; padding: 9px 10px; text-align: left; font-weight: 700; color: var(--text); cursor: pointer; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
     .system-menu label input[type="color"] { width: 34px; height: 24px; border: none; background: transparent; padding: 0; }
@@ -2026,13 +2036,13 @@
             <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="m6 6 12 12M18 6 6 18"></path></svg>
           </button>
         </div>
+        <div id="systemList" class="system-list"></div>
         <div class="system-create">
           <div class="settings-row inline">
             <input id="systemNewName" class="settings-input" placeholder="Название системы">
             <button id="systemAddBtn" class="btn primary" disabled>Добавить</button>
           </div>
         </div>
-        <div id="systemList" class="system-list"></div>
       </div>
     </div>
   </div>
@@ -2885,9 +2895,12 @@
       intervalId: null,
       finished: false,
       endAt: null,
+      drag: { active: false, pointerId: null, startX: 0, startY: 0, baseX: null, baseY: null, moved: false },
+      position: { x: null, y: null },
     };
 
     const PRODUCTIVITY_STORAGE_KEY = 'gd_productivity_ui_v2';
+    const TIMER_PILL_POSITION_STORAGE_KEY = 'gd_timer_pill_pos_v1';
     const TINT_MODES = ['sides', 'top-bottom', 'frame', 'corners', 'left-top', 'right-top', 'diagonal', 'spotlight'];
 
     function clamp01(value) {
@@ -3422,6 +3435,60 @@
       }
     }
 
+    function loadTimerPillPosition(){
+      try {
+        const raw = localStorage.getItem(TIMER_PILL_POSITION_STORAGE_KEY);
+        if (!raw) return;
+        const parsed = JSON.parse(raw);
+        if (!parsed || typeof parsed !== 'object') return;
+        const x = Number(parsed.x);
+        const y = Number(parsed.y);
+        if (Number.isFinite(x) && Number.isFinite(y)) {
+          timerState.position = { x, y };
+        }
+      } catch (e) {
+        console.warn('Timer pill position load failed', e);
+      }
+    }
+
+    function saveTimerPillPosition(){
+      try {
+        const { x, y } = timerState.position || {};
+        if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+        localStorage.setItem(TIMER_PILL_POSITION_STORAGE_KEY, JSON.stringify({ x, y }));
+      } catch (e) {
+        console.warn('Timer pill position save failed', e);
+      }
+    }
+
+    function clampTimerPillPosition(x, y, pill){
+      const el = pill || document.getElementById('timerPill');
+      if (!el) return { x: 12, y: 12 };
+      const rect = el.getBoundingClientRect();
+      const maxX = Math.max(8, window.innerWidth - rect.width - 8);
+      const maxY = Math.max(8, window.innerHeight - rect.height - 8);
+      return {
+        x: Math.max(8, Math.min(maxX, Number(x) || 8)),
+        y: Math.max(8, Math.min(maxY, Number(y) || 8)),
+      };
+    }
+
+    function applyTimerPillPosition(){
+      const pill = document.getElementById('timerPill');
+      if (!pill) return;
+      if (!Number.isFinite(timerState.position?.x) || !Number.isFinite(timerState.position?.y)) {
+        pill.style.removeProperty('left');
+        pill.style.removeProperty('top');
+        pill.style.removeProperty('right');
+        return;
+      }
+      const pos = clampTimerPillPosition(timerState.position.x, timerState.position.y, pill);
+      timerState.position = pos;
+      pill.style.left = `${pos.x}px`;
+      pill.style.top = `${pos.y}px`;
+      pill.style.right = 'auto';
+    }
+
     function clampTimer(sec){
       sec = Math.max(0, Math.min(TIMER_MAX_SEC, Number(sec)||0));
       return Math.round(sec);
@@ -3468,6 +3535,7 @@
       // show pill if running or remaining != preset or finished
       const show = timerState.running || timerState.remaining !== timerState.preset || timerState.finished;
       pill.classList.toggle('show', !!show);
+      if (show) applyTimerPillPosition();
 
       // buttons state
       const startBtn = document.getElementById('timerStartBtn');
@@ -3695,8 +3763,58 @@
       document.getElementById('timerPillPause').addEventListener('click', (e)=>{ e.stopPropagation(); timerState.finished ? timerRepeat() : timerStartPause(); });
       document.getElementById('timerPillStop').addEventListener('click', (e)=>{ e.stopPropagation(); timerStop(); });
 
-      // tap pill opens sheet
-      pill.addEventListener('click', (e)=>{ e.stopPropagation(); openTimerSheet(); });
+      // tap pill opens sheet (drag does not open)
+      pill.addEventListener('click', (e)=>{
+        e.stopPropagation();
+        if (timerState.drag.moved) return;
+        openTimerSheet();
+      });
+
+      pill.addEventListener('pointerdown', (e) => {
+        if (e.button !== undefined && e.button !== 0) return;
+        timerState.drag.active = true;
+        timerState.drag.pointerId = e.pointerId;
+        timerState.drag.startX = e.clientX;
+        timerState.drag.startY = e.clientY;
+        const rect = pill.getBoundingClientRect();
+        const initialX = Number.isFinite(timerState.position?.x) ? timerState.position.x : rect.left;
+        const initialY = Number.isFinite(timerState.position?.y) ? timerState.position.y : rect.top;
+        timerState.drag.baseX = initialX;
+        timerState.drag.baseY = initialY;
+        timerState.drag.moved = false;
+        if (pill.setPointerCapture) {
+          try { pill.setPointerCapture(e.pointerId); } catch (_) {}
+        }
+      });
+
+      pill.addEventListener('pointermove', (e) => {
+        if (!timerState.drag.active) return;
+        if (timerState.drag.pointerId !== null && e.pointerId !== timerState.drag.pointerId) return;
+        const dx = e.clientX - timerState.drag.startX;
+        const dy = e.clientY - timerState.drag.startY;
+        if (!timerState.drag.moved && (Math.abs(dx) > 4 || Math.abs(dy) > 4)) timerState.drag.moved = true;
+        if (!timerState.drag.moved) return;
+        const next = clampTimerPillPosition(timerState.drag.baseX + dx, timerState.drag.baseY + dy, pill);
+        timerState.position = next;
+        applyTimerPillPosition();
+      });
+
+      const finishTimerPillDrag = (e) => {
+        if (!timerState.drag.active) return;
+        if (timerState.drag.pointerId !== null && e.pointerId !== timerState.drag.pointerId) return;
+        timerState.drag.active = false;
+        timerState.drag.pointerId = null;
+        if (pill.releasePointerCapture) {
+          try { pill.releasePointerCapture(e.pointerId); } catch (_) {}
+        }
+        if (timerState.drag.moved) {
+          saveTimerPillPosition();
+          setTimeout(() => { timerState.drag.moved = false; }, 0);
+        }
+      };
+
+      pill.addEventListener('pointerup', finishTimerPillDrag);
+      pill.addEventListener('pointercancel', finishTimerPillDrag);
 
       document.addEventListener('visibilitychange', () => {
         if (document.visibilityState === 'visible') {
@@ -8632,6 +8750,13 @@
         const action = target.dataset.action;
         if (action === 'leader-open') {
           const userId = Number(target.dataset.userId || 0);
+          const lb = state.settings.productivity.leaderboard;
+          if (userId > 0 && Number(lb.selectedUserId) === userId && !lb.profileLoading) {
+            lb.profile = null;
+            lb.selectedUserId = null;
+            renderLeaderboardSection();
+            return;
+          }
           if (userId > 0) openLeaderProfile(userId).catch(console.error);
           return;
         }
@@ -8706,6 +8831,9 @@
         if (state.editor.noteTimer) clearTimeout(state.editor.noteTimer);
         setNoteStatus('Сохраняем…');
         state.editor.noteTimer = setTimeout(() => saveExerciseNote(state.editor.ueId, value), 850);
+      });
+      document.addEventListener('pointerdown', (e) => {
+        if (!e.target.closest('#manageMenu') && !e.target.closest('#manageExerciseBtn')) setManageMenu(false);
       });
       document.addEventListener('click', (e) => {
         if (!e.target.closest('.card-menu') && !e.target.closest('.menu-button')) closeMenus();
@@ -9186,6 +9314,7 @@
       openConfirmModal = setupModal();
       bindEvents();
       syncFinishFabVisibility();
+      loadTimerPillPosition();
       bindTimer();
       setupVisibilityRefresh();
       updateActingBanner();

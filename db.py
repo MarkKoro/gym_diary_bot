@@ -4921,7 +4921,7 @@ async def copy_training_plan_from_user(source_user_id: int, target_user_id: int)
     return {"days": len(day_map), "exercises": copied}
 
 
-async def copy_training_system_from_user(source_user_id: int, target_user_id: int, source_system_id: int | None = None):
+async def copy_training_system_from_user(source_user_id: int, target_user_id: int, source_system_id: int | None = None, fallback_system_name: str | None = None):
     def _custom_group_id(group_code: str | None) -> int | None:
         raw = (group_code or "").strip().lower()
         if not raw.startswith("u"):
@@ -4951,7 +4951,8 @@ async def copy_training_system_from_user(source_user_id: int, target_user_id: in
             selected = systems[0]
 
         selected_system_id = int(selected[0])
-        name = (selected[1] or "Скопированная система").strip() or "Скопированная система"
+        fallback_name = (fallback_system_name or "").strip()
+        name = (selected[1] or fallback_name or "Скопированная система").strip() or (fallback_name or "Скопированная система")
         color = (selected[2] or "#2ea6ff").strip() or "#2ea6ff"
 
         days_cur = await db.execute(
