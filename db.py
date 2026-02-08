@@ -1396,7 +1396,6 @@ async def create_training_system(
 ):
     system_name = (name or '').strip() or 'Новая система'
     now = datetime.now(UTC).isoformat()
-    active_id = await get_active_training_system_id(user_id)
     default_days = max(1, min(7, int(workouts_per_week or 0) or 3))
     async with connect_db() as db:
         cur = await db.execute(
@@ -1404,31 +1403,10 @@ async def create_training_system(
             (user_id, system_name, color, now),
         )
         system_id = int(cur.lastrowid)
-        # clone active template
-        cur = await db.execute("SELECT day_index, label, is_active FROM training_system_days WHERE system_id=?", (active_id,))
-        copied_days = await cur.fetchall()
-        for day_index, label, is_active in copied_days:
+        for day_index in range(1, 8):
             await db.execute(
                 "INSERT INTO training_system_days(system_id, day_index, label, is_active) VALUES(?,?,?,?)",
-                (system_id, int(day_index), label, int(is_active or 0)),
-            )
-        if not copied_days:
-            for day_index in range(1, 8):
-                await db.execute(
-                    "INSERT INTO training_system_days(system_id, day_index, label, is_active) VALUES(?,?,?,?)",
-                    (system_id, day_index, f"День {day_index}", 1 if day_index <= default_days else 0),
-                )
-        cur = await db.execute("SELECT day_index, exercise_id FROM training_system_exercises WHERE system_id=?", (active_id,))
-        for day_index, exercise_id in await cur.fetchall():
-            await db.execute(
-                "INSERT OR IGNORE INTO training_system_exercises(system_id, day_index, exercise_id) VALUES(?,?,?)",
-                (system_id, int(day_index), int(exercise_id)),
-            )
-        cur = await db.execute("SELECT day_no, dow, hour, minute FROM training_system_reminders WHERE system_id=?", (active_id,))
-        for day_no, dow, hour, minute in await cur.fetchall():
-            await db.execute(
-                "INSERT OR REPLACE INTO training_system_reminders(system_id, day_no, dow, hour, minute) VALUES(?,?,?,?,?)",
-                (system_id, int(day_no), int(dow), int(hour), int(minute)),
+                (system_id, day_index, f"День {day_index}", 1 if day_index <= default_days else 0),
             )
         await db.commit()
     return system_id

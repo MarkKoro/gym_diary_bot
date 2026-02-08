@@ -412,6 +412,12 @@
     .modal-text { font-size: 14px; color: var(--muted); margin-bottom: 14px; }
     .modal-actions { display: flex; gap: 10px; }
     .modal-actions .btn { flex: 1; }
+    .system-days-picker { margin: 8px 0 16px; padding: 12px; border: 1px solid var(--border); border-radius: 14px; background: color-mix(in srgb, var(--bg) 82%, transparent); display: grid; gap: 10px; }
+    .system-days-picker .control-value { width: 100%; }
+    .system-days-actions { display: flex; align-items: center; justify-content: center; gap: 16px; }
+    .system-days-actions .circle-btn { width: 52px; height: 52px; font-size: 24px; }
+    .system-days-modal .modal-actions { margin-top: 4px; }
+
     .sheet-backdrop {
       position: fixed;
       inset: 0;
@@ -456,6 +462,9 @@
     .sheet-handle { width: 48px; height: 5px; border-radius: 999px; background: var(--border); margin: 0 auto 12px; cursor: pointer; }
     .sheet-title { font-size: 17px; font-weight: 700; }
     .sheet-subtitle { font-size: 13px; color: var(--muted); margin-top: 2px; }
+    .sheet-header-row { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; }
+    .sheet-header-source { position: relative; margin-left: auto; }
+
     .segmented { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 6px; margin: 12px 0 4px; }
     .seg-btn { padding: 10px 12px; border-radius: 12px; border: 1px solid var(--border); background: var(--bg); color: var(--text); font-weight: 600; font-size: 14px; cursor: pointer; }
     .seg-btn.active { background: var(--accent); color: #fff; border-color: var(--accent); box-shadow: 0 8px 16px rgba(0,122,255,0.18); }
@@ -2072,14 +2081,16 @@
   </div>
 
 
-  <div id="systemDaysModal" class="modal-backdrop">
+  <div id="systemDaysModal" class="modal-backdrop system-days-modal">
     <div class="modal">
       <div class="modal-title">Сколько тренировочных дней в неделе?</div>
       <div class="modal-text">Выберите количество дней для новой системы.</div>
-      <div class="stepper" id="systemDaysStepper">
-        <button type="button" id="systemDaysMinus">−</button>
-        <span id="systemDaysValue">3</span>
-        <button type="button" id="systemDaysPlus">+</button>
+      <div class="system-days-picker" id="systemDaysStepper">
+        <button type="button" id="systemDaysValue" class="control-value" aria-label="Количество тренировочных дней">3</button>
+        <div class="system-days-actions">
+          <button type="button" id="systemDaysMinus" class="circle-btn" aria-label="Уменьшить количество дней">−</button>
+          <button type="button" id="systemDaysPlus" class="circle-btn" aria-label="Увеличить количество дней">+</button>
+        </div>
       </div>
       <div class="modal-actions">
         <button id="systemDaysCancelBtn" class="btn">Отмена</button>
@@ -2251,8 +2262,16 @@
     <div id="sheet" class="sheet-backdrop">
       <div class="sheet" id="sheetBody">
         <div class="sheet-handle"></div>
-        <div class="sheet-title">Редактор подходов</div>
-        <div class="sheet-subtitle" id="sheetSubtitle"></div>
+        <div class="sheet-header-row">
+          <div>
+            <div class="sheet-title">Редактор подходов</div>
+            <div class="sheet-subtitle" id="sheetSubtitle"></div>
+          </div>
+          <div class="sheet-header-source" id="sheetSourceMetaWrap" style="display:none;">
+            <button type="button" class="source-meta-btn" id="sheetSourceMetaBtn" title="Данные источника">👻</button>
+            <div class="source-meta-pop" id="sheetSourceMetaPop"></div>
+          </div>
+        </div>
         <div class="segmented" id="editorTabs">
           <button type="button" class="seg-btn active" data-tab="sets">Подходы</button>
           <button type="button" class="seg-btn" data-tab="note">Заметка</button>
@@ -3724,15 +3743,21 @@
       document.getElementById('productivityCloseBtn')?.addEventListener('click', closeProductivitySheet);
       document.getElementById('systemCloseBtn')?.addEventListener('click', closeSystemSheet);
       document.getElementById('systemNewName')?.addEventListener('input', () => setSystemCreateButtonState());
+      const syncSystemDaysValue = () => {
+        const valueEl = document.getElementById('systemDaysValue');
+        if (valueEl) valueEl.textContent = String(state.settings.systems.newDays || 3);
+      };
       document.getElementById('systemDaysMinus')?.addEventListener('click', () => {
         state.settings.systems.newDays = Math.max(1, Number(state.settings.systems.newDays || 3) - 1);
-        const valueEl = document.getElementById('systemDaysValue');
-        if (valueEl) valueEl.textContent = String(state.settings.systems.newDays);
+        syncSystemDaysValue();
       });
       document.getElementById('systemDaysPlus')?.addEventListener('click', () => {
         state.settings.systems.newDays = Math.min(7, Number(state.settings.systems.newDays || 3) + 1);
-        const valueEl = document.getElementById('systemDaysValue');
-        if (valueEl) valueEl.textContent = String(state.settings.systems.newDays);
+        syncSystemDaysValue();
+      });
+      document.getElementById('systemDaysValue')?.addEventListener('click', () => {
+        state.settings.systems.newDays = (Number(state.settings.systems.newDays || 3) % 7) + 1;
+        syncSystemDaysValue();
       });
       document.getElementById('systemAddBtn')?.addEventListener('click', () => {
         const input = document.getElementById('systemNewName');
@@ -7700,33 +7725,6 @@
       }
       info.append(titleWrap, meta);
       header.appendChild(info);
-      if (!isDeleteMode && exercise.source_meta && Number(exercise.source_meta.source_user_id || 0) > 0) {
-        const srcWrap = document.createElement('div');
-        srcWrap.className = 'source-meta-wrap';
-        const srcBtn = document.createElement('button');
-        srcBtn.type = 'button';
-        srcBtn.className = 'source-meta-btn';
-        srcBtn.textContent = '👻';
-        srcBtn.title = 'Данные источника';
-        const srcPop = document.createElement('div');
-        srcPop.className = 'source-meta-pop';
-        const setsCount = Number(exercise.source_meta.sets_count || 0);
-        const reps = Number(exercise.source_meta.reps || 0);
-        const weight = Number(exercise.source_meta.weight_kg || 0);
-        srcPop.innerHTML = `
-          <div class="source-meta-title">Источник упражнения</div>
-          <div class="source-meta-row"><span>Упражнение</span><b>${escapeHtml(exercise.source_meta.source_exercise_name || exercise.name || '—')}</b></div>
-          <div class="source-meta-row"><span>Подходы</span><b>${setsCount || '—'}</b></div>
-          <div class="source-meta-row"><span>Повторы</span><b>${reps || '—'}</b></div>
-          <div class="source-meta-row"><span>Вес, кг</span><b>${weight ? Number(weight).toFixed(1).replace(/\.0$/, '') : '—'}</b></div>
-        `;
-        srcBtn.addEventListener('click', (ev) => {
-          ev.stopPropagation();
-          toggleSourceMetaPopover(exercise.user_exercise_id, srcBtn, srcPop);
-        });
-        srcWrap.append(srcBtn, srcPop);
-        header.appendChild(srcWrap);
-      }
       if (isDeleteMode) {
         const delBtn = document.createElement('button');
         delBtn.type = 'button';
@@ -9357,11 +9355,49 @@
       container.append(cards, pager, list);
     }
 
+
+    function buildSourceMetaContent(exercise) {
+      const meta = exercise?.source_meta || {};
+      const setsCount = Number(meta.sets_count || 0);
+      const reps = Number(meta.reps || 0);
+      const weight = Number(meta.weight_kg || 0);
+      return `
+        <div class="source-meta-title">Источник упражнения</div>
+        <div class="source-meta-row"><span>Упражнение</span><b>${escapeHtml(meta.source_exercise_name || exercise?.name || '—')}</b></div>
+        <div class="source-meta-row"><span>Подходы</span><b>${setsCount || '—'}</b></div>
+        <div class="source-meta-row"><span>Повторы</span><b>${reps || '—'}</b></div>
+        <div class="source-meta-row"><span>Вес, кг</span><b>${weight ? Number(weight).toFixed(1).replace(/\.0$/, '') : '—'}</b></div>
+      `;
+    }
+
+    function updateSheetSourceMeta(exercise) {
+      const wrap = document.getElementById('sheetSourceMetaWrap');
+      const btn = document.getElementById('sheetSourceMetaBtn');
+      const pop = document.getElementById('sheetSourceMetaPop');
+      if (!wrap || !btn || !pop) return;
+      const hasSourceMeta = Number(exercise?.source_meta?.source_user_id || 0) > 0;
+      if (!hasSourceMeta) {
+        wrap.style.display = 'none';
+        btn.classList.remove('active');
+        pop.classList.remove('show');
+        pop.innerHTML = '';
+        state.sourceMetaOpenFor = null;
+        return;
+      }
+      wrap.style.display = '';
+      pop.innerHTML = buildSourceMetaContent(exercise);
+      btn.onclick = (ev) => {
+        ev.stopPropagation();
+        toggleSourceMetaPopover(exercise.user_exercise_id, btn, pop);
+      };
+    }
+
     function renderEditor() {
       if (!state.editor.open) return;
       const exercise = state.exercises.get(state.editor.ueId);
       if (!exercise) return;
       document.getElementById('sheet').classList.add('show');
+      updateSheetSourceMeta(exercise);
       document.getElementById('sheetSubtitle').textContent = `Упражнение: ${exercise.name}`;
       setActiveTab(state.editor.tab || 'sets');
       const isRunning = isRunningExercise(exercise);
@@ -9429,6 +9465,7 @@
       state.editor = { open: false, ueId: null, selectedSet: null, tab: 'sets', noteTimer: null, noteStatusTimer: null, flashSet: null, flashTimer: null, scrollTarget: null };
       const sheet = document.getElementById('sheet');
       if (sheet) sheet.classList.remove('show');
+      closeSourceMetaPopover();
       setNoteStatus('');
       const noteArea = document.getElementById('noteArea');
       if (noteArea) noteArea.value = '';
