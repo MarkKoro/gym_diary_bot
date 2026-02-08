@@ -1152,6 +1152,7 @@ async def update_running_state(
 async def complete_running_state(
     day_index: int,
     ue_id: int,
+    payload: dict = Body(default={}),
     date: str | None = None,
     ctx: AuthCtx = Depends(get_auth_ctx),
 ):
@@ -1169,10 +1170,35 @@ async def complete_running_state(
         create=True,
     )
     entry_id = entry[0]
-    distance_val = float(entry[1] or 0.0)
-    duration_ms_val = int(entry[3] or 0)
-    if not duration_ms_val and entry[2]:
-        duration_ms_val = int(entry[2]) * 1000
+    distance_raw = payload.get("distance_km") if isinstance(payload, dict) else None
+    duration_sec_raw = payload.get("duration_sec") if isinstance(payload, dict) else None
+    duration_ms_raw = payload.get("duration_ms") if isinstance(payload, dict) else None
+    calories_raw = payload.get("calories") if isinstance(payload, dict) else None
+    heart_rate_raw = payload.get("heart_rate") if isinstance(payload, dict) else None
+
+    distance_val = _clamp_running_distance(distance_raw if distance_raw is not None else entry[1])
+    base_duration_ms = entry[3] if len(entry) > 3 else 0
+    if not base_duration_ms and entry[2]:
+        base_duration_ms = int(entry[2]) * 1000
+    if duration_ms_raw is not None:
+        duration_ms_val = _clamp_running_duration_ms(duration_ms_raw)
+    elif duration_sec_raw is not None:
+        duration_ms_val = _clamp_running_duration_ms(float(duration_sec_raw) * 1000)
+    else:
+        duration_ms_val = base_duration_ms
+    duration_sec_val = max(int(round(duration_ms_val / 1000)), 0)
+    calories_val = _clamp_running_calories(calories_raw if calories_raw is not None else entry[4])
+    heart_rate_val = _clamp_running_heart_rate(heart_rate_raw if heart_rate_raw is not None else entry[5])
+
+    await update_running_entry(
+        entry_id,
+        distance_km=distance_val,
+        duration_sec=duration_sec_val,
+        duration_ms=duration_ms_val,
+        calories=calories_val,
+        heart_rate=heart_rate_val,
+        is_draft=1,
+    )
     if distance_val <= 0 or duration_ms_val <= 0:
         raise HTTPException(status_code=400, detail='Добавь дистанцию и время перед сохранением.')
     await mark_running_entry_done(entry_id)
@@ -3339,6 +3365,7 @@ async def systems_delete(system_id: int, ctx: AuthCtx = Depends(get_auth_ctx)):
     ok = await delete_training_system(ctx.user_id, int(system_id))
     if not ok:
         raise HTTPException(status_code=400, detail='Нельзя удалить единственную систему')
+    await apply_system_to_current_plan(ctx.user_id, await get_active_training_system_id(ctx.user_id))
     return {'ok': True}
 
 

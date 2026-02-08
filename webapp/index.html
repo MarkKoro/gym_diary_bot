@@ -447,6 +447,12 @@
       -webkit-overflow-scrolling: touch;
     }
     .sheet-backdrop.show .sheet { transform: translateY(0); }
+    #sheet .sheet {
+      max-height: min(88vh, 760px);
+      overflow-y: auto;
+      overscroll-behavior: contain;
+      -webkit-overflow-scrolling: touch;
+    }
     .sheet-handle { width: 48px; height: 5px; border-radius: 999px; background: var(--border); margin: 0 auto 12px; cursor: pointer; }
     .sheet-title { font-size: 17px; font-weight: 700; }
     .sheet-subtitle { font-size: 13px; color: var(--muted); margin-top: 2px; }
@@ -549,6 +555,12 @@
     .running-history-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 8px; padding: 10px; border-radius: 10px; border: 1px solid var(--border); background: color-mix(in srgb, var(--card) 90%, transparent); }
     .running-history-row .label { color: var(--muted); font-size: 12px; }
     .running-history-row .value { font-weight: 700; }
+    .running-detail-section { margin-top: 10px; display: grid; gap: 8px; }
+    .running-detail-title { font-size: 13px; color: var(--muted); font-weight: 700; }
+    .running-summary-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 8px; }
+    .running-summary-card { border: 1px solid var(--border); border-radius: 12px; padding: 10px; background: color-mix(in srgb, var(--bg) 85%, transparent); display: grid; gap: 4px; }
+    .running-summary-card .label { font-size: 12px; color: var(--muted); }
+    .running-summary-card .value { font-size: 16px; font-weight: 800; }
     .history-pager { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
     .pager-buttons { display: flex; gap: 6px; }
     .pager-btn { border: 1px solid var(--border); background: var(--card); color: var(--text); border-radius: 10px; padding: 8px 10px; font-weight: 700; cursor: pointer; box-shadow: var(--shadow); min-width: 42px; }
@@ -7561,10 +7573,22 @@
 
     async function handleRunningDone(exercise) {
       const ueId = exercise.user_exercise_id;
+      const draft = ensureRunningDraft(ueId);
+      const durationMs = getRunningDraftDurationMs(ueId);
+      const durationSec = Math.max(0, Math.round(durationMs / 1000));
       const query = state.dateIso ? `?date=${state.dateIso}` : '';
       await queueExerciseAction(ueId, async () => {
         try {
-          const data = await apiFetch(`/gymapi/day/${state.dayIndex}/exercise/${ueId}/running/done${query}`, { method: 'POST' });
+          const data = await apiFetch(`/gymapi/day/${state.dayIndex}/exercise/${ueId}/running/done${query}`, {
+            method: 'POST',
+            body: {
+              distance_km: Number(draft.distance_km || 0),
+              duration_sec: durationSec,
+              duration_ms: durationMs,
+              calories: Number(draft.calories || 0),
+              heart_rate: Number(draft.heart_rate || 0),
+            },
+          });
           applyRunningUpdate(ueId, data);
           const doneIds = state.workout.doneIds instanceof Set ? state.workout.doneIds : new Set();
           doneIds.add(ueId);
@@ -7577,8 +7601,13 @@
           }
           if (data?.last_completed_at) updateLastCompleted(data.last_completed_at);
           toast('Забег сохранён ✅');
-        } catch (_) {
-          toast('Ошибка связи. Попробуй ещё раз.');
+        } catch (err) {
+          const msg = String(err?.message || '').toLowerCase();
+          if (msg.includes('добавь дистанцию') || msg.includes('distance')) {
+            toast('Добавь дистанцию и время, чтобы завершить забег.');
+          } else {
+            toast('Ошибка связи. Попробуй ещё раз.');
+          }
         }
       });
     }
@@ -9072,13 +9101,28 @@
       const draft = ensureRunningDraft(ueId);
       const durationMs = getRunningDraftDurationMs(ueId);
       const pace = draft.distance_km > 0 && durationMs > 0 ? (durationMs / 1000) / draft.distance_km : null;
-      const meta = document.createElement('div');
-      meta.className = 'running-meta';
-      const d = document.createElement('span'); d.className = 'running-badge'; d.textContent = `Дистанция: ${draft.distance_km.toFixed(2)} км`;
-      const t = document.createElement('span'); t.className = 'running-badge'; t.textContent = `Время: ${formatDurationValueMs(durationMs)}`;
-      const p = document.createElement('span'); p.className = 'running-pace'; p.textContent = `Темп: ${formatPaceValue(pace)} мин/км`;
-      meta.append(d, t, p);
-      list.appendChild(meta);
+      const summary = document.createElement('div');
+      summary.className = 'running-detail-section';
+      const summaryTitle = document.createElement('div');
+      summaryTitle.className = 'running-detail-title';
+      summaryTitle.textContent = 'Текущая запись';
+      const summaryGrid = document.createElement('div');
+      summaryGrid.className = 'running-summary-grid';
+      const cards = [
+        ['Дистанция', `${draft.distance_km.toFixed(2)} км`],
+        ['Время', formatDurationValueMs(durationMs)],
+        ['Темп', `${formatPaceValue(pace)} мин/км`],
+        ['Калории', Number(draft.calories || 0) > 0 ? `${Number(draft.calories || 0)} ккал` : '—'],
+        ['Пульс', Number(draft.heart_rate || 0) > 0 ? `${Number(draft.heart_rate || 0)} уд/мин` : '—'],
+      ];
+      cards.forEach(([title, value]) => {
+        const card = document.createElement('div');
+        card.className = 'running-summary-card';
+        card.innerHTML = `<div class="label">${title}</div><div class="value">${value}</div>`;
+        summaryGrid.appendChild(card);
+      });
+      summary.append(summaryTitle, summaryGrid);
+      list.appendChild(summary);
 
       label.textContent = 'История забегов';
       const history = exercise.running_history || [];
