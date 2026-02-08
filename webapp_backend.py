@@ -75,7 +75,6 @@ from db import (
     fetch_productivity_leaderboard,
     fetch_public_training_plan,
     fetch_public_training_systems,
-    copy_training_plan_from_user,
     copy_training_system_from_user,
     ensure_training_system_defaults,
     list_training_systems,
@@ -3409,7 +3408,16 @@ async def leaderboard_productivity_copy(
             source_system_id = int(payload.get('system_id'))
         except (TypeError, ValueError):
             source_system_id = None
-    result = await copy_training_system_from_user(int(leader_user_id), int(user_id), source_system_id)
+    leader_row = await find_user_by_id(int(leader_user_id))
+    fallback_name = None
+    if leader_row:
+        fallback_name = ((leader_row[2] or '').strip() if len(leader_row) > 2 else '') or f'athlete_{int(leader_user_id)}'
+    result = await copy_training_system_from_user(
+        int(leader_user_id),
+        int(user_id),
+        source_system_id,
+        fallback_system_name=fallback_name,
+    )
     if not result.get('system_id'):
-        result = await copy_training_plan_from_user(int(leader_user_id), int(user_id))
+        raise HTTPException(status_code=400, detail='У лидера нет системы для копирования')
     return {'ok': True, **result}
