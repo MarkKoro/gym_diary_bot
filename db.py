@@ -923,6 +923,15 @@ async def init_db():
             minute INTEGER NOT NULL,
             UNIQUE(system_id, day_no)
         );
+
+        CREATE TABLE IF NOT EXISTS training_system_exercise_sources(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            system_id INTEGER NOT NULL,
+            day_index INTEGER NOT NULL,
+            exercise_id INTEGER NOT NULL,
+            source_payload TEXT NOT NULL,
+            UNIQUE(system_id, day_index, exercise_id)
+        );
         """)
         try:
             await db.execute("ALTER TABLE users ADD COLUMN system TEXT")
@@ -1270,6 +1279,26 @@ async def list_training_systems(user_id: int):
         }
         for r in rows
     ]
+
+
+async def fetch_training_system_exercise_sources(system_id: int, day_index: int) -> dict[int, dict]:
+    async with connect_db() as db:
+        cur = await db.execute(
+            """
+            SELECT exercise_id, source_payload
+            FROM training_system_exercise_sources
+            WHERE system_id=? AND day_index=?
+            """,
+            (int(system_id), int(day_index)),
+        )
+        rows = await cur.fetchall()
+    result: dict[int, dict] = {}
+    for exercise_id, payload in rows:
+        try:
+            result[int(exercise_id)] = json.loads(payload or '{}')
+        except Exception:
+            result[int(exercise_id)] = {}
+    return result
 
 
 async def sync_current_plan_to_system(user_id: int, system_id: int):
@@ -5039,7 +5068,7 @@ async def copy_training_system_from_user(source_user_id: int, target_user_id: in
 
         ex_cur = await db.execute(
             """
-            SELECT tse.day_index, e.name, e.muscle_group
+            SELECT tse.day_index, e.name, e.muscle_group, tse.exercise_id
             FROM training_system_exercises tse
             JOIN exercises e ON e.id=tse.exercise_id
             WHERE tse.system_id=?
@@ -5048,6 +5077,22 @@ async def copy_training_system_from_user(source_user_id: int, target_user_id: in
             (selected_system_id,),
         )
         source_exercises = await ex_cur.fetchall()
+
+        source_meta_cur = await db.execute(
+            """
+            SELECT day_index, exercise_id, source_payload
+            FROM training_system_exercise_sources
+            WHERE system_id=?
+            """,
+            (selected_system_id,),
+        )
+        source_meta_rows = await source_meta_cur.fetchall()
+        source_meta_map: dict[tuple[int, int], dict] = {}
+        for day_no, ex_id, payload in source_meta_rows:
+            try:
+                source_meta_map[(int(day_no), int(ex_id))] = json.loads(payload or '{}')
+            except Exception:
+                source_meta_map[(int(day_no), int(ex_id))] = {}
 
         now = datetime.now(UTC).isoformat()
         cur = await db.execute(
@@ -5096,6 +5141,62 @@ async def copy_training_system_from_user(source_user_id: int, target_user_id: in
             custom_groups_cache[code] = target_code
             return target_code
 
+        source_snapshot_cache: dict[int, dict] = {}
+
+        async def get_source_snapshot(source_ex_id: int) -> dict:
+            ex_id = int(source_ex_id or 0)
+            if ex_id <= 0:
+                return {}
+            cached_snapshot = source_snapshot_cache.get(ex_id)
+            if cached_snapshot is not None:
+                return cached_snapshot
+            latest_cur = await db.execute(
+                """
+                SELECT s.id
+                FROM sets st
+                JOIN sessions s ON s.id=st.session_id
+                JOIN user_exercises ue ON ue.id=st.user_exercise_id
+                WHERE s.user_id=? AND ue.exercise_id=?
+                ORDER BY s.date DESC, s.id DESC, st.set_no DESC
+                LIMIT 1
+                """,
+                (source_user_id, ex_id),
+            )
+            latest_row = await latest_cur.fetchone()
+            if not latest_row:
+                source_snapshot_cache[ex_id] = {}
+                return {}
+            latest_session_id = int(latest_row[0])
+            count_cur = await db.execute(
+                """
+                SELECT COUNT(*)
+                FROM sets st
+                JOIN user_exercises ue ON ue.id=st.user_exercise_id
+                WHERE st.session_id=? AND ue.exercise_id=?
+                """,
+                (latest_session_id, ex_id),
+            )
+            count_row = await count_cur.fetchone()
+            last_cur = await db.execute(
+                """
+                SELECT st.reps, st.weight_kg
+                FROM sets st
+                JOIN user_exercises ue ON ue.id=st.user_exercise_id
+                WHERE st.session_id=? AND ue.exercise_id=?
+                ORDER BY st.set_no DESC
+                LIMIT 1
+                """,
+                (latest_session_id, ex_id),
+            )
+            last_row = await last_cur.fetchone()
+            snapshot = {
+                'sets_count': int((count_row[0] if count_row else 0) or 0),
+                'reps': int((last_row[0] if last_row else 0) or 0),
+                'weight_kg': float((last_row[1] if last_row else 0.0) or 0.0),
+            }
+            source_snapshot_cache[ex_id] = snapshot
+            return snapshot
+
         exercise_cache: dict[tuple[str, str], int] = {}
 
         async def ensure_target_exercise(ex_name: str, muscle_group: str | None) -> int:
@@ -5136,7 +5237,7 @@ async def copy_training_system_from_user(source_user_id: int, target_user_id: in
 
         ex_count = 0
         copied_exercise_ids: set[int] = set()
-        for day_index, ex_name, muscle_group in source_exercises:
+        for day_index, ex_name, muscle_group, source_exercise_id in source_exercises:
             day_no = int(day_index or 0)
             if day_no <= 0:
                 continue
@@ -5151,6 +5252,34 @@ async def copy_training_system_from_user(source_user_id: int, target_user_id: in
             )
             ex_count += 1
             copied_exercise_ids.add(exercise_id)
+            source_meta = source_meta_map.get((day_no, int(source_exercise_id or 0))) or {}
+            inherited_source_user_id = source_meta.get('source_user_id')
+            inherited_source_system_id = source_meta.get('source_system_id')
+            inherited_source_exercise_id = source_meta.get('source_exercise_id')
+            inherited_source_exercise_name = (source_meta.get('source_exercise_name') or name_raw).strip() or name_raw
+            payload_source_exercise_id = int(inherited_source_exercise_id) if inherited_source_exercise_id is not None else int(source_exercise_id or 0)
+            inherited_sets_count = source_meta.get('sets_count')
+            inherited_reps = source_meta.get('reps')
+            inherited_weight = source_meta.get('weight_kg')
+            snapshot = await get_source_snapshot(payload_source_exercise_id)
+            payload = {
+                'source_user_id': int(inherited_source_user_id) if inherited_source_user_id is not None else int(source_user_id),
+                'source_system_id': int(inherited_source_system_id) if inherited_source_system_id is not None else int(selected_system_id),
+                'source_exercise_id': payload_source_exercise_id,
+                'source_exercise_name': inherited_source_exercise_name,
+                'sets_count': int(inherited_sets_count) if inherited_sets_count is not None else int(snapshot.get('sets_count') or 0),
+                'reps': int(inherited_reps) if inherited_reps is not None else int(snapshot.get('reps') or 0),
+                'weight_kg': float(inherited_weight) if inherited_weight is not None else float(snapshot.get('weight_kg') or 0.0),
+            }
+            await db.execute(
+                """
+                INSERT INTO training_system_exercise_sources(system_id, day_index, exercise_id, source_payload)
+                VALUES(?,?,?,?)
+                ON CONFLICT(system_id, day_index, exercise_id)
+                DO UPDATE SET source_payload=excluded.source_payload
+                """,
+                (new_system_id, day_no, exercise_id, json.dumps(payload, ensure_ascii=False)),
+            )
 
         for day_no, dow, hour, minute in source_reminders:
             if int(day_no or 0) <= 0:
