@@ -7789,7 +7789,7 @@ async def cmd_set_intro(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     context.user_data[INTRO_AWAIT_KEY] = True
     await update.message.reply_text(
-        "Пришли видео-гайд одним сообщением (файл/видео). Я сохраню file_id и буду показывать новым пользователям в начале онбординга."
+        "Пришли видео-гайд одним сообщением (файл/видео). Я сохраню file_id и буду показывать новым пользователям в начале начальной настройки."
     )
 
 
@@ -7816,7 +7816,7 @@ async def capture_intro_video(update: Update, context: ContextTypes.DEFAULT_TYPE
     await set_intro_video(file_id)
     context.user_data.pop(INTRO_AWAIT_KEY, None)
     await msg.reply_text(
-        "✅ Видео сохранено. Теперь оно будет показано всем новым пользователям перед началом онбординга."
+        "✅ Видео сохранено. Теперь оно будет показано всем новым пользователям перед началом начальной настройки."
     )
 
 
@@ -8850,7 +8850,7 @@ async def wizard_router(
                 logger.warning("Failed to clear onboarding intro message: %s", exc)
 
             # 3) Пересылаем «привет» и первый вопрос визарда как два новых сообщения
-            #    (поведение становится идентичным старому онбордингу, только после видео)
+            #    (поведение становится идентичным старой начальной настройке, только после видео)
             try:
                 prefs = await load_ui_preferences(user_id)
                 intro_text, _ = prepare_ui_output(t("ONBOARDING_INTRO"), None, prefs)

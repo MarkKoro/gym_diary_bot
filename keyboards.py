@@ -692,7 +692,7 @@ def day_done_kb(day_index: int):
         ],
         [
             InlineKeyboardButton(
-                dual("⏹ Завершить", "Завершить онбординг"),
+                dual("⏹ Завершить", "Завершить начальную настройку"),
                 callback_data="wiz:finish_early",
             )
         ],
