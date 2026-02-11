@@ -12,7 +12,16 @@ from zoneinfo import ZoneInfo
 from fastapi import Body, Depends, FastAPI, Header, HTTPException, Request, Response
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from settings import ADMIN_IDS, BOT_PUBLIC_LINK, JOIN_URL, SUPPORT_DEEPLINK, OPENAI_API_KEY, OPENAI_MODEL, TG_TOKEN, YK_TOKEN
+from settings import (
+    ADMIN_IDS,
+    BOT_PUBLIC_LINK,
+    JOIN_URL,
+    SUPPORT_DEEPLINK,
+    TG_TOKEN,
+    YK_TOKEN,
+    get_openai_api_key,
+    get_openai_model,
+)
 from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram_webapp_auth import (
     InitDataError,
@@ -508,10 +517,11 @@ def _build_ai_system_prompt(mode: str) -> str:
 
 
 async def _call_openai_chat(system_prompt: str, user_prompt: str) -> dict:
-    if not OPENAI_API_KEY:
+    openai_api_key = get_openai_api_key()
+    if not openai_api_key:
         raise HTTPException(status_code=503, detail='OPENAI_API_KEY не задан')
     payload = {
-        'model': (OPENAI_MODEL or 'gpt-4o-mini'),
+        'model': get_openai_model(),
         'temperature': 0.6,
         'messages': [
             {'role': 'system', 'content': system_prompt},
@@ -519,7 +529,7 @@ async def _call_openai_chat(system_prompt: str, user_prompt: str) -> dict:
         ],
     }
     headers = {
-        'Authorization': f'Bearer {OPENAI_API_KEY}',
+        'Authorization': f'Bearer {openai_api_key}',
         'Content-Type': 'application/json',
     }
     async with httpx.AsyncClient(timeout=55.0) as client:
@@ -4038,5 +4048,5 @@ async def ai_coach_query(payload: dict = Body(default_factory=dict), ctx: AuthCt
         'answer_text': result['text'],
         'parsed_action_plan': parsed,
         'context_preview': context_text,
-        'model': (OPENAI_MODEL or 'gpt-4o-mini'),
+        'model': get_openai_model(),
     }
