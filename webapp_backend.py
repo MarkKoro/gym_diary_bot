@@ -12,7 +12,7 @@ from zoneinfo import ZoneInfo
 from fastapi import Body, Depends, FastAPI, Header, HTTPException, Request, Response
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from settings import ADMIN_IDS, BOT_PUBLIC_LINK, OPENAI_API_KEY, OPENAI_MODEL, TG_TOKEN, YK_TOKEN
+from settings import ADMIN_IDS, BOT_PUBLIC_LINK, JOIN_URL, SUPPORT_DEEPLINK, OPENAI_API_KEY, OPENAI_MODEL, TG_TOKEN, YK_TOKEN
 from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram_webapp_auth import (
     InitDataError,
@@ -156,12 +156,25 @@ SUBSCRIPTION_PLANS = {
 
 def _subscription_features() -> list[str]:
     return [
-        'AI-коуч: можно задавать запросы как в ChatGPT, получать персональные рекомендации и готовые шаги для тренировок.',
+        'AI-коуч подберёт новые упражнения под цель, оборудование и ограничения по нагрузке.',
+        'AI-коуч поможет поменять объём: пересоберёт подходы, повторения и отдых под твой текущий режим.',
+        'AI-коуч предложит план на неделю/месяц: как прогрессировать по весам и когда делать разгрузку.',
+        'AI-коуч подскажет, как улучшить технику и снизить риск перегруза по твоим заметкам и самочувствию.',
         'Неограниченное количество систем тренировок: сохраняй разные сплиты и переключайся между ними в любой момент.',
         'Отключение рекламы внутри бота и WebApp.',
         'Ранний доступ к новым функциям и обновлениям до общего релиза.',
         'Поддержка проекта: ты напрямую помогаешь развивать продукт и выпускать новые инструменты.',
     ]
+
+
+def _resolve_subscription_return_url() -> str:
+    if SUPPORT_DEEPLINK:
+        return SUPPORT_DEEPLINK
+    if JOIN_URL:
+        return JOIN_URL
+    if BOT_PUBLIC_LINK:
+        return BOT_PUBLIC_LINK
+    return 'https://t.me'
 
 
 async def _create_subscription_payment(user_id: int, plan_code: str, return_url: str | None = None) -> tuple[str, str, dict]:
@@ -3863,7 +3876,11 @@ async def subscription_overview(ctx: AuthCtx = Depends(get_auth_ctx)):
 async def subscription_payment_start(payload: dict = Body(default_factory=dict), ctx: AuthCtx = Depends(get_auth_ctx)):
     user_id = int(ctx.user_id)
     plan_code = str(payload.get('plan_code') or '').strip()
-    payment_id, confirmation_url, _plan = await _create_subscription_payment(user_id, plan_code)
+    payment_id, confirmation_url, _plan = await _create_subscription_payment(
+        user_id,
+        plan_code,
+        return_url=_resolve_subscription_return_url(),
+    )
     return {
         'ok': True,
         'payment_id': payment_id,
