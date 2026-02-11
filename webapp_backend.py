@@ -235,7 +235,7 @@ async def _create_telegram_subscription_invoice_link(user_id: int, plan_code: st
     payload = f'sub:{user_id}:{plan_code}'
     body = {
         'title': f"Подписка — {plan['title']}",
-        'description': 'Подписка на умный дневник питания с фото, голосом и текстом.',
+        'description': 'Подписка на умный дневник тренировок Progressor.',
         'payload': payload,
         'provider_token': YK_TOKEN,
         'currency': 'RUB',
