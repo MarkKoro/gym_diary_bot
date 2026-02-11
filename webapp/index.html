@@ -125,8 +125,13 @@
     .subscription-hero { border: 1px solid var(--border); border-radius: 16px; padding: 14px; background: color-mix(in srgb, var(--accent) 16%, var(--card)); display: grid; gap: 8px; }
     .subscription-title { font-size: 18px; font-weight: 800; }
     .subscription-list { margin: 0; padding-left: 18px; display: grid; gap: 6px; }
-    .subscription-plan-row { display: grid; gap: 8px; }
-    .subscription-plan-btn { width: 100%; text-align: left; }
+    .subscription-plan-row { display: grid; gap: 10px; }
+    .subscription-plan-btn { width: 100%; text-align: left; border-radius: 14px; border: 1px solid color-mix(in srgb, var(--accent) 36%, transparent); background: color-mix(in srgb, var(--accent) 20%, var(--card)); font-weight: 800; }
+    .subscription-plan-btn .plan-price { color: var(--text); opacity: 0.95; }
+    .subscription-plan-btn .plan-note { display: block; margin-top: 4px; color: var(--muted); font-size: 12px; font-weight: 600; }
+    .subscription-cta-title { font-size: 16px; font-weight: 800; letter-spacing: -0.01em; }
+    .subscription-cta-subtitle { color: var(--muted); font-size: 13px; }
+    .subscription-sheet-note { color: var(--muted); font-size: 13px; }
     .loader-inline { width: 18px; height: 18px; border: 2px solid color-mix(in srgb, var(--text) 26%, transparent); border-top-color: var(--accent); border-radius: 999px; animation: spin 0.9s linear infinite; display: inline-block; vertical-align: middle; margin-right: 6px; }
     @keyframes spin { to { transform: rotate(360deg); } }
     .manage-menu {
@@ -2254,8 +2259,9 @@
   <div id="planPickerSheet" class="sheet-backdrop">
     <div class="sheet">
       <div class="sheet-handle"></div>
-      <div class="sheet-title">Выбери длительность подписки</div>
+      <div class="sheet-title">Оформление подписки</div>
       <div id="planPickerContent" class="ai-coach-grid"></div>
+      <button class="btn" id="planPickerCloseBtn">Закрыть</button>
     </div>
   </div>
 
@@ -9133,25 +9139,31 @@
         updateDrawerSubscriptionStatus();
         return;
       }
-      const plans = (sub.plans || []).map((p) => `<button class="btn subscription-plan-btn" data-sub-action="buy" data-plan-code="${p.code}">${p.title} — ${p.amount_rub} ₽</button>`).join('');
       const exactUntil = formatDateTimeLocal(sub.activeExpiresAt);
       const statusLabel = sub.active ? `Активна до ${exactUntil}` : 'Подписка не активна';
       const checking = sub.payment.checking ? '<div><span class="loader-inline"></span>Проверяем оплату…</div>' : '';
       const features = (sub.features || []).map((f) => `<li>${escapeHtml(f)}</li>`).join('');
       const accentNote = sub.active
-        ? 'Спасибо за поддержку проекта. Ты уже получаешь все преимущества подписки.'
-        : 'Подписка нужна, чтобы включить дополнительные возможности и поддержать развитие проекта.';
+        ? 'Спасибо за поддержку проекта. Подписка уже активна — все функции открыты.'
+        : 'В подписке открывается персональный AI-коуч, гибкая работа с системами тренировок и ранний доступ к обновлениям.';
+      const cta = sub.active
+        ? '<button class="btn subscription-plan-btn" data-sub-action="change-plan">Продлить или изменить тариф</button>'
+        : '<button class="btn primary subscription-plan-btn" data-sub-action="open-picker">Купить подписку</button>';
       container.innerHTML = `
         <div class="card subscription-hero">
           <div class="subscription-title">Progressor Подписка</div>
           <div class="subscription-status-badge ${sub.active ? 'active' : ''}"><span class="dot"></span>${statusLabel}</div>
           <div class="timer-hint">${accentNote}</div>${checking}
           <ul class="subscription-list">${features}</ul>
-          <div class="subscription-plan-row">${plans}</div>
+          <div class="subscription-plan-row">
+            <div class="subscription-cta-title">Оформи доступ за 20 секунд</div>
+            <div class="subscription-cta-subtitle">Нажми кнопку, выбери период и перейди в мини-приложение ЮKassa для оплаты.</div>
+            ${cta}
+          </div>
         </div>
       `;
       updateDrawerSubscriptionStatus();
-      container.querySelectorAll('[data-sub-action="buy"]').forEach((btn) => btn.addEventListener('click', () => startSubscriptionPayment(btn.dataset.planCode).catch(console.error)));
+      container.querySelectorAll('[data-sub-action="open-picker"], [data-sub-action="change-plan"]').forEach((btn) => btn.addEventListener('click', () => openPlanPicker().catch(console.error)));
     }
 
     function formatDateLocal(value) {
@@ -9201,7 +9213,12 @@
       const wrap = document.getElementById('planPickerContent');
       if (!wrap) return;
       const plans = state.subscription.plans || [];
-      wrap.innerHTML = plans.map((p) => `<button class="btn primary" data-plan-code="${p.code}">${p.title} — ${p.amount_rub} ₽</button>`).join('') || '<div class="timer-hint">Тарифы недоступны</div>';
+      const summary = '<div class="subscription-sheet-note">Выбери период подписки — мы создадим платёж и откроем мини-приложение ЮKassa так же, как при оплате в Telegram.</div>';
+      const items = plans.map((p) => {
+        const monthWord = p.code === '1m' ? '1 месяц' : (p.code === '6m' ? '6 месяцев' : (p.code === '12m' ? '12 месяцев' : p.title));
+        return `<button class="btn primary subscription-plan-btn" data-plan-code="${p.code}"><span class="plan-price">${monthWord} — ${p.amount_rub} ₽</span><span class="plan-note">После выбора сразу откроется страница оплаты</span></button>`;
+      }).join('');
+      wrap.innerHTML = `${summary}${items || '<div class="timer-hint">Тарифы недоступны</div>'}`;
       wrap.querySelectorAll('[data-plan-code]').forEach((btn) => btn.addEventListener('click', () => startSubscriptionPayment(btn.dataset.planCode).catch(console.error)));
       document.getElementById('planPickerSheet')?.classList.add('show');
     }
@@ -9378,6 +9395,7 @@
       document.getElementById('planPickerSheet').addEventListener('click', (e) => { if (e.target.id === 'planPickerSheet') closePlanPicker(); });
       document.getElementById('paywallBuyBtn').addEventListener('click', () => { closePaywall(); openPlanPicker().catch(console.error); });
       document.getElementById('paywallCancelBtn').addEventListener('click', closePaywall);
+      document.getElementById('planPickerCloseBtn')?.addEventListener('click', closePlanPicker);
       document.getElementById('systemSheet').addEventListener('click', async (e) => {
         if (e.target.id === 'systemSheet') { closeSystemSheet(); return; }
         if (!e.target.closest('.system-menu-wrap')) {
