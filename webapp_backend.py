@@ -217,6 +217,53 @@ async def _create_subscription_payment(user_id: int, plan_code: str, return_url:
     return payment_id, confirmation_url, plan
 
 
+def _looks_like_telegram_provider_token(token: str) -> bool:
+    value = str(token or '').strip()
+    if not value:
+        return False
+    # Пример формата провайдер-токена Telegram: 123456:TEST:abcdef...
+    return value.count(':') >= 2
+
+
+async def _create_telegram_subscription_invoice_link(user_id: int, plan_code: str) -> tuple[str, str, dict]:
+    if not TG_TOKEN or not YK_TOKEN:
+        raise HTTPException(status_code=503, detail='Оплата временно недоступна')
+    plan = SUBSCRIPTION_PLANS.get(plan_code)
+    if not plan:
+        raise HTTPException(status_code=400, detail='Неизвестный тариф')
+
+    payload = f'sub:{user_id}:{plan_code}'
+    body = {
+        'title': f"Подписка — {plan['title']}",
+        'description': 'Подписка на умный дневник питания с фото, голосом и текстом.',
+        'payload': payload,
+        'provider_token': YK_TOKEN,
+        'currency': 'RUB',
+        'prices': [{'label': plan['title'], 'amount': int(plan['amount_rub']) * 100}],
+    }
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        resp = await client.post(f'https://api.telegram.org/bot{TG_TOKEN}/createInvoiceLink', json=body)
+    if resp.status_code >= 400:
+        raise HTTPException(status_code=502, detail='Не удалось создать ссылку на оплату')
+    data = resp.json()
+    if not data.get('ok'):
+        raise HTTPException(status_code=502, detail='Платёжный сервис вернул ошибку')
+    confirmation_url = str(data.get('result') or '').strip()
+    if not confirmation_url:
+        raise HTTPException(status_code=502, detail='Платёжный сервис вернул неполный ответ')
+
+    await db.create_payment_record(
+        user_id=user_id,
+        provider='telegram',
+        amount=int(plan['amount_rub']) * 100,
+        currency='RUB',
+        status='pending',
+        payload={'plan': plan_code, 'title': plan['title'], 'confirmation_url': confirmation_url},
+        external_id=payload,
+    )
+    return payload, confirmation_url, plan
+
+
 UNSCHEDULED_COMPLETION_EXPIRY_DAYS = 5
 SCHEDULED_COMPLETION_EXPIRY_DAYS = 5
 
@@ -3876,11 +3923,15 @@ async def subscription_overview(ctx: AuthCtx = Depends(get_auth_ctx)):
 async def subscription_payment_start(payload: dict = Body(default_factory=dict), ctx: AuthCtx = Depends(get_auth_ctx)):
     user_id = int(ctx.user_id)
     plan_code = str(payload.get('plan_code') or '').strip()
-    payment_id, confirmation_url, _plan = await _create_subscription_payment(
-        user_id,
-        plan_code,
-        return_url=_resolve_subscription_return_url(),
-    )
+
+    if _looks_like_telegram_provider_token(YK_TOKEN):
+        payment_id, confirmation_url, _plan = await _create_telegram_subscription_invoice_link(user_id, plan_code)
+    else:
+        payment_id, confirmation_url, _plan = await _create_subscription_payment(
+            user_id,
+            plan_code,
+            return_url=_resolve_subscription_return_url(),
+        )
     return {
         'ok': True,
         'payment_id': payment_id,
@@ -3890,21 +3941,28 @@ async def subscription_payment_start(payload: dict = Body(default_factory=dict),
 
 @app.get('/subscription/payment/{payment_id}/status')
 async def subscription_payment_status(payment_id: str, ctx: AuthCtx = Depends(get_auth_ctx)):
-    if not YK_TOKEN:
-        raise HTTPException(status_code=503, detail='Оплата временно недоступна')
     user_id = int(ctx.user_id)
     record = await db.get_payment_by_external_id(payment_id)
     if not record or int(record.get('user_id') or 0) != user_id:
         raise HTTPException(status_code=404, detail='Платёж не найден')
 
-    headers = {'Authorization': f'Basic {YK_TOKEN}'}
-    async with httpx.AsyncClient(timeout=15.0) as client:
-        resp = await client.get(f'https://api.yookassa.ru/v3/payments/{payment_id}', headers=headers)
-    if resp.status_code >= 400:
-        raise HTTPException(status_code=502, detail='Не удалось проверить платёж')
-    data = resp.json()
-    status = str(data.get('status') or '')
-    await db.update_payment_status(payment_id, status, data)
+    provider = str(record.get('provider') or '')
+    if provider == 'telegram':
+        status = str(record.get('status') or '')
+        if status == 'paid':
+            status = 'succeeded'
+        data = {'provider': 'telegram', 'status': status}
+    else:
+        if not YK_TOKEN:
+            raise HTTPException(status_code=503, detail='Оплата временно недоступна')
+        headers = {'Authorization': f'Basic {YK_TOKEN}'}
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.get(f'https://api.yookassa.ru/v3/payments/{payment_id}', headers=headers)
+        if resp.status_code >= 400:
+            raise HTTPException(status_code=502, detail='Не удалось проверить платёж')
+        data = resp.json()
+        status = str(data.get('status') or '')
+        await db.update_payment_status(payment_id, status, data)
 
     activated = False
     expires_at_iso = None
