@@ -126,9 +126,9 @@
     .subscription-title { font-size: 18px; font-weight: 800; }
     .subscription-list { margin: 0; padding-left: 18px; display: grid; gap: 6px; }
     .subscription-plan-row { display: grid; gap: 10px; }
-    .subscription-plan-btn { width: 100%; text-align: left; border-radius: 14px; border: 1px solid color-mix(in srgb, var(--accent) 36%, transparent); background: color-mix(in srgb, var(--accent) 20%, var(--card)); font-weight: 800; }
-    .subscription-plan-btn .plan-price { color: var(--text); opacity: 0.95; }
-    .subscription-plan-btn .plan-note { display: block; margin-top: 4px; color: var(--muted); font-size: 12px; font-weight: 600; }
+    .subscription-plan-btn { width: 100%; text-align: left; border-radius: 14px; border: 1px solid color-mix(in srgb, #22c55e 55%, transparent); background: linear-gradient(180deg, #22c55e 0%, #16a34a 100%); color: #062012; font-weight: 800; box-shadow: 0 8px 18px rgba(22, 163, 74, 0.28); }
+    .subscription-plan-btn .plan-price { color: #062012; opacity: 1; }
+    .subscription-plan-btn .plan-note { display: none; }
     .subscription-cta-title { font-size: 16px; font-weight: 800; letter-spacing: -0.01em; }
     .subscription-cta-subtitle { color: var(--muted); font-size: 13px; }
     .subscription-sheet-note { color: var(--muted); font-size: 13px; }
@@ -9147,8 +9147,8 @@
         ? 'Спасибо за поддержку проекта. Подписка уже активна — все функции открыты.'
         : 'В подписке открывается персональный AI-коуч, гибкая работа с системами тренировок и ранний доступ к обновлениям.';
       const cta = sub.active
-        ? '<button class="btn subscription-plan-btn" data-sub-action="change-plan">Продлить или изменить тариф</button>'
-        : '<button class="btn primary subscription-plan-btn" data-sub-action="open-picker">Купить подписку</button>';
+        ? '<button class="btn subscription-plan-btn" data-sub-action="change-plan">Продлить подписку</button>'
+        : '<button class="btn subscription-plan-btn" data-sub-action="open-picker">Купить подписку</button>';
       container.innerHTML = `
         <div class="card subscription-hero">
           <div class="subscription-title">Progressor Подписка</div>
@@ -9156,8 +9156,6 @@
           <div class="timer-hint">${accentNote}</div>${checking}
           <ul class="subscription-list">${features}</ul>
           <div class="subscription-plan-row">
-            <div class="subscription-cta-title">Оформи доступ за 20 секунд</div>
-            <div class="subscription-cta-subtitle">Нажми кнопку, выбери период и перейди в мини-приложение ЮKassa для оплаты.</div>
             ${cta}
           </div>
         </div>
@@ -9213,10 +9211,10 @@
       const wrap = document.getElementById('planPickerContent');
       if (!wrap) return;
       const plans = state.subscription.plans || [];
-      const summary = '<div class="subscription-sheet-note">Выбери период подписки — мы создадим платёж и откроем мини-приложение ЮKassa так же, как при оплате в Telegram.</div>';
+      const summary = '';
       const items = plans.map((p) => {
         const monthWord = p.code === '1m' ? '1 месяц' : (p.code === '6m' ? '6 месяцев' : (p.code === '12m' ? '12 месяцев' : p.title));
-        return `<button class="btn primary subscription-plan-btn" data-plan-code="${p.code}"><span class="plan-price">${monthWord} — ${p.amount_rub} ₽</span><span class="plan-note">После выбора сразу откроется страница оплаты</span></button>`;
+        return `<button class="btn subscription-plan-btn" data-plan-code="${p.code}"><span class="plan-price">${monthWord} — ${p.amount_rub} ₽</span></button>`;
       }).join('');
       wrap.innerHTML = `${summary}${items || '<div class="timer-hint">Тарифы недоступны</div>'}`;
       wrap.querySelectorAll('[data-plan-code]').forEach((btn) => btn.addEventListener('click', () => startSubscriptionPayment(btn.dataset.planCode).catch(console.error)));
