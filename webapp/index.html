@@ -103,6 +103,32 @@
       pointer-events: none;
     }
     .manage-timer-mini svg { width: 10px; height: 10px; stroke-width: 2.2; }
+    .manage-robot-mini {
+      position: absolute;
+      right: -4px;
+      bottom: -4px;
+      width: 18px;
+      height: 18px;
+      border-radius: 999px;
+      border: 1.5px solid color-mix(in srgb, var(--bg) 65%, transparent);
+      background: color-mix(in srgb, #8b5cf6 58%, var(--card));
+      box-shadow: 0 2px 6px rgba(0,0,0,0.24);
+      display: grid;
+      place-items: center;
+      pointer-events: none;
+    }
+    .manage-robot-mini svg { width: 10px; height: 10px; stroke-width: 2.1; }
+    .ai-coach-grid { display: grid; gap: 8px; }
+    .ai-coach-response { max-height: 42vh; overflow: auto; white-space: pre-wrap; border: 1px solid var(--border); border-radius: 12px; padding: 10px; background: var(--bg); font-size: 13px; line-height: 1.4; }
+    .ai-coach-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+
+    .subscription-hero { border: 1px solid var(--border); border-radius: 16px; padding: 14px; background: color-mix(in srgb, var(--accent) 16%, var(--card)); display: grid; gap: 8px; }
+    .subscription-title { font-size: 18px; font-weight: 800; }
+    .subscription-list { margin: 0; padding-left: 18px; display: grid; gap: 6px; }
+    .subscription-plan-row { display: grid; gap: 8px; }
+    .subscription-plan-btn { width: 100%; text-align: left; }
+    .loader-inline { width: 18px; height: 18px; border: 2px solid color-mix(in srgb, var(--text) 26%, transparent); border-top-color: var(--accent); border-radius: 999px; animation: spin 0.9s linear infinite; display: inline-block; vertical-align: middle; margin-right: 6px; }
+    @keyframes spin { to { transform: rotate(360deg); } }
     .manage-menu {
       position: absolute;
       top: 52px;
@@ -1868,6 +1894,7 @@
         <button class="menu-item active" data-route="today">Сегодня</button>
         <button class="menu-item" data-route="library">Статистика упражнений</button>
         <button class="menu-item" data-route="settings">Настройки</button>
+        <button class="menu-item" data-route="subscription">Подписка</button>
         <button class="menu-item" data-route="measurements">Мои замеры</button>
       </nav>
     </div>
@@ -1927,7 +1954,7 @@
           <div id="deleteModeHeaderText" class="delete-mode-banner hidden">Вы находитесь в меню удаления</div>
           <div id="actingHeaderText" class="acting-banner hidden"></div>
           <div id="manageMenuWrap" class="manage-menu-wrap">
-            <button id="manageExerciseBtn" class="icon-btn manage-trigger" aria-label="Добавить, удалить упражнения и включить таймер">
+            <button id="manageExerciseBtn" class="icon-btn manage-trigger" aria-label="Добавить, удалить упражнения, включить таймер и ИИ">
               <svg class="manage-icon" viewBox="0 0 24 24" aria-hidden="true">
                 <path class="manage-plus" d="M12 5v14M5 12h14"></path>
                 <path class="manage-minus" d="M8 12h8"></path>
@@ -1939,11 +1966,20 @@
                   <circle cx="12" cy="13" r="6"></circle>
                 </svg>
               </span>
+              <span class="manage-robot-mini" aria-hidden="true">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                  <rect x="6" y="8" width="12" height="9" rx="2"></rect>
+                  <circle cx="10" cy="12" r="1"></circle>
+                  <circle cx="14" cy="12" r="1"></circle>
+                  <path d="M12 8V5"></path>
+                </svg>
+              </span>
             </button>
             <div id="manageMenu" class="manage-menu" role="menu" aria-hidden="true">
               <button type="button" data-action="add">Добавить упражнение</button>
               <button type="button" data-action="delete">Удалить упражнение</button>
               <button type="button" data-action="timer">Включить таймер</button>
+              <button type="button" data-action="ai">Прогрессируем вместе с ИИ</button>
             </div>
           </div>
           <button id="deleteModeDone" class="btn primary header-done-btn hidden" type="button">Готово</button>
@@ -2024,7 +2060,11 @@
         </div>
       </section>
 
-      <section id="screen-measurements" class="screen" data-route="measurements">
+            <section id="screen-subscription" class="screen" data-route="subscription">
+        <div class="card-list" id="subscriptionContent"></div>
+      </section>
+
+<section id="screen-measurements" class="screen" data-route="measurements">
         <div id="measurementsContent" class="settings-section"></div>
       </section>
 
@@ -2147,6 +2187,62 @@
           <button id="leaderboardNextBtn" class="btn">Вперёд →</button>
         </div>
       </div>
+    </div>
+  </div>
+
+  <div id="aiCoachSheet" class="sheet-backdrop">
+    <div class="sheet">
+      <div class="sheet-handle"></div>
+      <div class="sheet-title">Прогрессируем вместе с ИИ</div>
+      <div class="ai-coach-grid">
+        <select id="aiCoachMode" class="settings-select">
+          <option value="free_request">Общий запрос / помощь</option>
+          <option value="replace_exercises">Попросить новые упражнения</option>
+          <option value="new_system">Попросить новую систему</option>
+          <option value="adjust_sets">Изменить количество подходов</option>
+          <option value="mistakes_analysis">Анализ ошибок</option>
+        </select>
+        <textarea id="aiCoachInput" class="settings-input" rows="4" placeholder="Например: хочу прогресс по жиму и разгрузить локти"></textarea>
+        <div class="ai-coach-actions">
+          <button class="btn primary" id="aiCoachAskBtn">Спросить ИИ</button>
+          <button class="btn" id="aiCoachCloseBtn">Закрыть</button>
+        </div>
+        <div id="aiCoachApplyRow" class="ai-coach-actions hidden">
+          <button class="btn" id="aiCoachApplyCurrentBtn">Подставить в текущую систему</button>
+          <button class="btn" id="aiCoachApplyNewSystemBtn">Создать новую систему</button>
+        </div>
+        <div id="aiCoachAnswer" class="ai-coach-response hidden"></div>
+      </div>
+    </div>
+  </div>
+
+  <div id="paywallSheet" class="sheet-backdrop">
+    <div class="sheet">
+      <div class="sheet-handle"></div>
+      <div class="sheet-title">Доступно по подписке</div>
+      <div class="ai-coach-grid">
+        <div id="paywallText" class="timer-hint">Эта функция доступна только в подписке.</div>
+        <div class="ai-coach-actions">
+          <button class="btn primary" id="paywallBuyBtn">Купить подписку</button>
+          <button class="btn" id="paywallCancelBtn">Отмена</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="planPickerSheet" class="sheet-backdrop">
+    <div class="sheet">
+      <div class="sheet-handle"></div>
+      <div class="sheet-title">Выбери длительность подписки</div>
+      <div id="planPickerContent" class="ai-coach-grid"></div>
+    </div>
+  </div>
+
+  <div id="systemsLimitSheet" class="sheet-backdrop">
+    <div class="sheet">
+      <div class="sheet-handle"></div>
+      <div class="sheet-title">Выбери одну систему</div>
+      <div id="systemsLimitContent" class="ai-coach-grid"></div>
     </div>
   </div>
 
@@ -2391,6 +2487,7 @@
       today: 'Сегодня',
       library: 'Статистика упражнений',
       settings: 'Настройки',
+      subscription: 'Подписка',
       measurements: 'Мои замеры',
     };
 
@@ -2421,6 +2518,9 @@
       isTelegram: false,
       isAdmin: false,
       systemSheetOpen: false,
+      aiCoach: { open: false, loading: false, mode: 'free_request', answerText: '', parsed: null },
+      subscription: { loading: false, active: false, activePlan: null, activeExpiresAt: null, plans: [], features: [], payment: { checking: false, paymentId: null } },
+      paywall: { open: false, reason: '' },
       productivitySheetOpen: false,
       muscleLoad: { groups: [], selectedKey: null, showAll: false, detailsOpen: true, byMuscle: {}, loading: false },
       manage: {
@@ -3328,6 +3428,9 @@
 
     async function copyLeaderPlan(leaderUserId, systemId = null) {
       if (!openConfirmModal) return;
+      const warn = state.subscription.active
+        ? 'Скопируется выбранная система с днями и упражнениями. Продолжить?'
+        : 'Внимание, ваша текущая система полностью перезапишется. История тренировок сохранится. Продолжить?';
       openConfirmModal(async () => {
         await apiFetch(`/gymapi/leaderboard/productivity/${leaderUserId}/copy`, {
           method: 'POST',
@@ -3336,7 +3439,7 @@
         toast('Система лидера скопирована ✅');
         await loadSystems();
         await refreshTodayData({ keepDay: true });
-      }, 'Скопировать систему тренировок?', 'Скопируется выбранная система с днями и упражнениями. Продолжить?', 'Скопировать');
+      }, 'Скопировать систему тренировок?', warn, 'Скопировать');
     }
 
     async function loadSystems() {
@@ -3349,6 +3452,8 @@
         systems.items = data.systems || [];
         const active = (systems.items || []).find((it) => Number(it.id) === Number(systems.activeSystemId));
         systems.activeSystemName = active?.name || '';
+        state.subscription.active = !!data.has_subscription;
+        if (data.systems_limit?.requires_resolution) renderSystemsLimitSheet(data.systems_limit);
       } catch (e) {
         toast('Не удалось загрузить системы');
       } finally {
@@ -3462,9 +3567,15 @@
       const name = (input?.value || '').trim();
       if (!name) return;
       const days = Math.max(1, Math.min(7, Number(state.settings.systems.newDays) || 3));
+      let replaceExisting = false;
+      if (!state.subscription.active && (state.settings.systems.items || []).length >= 1) {
+        const ok = window.confirm('Внимание, ваша нынешняя система полностью перезапишется. История упражнений сохранится. Продолжить?');
+        if (!ok) return;
+        replaceExisting = true;
+      }
       await apiFetch('/gymapi/systems', {
         method: 'POST',
-        body: JSON.stringify({ name, workouts_per_week: days }),
+        body: JSON.stringify({ name, workouts_per_week: days, replace_existing: replaceExisting }),
       });
       if (input) input.value = '';
       state.settings.systems.newDays = days;
@@ -6206,6 +6317,10 @@
         renderMeasurementsScreen();
         loadMeasurementsOverview().catch(console.error);
       }
+      if (normalized === 'subscription') {
+        renderSubscriptionScreen();
+        loadSubscriptionOverview().catch(console.error);
+      }
     }
 
     function navigateTo(route, replace = false) {
@@ -6233,6 +6348,12 @@
     function handleBackAction() {
       const timerSheetOpen = document.getElementById('timerSheet')?.classList.contains('show');
       if (timerSheetOpen) { closeTimerSheet(); return; }
+      const paywallOpen = document.getElementById('paywallSheet')?.classList.contains('show');
+      if (paywallOpen) { closePaywall(); return; }
+      const planPickerOpen = document.getElementById('planPickerSheet')?.classList.contains('show');
+      if (planPickerOpen) { closePlanPicker(); return; }
+      const systemsLimitOpen = document.getElementById('systemsLimitSheet')?.classList.contains('show');
+      if (systemsLimitOpen) { return; }
       const measurementSheetOpen = document.getElementById('measurementSheet')?.classList.contains('show');
       if (measurementSheetOpen) { closeMeasurementSheet(); return; }
       const manageSheetOpen = document.getElementById('manageExerciseSheet')?.classList.contains('show');
@@ -8836,6 +8957,263 @@
       } else closeFinishPopover();
     }
 
+
+    function openAiCoachSheet() {
+      const sheet = document.getElementById('aiCoachSheet');
+      if (!sheet) return;
+      state.aiCoach.open = true;
+      sheet.classList.add('show');
+      const modeEl = document.getElementById('aiCoachMode');
+      if (modeEl) modeEl.value = state.aiCoach.mode || 'free_request';
+    }
+
+    function closeAiCoachSheet() {
+      const sheet = document.getElementById('aiCoachSheet');
+      if (!sheet) return;
+      state.aiCoach.open = false;
+      sheet.classList.remove('show');
+    }
+
+    function renderAiCoachResult() {
+      const answerEl = document.getElementById('aiCoachAnswer');
+      const applyRow = document.getElementById('aiCoachApplyRow');
+      if (!answerEl || !applyRow) return;
+      const text = (state.aiCoach.answerText || '').trim();
+      answerEl.textContent = text || 'Ответ пустой';
+      answerEl.classList.toggle('hidden', !text);
+      const hasPlan = Boolean(state.aiCoach.parsed && Array.isArray(state.aiCoach.parsed.actions) && state.aiCoach.parsed.actions.length);
+      applyRow.classList.toggle('hidden', !hasPlan);
+    }
+
+    async function askAiCoach() {
+      if (!state.subscription.active) { openPaywall('ИИ-функции доступны только при активной подписке.'); return; }
+      if (state.aiCoach.loading) return;
+      const modeEl = document.getElementById('aiCoachMode');
+      const inputEl = document.getElementById('aiCoachInput');
+      const mode = modeEl ? String(modeEl.value || 'free_request') : 'free_request';
+      const message = inputEl ? String(inputEl.value || '').trim() : '';
+      state.aiCoach.mode = mode;
+      state.aiCoach.loading = true;
+      try {
+        const data = await apiFetch('/gymapi/ai/coach/query', {
+          method: 'POST',
+          body: JSON.stringify({ mode, message }),
+        });
+        state.aiCoach.answerText = data.answer_text || '';
+        state.aiCoach.parsed = data.parsed_action_plan || null;
+        renderAiCoachResult();
+      } catch (e) {
+        state.aiCoach.answerText = `Ошибка: ${e?.message || e}`;
+        state.aiCoach.parsed = null;
+        renderAiCoachResult();
+      } finally {
+        state.aiCoach.loading = false;
+      }
+    }
+
+    async function applyAiCoachPlan(mode = 'current') {
+      const plan = state.aiCoach.parsed;
+      const actions = Array.isArray(plan?.actions) ? plan.actions : [];
+      if (!actions.length) {
+        toast('Нет действий для применения');
+        return;
+      }
+
+      if (mode === 'new_system') {
+        if (!state.subscription.active) { openPaywall('Создание отдельных систем по ИИ доступно только в подписке.'); return; }
+        const createAction = actions.find((a) => a && a.type === 'create_system');
+        if (!createAction) {
+          toast('В ответе нет блока create_system');
+          return;
+        }
+        const systemName = String(createAction.system_name || 'Система от ИИ').trim() || 'Система от ИИ';
+        await apiFetch('/gymapi/systems', { method: 'POST', body: JSON.stringify({ name: systemName, workouts_per_week: 3 }) });
+        await loadSystems();
+        toast('Создана новая система. Наполни упражнения вручную из ответа ИИ.');
+        return;
+      }
+
+      const grouped = new Map();
+      for (const action of actions) {
+        const di = Number(action?.day_index || state.dayIndex || 1);
+        if (!grouped.has(di)) grouped.set(di, []);
+        grouped.get(di).push(action);
+      }
+      for (const [dayIndex, items] of grouped.entries()) {
+        await loadSheet(dayIndex);
+        for (const action of items) {
+          const type = String(action?.type || '');
+          if (!type) continue;
+          const exName = String(action.exercise_name || action.new_exercise_name || '').trim();
+          let target = Array.from(state.exercises.values()).find((x) => String(x.name || '').toLowerCase() === exName.toLowerCase());
+          if ((type === 'add_exercise' || type === 'replace_exercise') && !target && exName) {
+            const search = await apiFetch(`/gymapi/catalog/search?query=${encodeURIComponent(exName)}`);
+            const found = (search.items || []).find((it) => String(it.name || '').toLowerCase() === exName.toLowerCase()) || (search.items || [])[0];
+            if (found?.id) {
+              await apiFetch(`/gymapi/day/${dayIndex}/exercise`, { method: 'POST', body: JSON.stringify({ exercise_id: found.id }) });
+              await loadSheet(dayIndex);
+              target = Array.from(state.exercises.values()).find((x) => String(x.name || '').toLowerCase() === exName.toLowerCase());
+            }
+          }
+          if (type === 'replace_exercise') {
+            const oldName = String(action.old_exercise_name || '').trim().toLowerCase();
+            const oldItem = Array.from(state.exercises.values()).find((x) => String(x.name || '').toLowerCase() === oldName);
+            if (oldItem?.user_exercise_id) {
+              await apiFetch(`/gymapi/day/${dayIndex}/exercise/${oldItem.user_exercise_id}/toggle`, { method: 'POST' });
+            }
+          }
+          if (!target?.user_exercise_id) continue;
+          const ueId = Number(target.user_exercise_id);
+          const currentSets = Array.isArray(target.sets) ? target.sets.length : 0;
+          for (let i = 0; i < currentSets; i += 1) await apiFetch(`/gymapi/day/${dayIndex}/exercise/${ueId}/set/remove_last`, { method: 'POST' });
+          const sets = Math.max(1, Number(action.sets || 1));
+          const reps = Math.max(0, Number(action.reps || 0));
+          const seconds = Math.max(0, Number(action.seconds || 0));
+          const weight = Math.max(0, Number(action.weight_kg || 0));
+          for (let i = 0; i < sets; i += 1) {
+            await apiFetch(`/gymapi/day/${dayIndex}/exercise/${ueId}/set/add`, {
+              method: 'POST',
+              body: JSON.stringify({ reps, seconds, weight_kg: weight }),
+            });
+          }
+        }
+      }
+      await loadSheet(state.dayIndex || 1);
+      toast('План от ИИ применён');
+      closeAiCoachSheet();
+    }
+
+
+    async function loadSubscriptionOverview() {
+      state.subscription.loading = true;
+      renderSubscriptionScreen();
+      try {
+        const data = await apiFetch('/gymapi/subscription/overview', { silent: true });
+        state.subscription.active = !!data.active;
+        state.subscription.activePlan = data.active_plan || null;
+        state.subscription.activeExpiresAt = data.active_expires_at || null;
+        state.subscription.plans = data.plans || [];
+        state.subscription.features = data.features || [];
+      } catch (e) {
+        // noop
+      } finally {
+        state.subscription.loading = false;
+        renderSubscriptionScreen();
+      }
+    }
+
+    function renderSubscriptionScreen() {
+      const container = document.getElementById('subscriptionContent');
+      if (!container) return;
+      const sub = state.subscription;
+      if (sub.loading && !sub.plans.length) {
+        container.innerHTML = '<div class="card">Загружаем подписку…</div>';
+        return;
+      }
+      const plans = (sub.plans || []).map((p) => `<button class="btn subscription-plan-btn" data-sub-action="buy" data-plan-code="${p.code}">${p.title} — ${p.amount_rub} ₽</button>`).join('');
+      const status = sub.active ? `Активна до ${formatDateLocal(sub.activeExpiresAt)}` : 'Сейчас не активна';
+      const checking = sub.payment.checking ? '<div><span class="loader-inline"></span>Проверяем оплату…</div>' : '';
+      const features = (sub.features || []).map((f) => `<li>${escapeHtml(f)}</li>`).join('');
+      container.innerHTML = `
+        <div class="card subscription-hero">
+          <div class="subscription-title">Progressor Подписка</div>
+          <div class="timer-hint">${status}</div>${checking}
+          <ul class="subscription-list">${features}</ul>
+          <div class="subscription-plan-row">${plans}</div>
+        </div>
+      `;
+      container.querySelectorAll('[data-sub-action="buy"]').forEach((btn) => btn.addEventListener('click', () => startSubscriptionPayment(btn.dataset.planCode).catch(console.error)));
+    }
+
+    function formatDateLocal(value) {
+      if (!value) return '—';
+      const dt = new Date(value);
+      if (Number.isNaN(dt.getTime())) return '—';
+      return dt.toLocaleDateString('ru-RU');
+    }
+
+    function openPaywall(reason = '') {
+      state.paywall.reason = reason || 'Функция доступна только по подписке.';
+      const text = document.getElementById('paywallText');
+      if (text) text.textContent = state.paywall.reason;
+      state.paywall.open = true;
+      document.getElementById('paywallSheet')?.classList.add('show');
+    }
+
+    function closePaywall() {
+      state.paywall.open = false;
+      document.getElementById('paywallSheet')?.classList.remove('show');
+    }
+
+    async function openPlanPicker() {
+      if (!(state.subscription.plans || []).length) await loadSubscriptionOverview();
+      const wrap = document.getElementById('planPickerContent');
+      if (!wrap) return;
+      const plans = state.subscription.plans || [];
+      wrap.innerHTML = plans.map((p) => `<button class="btn primary" data-plan-code="${p.code}">${p.title} — ${p.amount_rub} ₽</button>`).join('') || '<div class="timer-hint">Тарифы недоступны</div>';
+      wrap.querySelectorAll('[data-plan-code]').forEach((btn) => btn.addEventListener('click', () => startSubscriptionPayment(btn.dataset.planCode).catch(console.error)));
+      document.getElementById('planPickerSheet')?.classList.add('show');
+    }
+
+    function closePlanPicker() {
+      document.getElementById('planPickerSheet')?.classList.remove('show');
+    }
+
+    async function startSubscriptionPayment(planCode) {
+      closePaywall();
+      const data = await apiFetch('/gymapi/subscription/payment/start', { method: 'POST', body: JSON.stringify({ plan_code: planCode }) });
+      state.subscription.payment.paymentId = data.payment_id;
+      closePlanPicker();
+      const tg = getTg();
+      if (tg?.openLink) tg.openLink(data.confirmation_url, { try_instant_view: false });
+      else window.open(data.confirmation_url, '_blank');
+      await pollPaymentStatus(data.payment_id);
+    }
+
+    async function pollPaymentStatus(paymentId) {
+      if (!paymentId) return;
+      state.subscription.payment.checking = true;
+      for (let i = 0; i < 40; i += 1) {
+        const data = await apiFetch(`/gymapi/subscription/payment/${encodeURIComponent(paymentId)}/status`, { silent: true });
+        const status = String(data.status || '');
+        if (status === 'succeeded') {
+          state.subscription.payment.checking = false;
+          toast('Оплата успешна. Подписка активирована ✅');
+          await loadSubscriptionOverview();
+          await loadSystems();
+          return;
+        }
+        if (status === 'canceled') {
+          state.subscription.payment.checking = false;
+          toast('Платёж отменён');
+          return;
+        }
+        await new Promise((r) => setTimeout(r, 2500));
+      }
+      state.subscription.payment.checking = false;
+      toast('Платёж ещё обрабатывается. Проверь чуть позже.');
+    }
+
+    function renderSystemsLimitSheet(limit) {
+      const wrap = document.getElementById('systemsLimitContent');
+      if (!wrap) return;
+      const systems = state.settings.systems.items || [];
+      const deadline = limit?.grace_deadline ? formatDateLocal(limit.grace_deadline) : 'через 7 дней';
+      wrap.innerHTML = `
+        <div class="timer-hint">Подписка не активна. Можно оставить только одну систему. Выбери, какую оставить до ${deadline}.</div>
+        ${systems.map((s) => `<button class="btn" data-keep-system="${s.id}">Оставить: ${escapeHtml(s.name || 'Система')}</button>`).join('')}
+      `;
+      wrap.querySelectorAll('[data-keep-system]').forEach((btn) => btn.addEventListener('click', async () => {
+        const id = Number(btn.dataset.keepSystem || 0);
+        if (!id) return;
+        await apiFetch('/gymapi/systems/resolve_limit', { method: 'POST', body: JSON.stringify({ keep_system_id: id }) });
+        document.getElementById('systemsLimitSheet')?.classList.remove('show');
+        await loadSystems();
+        await refreshTodayData({ keepDay: true });
+      }));
+      document.getElementById('systemsLimitSheet')?.classList.add('show');
+    }
+
     function bindEvents() {
       document.getElementById('dayPrev').addEventListener('click', () => shiftDay(-1));
       document.getElementById('dayNext').addEventListener('click', () => shiftDay(1));
@@ -8912,6 +9290,7 @@
           setManageMode('delete');
         }
         if (action === 'timer') openTimerSheet();
+        if (action === 'ai') { if (!state.subscription.active) openPaywall('ИИ-функции доступны только в подписке.'); else openAiCoachSheet(); }
       });
       document.getElementById('deleteModeDone').addEventListener('click', () => setManageMode('normal'));
       document.getElementById('manageDoneBtn').addEventListener('click', closeManageAddSheet);
@@ -8936,6 +9315,15 @@
       });
       document.getElementById('textPrompt').addEventListener('click', (e) => { if (e.target.id === 'textPrompt') closeTextPrompt(); });
       document.getElementById('timerSheet').addEventListener('click', (e) => { if (e.target.id === 'timerSheet') closeTimerSheet(); });
+      document.getElementById('aiCoachSheet').addEventListener('click', (e) => { if (e.target.id === 'aiCoachSheet') closeAiCoachSheet(); });
+      document.getElementById('aiCoachCloseBtn').addEventListener('click', closeAiCoachSheet);
+      document.getElementById('aiCoachAskBtn').addEventListener('click', () => askAiCoach().catch(console.error));
+      document.getElementById('aiCoachApplyCurrentBtn').addEventListener('click', () => applyAiCoachPlan('current').catch(console.error));
+      document.getElementById('aiCoachApplyNewSystemBtn').addEventListener('click', () => applyAiCoachPlan('new_system').catch(console.error));
+      document.getElementById('paywallSheet').addEventListener('click', (e) => { if (e.target.id === 'paywallSheet') closePaywall(); });
+      document.getElementById('planPickerSheet').addEventListener('click', (e) => { if (e.target.id === 'planPickerSheet') closePlanPicker(); });
+      document.getElementById('paywallBuyBtn').addEventListener('click', () => { closePaywall(); openPlanPicker().catch(console.error); });
+      document.getElementById('paywallCancelBtn').addEventListener('click', closePaywall);
       document.getElementById('systemSheet').addEventListener('click', async (e) => {
         if (e.target.id === 'systemSheet') { closeSystemSheet(); return; }
         if (!e.target.closest('.system-menu-wrap')) {
@@ -9014,6 +9402,10 @@
           switch (backdrop.id) {
             case 'daySheet': closeDayPicker(); break;
             case 'timerSheet': closeTimerSheet(); break;
+            case 'aiCoachSheet': closeAiCoachSheet(); break;
+            case 'paywallSheet': closePaywall(); break;
+            case 'planPickerSheet': closePlanPicker(); break;
+            case 'systemsLimitSheet': break;
             case 'systemSheet': closeSystemSheet(); break;
             case 'productivitySheet': closeProductivitySheet(); break;
             case 'sheet': closeEditor(); break;
@@ -9598,6 +9990,7 @@
       applyHeaderWidgetVisibility();
       if (!state.isTelegram) { handleRouteFromHash(); return; }
       loadSystems().catch(console.error);
+      loadSubscriptionOverview().catch(console.error);
       state.startDayIndex = getDayIndexFromUrl();
       loadTrainerOverview().catch(console.error);
       const onboardingActive = await checkOnboardingStatus();

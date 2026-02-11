@@ -689,7 +689,8 @@ async def init_db():
             onboarding_video_message_id INTEGER,
             onboarding_intro_chat_id INTEGER,
             onboarding_intro_message_id INTEGER,
-            onboarding_completed INTEGER NOT NULL DEFAULT 0
+            onboarding_completed INTEGER NOT NULL DEFAULT 0,
+            systems_limit_prompted_at TEXT
         );
 
         CREATE TABLE IF NOT EXISTS exercises(
@@ -1051,6 +1052,8 @@ async def init_db():
             )
         if not await _column_exists(db, "users", "active_system_id"):
             await db.execute("ALTER TABLE users ADD COLUMN active_system_id INTEGER")
+        if not await _column_exists(db, "users", "systems_limit_prompted_at"):
+            await db.execute("ALTER TABLE users ADD COLUMN systems_limit_prompted_at TEXT")
         if not await _column_exists(db, "sessions", "system_id"):
             await db.execute("ALTER TABLE sessions ADD COLUMN system_id INTEGER")
         await db.execute("UPDATE sessions SET system_id=0 WHERE system_id IS NULL")
@@ -1456,6 +1459,60 @@ async def delete_training_system(user_id: int, system_id: int):
                 await db.execute("UPDATE users SET active_system_id=? WHERE id=?", (int(row[0]), user_id))
         await db.commit()
     return True
+
+
+
+async def count_user_training_systems(user_id: int) -> int:
+    async with connect_db() as db:
+        cur = await db.execute("SELECT COUNT(*) FROM training_systems WHERE user_id=?", (user_id,))
+        row = await cur.fetchone()
+        return int(row[0] or 0) if row else 0
+
+
+async def list_user_training_system_ids(user_id: int) -> list[int]:
+    async with connect_db() as db:
+        cur = await db.execute("SELECT id FROM training_systems WHERE user_id=? ORDER BY id", (user_id,))
+        rows = await cur.fetchall()
+        return [int(r[0]) for r in rows]
+
+
+async def prune_user_training_systems(user_id: int, keep_system_id: int) -> None:
+    keep_system_id = int(keep_system_id)
+    async with connect_db() as db:
+        cur = await db.execute("SELECT id FROM training_systems WHERE user_id=? AND id<>?", (user_id, keep_system_id))
+        rows = await cur.fetchall()
+        remove_ids = [int(r[0]) for r in rows]
+        if not remove_ids:
+            await db.execute("UPDATE users SET active_system_id=?, systems_limit_prompted_at=NULL WHERE id=?", (keep_system_id, user_id))
+            await db.commit()
+            return
+        placeholders = ','.join('?' for _ in remove_ids)
+        params = tuple(remove_ids)
+        await db.execute(f"DELETE FROM training_system_reminders WHERE system_id IN ({placeholders})", params)
+        await db.execute(f"DELETE FROM training_system_exercises WHERE system_id IN ({placeholders})", params)
+        await db.execute(f"DELETE FROM training_system_days WHERE system_id IN ({placeholders})", params)
+        await db.execute(f"DELETE FROM training_systems WHERE id IN ({placeholders})", params)
+        await db.execute("UPDATE users SET active_system_id=?, systems_limit_prompted_at=NULL WHERE id=?", (keep_system_id, user_id))
+        await db.commit()
+
+
+async def get_systems_limit_prompted_at(user_id: int) -> datetime | None:
+    async with connect_db() as db:
+        cur = await db.execute("SELECT systems_limit_prompted_at FROM users WHERE id=?", (user_id,))
+        row = await cur.fetchone()
+        if not row or not row[0]:
+            return None
+        try:
+            return datetime.fromisoformat(row[0])
+        except Exception:
+            return None
+
+
+async def set_systems_limit_prompted_at(user_id: int, dt: datetime | None) -> None:
+    value = dt.isoformat() if dt else None
+    async with connect_db() as db:
+        await db.execute("UPDATE users SET systems_limit_prompted_at=? WHERE id=?", (value, user_id))
+        await db.commit()
 
 async def get_or_create_today_session(
     user_id: int, date_str: str, day_index: int = 1, system_id: int | None = None

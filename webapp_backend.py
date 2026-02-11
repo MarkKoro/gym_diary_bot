@@ -1,6 +1,9 @@
 import os
+import json
 import random
 import logging
+import httpx
+import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, date, time, timedelta
 from math import sqrt
@@ -9,7 +12,7 @@ from zoneinfo import ZoneInfo
 from fastapi import Body, Depends, FastAPI, Header, HTTPException, Request, Response
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from settings import ADMIN_IDS, BOT_PUBLIC_LINK, TG_TOKEN
+from settings import ADMIN_IDS, BOT_PUBLIC_LINK, OPENAI_API_KEY, OPENAI_MODEL, TG_TOKEN, YK_TOKEN
 from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram_webapp_auth import (
     InitDataError,
@@ -143,6 +146,23 @@ logger = logging.getLogger(__name__)
 
 MAX_INITDATA_AGE_SEC = 24 * 60 * 60
 
+SYSTEMS_LIMIT_GRACE_DAYS = 7
+SUBSCRIPTION_PLANS = {
+    '1m': {'title': '1 месяц', 'days': 30, 'amount_rub': 100},
+    '6m': {'title': '6 месяцев', 'days': 180, 'amount_rub': 600},
+    '12m': {'title': '12 месяцев', 'days': 365, 'amount_rub': 1000},
+}
+
+
+def _subscription_features() -> list[str]:
+    return [
+        'AI-коуч: анализ прогресса, корректировка подходов, предложения новых упражнений и систем.',
+        'Несколько систем тренировок без ограничений.',
+        'Приоритетная логика обновления плана без потери истории выполненных тренировок.',
+        'Быстрое копирование системы лидеров в отдельную систему.',
+    ]
+
+
 UNSCHEDULED_COMPLETION_EXPIRY_DAYS = 5
 SCHEDULED_COMPLETION_EXPIRY_DAYS = 5
 
@@ -228,6 +248,206 @@ async def get_auth_ctx(
     )
 
 
+
+
+def _format_num(value: float | int | None) -> str:
+    if value is None:
+        return '0'
+    n = float(value)
+    if abs(n - round(n)) < 1e-6:
+        return str(int(round(n)))
+    return f"{n:.2f}".rstrip('0').rstrip('.')
+
+
+def _to_int(value: object, default: int = 0) -> int:
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return default
+
+
+def _to_float(value: object, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _clip_text(text: str, limit: int) -> str:
+    src = (text or '').strip()
+    if len(src) <= limit:
+        return src
+    return src[: max(0, limit - 1)].rstrip() + '…'
+
+
+def _build_user_context_summary(user_profile: dict, active_system_id: int, systems: list[dict], day_snapshots: list[dict], measurement_trends: list[dict]) -> str:
+    lines: list[str] = []
+    lines.append(f"Профиль: user_id={user_profile.get('user_id')} workouts_per_week={user_profile.get('workouts_per_week', 0)} timezone={user_profile.get('timezone') or 'UTC'}")
+    if systems:
+        systems_line = ', '.join([f"{it.get('id')}:{it.get('name')}{'*' if int(it.get('id', 0)) == int(active_system_id) else ''}" for it in systems])
+        lines.append(f"Системы: {systems_line}")
+    else:
+        lines.append('Системы: нет')
+
+    lines.append('Текущие тренировки (по дням):')
+    if not day_snapshots:
+        lines.append('- нет упражнений')
+    else:
+        for day in day_snapshots:
+            header = f"- День {day.get('day_index')}: {day.get('day_label') or f'День {day.get('day_index')}'}"
+            lines.append(header)
+            for ex in day.get('exercises', [])[:18]:
+                lines.append(
+                    f"  • {ex.get('name')} [{ex.get('group')}] sets={ex.get('sets')} reps={ex.get('reps')} sec={ex.get('seconds')} weight={_format_num(ex.get('weight_kg'))}kg"
+                )
+
+    lines.append('Тренды замеров (последние изменения):')
+    if measurement_trends:
+        for row in measurement_trends[:10]:
+            lines.append(f"- {row.get('metric')}: {row.get('delta_text')} (было {row.get('from')}, стало {row.get('to')})")
+    else:
+        lines.append('- нет данных')
+
+    return _clip_text('\n'.join(lines), 8200)
+
+
+async def _build_ai_context_payload(user_id: int) -> dict:
+    active_system_id = await get_active_training_system_id(user_id)
+    systems = await list_training_systems(user_id)
+    settings = await db.fetch_user_settings(user_id)
+    timezone = await get_user_timezone(user_id)
+    active_days = await db.list_active_days(user_id)
+
+    day_snapshots: list[dict] = []
+    today_iso = datetime.now(UTC).strftime('%Y-%m-%d')
+    for day_index, day_label in active_days:
+        rows = await db.fetch_day_exercises(user_id, int(day_index), today_iso, active_system_id)
+        ex_list: list[dict] = []
+        for ue_id, ex_name, muscle_group, _is_done, exercise_id in rows:
+            baseline = await db.get_baseline(user_id, int(day_index), int(exercise_id))
+            sets = _to_int(baseline[0], 0) if baseline else 0
+            reps = _to_int(baseline[1], 0) if baseline else 0
+            seconds = _to_int(baseline[2], 0) if baseline else 0
+            weight_kg = _to_float(baseline[3], 0.0) if baseline else 0.0
+            ex_list.append({
+                'user_exercise_id': int(ue_id),
+                'exercise_id': int(exercise_id),
+                'name': ex_name,
+                'group': muscle_group or 'other',
+                'sets': sets,
+                'reps': reps,
+                'seconds': seconds,
+                'weight_kg': weight_kg,
+            })
+        day_snapshots.append({
+            'day_index': int(day_index),
+            'day_label': day_label,
+            'exercises': ex_list,
+        })
+
+    measurement_codes = ['weight', 'waist', 'chest', 'hips', 'biceps', 'thigh', 'run_5k', 'resting_pulse']
+    measurement_trends: list[dict] = []
+    for code in measurement_codes:
+        hist = await fetch_measurement_history(user_id, code, limit=2)
+        if len(hist) < 2:
+            continue
+        old = _to_float(hist[-1][0], 0.0)
+        new = _to_float(hist[0][0], 0.0)
+        delta = new - old
+        sign = '+' if delta >= 0 else ''
+        measurement_trends.append({
+            'metric': code,
+            'from': _format_num(old),
+            'to': _format_num(new),
+            'delta': delta,
+            'delta_text': f"{sign}{_format_num(delta)}",
+        })
+
+    return {
+        'user_profile': {
+            'user_id': int(user_id),
+            'workouts_per_week': int(settings.get('workouts_per_week') or 0),
+            'timezone': timezone or 'UTC',
+        },
+        'active_system_id': int(active_system_id),
+        'systems': systems,
+        'day_snapshots': day_snapshots,
+        'measurement_trends': measurement_trends,
+    }
+
+
+def _build_ai_system_prompt(mode: str) -> str:
+    base = (
+        'Ты — спортивный ИИ-ассистент внутри фитнес-бота. Анализируй план и прогресс пользователя. '
+        'Отвечай по-русски. Сначала дай краткий анализ (3-6 пунктов), затем предложи actionable изменения. '
+        'ОБЯЗАТЕЛЬНО заверши ответ JSON-блоком в markdown fenced code block с языком json и ключом action_plan. '
+        'JSON должен быть валидным и содержать массив actions. '
+        'Разрешённые типы actions: update_sets, replace_exercise, add_exercise, create_system. '
+        'Каждый action должен включать day_index и необходимые поля: '
+        'для update_sets: exercise_name, sets, reps, seconds, weight_kg; '
+        'для replace_exercise: old_exercise_name, new_exercise_name, sets, reps, seconds, weight_kg; '
+        'для add_exercise: exercise_name, sets, reps, seconds, weight_kg; '
+        'для create_system: system_name и days (массив дней с упражнениями). '
+        'Используй только упражнения, которые уже есть в контексте пользователя, кроме случая create_system — там можно предложить новые. '
+    )
+    mode_guidance = {
+        'adjust_sets': 'Сфокусируйся на корректировке объёма/интенсивности без полной смены упражнений.',
+        'replace_exercises': 'Сфокусируйся на замене отдельных упражнений с сохранением структуры дня.',
+        'new_system': 'Сфокусируйся на создании новой системы целиком на 3-7 дней.',
+        'mistakes_analysis': 'Сфокусируйся на ошибках, узких местах и точечных правках.',
+        'free_request': 'Сфокусируйся на запросе пользователя и предложи минимум 2 рабочих варианта.',
+    }.get(mode, 'Сфокусируйся на практической пользе и безопасности.')
+    return base + ' ' + mode_guidance
+
+
+async def _call_openai_chat(system_prompt: str, user_prompt: str) -> dict:
+    if not OPENAI_API_KEY:
+        raise HTTPException(status_code=503, detail='OPENAI_API_KEY не задан')
+    payload = {
+        'model': (OPENAI_MODEL or 'gpt-4o-mini'),
+        'temperature': 0.6,
+        'messages': [
+            {'role': 'system', 'content': system_prompt},
+            {'role': 'user', 'content': user_prompt},
+        ],
+    }
+    headers = {
+        'Authorization': f'Bearer {OPENAI_API_KEY}',
+        'Content-Type': 'application/json',
+    }
+    async with httpx.AsyncClient(timeout=55.0) as client:
+        resp = await client.post('https://api.openai.com/v1/chat/completions', headers=headers, json=payload)
+    if resp.status_code >= 400:
+        detail = resp.text[:700]
+        raise HTTPException(status_code=502, detail=f'OpenAI error: {detail}')
+    data = resp.json()
+    text = ''
+    try:
+        text = data['choices'][0]['message']['content'] or ''
+    except Exception:
+        text = ''
+    return {'raw': data, 'text': text}
+
+
+def _extract_json_block(answer_text: str) -> dict | None:
+    src = answer_text or ''
+    start = src.find('```json')
+    if start == -1:
+        return None
+    start += len('```json')
+    end = src.find('```', start)
+    if end == -1:
+        return None
+    block = src[start:end].strip()
+    if not block:
+        return None
+    try:
+        payload = json.loads(block)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    return payload
 def _today_date() -> date:
     return datetime.now(UTC).date()
 
@@ -3340,14 +3560,90 @@ async def settings_trainer_trainee_detach(
     return {"ok": True}
 
 
+
+async def _has_active_subscription(user_id: int) -> bool:
+    return bool(await db.get_active_subscription(user_id))
+
+
+async def _enforce_system_limit_if_needed(user_id: int) -> dict:
+    has_sub = await _has_active_subscription(user_id)
+    systems = await list_training_systems(user_id)
+    if has_sub or len(systems) <= 1:
+        await db.set_systems_limit_prompted_at(user_id, None)
+        return {
+            'requires_resolution': False,
+            'auto_pruned': False,
+            'first_prompt_at': None,
+            'grace_deadline': None,
+            'systems': systems,
+        }
+
+    now = datetime.now(UTC)
+    first_prompt_at = await db.get_systems_limit_prompted_at(user_id)
+    if first_prompt_at is None:
+        first_prompt_at = now
+        await db.set_systems_limit_prompted_at(user_id, first_prompt_at)
+
+    deadline = first_prompt_at + timedelta(days=SYSTEMS_LIMIT_GRACE_DAYS)
+    if now >= deadline:
+        keep_system_id = int(sorted(systems, key=lambda x: int(x.get('id') or 0))[0]['id'])
+        await db.prune_user_training_systems(user_id, keep_system_id)
+        systems = await list_training_systems(user_id)
+        return {
+            'requires_resolution': False,
+            'auto_pruned': True,
+            'first_prompt_at': first_prompt_at.isoformat(),
+            'grace_deadline': deadline.isoformat(),
+            'systems': systems,
+        }
+
+    return {
+        'requires_resolution': True,
+        'auto_pruned': False,
+        'first_prompt_at': first_prompt_at.isoformat(),
+        'grace_deadline': deadline.isoformat(),
+        'systems': systems,
+    }
+
+
+def _subscription_payload(active: dict | None, latest: dict | None) -> dict:
+    return {
+        'active': bool(active),
+        'active_plan': (active or {}).get('plan') if active else None,
+        'active_expires_at': active.get('expires_at').isoformat() if active and active.get('expires_at') else None,
+        'latest_status': latest.get('status') if latest else None,
+        'features': _subscription_features(),
+        'plans': [
+            {
+                'code': code,
+                'title': cfg['title'],
+                'days': cfg['days'],
+                'amount_rub': cfg['amount_rub'],
+            }
+            for code, cfg in SUBSCRIPTION_PLANS.items()
+        ],
+    }
+
+
 @app.get('/systems')
 async def systems_overview(ctx: AuthCtx = Depends(get_auth_ctx)):
     user_id = ctx.user_id
+    await get_active_training_system_id(user_id)
+    limit_info = await _enforce_system_limit_if_needed(user_id)
+    systems = limit_info.get('systems') or await list_training_systems(user_id)
     active_id = await get_active_training_system_id(user_id)
-    systems = await list_training_systems(user_id)
+    sub = await db.get_active_subscription(user_id)
     return {
         'active_system_id': int(active_id),
         'systems': systems,
+        'has_subscription': bool(sub),
+        'systems_limit': {
+            'max_without_subscription': 1,
+            'requires_resolution': bool(limit_info.get('requires_resolution')),
+            'auto_pruned': bool(limit_info.get('auto_pruned')),
+            'first_prompt_at': limit_info.get('first_prompt_at'),
+            'grace_deadline': limit_info.get('grace_deadline'),
+        },
     }
 
 
@@ -3356,17 +3652,28 @@ async def systems_create(payload: dict = Body(default={}), ctx: AuthCtx = Depend
     user_id = ctx.user_id
     name = (payload.get('name') or '').strip() or 'Новая система'
     color = (payload.get('color') or '#2ea6ff').strip()
+    replace_existing = bool(payload.get('replace_existing'))
     try:
         workouts_per_week = int(payload.get('workouts_per_week') or 0)
     except (TypeError, ValueError):
         workouts_per_week = 0
     workouts_per_week = max(1, min(7, workouts_per_week)) if workouts_per_week else None
+
+    has_sub = await _has_active_subscription(user_id)
+    systems_count = await db.count_user_training_systems(user_id)
+    if not has_sub and systems_count >= 1 and not replace_existing:
+        raise HTTPException(status_code=402, detail='Без подписки доступна только одна система. Новая система может только перезаписать текущую.')
+
     system_id = await create_training_system(user_id, name, color, workouts_per_week=workouts_per_week)
     if workouts_per_week:
         await apply_system_to_current_plan(user_id, int(system_id))
         await set_workouts_per_week(user_id, workouts_per_week)
         await sync_current_plan_to_system(user_id, int(system_id))
-    return {'ok': True, 'system_id': int(system_id)}
+
+    if not has_sub:
+        await db.prune_user_training_systems(user_id, int(system_id))
+
+    return {'ok': True, 'system_id': int(system_id), 'replaced': bool(not has_sub and systems_count >= 1)}
 
 
 @app.post('/systems/{system_id}/select')
@@ -3482,6 +3789,7 @@ async def leaderboard_productivity_copy(
     fallback_name = None
     if leader_row:
         fallback_name = ((leader_row[2] or '').strip() if len(leader_row) > 2 else '') or f'athlete_{int(leader_user_id)}'
+    had_sub = await _has_active_subscription(int(user_id))
     result = await copy_training_system_from_user(
         int(leader_user_id),
         int(user_id),
@@ -3490,4 +3798,156 @@ async def leaderboard_productivity_copy(
     )
     if not result.get('system_id'):
         raise HTTPException(status_code=400, detail='У лидера нет системы для копирования')
+    if not had_sub:
+        await db.prune_user_training_systems(int(user_id), int(result.get('system_id')))
+        result['overwritten'] = True
     return {'ok': True, **result}
+
+
+
+@app.get('/subscription/overview')
+async def subscription_overview(ctx: AuthCtx = Depends(get_auth_ctx)):
+    user_id = ctx.user_id
+    await db.cleanup_expired_subscriptions(user_id)
+    active = await db.get_active_subscription(user_id)
+    latest = await db.get_latest_subscription(user_id)
+    return {
+        'ok': True,
+        **_subscription_payload(active, latest),
+        'supports_web_payment': bool(YK_TOKEN),
+    }
+
+
+@app.post('/subscription/payment/start')
+async def subscription_payment_start(payload: dict = Body(default_factory=dict), ctx: AuthCtx = Depends(get_auth_ctx)):
+    if not YK_TOKEN:
+        raise HTTPException(status_code=503, detail='Оплата временно недоступна')
+    user_id = int(ctx.user_id)
+    plan_code = str(payload.get('plan_code') or '').strip()
+    plan = SUBSCRIPTION_PLANS.get(plan_code)
+    if not plan:
+        raise HTTPException(status_code=400, detail='Неизвестный тариф')
+    idem = str(uuid.uuid4())
+    amount = plan['amount_rub']
+    body = {
+        'amount': {'value': f'{amount:.2f}', 'currency': 'RUB'},
+        'capture': True,
+        'confirmation': {'type': 'redirect', 'return_url': 'https://t.me'},
+        'description': f"Подписка Progressor ({plan['title']})",
+        'metadata': {'user_id': user_id, 'plan': plan_code},
+    }
+    headers = {
+        'Authorization': f'Basic {YK_TOKEN}',
+        'Idempotence-Key': idem,
+        'Content-Type': 'application/json',
+    }
+    async with httpx.AsyncClient(timeout=20.0) as client:
+        resp = await client.post('https://api.yookassa.ru/v3/payments', json=body, headers=headers)
+    if resp.status_code >= 400:
+        raise HTTPException(status_code=502, detail='Не удалось создать платёж')
+    data = resp.json()
+    payment_id = data.get('id')
+    confirmation_url = (data.get('confirmation') or {}).get('confirmation_url')
+    if not payment_id or not confirmation_url:
+        raise HTTPException(status_code=502, detail='Платёжный сервис вернул неполный ответ')
+
+    await db.create_payment_record(
+        user_id=user_id,
+        provider='yookassa',
+        amount=int(amount * 100),
+        currency='RUB',
+        status='pending',
+        payload={'plan': plan_code, 'title': plan['title'], 'confirmation_url': confirmation_url},
+        external_id=payment_id,
+    )
+    return {'ok': True, 'payment_id': payment_id, 'confirmation_url': confirmation_url}
+
+
+@app.get('/subscription/payment/{payment_id}/status')
+async def subscription_payment_status(payment_id: str, ctx: AuthCtx = Depends(get_auth_ctx)):
+    if not YK_TOKEN:
+        raise HTTPException(status_code=503, detail='Оплата временно недоступна')
+    user_id = int(ctx.user_id)
+    record = await db.get_payment_by_external_id(payment_id)
+    if not record or int(record.get('user_id') or 0) != user_id:
+        raise HTTPException(status_code=404, detail='Платёж не найден')
+
+    headers = {'Authorization': f'Basic {YK_TOKEN}'}
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        resp = await client.get(f'https://api.yookassa.ru/v3/payments/{payment_id}', headers=headers)
+    if resp.status_code >= 400:
+        raise HTTPException(status_code=502, detail='Не удалось проверить платёж')
+    data = resp.json()
+    status = str(data.get('status') or '')
+    await db.update_payment_status(payment_id, status, data)
+
+    activated = False
+    expires_at_iso = None
+    if status == 'succeeded':
+        payload_data = record.get('payload') or {}
+        plan_code = str(payload_data.get('plan') or '1m')
+        plan = SUBSCRIPTION_PLANS.get(plan_code) or SUBSCRIPTION_PLANS['1m']
+        active = await db.get_active_subscription(user_id)
+        if not active:
+            expires = await db.grant_subscription_days(user_id, int(plan['days']), plan=plan_code)
+            expires_at_iso = expires.isoformat()
+            activated = True
+        else:
+            expires_at_iso = active.get('expires_at').isoformat() if active.get('expires_at') else None
+
+    return {'ok': True, 'status': status, 'activated': activated, 'expires_at': expires_at_iso}
+
+
+@app.post('/systems/resolve_limit')
+async def systems_resolve_limit(payload: dict = Body(default_factory=dict), ctx: AuthCtx = Depends(get_auth_ctx)):
+    user_id = int(ctx.user_id)
+    keep_system_id = int(payload.get('keep_system_id') or 0)
+    if keep_system_id <= 0:
+        raise HTTPException(status_code=400, detail='Укажите систему для сохранения')
+    systems = await db.list_user_training_system_ids(user_id)
+    if keep_system_id not in systems:
+        raise HTTPException(status_code=404, detail='Система не найдена')
+    await db.prune_user_training_systems(user_id, keep_system_id)
+    await apply_system_to_current_plan(user_id, keep_system_id)
+    return {'ok': True, 'keep_system_id': keep_system_id}
+
+
+@app.post('/ai/coach/query')
+async def ai_coach_query(payload: dict = Body(default_factory=dict), ctx: AuthCtx = Depends(get_auth_ctx)):
+    user_id = ctx.user_id
+    sub = await db.get_active_subscription(user_id)
+    if not sub:
+        raise HTTPException(status_code=403, detail='AI доступен только при активной подписке')
+
+    mode = str(payload.get('mode') or 'free_request').strip()
+    user_message = _clip_text(str(payload.get('message') or '').strip(), 1800)
+    if mode == 'free_request' and not user_message:
+        raise HTTPException(status_code=400, detail='Введите запрос для ИИ')
+
+    context_payload = await _build_ai_context_payload(user_id)
+    context_text = _build_user_context_summary(
+        user_profile=context_payload['user_profile'],
+        active_system_id=context_payload['active_system_id'],
+        systems=context_payload['systems'],
+        day_snapshots=context_payload['day_snapshots'],
+        measurement_trends=context_payload['measurement_trends'],
+    )
+
+    user_prompt = (
+        f"Режим запроса: {mode}\n"
+        f"Запрос пользователя: {user_message or '—'}\n\n"
+        "Контекст пользователя:\n"
+        f"{context_text}\n"
+    )
+
+    result = await _call_openai_chat(_build_ai_system_prompt(mode), user_prompt)
+    parsed = _extract_json_block(result['text'])
+
+    return {
+        'ok': True,
+        'mode': mode,
+        'answer_text': result['text'],
+        'parsed_action_plan': parsed,
+        'context_preview': context_text,
+        'model': (OPENAI_MODEL or 'gpt-4o-mini'),
+    }
