@@ -2783,6 +2783,40 @@ async def grant_subscription_days(
     return expires_at
 
 
+async def degrant_subscription_days(user_id: int, days: int) -> datetime | None:
+    if days <= 0:
+        raise ValueError("days must be positive")
+    await cleanup_expired_subscriptions(user_id)
+    now = datetime.now(UTC)
+    async with connect_db() as db:
+        cur = await db.execute(
+            "SELECT id, expires_at FROM subscriptions WHERE user_id=? AND status='active' ORDER BY expires_at DESC LIMIT 1",
+            (user_id,),
+        )
+        row = await cur.fetchone()
+        if not row:
+            return None
+        sub_id, expires_at_raw = row
+        try:
+            expires_at = datetime.fromisoformat(expires_at_raw)
+        except (TypeError, ValueError):
+            expires_at = now
+        reduced_expires_at = expires_at - timedelta(days=days)
+        if reduced_expires_at <= now:
+            await db.execute(
+                "UPDATE subscriptions SET status='expired', expires_at=? WHERE user_id=? AND status='active'",
+                (now.isoformat(), user_id),
+            )
+            await db.commit()
+            return None
+        await db.execute(
+            "UPDATE subscriptions SET expires_at=? WHERE id=?",
+            (reduced_expires_at.isoformat(), sub_id),
+        )
+        await db.commit()
+    return reduced_expires_at
+
+
 async def create_payment_record(
     user_id: int,
     provider: str,

@@ -214,6 +214,7 @@ from db import (
     get_custom_measurement,
     get_active_subscription,
     grant_subscription_days,
+    degrant_subscription_days,
     create_payment_record,
     update_payment_status,
     get_payment_by_external_id,
@@ -7914,6 +7915,64 @@ async def grant_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
+async def degrant_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    if not user or user.id not in ADMIN_IDS:
+        if update.message:
+            await update.message.reply_text("Команда доступна только администратору.")
+        return
+    if not update.message or not update.message.text:
+        return
+    parts = update.message.text.split()
+    if len(parts) < 3:
+        await update.message.reply_text("Использование: /degrant <tg_id|user_id> <дней>.")
+        return
+    try:
+        target_raw = int(parts[1])
+        days = int(parts[2])
+    except ValueError:
+        await update.message.reply_text("Укажи числовые значения: идентификатор и количество дней.")
+        return
+    if days <= 0:
+        await update.message.reply_text("Количество дней должно быть больше нуля.")
+        return
+    found = await find_user_by_tg_id(target_raw)
+    user_id: int | None = None
+    tg_id: int | None = None
+    username: str | None = None
+    if found:
+        user_id, username = found
+        tg_id = target_raw
+    else:
+        entry = await find_user_by_id(target_raw)
+        if not entry:
+            await update.message.reply_text("Пользователь с таким ID не найден.")
+            return
+        user_id, tg_id, username = entry
+    try:
+        expires_at = await degrant_subscription_days(user_id, days)
+    except Exception:
+        logger.exception("Failed to degrant subscription")
+        await update.message.reply_text("Не удалось обновить подписку. Попробуй позже.")
+        return
+    await cleanup_expired_subscriptions(user_id)
+    label_parts: list[str] = []
+    if tg_id:
+        label_parts.append(str(tg_id))
+    if username:
+        label_parts.append(f"@{username}")
+    label = " ".join(label_parts) or f"user_id={user_id}"
+    if expires_at is None:
+        await update.message.reply_text(
+            f"Подписка для {label} аннулирована. Списано {days} дн."
+        )
+        return
+    expires_label = expires_at.astimezone(ZoneInfo("UTC")).strftime("%d.%m.%Y")
+    await update.message.reply_text(
+        f"Подписка для {label} активна до {expires_label}. Списано {days} дн."
+    )
+
+
 async def handle_broadcast_text(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
@@ -13860,6 +13919,7 @@ def main():
     app.add_handler(CommandHandler("stats", cmd_stats))
     app.add_handler(CommandHandler("cancel", cancel_command))
     app.add_handler(CommandHandler(("grant", "grunt"), grant_command))
+    app.add_handler(CommandHandler("degrant", degrant_command))
     app.add_handler(MessageHandler(filters.VIDEO | filters.Document.VIDEO, capture_intro_video))
     app.add_handler(CallbackQueryHandler(on_subscription_menu, pattern="^menu:subscription$"))
     app.add_handler(CallbackQueryHandler(on_subscription_choose, pattern="^sub:"))
