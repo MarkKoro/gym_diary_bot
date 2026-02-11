@@ -416,6 +416,12 @@ async def _build_ai_context_payload(user_id: int) -> dict:
     active_system_id = await get_active_training_system_id(user_id)
     systems = await list_training_systems(user_id)
     settings = await db.fetch_user_settings(user_id)
+    workouts_per_week = 0
+    if isinstance(settings, dict):
+        workouts_per_week = _to_int(settings.get('workouts_per_week'), 0)
+    elif isinstance(settings, tuple):
+        # db.fetch_user_settings() returns (system, workouts_per_week)
+        workouts_per_week = _to_int(settings[1] if len(settings) > 1 else 0, 0)
     timezone = await get_user_timezone(user_id)
     active_days = await db.list_active_days(user_id)
 
@@ -467,7 +473,7 @@ async def _build_ai_context_payload(user_id: int) -> dict:
     return {
         'user_profile': {
             'user_id': int(user_id),
-            'workouts_per_week': int(settings.get('workouts_per_week') or 0),
+            'workouts_per_week': workouts_per_week,
             'timezone': timezone or 'UTC',
         },
         'active_system_id': int(active_system_id),
