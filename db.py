@@ -1820,7 +1820,6 @@ async def set_workouts_per_week(user_id: int, n: int) -> list[tuple[int, int, in
         inactive. Each entry contains ``(day_no, dow, hour, minute)``.
     """
 
-    active_system_id = await get_active_training_system_id(user_id)
     async with connect_db() as db:
         await db.execute("UPDATE users SET workouts_per_week=? WHERE id=?", (n, user_id))
         removed_days: list[int] = []
@@ -1854,14 +1853,8 @@ async def set_workouts_per_week(user_id: int, n: int) -> list[tuple[int, int, in
                 f"DELETE FROM exercise_baseline WHERE user_id=? AND day_index IN ({placeholders})",
                 (user_id, *day_params),
             )
-            await db.execute(
-                f"DELETE FROM day_completions WHERE user_id=? AND system_id=? AND day_index IN ({placeholders})",
-                (user_id, int(active_system_id), *day_params),
-            )
-            await db.execute(
-                f"DELETE FROM sessions WHERE user_id=? AND system_id=? AND day_index IN ({placeholders})",
-                (user_id, int(active_system_id), *day_params),
-            )
+            # Историю выполненных тренировок и отметок не удаляем при смене количества
+            # тренировочных дней, чтобы пользователь не терял прогресс в статистике.
         if removed_ue_ids:
             ue_placeholders = ",".join("?" for _ in removed_ue_ids)
             await db.execute(
