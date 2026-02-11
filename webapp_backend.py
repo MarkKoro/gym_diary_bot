@@ -156,11 +156,52 @@ SUBSCRIPTION_PLANS = {
 
 def _subscription_features() -> list[str]:
     return [
-        'AI-коуч: анализ прогресса, корректировка подходов, предложения новых упражнений и систем.',
-        'Несколько систем тренировок без ограничений.',
-        'Приоритетная логика обновления плана без потери истории выполненных тренировок.',
-        'Быстрое копирование системы лидеров в отдельную систему.',
+        'AI-коуч: можно задавать запросы как в ChatGPT, получать персональные рекомендации и готовые шаги для тренировок.',
+        'Неограниченное количество систем тренировок: сохраняй разные сплиты и переключайся между ними в любой момент.',
+        'Отключение рекламы внутри бота и WebApp.',
+        'Ранний доступ к новым функциям и обновлениям до общего релиза.',
+        'Поддержка проекта: ты напрямую помогаешь развивать продукт и выпускать новые инструменты.',
     ]
+
+
+async def _create_subscription_payment(user_id: int, plan_code: str, return_url: str | None = None) -> tuple[str, str, dict]:
+    if not YK_TOKEN:
+        raise HTTPException(status_code=503, detail='Оплата временно недоступна')
+    plan = SUBSCRIPTION_PLANS.get(plan_code)
+    if not plan:
+        raise HTTPException(status_code=400, detail='Неизвестный тариф')
+    amount = float(plan['amount_rub'])
+    body = {
+        'amount': {'value': f'{amount:.2f}', 'currency': 'RUB'},
+        'capture': True,
+        'confirmation': {'type': 'redirect', 'return_url': return_url or 'https://t.me'},
+        'description': f"Подписка Progressor ({plan['title']})",
+        'metadata': {'user_id': user_id, 'plan': plan_code},
+    }
+    headers = {
+        'Authorization': f'Basic {YK_TOKEN}',
+        'Idempotence-Key': str(uuid.uuid4()),
+        'Content-Type': 'application/json',
+    }
+    async with httpx.AsyncClient(timeout=20.0) as client:
+        resp = await client.post('https://api.yookassa.ru/v3/payments', json=body, headers=headers)
+    if resp.status_code >= 400:
+        raise HTTPException(status_code=502, detail='Не удалось создать платёж')
+    data = resp.json()
+    payment_id = data.get('id')
+    confirmation_url = (data.get('confirmation') or {}).get('confirmation_url')
+    if not payment_id or not confirmation_url:
+        raise HTTPException(status_code=502, detail='Платёжный сервис вернул неполный ответ')
+    await db.create_payment_record(
+        user_id=user_id,
+        provider='yookassa',
+        amount=int(amount * 100),
+        currency='RUB',
+        status='pending',
+        payload={'plan': plan_code, 'title': plan['title'], 'confirmation_url': confirmation_url},
+        external_id=payment_id,
+    )
+    return payment_id, confirmation_url, plan
 
 
 UNSCHEDULED_COMPLETION_EXPIRY_DAYS = 5
@@ -3820,47 +3861,14 @@ async def subscription_overview(ctx: AuthCtx = Depends(get_auth_ctx)):
 
 @app.post('/subscription/payment/start')
 async def subscription_payment_start(payload: dict = Body(default_factory=dict), ctx: AuthCtx = Depends(get_auth_ctx)):
-    if not YK_TOKEN:
-        raise HTTPException(status_code=503, detail='Оплата временно недоступна')
     user_id = int(ctx.user_id)
     plan_code = str(payload.get('plan_code') or '').strip()
-    plan = SUBSCRIPTION_PLANS.get(plan_code)
-    if not plan:
-        raise HTTPException(status_code=400, detail='Неизвестный тариф')
-    idem = str(uuid.uuid4())
-    amount = plan['amount_rub']
-    body = {
-        'amount': {'value': f'{amount:.2f}', 'currency': 'RUB'},
-        'capture': True,
-        'confirmation': {'type': 'redirect', 'return_url': 'https://t.me'},
-        'description': f"Подписка Progressor ({plan['title']})",
-        'metadata': {'user_id': user_id, 'plan': plan_code},
+    payment_id, confirmation_url, _plan = await _create_subscription_payment(user_id, plan_code)
+    return {
+        'ok': True,
+        'payment_id': payment_id,
+        'confirmation_url': confirmation_url,
     }
-    headers = {
-        'Authorization': f'Basic {YK_TOKEN}',
-        'Idempotence-Key': idem,
-        'Content-Type': 'application/json',
-    }
-    async with httpx.AsyncClient(timeout=20.0) as client:
-        resp = await client.post('https://api.yookassa.ru/v3/payments', json=body, headers=headers)
-    if resp.status_code >= 400:
-        raise HTTPException(status_code=502, detail='Не удалось создать платёж')
-    data = resp.json()
-    payment_id = data.get('id')
-    confirmation_url = (data.get('confirmation') or {}).get('confirmation_url')
-    if not payment_id or not confirmation_url:
-        raise HTTPException(status_code=502, detail='Платёжный сервис вернул неполный ответ')
-
-    await db.create_payment_record(
-        user_id=user_id,
-        provider='yookassa',
-        amount=int(amount * 100),
-        currency='RUB',
-        status='pending',
-        payload={'plan': plan_code, 'title': plan['title'], 'confirmation_url': confirmation_url},
-        external_id=payment_id,
-    )
-    return {'ok': True, 'payment_id': payment_id, 'confirmation_url': confirmation_url}
 
 
 @app.get('/subscription/payment/{payment_id}/status')

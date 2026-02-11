@@ -243,6 +243,27 @@
       cursor: pointer;
     }
     .menu-item.active { border-color: var(--accent); color: var(--accent); box-shadow: 0 8px 18px rgba(0,122,255,0.12); }
+    .menu-item.subscription-active { border-color: color-mix(in srgb, #22c55e 42%, var(--border)); }
+    .menu-item.subscription-active .sub-status { color: #16a34a; }
+    .menu-item.subscription-inactive .sub-status { color: var(--muted); }
+    .subscription-status-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 8px 12px;
+      border-radius: 999px;
+      background: color-mix(in srgb, var(--bg) 68%, var(--accent));
+      border: 1px solid var(--border);
+      font-weight: 700;
+      width: fit-content;
+    }
+    .subscription-status-badge .dot {
+      width: 9px;
+      height: 9px;
+      border-radius: 999px;
+      background: #9ca3af;
+    }
+    .subscription-status-badge.active .dot { background: #22c55e; }
     .screens { display: flex; flex-direction: column; gap: 16px; flex: 1; }
     .screen { display: none; flex-direction: column; gap: 16px; }
     .screen.active { display: flex; }
@@ -1892,10 +1913,10 @@
       </div>
       <nav class="drawer-menu">
         <button class="menu-item active" data-route="today">Сегодня</button>
-        <button class="menu-item" data-route="library">Статистика упражнений</button>
-        <button class="menu-item" data-route="settings">Настройки</button>
-        <button class="menu-item" data-route="subscription">Подписка</button>
         <button class="menu-item" data-route="measurements">Мои замеры</button>
+        <button class="menu-item" data-route="library">Статистика упражнений</button>
+        <button class="menu-item" data-route="subscription" id="drawerSubscriptionBtn">Подписка · неактивно</button>
+        <button class="menu-item" data-route="settings">Настройки</button>
       </nav>
     </div>
   </div>
@@ -9094,6 +9115,7 @@
         state.subscription.activeExpiresAt = data.active_expires_at || null;
         state.subscription.plans = data.plans || [];
         state.subscription.features = data.features || [];
+        updateDrawerSubscriptionStatus();
       } catch (e) {
         // noop
       } finally {
@@ -9108,20 +9130,27 @@
       const sub = state.subscription;
       if (sub.loading && !sub.plans.length) {
         container.innerHTML = '<div class="card">Загружаем подписку…</div>';
+        updateDrawerSubscriptionStatus();
         return;
       }
       const plans = (sub.plans || []).map((p) => `<button class="btn subscription-plan-btn" data-sub-action="buy" data-plan-code="${p.code}">${p.title} — ${p.amount_rub} ₽</button>`).join('');
-      const status = sub.active ? `Активна до ${formatDateLocal(sub.activeExpiresAt)}` : 'Сейчас не активна';
+      const exactUntil = formatDateTimeLocal(sub.activeExpiresAt);
+      const statusLabel = sub.active ? `Активна до ${exactUntil}` : 'Подписка не активна';
       const checking = sub.payment.checking ? '<div><span class="loader-inline"></span>Проверяем оплату…</div>' : '';
       const features = (sub.features || []).map((f) => `<li>${escapeHtml(f)}</li>`).join('');
+      const accentNote = sub.active
+        ? 'Спасибо за поддержку проекта. Ты уже получаешь все преимущества подписки.'
+        : 'Подписка нужна, чтобы включить дополнительные возможности и поддержать развитие проекта.';
       container.innerHTML = `
         <div class="card subscription-hero">
           <div class="subscription-title">Progressor Подписка</div>
-          <div class="timer-hint">${status}</div>${checking}
+          <div class="subscription-status-badge ${sub.active ? 'active' : ''}"><span class="dot"></span>${statusLabel}</div>
+          <div class="timer-hint">${accentNote}</div>${checking}
           <ul class="subscription-list">${features}</ul>
           <div class="subscription-plan-row">${plans}</div>
         </div>
       `;
+      updateDrawerSubscriptionStatus();
       container.querySelectorAll('[data-sub-action="buy"]').forEach((btn) => btn.addEventListener('click', () => startSubscriptionPayment(btn.dataset.planCode).catch(console.error)));
     }
 
@@ -9130,6 +9159,28 @@
       const dt = new Date(value);
       if (Number.isNaN(dt.getTime())) return '—';
       return dt.toLocaleDateString('ru-RU');
+    }
+
+    function formatDateTimeLocal(value) {
+      if (!value) return '—';
+      const dt = new Date(value);
+      if (Number.isNaN(dt.getTime())) return '—';
+      return dt.toLocaleString('ru-RU', {
+        day: '2-digit',
+        month: '2-digit',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+      });
+    }
+
+    function updateDrawerSubscriptionStatus() {
+      const btn = document.getElementById('drawerSubscriptionBtn');
+      if (!btn) return;
+      const active = !!state.subscription.active;
+      btn.classList.toggle('subscription-active', active);
+      btn.classList.toggle('subscription-inactive', !active);
+      btn.innerHTML = `Подписка <span class="sub-status">· ${active ? 'активно' : 'неактивно'}</span>`;
     }
 
     function openPaywall(reason = '') {
@@ -9165,8 +9216,11 @@
       state.subscription.payment.paymentId = data.payment_id;
       closePlanPicker();
       const tg = getTg();
-      if (tg?.openLink) tg.openLink(data.confirmation_url, { try_instant_view: false });
-      else window.open(data.confirmation_url, '_blank');
+      if (tg?.openLink) {
+        tg.openLink(data.confirmation_url, { try_instant_view: false });
+      } else {
+        window.open(data.confirmation_url, '_blank');
+      }
       await pollPaymentStatus(data.payment_id);
     }
 
