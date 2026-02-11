@@ -1,6 +1,11 @@
 import os
 from dotenv import load_dotenv
-load_dotenv()
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# Явно загружаем .env рядом с кодом проекта.
+# Это стабильно работает даже если процесс запущен не из корня репозитория.
+load_dotenv(os.path.join(BASE_DIR, ".env"))
 
 TG_TOKEN = os.getenv("TG_TOKEN")
 YK_TOKEN = os.getenv("YK_TOKEN")
@@ -19,6 +24,14 @@ TG_POOL_SIZE = int(os.getenv("TG_POOL_SIZE", "10"))
 DB_POOL_SIZE = int(os.getenv("DB_POOL_SIZE", "5"))
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+
+
+def get_openai_api_key() -> str | None:
+    return os.getenv("OPENAI_API_KEY") or OPENAI_API_KEY
+
+
+def get_openai_model() -> str:
+    return os.getenv("OPENAI_MODEL") or OPENAI_MODEL or "gpt-4o-mini"
 # Список администраторов (tg_id), которые могут выполнять административные команды
 ADMIN_IDS = {
     int(x) for x in (os.getenv("ADMINS") or os.getenv("ADMIN_IDS") or "").replace(",", " ").split()
