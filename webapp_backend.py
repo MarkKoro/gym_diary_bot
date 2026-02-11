@@ -520,8 +520,11 @@ async def _call_openai_chat(system_prompt: str, user_prompt: str) -> dict:
     openai_api_key = get_openai_api_key()
     if not openai_api_key:
         raise HTTPException(status_code=503, detail='OPENAI_API_KEY не задан')
+    openai_model = get_openai_model().strip()
+    if not openai_model:
+        raise HTTPException(status_code=503, detail='OPENAI_MODEL не задан')
     payload = {
-        'model': get_openai_model(),
+        'model': openai_model,
         'temperature': 0.6,
         'messages': [
             {'role': 'system', 'content': system_prompt},

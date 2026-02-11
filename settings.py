@@ -22,16 +22,16 @@ JOIN_URL = os.getenv("JOIN_URL", "https://t.me/obotization")
 TG_POOL_SIZE = int(os.getenv("TG_POOL_SIZE", "10"))
 # Количество одновременных операций с SQLite
 DB_POOL_SIZE = int(os.getenv("DB_POOL_SIZE", "5"))
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY") or os.getenv("OPENAI_KEY")
+OPENAI_MODEL = os.getenv("OPENAI_MODEL")
 
 
 def get_openai_api_key() -> str | None:
-    return os.getenv("OPENAI_API_KEY") or OPENAI_API_KEY
+    return os.getenv("OPENAI_API_KEY") or os.getenv("OPENAI_KEY") or OPENAI_API_KEY
 
 
 def get_openai_model() -> str:
-    return os.getenv("OPENAI_MODEL") or OPENAI_MODEL or "gpt-4o-mini"
+    return os.getenv("OPENAI_MODEL") or OPENAI_MODEL or ""
 # Список администраторов (tg_id), которые могут выполнять административные команды
 ADMIN_IDS = {
     int(x) for x in (os.getenv("ADMINS") or os.getenv("ADMIN_IDS") or "").replace(",", " ").split()
