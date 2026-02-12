@@ -524,7 +524,8 @@ def _build_ai_system_prompt(mode: str) -> str:
         'new_system': (
             'Режим new_system: верни один action типа create_system. '
             'Количество дней в новой системе выбери по профилю пользователя (workouts_per_week), '
-            'обычно 3-4 дня, максимум 7. Все дни должны быть полностью заполнены упражнениями.'
+            'обычно 3-4 дня, максимум 7. Все дни должны быть полностью заполнены упражнениями. '
+            'Минимум 4 упражнения на каждый день, без пустых блоков и обрывов.'
         ),
         'mistakes_analysis': (
             'Режим mistakes_analysis: дай качественный разбор ошибок и узких мест в summary/rationale. '
@@ -549,12 +550,13 @@ async def _call_openai_chat(system_prompt: str, user_prompt: str) -> dict:
             {'role': 'user', 'content': user_prompt},
         ],
         'response_format': {'type': 'json_object'},
+        'max_tokens': 3200,
     }
     headers = {
         'Authorization': f'Bearer {openai_api_key}',
         'Content-Type': 'application/json',
     }
-    async with httpx.AsyncClient(timeout=55.0) as client:
+    async with httpx.AsyncClient(timeout=120.0) as client:
         resp = await client.post('https://api.openai.com/v1/chat/completions', headers=headers, json=payload)
     if resp.status_code >= 400:
         detail = resp.text[:700]
