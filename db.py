@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone, UTC
 import secrets
 from contextlib import asynccontextmanager
 from typing import Optional, Sequence
-from settings import DB_PATH, TRIAL_DAYS, DB_POOL_SIZE
+from settings import DB_PATH, DB_POOL_SIZE
 from kb_catalog import KB_CATEGORY_DEFINITION, KB_EXERCISE_NAMES
 
 
@@ -1177,19 +1177,18 @@ async def _ensure_user_trainer_code(db, user_id: int) -> str:
 async def get_or_create_user(tg_id: int, username: str|None):
     async with connect_db() as db:
         cur = await db.execute(
-            "SELECT id, trial_until, trainer_code FROM users WHERE tg_id=?",
+            "SELECT id, trainer_code FROM users WHERE tg_id=?",
             (tg_id,),
         )
         row = await cur.fetchone()
         if row:
             user_id = row[0]
-            if not row[2]:
+            if not row[1]:
                 await _ensure_user_trainer_code(db, user_id)
             return user_id
-        trial_until = (datetime.now(UTC) + timedelta(days=TRIAL_DAYS)).isoformat()
         await db.execute(
-            "INSERT INTO users(tg_id, username, created_at, trial_until) VALUES(?,?,?,?)",
-            (tg_id, username, datetime.now(UTC).isoformat(), trial_until)
+            "INSERT INTO users(tg_id, username, created_at) VALUES(?,?,?)",
+            (tg_id, username, datetime.now(UTC).isoformat())
         )
         await db.commit()
         cur = await db.execute("SELECT id FROM users WHERE tg_id=?", (tg_id,))
@@ -2664,6 +2663,17 @@ async def list_all_user_tg_ids():
         cur = await db.execute("SELECT tg_id FROM users WHERE tg_id IS NOT NULL")
         rows = await cur.fetchall()
         return [row[0] for row in rows]
+
+
+async def count_active_subscriptions() -> int:
+    now_iso = datetime.now(UTC).isoformat()
+    async with connect_db() as db:
+        cur = await db.execute(
+            "SELECT COUNT(*) FROM subscriptions WHERE status='active' AND expires_at >= ?",
+            (now_iso,),
+        )
+        row = await cur.fetchone()
+    return int(row[0]) if row else 0
 
 
 async def cleanup_expired_subscriptions(user_id: int | None = None):
