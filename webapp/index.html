@@ -129,7 +129,7 @@
     .ai-coach-response-wrap { min-height: 0; display: grid; gap: 8px; grid-template-rows: auto auto minmax(0, 1fr); }
     .ai-coach-title { font-size: 15px; font-weight: 700; }
     .ai-coach-list { margin: 0; padding-left: 18px; color: var(--muted); font-size: 13px; display: grid; gap: 5px; }
-    .ai-coach-response { min-height: 0; overflow: auto; white-space: pre-wrap; border: 1px solid var(--border); border-radius: 12px; padding: 12px; background: var(--bg); font-size: 13px; line-height: 1.4; }
+    .ai-coach-response { min-height: 0; overflow: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; white-space: pre-wrap; border: 1px solid var(--border); border-radius: 12px; padding: 12px; background: var(--bg); font-size: 13px; line-height: 1.4; }
     .ai-coach-actions { display: flex; flex-wrap: wrap; gap: 8px; }
     .ai-coach-apply-frame {
       border: 1px solid var(--border);
@@ -409,11 +409,14 @@
       .exercise-head { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 10px; align-items: flex-start; }
       .exercise-info { display: grid; gap: 6px; min-width: 0; }
       .exercise-meta { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
-      .source-meta-wrap { position: relative; margin-left: auto; }
+    .source-meta-wrap { position: relative; margin-left: auto; }
       .source-meta-btn { width: 24px; height: 24px; border-radius: 999px; border: 1px solid var(--border); background: color-mix(in srgb, var(--card) 85%, transparent); color: var(--muted); font-size: 13px; cursor: pointer; }
       .source-meta-btn.active { border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); color: var(--accent); }
       .source-meta-pop { position: absolute; z-index: 20; right: 0; top: calc(100% + 8px); min-width: 220px; max-width: 280px; border: 1px solid var(--border); border-radius: 12px; padding: 10px; background: var(--card); box-shadow: var(--shadow); display: none; font-size: 12px; color: var(--muted); }
-      .source-meta-pop.show { display: grid; gap: 6px; }
+    .source-meta-pop.show { display: grid; gap: 6px; }
+    .ai-proposed-pill { margin-left: auto; padding: 5px 8px; border-radius: 999px; border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--border)); background: color-mix(in srgb, var(--accent) 14%, var(--card)); color: var(--accent); font-size: 11px; font-weight: 700; white-space: nowrap; }
+    .ai-proposed-summary { margin-top: 8px; border: 1px dashed color-mix(in srgb, var(--accent) 45%, var(--border)); border-radius: 10px; padding: 8px; font-size: 12px; color: var(--muted); }
+    .ai-proposed-summary b { color: var(--text); }
       .source-meta-title { font-size: 13px; font-weight: 700; color: var(--text); }
       .source-meta-row { display: flex; justify-content: space-between; gap: 8px; }
       .finish-flag { font-size: 18px; filter: drop-shadow(0 4px 10px rgba(52,199,89,0.35)); }
@@ -2306,8 +2309,7 @@
         </div>
         <textarea id="aiCoachInput" class="settings-input" rows="4" placeholder="Например: хочу прогресс по жиму и разгрузить локти"></textarea>
         <div class="ai-coach-actions">
-          <button class="btn primary" id="aiCoachAskBtn">Получить предложение</button>
-          <button class="btn hidden" id="aiCoachRetryBtn">Запросить ещё раз</button>
+          <button class="btn primary" id="aiCoachAskBtn">Сделать запрос</button>
         </div>
         <div class="ai-coach-response-wrap">
           <div id="aiCoachLoadingOverlay" class="ai-coach-loading-overlay hidden" aria-live="polite" aria-busy="true">
@@ -2329,7 +2331,6 @@
         <div class="ai-coach-apply-frame">
         <div id="aiCoachApplyRow" class="ai-coach-actions hidden">
           <button class="btn" id="aiCoachApplyCurrentBtn">Применить изменения</button>
-          <button class="btn" id="aiCoachApplyNewSystemBtn">Создать как новую систему</button>
         </div>
         </div>
       </div>
@@ -2639,7 +2640,7 @@
       isTelegram: false,
       isAdmin: false,
       systemSheetOpen: false,
-      aiCoach: { open: false, loading: false, mode: 'replace_exercises', answerText: '', parsed: null, summary: '', rationale: [], retriesUsed: 0, maxRetries: 3, rejectedVariants: [], hasResponse: false },
+      aiCoach: { open: false, loading: false, mode: 'replace_exercises', answerText: '', parsed: null, summary: '', rationale: [], retriesUsed: 0, maxRetries: 3, rejectedVariants: [], hasResponse: false, requestDayKey: '', appliedByDay: {} },
       subscription: { loading: false, active: false, activePlan: null, activeExpiresAt: null, plans: [], features: [], payment: { checking: false, paymentId: null } },
       paywall: { open: false, reason: '' },
       productivitySheetOpen: false,
@@ -8044,6 +8045,18 @@
       info.append(titleWrap, meta);
       header.appendChild(info);
 
+      if (!isDeleteMode) {
+        const dayKey = getAiCoachDayKey();
+        const proposalKey = `${dayKey}:${String(exercise.name || '').trim().toLowerCase()}`;
+        const proposal = state.aiCoach.appliedByDay?.[proposalKey] || null;
+        if (proposal) {
+          const proposedPill = document.createElement('span');
+          proposedPill.className = 'ai-proposed-pill';
+          proposedPill.textContent = 'Предложено ИИ';
+          header.appendChild(proposedPill);
+        }
+      }
+
       if (!isDeleteMode && hasExerciseSourceMeta(exercise)) {
         const sourceWrap = document.createElement('div');
         sourceWrap.className = 'source-meta-wrap';
@@ -8080,6 +8093,19 @@
       summary.textContent = buildExerciseSummary(exercise);
       if (!isRunningExercise(exercise) && (exercise.sets?.length || 0) === 0) {
         summary.classList.add('empty');
+      }
+      if (!isDeleteMode) {
+        const dayKey = getAiCoachDayKey();
+        const proposalKey = `${dayKey}:${String(exercise.name || '').trim().toLowerCase()}`;
+        const proposal = state.aiCoach.appliedByDay?.[proposalKey] || null;
+        if (proposal) {
+          const proposedInfo = document.createElement('div');
+          proposedInfo.className = 'ai-proposed-summary';
+          const weightPart = proposal.weight_kg > 0 ? `${proposal.weight_kg} кг` : 'без веса';
+          const secPart = proposal.seconds > 0 ? `, ${proposal.seconds} сек` : '';
+          proposedInfo.innerHTML = `<b>Предложено:</b> ${proposal.sets} подходов × ${proposal.reps} повторов, ${weightPart}${secPart}`;
+          summary.appendChild(proposedInfo);
+        }
       }
 
       const workoutBody = document.createElement('div');
@@ -9085,6 +9111,12 @@
     function openAiCoachSheet() {
       const sheet = document.getElementById('aiCoachSheet');
       if (!sheet) return;
+      const currentDayKey = getAiCoachDayKey();
+      if (state.aiCoach.requestDayKey && state.aiCoach.requestDayKey !== currentDayKey) {
+        state.aiCoach.hasResponse = false;
+        state.aiCoach.retriesUsed = 0;
+        state.aiCoach.rejectedVariants = [];
+      }
       state.aiCoach.open = true;
       sheet.classList.add('show');
       const modeEl = document.getElementById('aiCoachMode');
@@ -9102,14 +9134,18 @@
       updateBackButton(state.currentRoute);
     }
 
+    function getAiCoachDayKey() {
+      const datePart = state.dateIso || getTodayIsoLocal() || '';
+      const dayPart = Number(state.dayIndex || 0);
+      return `${datePart}:${dayPart}`;
+    }
+
     function updateAiCoachCounter() {
       const counter = document.getElementById('aiCoachRetryCounter');
-      const retryBtn = document.getElementById('aiCoachRetryBtn');
       const askBtn = document.getElementById('aiCoachAskBtn');
       const modeEl = document.getElementById('aiCoachMode');
       const inputEl = document.getElementById('aiCoachInput');
       const applyCurrentBtn = document.getElementById('aiCoachApplyCurrentBtn');
-      const applyNewBtn = document.getElementById('aiCoachApplyNewSystemBtn');
       const loadingOverlay = document.getElementById('aiCoachLoadingOverlay');
       const totalUsed = 1 + Math.max(0, Number(state.aiCoach.retriesUsed || 0));
       const remaining = Math.max(0, Number(state.aiCoach.maxRetries || 3) - totalUsed);
@@ -9117,15 +9153,13 @@
         counter.textContent = `Ещё запросов сегодня: ${remaining} из ${state.aiCoach.maxRetries}`;
         counter.classList.toggle('hidden', !state.aiCoach.hasResponse);
       }
-      if (retryBtn) {
-        retryBtn.disabled = state.aiCoach.loading || remaining <= 0;
-        retryBtn.classList.toggle('hidden', !state.aiCoach.hasResponse);
+      if (askBtn) {
+        askBtn.disabled = state.aiCoach.loading;
+        askBtn.textContent = state.aiCoach.hasResponse ? 'Запросить снова' : 'Сделать запрос';
       }
-      if (askBtn) askBtn.disabled = state.aiCoach.loading;
       if (modeEl) modeEl.disabled = state.aiCoach.loading;
       if (inputEl) inputEl.disabled = state.aiCoach.loading;
       if (applyCurrentBtn) applyCurrentBtn.disabled = state.aiCoach.loading;
-      if (applyNewBtn) applyNewBtn.disabled = state.aiCoach.loading;
       if (loadingOverlay) loadingOverlay.classList.toggle('hidden', !state.aiCoach.loading);
     }
 
@@ -9218,7 +9252,8 @@
       rationaleEl.classList.toggle('hidden', !rationale.length);
 
       const hasPlan = Boolean(state.aiCoach.parsed && Array.isArray(state.aiCoach.parsed.actions) && state.aiCoach.parsed.actions.length);
-      applyRow.classList.toggle('hidden', !hasPlan);
+      const isMistakes = String(state.aiCoach.mode || '') === 'mistakes_analysis';
+      applyRow.classList.toggle('hidden', !hasPlan || isMistakes);
       updateAiCoachCounter();
     }
 
@@ -9232,19 +9267,21 @@
       if (mode !== 'mistakes_analysis' && !message) { toast('Опиши запрос для ИИ'); return; }
       if (retry && state.aiCoach.retriesUsed >= state.aiCoach.maxRetries - 1) { toast('Лимит попыток исчерпан на сегодня'); return; }
 
-      if (!retry) {
+      const currentDayKey = getAiCoachDayKey();
+      if (!retry || state.aiCoach.requestDayKey !== currentDayKey) {
         state.aiCoach.retriesUsed = 0;
         state.aiCoach.rejectedVariants = [];
         state.aiCoach.hasResponse = false;
       }
+      state.aiCoach.requestDayKey = currentDayKey;
       state.aiCoach.mode = mode;
       state.aiCoach.loading = true;
       updateAiCoachCounter();
       try {
         const data = await apiFetch('/gymapi/ai/coach/query', {
           method: 'POST',
-          timeoutMs: 70000,
-          body: JSON.stringify({ mode, message, rejected_variants: state.aiCoach.rejectedVariants }),
+          timeoutMs: 130000,
+          body: JSON.stringify({ mode, message, rejected_variants: state.aiCoach.rejectedVariants, day_key: state.aiCoach.requestDayKey }),
         });
         state.aiCoach.answerText = data.answer_text || '';
         state.aiCoach.summary = data.summary || '';
@@ -9271,7 +9308,7 @@
       }
     }
 
-    async function applyAiCoachPlan(mode = 'current') {
+    async function applyAiCoachPlan() {
       try {
         const plan = state.aiCoach.parsed;
         const actions = Array.isArray(plan?.actions) ? plan.actions : [];
@@ -9280,13 +9317,8 @@
           return;
         }
 
-        if (mode === 'new_system') {
-          if (!state.subscription.active) { openPaywall('Создание отдельных систем по ИИ доступно только в подписке.'); return; }
-          const createAction = actions.find((a) => a && a.type === 'create_system');
-          if (!createAction) {
-            toast('В ответе нет блока create_system');
-            return;
-          }
+        const createAction = actions.find((a) => a && String(a.type || '') === 'create_system');
+        if (createAction) {
           const systemDays = Array.isArray(createAction.days) ? createAction.days : [];
           const daysCount = Math.max(1, Math.min(7, Number(systemDays.length || 3)));
           const systemName = String(createAction.system_name || 'Система от ИИ').trim() || 'Система от ИИ';
@@ -9325,7 +9357,7 @@
           }
 
           await loadSystems();
-          await loadDay(state.dayIndex || 1);
+          await loadToday();
           toast('Создана и заполнена новая система из предложения ИИ');
           closeAiCoachSheet();
           return;
@@ -9377,6 +9409,22 @@
           }
         }
         await loadSheet(state.dayIndex || 1);
+        const dayKey = getAiCoachDayKey();
+        const applied = state.aiCoach.appliedByDay || {};
+        for (const action of actions) {
+          const type = String(action?.type || '');
+          if (!['update_sets', 'replace_exercise', 'add_exercise'].includes(type)) continue;
+          const exName = String(action.exercise_name || action.new_exercise_name || '').trim().toLowerCase();
+          if (!exName) continue;
+          const key = `${dayKey}:${exName}`;
+          applied[key] = {
+            sets: Math.max(1, Number(action.sets || 1)),
+            reps: Math.max(0, Number(action.reps || 0)),
+            seconds: Math.max(0, Number(action.seconds || 0)),
+            weight_kg: Math.max(0, Number(action.weight_kg || 0)),
+          };
+        }
+        state.aiCoach.appliedByDay = applied;
         toast('План от ИИ применён');
         closeAiCoachSheet();
       } catch (e) {
@@ -9666,10 +9714,11 @@
       document.getElementById('textPrompt').addEventListener('click', (e) => { if (e.target.id === 'textPrompt') closeTextPrompt(); });
       document.getElementById('timerSheet').addEventListener('click', (e) => { if (e.target.id === 'timerSheet') closeTimerSheet(); });
       document.getElementById('aiCoachSheet').addEventListener('click', (e) => { if (e.target.id === 'aiCoachSheet') closeAiCoachSheet(); });
-      document.getElementById('aiCoachAskBtn').addEventListener('click', () => askAiCoach({ retry: false }).catch(console.error));
-      document.getElementById('aiCoachRetryBtn').addEventListener('click', () => askAiCoach({ retry: true }).catch(console.error));
-      document.getElementById('aiCoachApplyCurrentBtn').addEventListener('click', () => applyAiCoachPlan('current').catch(console.error));
-      document.getElementById('aiCoachApplyNewSystemBtn').addEventListener('click', () => applyAiCoachPlan('new_system').catch(console.error));
+      document.getElementById('aiCoachAskBtn').addEventListener('click', () => {
+        const retry = state.aiCoach.hasResponse && state.aiCoach.requestDayKey === getAiCoachDayKey();
+        askAiCoach({ retry }).catch(console.error);
+      });
+      document.getElementById('aiCoachApplyCurrentBtn').addEventListener('click', () => applyAiCoachPlan().catch(console.error));
       document.getElementById('paywallSheet').addEventListener('click', (e) => { if (e.target.id === 'paywallSheet') closePaywall(); });
       document.getElementById('planPickerSheet').addEventListener('click', (e) => { if (e.target.id === 'planPickerSheet') closePlanPicker(); });
       document.getElementById('paywallBuyBtn').addEventListener('click', () => { closePaywall(); openPlanPicker().catch(console.error); });
