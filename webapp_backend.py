@@ -417,7 +417,12 @@ async def _build_ai_catalog_lookup(day_snapshots: list[dict], *, per_group_limit
     by_id: dict[int, dict] = dict(direct_exercises)
     for group in sorted(groups):
         rows = await db.list_exercises_by_group(group)
-        for ex_id, name, muscle_group in rows[:per_group_limit]:
+        for row in rows[:per_group_limit]:
+            if not row:
+                continue
+            ex_id = row[0]
+            name = row[1] if len(row) > 1 else ''
+            muscle_group = row[2] if len(row) > 2 else group
             ex_id_int = _to_int(ex_id, 0)
             if ex_id_int <= 0:
                 continue
