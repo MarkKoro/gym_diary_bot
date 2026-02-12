@@ -126,15 +126,27 @@
     .ai-coach-main { display: grid; gap: 10px; min-height: 0; flex: 1; grid-template-rows: auto auto auto minmax(0, 1fr) auto; }
     .ai-coach-toolbar { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
     .ai-coach-counter { font-size: 12px; color: var(--muted); padding: 6px 10px; border-radius: 999px; border: 1px solid var(--border); background: var(--bg); }
-    .ai-coach-response-wrap { min-height: 0; display: grid; gap: 8px; grid-template-rows: minmax(0, 1fr); }
+    .ai-coach-response-wrap {
+      min-height: 0;
+      display: grid;
+      gap: 8px;
+      grid-template-rows: minmax(0, 1fr);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 10px;
+      background: color-mix(in srgb, var(--bg) 90%, transparent);
+      position: relative;
+      overflow: hidden;
+    }
     .ai-coach-title { font-size: 15px; font-weight: 700; user-select: text; -webkit-user-select: text; }
-    .ai-coach-list { margin: 0; padding-left: 18px; color: var(--muted); font-size: 13px; display: grid; gap: 5px; user-select: text; -webkit-user-select: text; }
+    .ai-coach-list { margin: 0; padding-left: 18px; color: var(--text); font-size: 14px; line-height: 1.45; display: grid; gap: 5px; user-select: text; -webkit-user-select: text; }
     .ai-coach-result-scroll { min-height: 0; overflow: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; display: grid; gap: 8px; align-content: start; }
-    .ai-coach-response { min-height: 0; overflow: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; white-space: pre-wrap; border: 1px solid var(--border); border-radius: 12px; padding: 12px; background: var(--bg); font-size: 13px; line-height: 1.4; user-select: text; -webkit-user-select: text; cursor: text; }
+    .ai-coach-response { min-height: 0; white-space: pre-wrap; color: var(--text); font-size: 15px; line-height: 1.55; user-select: text; -webkit-user-select: text; cursor: text; }
     .ai-coach-examples { margin: 0; padding: 10px 12px; border-radius: 12px; border: 1px solid var(--border); background: var(--bg); display: grid; gap: 6px; }
     .ai-coach-examples-title { font-size: 12px; color: var(--muted); }
     .ai-coach-example-item { font-size: 13px; line-height: 1.35; color: var(--text); user-select: text; -webkit-user-select: text; }
-    .ai-coach-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+    .ai-coach-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+    #aiCoachAskBtn { flex: 0 0 auto; width: auto; min-width: 156px; padding: 10px 16px; font-size: 14px; }
     .ai-coach-apply-frame {
       border: 1px solid var(--border);
       border-radius: 14px;
@@ -9195,6 +9207,15 @@
       inputEl.placeholder = config.placeholder;
       const items = Array.isArray(config.examples) ? config.examples : [];
       box.innerHTML = `<div class="ai-coach-examples-title">${escapeHtml(config.title || 'Примеры:')}</div>${items.map((item) => `<div class="ai-coach-example-item">• ${escapeHtml(String(item))}</div>`).join('')}`;
+      box.classList.toggle('hidden', Boolean(state.aiCoach.hasResponse));
+    }
+
+    function scrollAiCoachToAnswer() {
+      const resultScroll = document.getElementById('aiCoachResultScroll');
+      if (!resultScroll) return;
+      requestAnimationFrame(() => {
+        resultScroll.scrollTop = resultScroll.scrollHeight;
+      });
     }
 
     function updateAiCoachCounter() {
@@ -9317,6 +9338,8 @@
       const hasPlan = Boolean(state.aiCoach.parsed && Array.isArray(state.aiCoach.parsed.actions) && state.aiCoach.parsed.actions.length);
       const isMistakes = String(state.aiCoach.mode || '') === 'mistakes_analysis';
       applyRow.classList.toggle('hidden', !hasPlan || isMistakes);
+      renderAiCoachExamples();
+      if (state.aiCoach.hasResponse) scrollAiCoachToAnswer();
       updateAiCoachCounter();
     }
 
