@@ -2250,13 +2250,13 @@
             <option value="adjust_sets">Изменить количество подходов</option>
             <option value="mistakes_analysis">Анализ ошибок</option>
           </select>
-          <div id="aiCoachRetryCounter" class="ai-coach-counter">Попытка 1 из 3</div>
+          <div id="aiCoachRetryCounter" class="ai-coach-counter hidden">Ещё запросов сегодня: 2 из 3</div>
         </div>
         <textarea id="aiCoachInput" class="settings-input" rows="4" placeholder="Например: хочу прогресс по жиму и разгрузить локти"></textarea>
         <div class="ai-coach-actions">
           <button class="btn primary" id="aiCoachAskBtn">Получить предложение</button>
-          <button class="btn" id="aiCoachRetryBtn">Ещё вариант</button>
-          <button class="btn" id="aiCoachCloseBtn">Закрыть</button>
+          <button class="btn hidden" id="aiCoachRetryBtn">Запросить ещё раз</button>
+          <button class="btn" id="aiCoachCloseBtn">Назад</button>
         </div>
         <div class="ai-coach-response-wrap">
           <div id="aiCoachSummary" class="ai-coach-title hidden"></div>
@@ -2264,8 +2264,8 @@
           <div id="aiCoachAnswer" class="ai-coach-response hidden"></div>
         </div>
         <div id="aiCoachApplyRow" class="ai-coach-actions hidden">
-          <button class="btn" id="aiCoachApplyCurrentBtn">Принять изменения</button>
-          <button class="btn" id="aiCoachApplyNewSystemBtn">Сохранить как новую систему</button>
+          <button class="btn" id="aiCoachApplyCurrentBtn">Применить изменения</button>
+          <button class="btn" id="aiCoachApplyNewSystemBtn">Создать как новую систему</button>
         </div>
       </div>
     </div>
@@ -2574,7 +2574,7 @@
       isTelegram: false,
       isAdmin: false,
       systemSheetOpen: false,
-      aiCoach: { open: false, loading: false, mode: 'replace_exercises', answerText: '', parsed: null, summary: '', rationale: [], retriesUsed: 0, maxRetries: 3, rejectedVariants: [] },
+      aiCoach: { open: false, loading: false, mode: 'replace_exercises', answerText: '', parsed: null, summary: '', rationale: [], retriesUsed: 0, maxRetries: 3, rejectedVariants: [], hasResponse: false },
       subscription: { loading: false, active: false, activePlan: null, activeExpiresAt: null, plans: [], features: [], payment: { checking: false, paymentId: null } },
       paywall: { open: false, reason: '' },
       productivitySheetOpen: false,
@@ -6299,6 +6299,7 @@
     function updateBackButton(route) {
       const tg = getTg();
       if (!state.isTelegram || !tg?.BackButton) return;
+      if (state.aiCoach?.open) { tg.BackButton.show(); return; }
       if (route === 'today') tg.BackButton.hide();
       else tg.BackButton.show();
     }
@@ -6410,6 +6411,8 @@
       if (planPickerOpen) { closePlanPicker(); return; }
       const systemsLimitOpen = document.getElementById('systemsLimitSheet')?.classList.contains('show');
       if (systemsLimitOpen) { return; }
+      const aiCoachSheetOpen = document.getElementById('aiCoachSheet')?.classList.contains('show');
+      if (aiCoachSheetOpen) { closeAiCoachSheet(); return; }
       const measurementSheetOpen = document.getElementById('measurementSheet')?.classList.contains('show');
       if (measurementSheetOpen) { closeMeasurementSheet(); return; }
       const manageSheetOpen = document.getElementById('manageExerciseSheet')?.classList.contains('show');
@@ -9023,6 +9026,7 @@
       if (modeEl) modeEl.value = state.aiCoach.mode || 'replace_exercises';
       updateAiCoachCounter();
       renderAiCoachResult();
+      updateBackButton(state.currentRoute);
     }
 
     function closeAiCoachSheet() {
@@ -9030,13 +9034,22 @@
       if (!sheet) return;
       state.aiCoach.open = false;
       sheet.classList.remove('show');
+      updateBackButton(state.currentRoute);
     }
 
     function updateAiCoachCounter() {
       const counter = document.getElementById('aiCoachRetryCounter');
       const retryBtn = document.getElementById('aiCoachRetryBtn');
-      if (counter) counter.textContent = `Попытка ${Math.min(state.aiCoach.retriesUsed + 1, state.aiCoach.maxRetries)} из ${state.aiCoach.maxRetries}`;
-      if (retryBtn) retryBtn.disabled = state.aiCoach.loading || state.aiCoach.retriesUsed >= state.aiCoach.maxRetries - 1;
+      const totalUsed = 1 + Math.max(0, Number(state.aiCoach.retriesUsed || 0));
+      const remaining = Math.max(0, Number(state.aiCoach.maxRetries || 3) - totalUsed);
+      if (counter) {
+        counter.textContent = `Ещё запросов сегодня: ${remaining} из ${state.aiCoach.maxRetries}`;
+        counter.classList.toggle('hidden', !state.aiCoach.hasResponse);
+      }
+      if (retryBtn) {
+        retryBtn.disabled = state.aiCoach.loading || remaining <= 0;
+        retryBtn.classList.toggle('hidden', !state.aiCoach.hasResponse);
+      }
     }
 
     function buildAiCoachPreviewText() {
@@ -9110,6 +9123,7 @@
       if (!retry) {
         state.aiCoach.retriesUsed = 0;
         state.aiCoach.rejectedVariants = [];
+        state.aiCoach.hasResponse = false;
       }
       state.aiCoach.mode = mode;
       state.aiCoach.loading = true;
@@ -9125,6 +9139,7 @@
         state.aiCoach.rationale = Array.isArray(data.rationale) ? data.rationale : [];
         state.aiCoach.parsed = data.parsed_action_plan || null;
         if (retry) state.aiCoach.retriesUsed += 1;
+        state.aiCoach.hasResponse = true;
         if (state.aiCoach.summary) state.aiCoach.rejectedVariants.push(state.aiCoach.summary);
         else if (state.aiCoach.answerText) state.aiCoach.rejectedVariants.push(state.aiCoach.answerText.slice(0, 250));
         if (state.aiCoach.rejectedVariants.length > 3) state.aiCoach.rejectedVariants = state.aiCoach.rejectedVariants.slice(-3);
@@ -9134,6 +9149,7 @@
         state.aiCoach.summary = '';
         state.aiCoach.rationale = [];
         state.aiCoach.parsed = null;
+        state.aiCoach.hasResponse = true;
         renderAiCoachResult();
       } finally {
         state.aiCoach.loading = false;
@@ -9142,48 +9158,102 @@
     }
 
     async function applyAiCoachPlan(mode = 'current') {
-      const plan = state.aiCoach.parsed;
-      const actions = Array.isArray(plan?.actions) ? plan.actions : [];
-      if (!actions.length) {
-        toast('Нет действий для применения');
-        return;
-      }
-
-      if (mode === 'new_system') {
-        if (!state.subscription.active) { openPaywall('Создание отдельных систем по ИИ доступно только в подписке.'); return; }
-        const createAction = actions.find((a) => a && a.type === 'create_system');
-        if (!createAction) {
-          toast('В ответе нет блока create_system');
+      try {
+        const plan = state.aiCoach.parsed;
+        const actions = Array.isArray(plan?.actions) ? plan.actions : [];
+        if (!actions.length) {
+          toast('Нет действий для применения');
           return;
         }
-        const systemDays = Array.isArray(createAction.days) ? createAction.days : [];
-        const daysCount = Math.max(1, Math.min(7, Number(systemDays.length || 3)));
-        const systemName = String(createAction.system_name || 'Система от ИИ').trim() || 'Система от ИИ';
-        const created = await apiFetch('/gymapi/systems', { method: 'POST', body: JSON.stringify({ name: systemName, workouts_per_week: daysCount }) });
-        const newSystemId = Number(created?.system_id || 0);
-        if (newSystemId > 0) await apiFetch(`/gymapi/systems/${newSystemId}/select`, { method: 'POST' });
 
-        for (const day of systemDays) {
-          const dayIndex = Math.max(1, Math.min(7, Number(day?.day_index || 0)));
-          if (!dayIndex) continue;
-          const exList = Array.isArray(day?.exercises) ? day.exercises : [];
-          for (const ex of exList) {
-            const exName = String(ex?.exercise_name || ex?.name || '').trim();
-            if (!exName) continue;
-            const search = await apiFetch(`/gymapi/catalog/search?query=${encodeURIComponent(exName)}`);
-            const found = (search.items || []).find((it) => String(it.name || '').toLowerCase() === exName.toLowerCase()) || (search.items || [])[0];
-            if (!found?.id) continue;
-            await apiFetch(`/gymapi/day/${dayIndex}/exercise`, { method: 'POST', body: JSON.stringify({ exercise_id: found.id }) });
-            await loadSheet(dayIndex);
-            const target = Array.from(state.exercises.values()).find((x) => String(x.name || '').toLowerCase() === exName.toLowerCase());
+        if (mode === 'new_system') {
+          if (!state.subscription.active) { openPaywall('Создание отдельных систем по ИИ доступно только в подписке.'); return; }
+          const createAction = actions.find((a) => a && a.type === 'create_system');
+          if (!createAction) {
+            toast('В ответе нет блока create_system');
+            return;
+          }
+          const systemDays = Array.isArray(createAction.days) ? createAction.days : [];
+          const daysCount = Math.max(1, Math.min(7, Number(systemDays.length || 3)));
+          const systemName = String(createAction.system_name || 'Система от ИИ').trim() || 'Система от ИИ';
+          const created = await apiFetch('/gymapi/systems', { method: 'POST', body: JSON.stringify({ name: systemName, workouts_per_week: daysCount }) });
+          const newSystemId = Number(created?.system_id || 0);
+          if (newSystemId > 0) await apiFetch(`/gymapi/systems/${newSystemId}/select`, { method: 'POST' });
+
+          for (const day of systemDays) {
+            const dayIndex = Math.max(1, Math.min(7, Number(day?.day_index || 0)));
+            if (!dayIndex) continue;
+            const exList = Array.isArray(day?.exercises) ? day.exercises : [];
+            for (const ex of exList) {
+              const exName = String(ex?.exercise_name || ex?.name || '').trim();
+              if (!exName) continue;
+              const search = await apiFetch(`/gymapi/catalog/search?query=${encodeURIComponent(exName)}`);
+              const found = (search.items || []).find((it) => String(it.name || '').toLowerCase() === exName.toLowerCase()) || (search.items || [])[0];
+              if (!found?.id) continue;
+              await apiFetch(`/gymapi/day/${dayIndex}/exercise`, { method: 'POST', body: JSON.stringify({ exercise_id: found.id }) });
+              await loadSheet(dayIndex);
+              const target = Array.from(state.exercises.values()).find((x) => String(x.name || '').toLowerCase() === exName.toLowerCase());
+              if (!target?.user_exercise_id) continue;
+              const ueId = Number(target.user_exercise_id);
+              const currentSets = Array.isArray(target.sets) ? target.sets.length : 0;
+              for (let i = 0; i < currentSets; i += 1) await apiFetch(`/gymapi/day/${dayIndex}/exercise/${ueId}/set/remove_last`, { method: 'POST' });
+              const sets = Math.max(1, Number(ex?.sets || 1));
+              const reps = Math.max(0, Number(ex?.reps || 0));
+              const seconds = Math.max(0, Number(ex?.seconds || 0));
+              const weight = Math.max(0, Number(ex?.weight_kg || 0));
+              for (let i = 0; i < sets; i += 1) {
+                await apiFetch(`/gymapi/day/${dayIndex}/exercise/${ueId}/set/add`, {
+                  method: 'POST',
+                  body: JSON.stringify({ reps, seconds, weight_kg: weight }),
+                });
+              }
+            }
+          }
+
+          await loadSystems();
+          await loadDay(state.dayIndex || 1);
+          toast('Создана и заполнена новая система из предложения ИИ');
+          closeAiCoachSheet();
+          return;
+        }
+
+        const grouped = new Map();
+        for (const action of actions) {
+          const di = Number(action?.day_index || state.dayIndex || 1);
+          if (!grouped.has(di)) grouped.set(di, []);
+          grouped.get(di).push(action);
+        }
+        for (const [dayIndex, items] of grouped.entries()) {
+          await loadSheet(dayIndex);
+          for (const action of items) {
+            const type = String(action?.type || '');
+            if (!type) continue;
+            const exName = String(action.exercise_name || action.new_exercise_name || '').trim();
+            let target = Array.from(state.exercises.values()).find((x) => String(x.name || '').toLowerCase() === exName.toLowerCase());
+            if ((type === 'add_exercise' || type === 'replace_exercise') && !target && exName) {
+              const search = await apiFetch(`/gymapi/catalog/search?query=${encodeURIComponent(exName)}`);
+              const found = (search.items || []).find((it) => String(it.name || '').toLowerCase() === exName.toLowerCase()) || (search.items || [])[0];
+              if (found?.id) {
+                await apiFetch(`/gymapi/day/${dayIndex}/exercise`, { method: 'POST', body: JSON.stringify({ exercise_id: found.id }) });
+                await loadSheet(dayIndex);
+                target = Array.from(state.exercises.values()).find((x) => String(x.name || '').toLowerCase() === exName.toLowerCase());
+              }
+            }
+            if (type === 'replace_exercise') {
+              const oldName = String(action.old_exercise_name || '').trim().toLowerCase();
+              const oldItem = Array.from(state.exercises.values()).find((x) => String(x.name || '').toLowerCase() === oldName);
+              if (oldItem?.user_exercise_id) {
+                await apiFetch(`/gymapi/day/${dayIndex}/exercise/${oldItem.user_exercise_id}/toggle`, { method: 'POST' });
+              }
+            }
             if (!target?.user_exercise_id) continue;
             const ueId = Number(target.user_exercise_id);
             const currentSets = Array.isArray(target.sets) ? target.sets.length : 0;
             for (let i = 0; i < currentSets; i += 1) await apiFetch(`/gymapi/day/${dayIndex}/exercise/${ueId}/set/remove_last`, { method: 'POST' });
-            const sets = Math.max(1, Number(ex?.sets || 1));
-            const reps = Math.max(0, Number(ex?.reps || 0));
-            const seconds = Math.max(0, Number(ex?.seconds || 0));
-            const weight = Math.max(0, Number(ex?.weight_kg || 0));
+            const sets = Math.max(1, Number(action.sets || 1));
+            const reps = Math.max(0, Number(action.reps || 0));
+            const seconds = Math.max(0, Number(action.seconds || 0));
+            const weight = Math.max(0, Number(action.weight_kg || 0));
             for (let i = 0; i < sets; i += 1) {
               await apiFetch(`/gymapi/day/${dayIndex}/exercise/${ueId}/set/add`, {
                 method: 'POST',
@@ -9192,64 +9262,14 @@
             }
           }
         }
-
-        await loadSystems();
-        await loadDay(state.dayIndex || 1);
-        toast('Создана и заполнена новая система из предложения ИИ');
+        await loadSheet(state.dayIndex || 1);
+        toast('План от ИИ применён');
         closeAiCoachSheet();
-        return;
+      } catch (e) {
+        toast(`Не удалось применить изменения: ${normalizeError(e).split('\n')[0].slice(0, 100)}`);
+        throw e;
       }
-
-      const grouped = new Map();
-      for (const action of actions) {
-        const di = Number(action?.day_index || state.dayIndex || 1);
-        if (!grouped.has(di)) grouped.set(di, []);
-        grouped.get(di).push(action);
-      }
-      for (const [dayIndex, items] of grouped.entries()) {
-        await loadSheet(dayIndex);
-        for (const action of items) {
-          const type = String(action?.type || '');
-          if (!type) continue;
-          const exName = String(action.exercise_name || action.new_exercise_name || '').trim();
-          let target = Array.from(state.exercises.values()).find((x) => String(x.name || '').toLowerCase() === exName.toLowerCase());
-          if ((type === 'add_exercise' || type === 'replace_exercise') && !target && exName) {
-            const search = await apiFetch(`/gymapi/catalog/search?query=${encodeURIComponent(exName)}`);
-            const found = (search.items || []).find((it) => String(it.name || '').toLowerCase() === exName.toLowerCase()) || (search.items || [])[0];
-            if (found?.id) {
-              await apiFetch(`/gymapi/day/${dayIndex}/exercise`, { method: 'POST', body: JSON.stringify({ exercise_id: found.id }) });
-              await loadSheet(dayIndex);
-              target = Array.from(state.exercises.values()).find((x) => String(x.name || '').toLowerCase() === exName.toLowerCase());
-            }
-          }
-          if (type === 'replace_exercise') {
-            const oldName = String(action.old_exercise_name || '').trim().toLowerCase();
-            const oldItem = Array.from(state.exercises.values()).find((x) => String(x.name || '').toLowerCase() === oldName);
-            if (oldItem?.user_exercise_id) {
-              await apiFetch(`/gymapi/day/${dayIndex}/exercise/${oldItem.user_exercise_id}/toggle`, { method: 'POST' });
-            }
-          }
-          if (!target?.user_exercise_id) continue;
-          const ueId = Number(target.user_exercise_id);
-          const currentSets = Array.isArray(target.sets) ? target.sets.length : 0;
-          for (let i = 0; i < currentSets; i += 1) await apiFetch(`/gymapi/day/${dayIndex}/exercise/${ueId}/set/remove_last`, { method: 'POST' });
-          const sets = Math.max(1, Number(action.sets || 1));
-          const reps = Math.max(0, Number(action.reps || 0));
-          const seconds = Math.max(0, Number(action.seconds || 0));
-          const weight = Math.max(0, Number(action.weight_kg || 0));
-          for (let i = 0; i < sets; i += 1) {
-            await apiFetch(`/gymapi/day/${dayIndex}/exercise/${ueId}/set/add`, {
-              method: 'POST',
-              body: JSON.stringify({ reps, seconds, weight_kg: weight }),
-            });
-          }
-        }
-      }
-      await loadSheet(state.dayIndex || 1);
-      toast('План от ИИ применён');
-      closeAiCoachSheet();
     }
-
 
     async function loadSubscriptionOverview() {
       state.subscription.loading = true;

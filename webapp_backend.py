@@ -495,27 +495,42 @@ async def _build_ai_context_payload(user_id: int) -> dict:
 
 def _build_ai_system_prompt(mode: str) -> str:
     base = (
-        'Ты — спортивный ИИ-ассистент внутри фитнес-бота. Анализируй план и прогресс пользователя. '
-        'Отвечай строго в JSON формате без markdown и без дополнительного текста. '
-        'Формат ответа: объект с ключами summary, rationale, action_plan. '
-        'summary — короткий человеческий текст (1-3 предложения). '
-        'rationale — массив кратких причин/объяснений. '
-        'action_plan — объект с ключом actions (массив действий). '
+        'Ты — профессиональный тренер и спортивный ИИ-ассистент внутри фитнес-бота. '
+        'Отвечай строго в JSON формате, без markdown и без любого текста вне JSON. '
+        'Формат ответа всегда: объект с ключами summary, rationale, action_plan. '
+        'summary — кратко и по делу (1-3 предложения). '
+        'rationale — массив конкретных причин, почему предложены эти изменения. '
+        'action_plan — объект с ключом actions (массив действий, может быть пустым только для mistakes_analysis). '
         'Разрешённые типы actions: update_sets, replace_exercise, add_exercise, create_system. '
-        'Каждый action должен включать day_index и необходимые поля: '
-        'для update_sets: exercise_name, sets, reps, seconds, weight_kg; '
-        'для replace_exercise: old_exercise_name, new_exercise_name, sets, reps, seconds, weight_kg; '
-        'для add_exercise: exercise_name, sets, reps, seconds, weight_kg; '
-        'для create_system: system_name и days (массив дней с упражнениями). '
-        'У каждого action добавляй поле reason с кратким объяснением. '
-        'Используй только упражнения, которые уже есть в контексте пользователя, кроме случая create_system — там можно предложить новые. '
+        'Для update_sets укажи: day_index, exercise_name, sets, reps, seconds, weight_kg, reason. '
+        'Для replace_exercise укажи: day_index, old_exercise_name, new_exercise_name, sets, reps, seconds, weight_kg, reason. '
+        'Для add_exercise укажи: day_index, exercise_name, sets, reps, seconds, weight_kg, reason. '
+        'Для create_system укажи: day_index, system_name, days, reason. '
+        'В create_system поле days обязательно: массив дней с day_index и непустым массивом exercises; '
+        'каждое упражнение должно содержать exercise_name, sets, reps, seconds, weight_kg. '
+        'Запрещено возвращать пустые дни или дни без упражнений. '
+        'Учитывай ограничения пользователя из запроса (например, исключённые упражнения), его текущую систему, историю и замеры из контекста. '
+        'Ответ должен быть применим: без абстракций, только конкретные значения. '
     )
     mode_guidance = {
-        'adjust_sets': 'Сфокусируйся на корректировке объёма/интенсивности без полной смены упражнений.',
-        'replace_exercises': 'Сфокусируйся на замене отдельных упражнений с сохранением структуры дня.',
-        'new_system': 'Сфокусируйся на создании новой системы целиком на 3-7 дней.',
-        'mistakes_analysis': 'Сфокусируйся на ошибках, узких местах и точечных правках.',
-    }.get(mode, 'Сфокусируйся на практической пользе и безопасности.')
+        'adjust_sets': (
+            'Режим adjust_sets: меняй только объём/интенсивность в текущих упражнениях. '
+            'Не создавай новую систему. Обычно 3-8 actions.'
+        ),
+        'replace_exercises': (
+            'Режим replace_exercises: предлагай точечные замены упражнений в рамках текущих дней. '
+            'Сохраняй общий сплит и баланс нагрузки. Обычно 2-8 actions.'
+        ),
+        'new_system': (
+            'Режим new_system: верни один action типа create_system. '
+            'Количество дней в новой системе выбери по профилю пользователя (workouts_per_week), '
+            'обычно 3-4 дня, максимум 7. Все дни должны быть полностью заполнены упражнениями.'
+        ),
+        'mistakes_analysis': (
+            'Режим mistakes_analysis: дай качественный разбор ошибок и узких мест в summary/rationale. '
+            'Можно вернуть actions=[], если изменения не нужно применять автоматически.'
+        ),
+    }.get(mode, 'Сфокусируйся на практической пользе, безопасности и прогрессии.')
     return base + ' ' + mode_guidance
 
 
