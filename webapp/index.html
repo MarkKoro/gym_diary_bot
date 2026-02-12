@@ -126,10 +126,14 @@
     .ai-coach-main { display: grid; gap: 10px; min-height: 0; flex: 1; grid-template-rows: auto auto auto minmax(0, 1fr) auto; }
     .ai-coach-toolbar { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
     .ai-coach-counter { font-size: 12px; color: var(--muted); padding: 6px 10px; border-radius: 999px; border: 1px solid var(--border); background: var(--bg); }
-    .ai-coach-response-wrap { min-height: 0; display: grid; gap: 8px; grid-template-rows: auto auto minmax(0, 1fr); }
-    .ai-coach-title { font-size: 15px; font-weight: 700; }
-    .ai-coach-list { margin: 0; padding-left: 18px; color: var(--muted); font-size: 13px; display: grid; gap: 5px; }
-    .ai-coach-response { min-height: 0; overflow: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; white-space: pre-wrap; border: 1px solid var(--border); border-radius: 12px; padding: 12px; background: var(--bg); font-size: 13px; line-height: 1.4; }
+    .ai-coach-response-wrap { min-height: 0; display: grid; gap: 8px; grid-template-rows: minmax(0, 1fr); }
+    .ai-coach-title { font-size: 15px; font-weight: 700; user-select: text; -webkit-user-select: text; }
+    .ai-coach-list { margin: 0; padding-left: 18px; color: var(--muted); font-size: 13px; display: grid; gap: 5px; user-select: text; -webkit-user-select: text; }
+    .ai-coach-result-scroll { min-height: 0; overflow: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; display: grid; gap: 8px; align-content: start; }
+    .ai-coach-response { min-height: 0; overflow: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; white-space: pre-wrap; border: 1px solid var(--border); border-radius: 12px; padding: 12px; background: var(--bg); font-size: 13px; line-height: 1.4; user-select: text; -webkit-user-select: text; cursor: text; }
+    .ai-coach-examples { margin: 0; padding: 10px 12px; border-radius: 12px; border: 1px solid var(--border); background: var(--bg); display: grid; gap: 6px; }
+    .ai-coach-examples-title { font-size: 12px; color: var(--muted); }
+    .ai-coach-example-item { font-size: 13px; line-height: 1.35; color: var(--text); user-select: text; -webkit-user-select: text; }
     .ai-coach-actions { display: flex; flex-wrap: wrap; gap: 8px; }
     .ai-coach-apply-frame {
       border: 1px solid var(--border);
@@ -2307,7 +2311,8 @@
           </select>
           <div id="aiCoachRetryCounter" class="ai-coach-counter hidden">Ещё запросов сегодня: 2 из 3</div>
         </div>
-        <textarea id="aiCoachInput" class="settings-input" rows="4" placeholder="Например: хочу прогресс по жиму и разгрузить локти"></textarea>
+        <textarea id="aiCoachInput" class="settings-input" rows="4" placeholder="Опиши ситуацию и что хочешь улучшить"></textarea>
+        <div id="aiCoachExamples" class="ai-coach-examples" aria-live="polite"></div>
         <div class="ai-coach-actions">
           <button class="btn primary" id="aiCoachAskBtn">Сделать запрос</button>
         </div>
@@ -2324,9 +2329,11 @@
             </div>
             <div class="ai-coach-loading-text">ИИ анализирует запрос и собирает план…</div>
           </div>
-          <div id="aiCoachSummary" class="ai-coach-title hidden"></div>
-          <ul id="aiCoachRationale" class="ai-coach-list hidden"></ul>
-          <div id="aiCoachAnswer" class="ai-coach-response hidden"></div>
+          <div id="aiCoachResultScroll" class="ai-coach-result-scroll">
+            <div id="aiCoachSummary" class="ai-coach-title hidden"></div>
+            <ul id="aiCoachRationale" class="ai-coach-list hidden"></ul>
+            <div id="aiCoachAnswer" class="ai-coach-response hidden"></div>
+          </div>
         </div>
         <div class="ai-coach-apply-frame">
         <div id="aiCoachApplyRow" class="ai-coach-actions hidden">
@@ -9121,6 +9128,7 @@
       sheet.classList.add('show');
       const modeEl = document.getElementById('aiCoachMode');
       if (modeEl) modeEl.value = state.aiCoach.mode || 'replace_exercises';
+      renderAiCoachExamples();
       updateAiCoachCounter();
       renderAiCoachResult();
       updateBackButton(state.currentRoute);
@@ -9138,6 +9146,55 @@
       const datePart = state.dateIso || getTodayIsoLocal() || '';
       const dayPart = Number(state.dayIndex || 0);
       return `${datePart}:${dayPart}`;
+    }
+
+    function renderAiCoachExamples() {
+      const mode = String(state.aiCoach.mode || 'replace_exercises');
+      const box = document.getElementById('aiCoachExamples');
+      const inputEl = document.getElementById('aiCoachInput');
+      if (!box || !inputEl) return;
+      const config = {
+        replace_exercises: {
+          placeholder: 'Опиши цель и что стоит заменить в текущем плане',
+          title: 'Подходящие формулировки:',
+          examples: [
+            'Хочу заменить упражнения на ноги на вариант без нагрузки на колени.',
+            'Нужны альтернативы, чтобы сохранить акцент на спине, но снизить нагрузку на поясницу.'
+          ],
+        },
+        new_system: {
+          placeholder: 'Опиши цель новой системы и ограничения',
+          title: 'Подходящие формулировки:',
+          examples: [
+            'Собери новую систему на 3 тренировки в неделю для набора мышечной массы.',
+            'Хочу новую программу с упором на силовой прогресс и минимумом упражнений с осевой нагрузкой.'
+          ],
+        },
+        adjust_sets: {
+          placeholder: 'Опиши, как хочешь изменить объём/интенсивность',
+          title: 'Подходящие формулировки:',
+          examples: [
+            'Слишком устаю к концу недели — перераспредели подходы, чтобы восстановление было лучше.',
+            'Хочу аккуратно повысить нагрузку в базовых упражнениях на ближайшие 2 недели.'
+          ],
+        },
+        mistakes_analysis: {
+          placeholder: 'Опиши, что тебя смущает в прогрессе или в структуре тренировок',
+          title: 'Примеры запроса для анализа ошибок:',
+          examples: [
+            'Почему за последние недели нет прогресса по силе, хотя тренируюсь регулярно?',
+            'Помоги разобрать перекосы в моей программе: где перегружаюсь, а какие группы недорабатываю.'
+          ],
+        },
+      }[mode] || {
+        placeholder: 'Опиши ситуацию и что хочешь улучшить',
+        title: 'Примеры:',
+        examples: [],
+      };
+
+      inputEl.placeholder = config.placeholder;
+      const items = Array.isArray(config.examples) ? config.examples : [];
+      box.innerHTML = `<div class="ai-coach-examples-title">${escapeHtml(config.title || 'Примеры:')}</div>${items.map((item) => `<div class="ai-coach-example-item">• ${escapeHtml(String(item))}</div>`).join('')}`;
     }
 
     function updateAiCoachCounter() {
@@ -9724,6 +9781,10 @@
       document.getElementById('textPrompt').addEventListener('click', (e) => { if (e.target.id === 'textPrompt') closeTextPrompt(); });
       document.getElementById('timerSheet').addEventListener('click', (e) => { if (e.target.id === 'timerSheet') closeTimerSheet(); });
       document.getElementById('aiCoachSheet').addEventListener('click', (e) => { if (e.target.id === 'aiCoachSheet') closeAiCoachSheet(); });
+      document.getElementById('aiCoachMode').addEventListener('change', (e) => {
+        state.aiCoach.mode = String(e?.target?.value || 'replace_exercises');
+        renderAiCoachExamples();
+      });
       document.getElementById('aiCoachAskBtn').addEventListener('click', () => {
         const retry = state.aiCoach.hasResponse && state.aiCoach.requestDayKey === getAiCoachDayKey();
         askAiCoach({ retry }).catch(console.error);
