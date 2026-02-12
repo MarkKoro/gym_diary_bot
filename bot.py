@@ -252,6 +252,7 @@ from db import (
     clear_onboarding_intro_message,
     clear_onboarding_video_message,
     set_onboarding_completed,
+    count_active_subscriptions,
 )
 from text_utils import normalize_whitespace
 from ui_texts import t, e, ONBOARDING_TIPS
@@ -7821,6 +7822,23 @@ async def capture_intro_video(update: Update, context: ContextTypes.DEFAULT_TYPE
     )
 
 
+async def check_prems_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    if not user or user.id not in ADMIN_IDS:
+        if update.message:
+            await update.message.reply_text("Команда доступна только администратору.")
+        return
+    try:
+        total = await count_active_subscriptions()
+    except Exception:
+        logger.exception("Failed to count active subscriptions")
+        if update.message:
+            await update.message.reply_text("Не удалось получить количество подписок. Попробуй позже.")
+        return
+    if update.message:
+        await update.message.reply_text(f"Сейчас активных подписок: {total}.")
+
+
 async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     if not user:
@@ -13917,6 +13935,7 @@ def main():
     app.add_handler(CommandHandler("splash_reset", splash_reset))
     app.add_handler(CommandHandler("broadcast", broadcast_command))
     app.add_handler(CommandHandler("stats", cmd_stats))
+    app.add_handler(CommandHandler(("checkprems", "check_prems", "prems"), check_prems_command))
     app.add_handler(CommandHandler("cancel", cancel_command))
     app.add_handler(CommandHandler(("grant", "grunt"), grant_command))
     app.add_handler(CommandHandler("degrant", degrant_command))
