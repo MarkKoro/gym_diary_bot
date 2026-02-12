@@ -131,6 +131,58 @@
     .ai-coach-list { margin: 0; padding-left: 18px; color: var(--muted); font-size: 13px; display: grid; gap: 5px; }
     .ai-coach-response { min-height: 0; overflow: auto; white-space: pre-wrap; border: 1px solid var(--border); border-radius: 12px; padding: 12px; background: var(--bg); font-size: 13px; line-height: 1.4; }
     .ai-coach-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+    .ai-coach-apply-frame {
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 10px;
+      background: color-mix(in srgb, var(--bg) 88%, transparent);
+    }
+    .ai-coach-loading-overlay {
+      position: absolute;
+      inset: 0;
+      background: color-mix(in srgb, var(--bg) 80%, transparent);
+      backdrop-filter: blur(4px);
+      border-radius: 12px;
+      display: grid;
+      place-items: center;
+      z-index: 6;
+      text-align: center;
+      padding: 18px;
+      gap: 10px;
+    }
+    .ai-coach-loading-head {
+      position: relative;
+      width: 82px;
+      height: 82px;
+      border-radius: 999px;
+      border: 2px solid color-mix(in srgb, var(--accent) 42%, var(--border));
+      background: color-mix(in srgb, var(--accent) 16%, var(--card));
+      box-shadow: 0 12px 28px rgba(0,0,0,0.25);
+      display: grid;
+      place-items: center;
+      animation: aiPulse 1.2s ease-in-out infinite;
+    }
+    .ai-coach-loading-head::before,
+    .ai-coach-loading-head::after {
+      content: '';
+      position: absolute;
+      border-radius: 999px;
+      background: color-mix(in srgb, var(--accent) 68%, #ffffff);
+      opacity: 0.8;
+      animation: aiDots 1.4s ease-in-out infinite;
+    }
+    .ai-coach-loading-head::before { width: 8px; height: 8px; right: -12px; top: 20px; }
+    .ai-coach-loading-head::after { width: 6px; height: 6px; left: -10px; bottom: 18px; animation-delay: 0.25s; }
+    .ai-coach-loading-head svg { width: 42px; height: 42px; stroke-width: 1.9; }
+    .ai-coach-loading-text { font-size: 14px; color: var(--muted); font-weight: 700; }
+    @keyframes aiPulse {
+      0%, 100% { transform: scale(0.92); }
+      50% { transform: scale(1.06); }
+    }
+    @keyframes aiDots {
+      0%, 100% { transform: translateY(0); opacity: 0.3; }
+      50% { transform: translateY(-6px); opacity: 1; }
+    }
 
     .subscription-hero { border: 1px solid var(--border); border-radius: 16px; padding: 14px; background: color-mix(in srgb, var(--accent) 16%, var(--card)); display: grid; gap: 8px; }
     .subscription-title { font-size: 18px; font-weight: 800; }
@@ -2256,16 +2308,29 @@
         <div class="ai-coach-actions">
           <button class="btn primary" id="aiCoachAskBtn">Получить предложение</button>
           <button class="btn hidden" id="aiCoachRetryBtn">Запросить ещё раз</button>
-          <button class="btn" id="aiCoachCloseBtn">Назад</button>
         </div>
         <div class="ai-coach-response-wrap">
+          <div id="aiCoachLoadingOverlay" class="ai-coach-loading-overlay hidden" aria-live="polite" aria-busy="true">
+            <div class="ai-coach-loading-head" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                <rect x="4" y="6" width="16" height="12" rx="3"></rect>
+                <circle cx="9" cy="12" r="1.2" fill="currentColor"></circle>
+                <circle cx="15" cy="12" r="1.2" fill="currentColor"></circle>
+                <path d="M12 3v3"></path>
+                <path d="M8 18h8"></path>
+              </svg>
+            </div>
+            <div class="ai-coach-loading-text">ИИ анализирует запрос и собирает план…</div>
+          </div>
           <div id="aiCoachSummary" class="ai-coach-title hidden"></div>
           <ul id="aiCoachRationale" class="ai-coach-list hidden"></ul>
           <div id="aiCoachAnswer" class="ai-coach-response hidden"></div>
         </div>
+        <div class="ai-coach-apply-frame">
         <div id="aiCoachApplyRow" class="ai-coach-actions hidden">
           <button class="btn" id="aiCoachApplyCurrentBtn">Применить изменения</button>
           <button class="btn" id="aiCoachApplyNewSystemBtn">Создать как новую систему</button>
+        </div>
         </div>
       </div>
     </div>
@@ -9040,6 +9105,12 @@
     function updateAiCoachCounter() {
       const counter = document.getElementById('aiCoachRetryCounter');
       const retryBtn = document.getElementById('aiCoachRetryBtn');
+      const askBtn = document.getElementById('aiCoachAskBtn');
+      const modeEl = document.getElementById('aiCoachMode');
+      const inputEl = document.getElementById('aiCoachInput');
+      const applyCurrentBtn = document.getElementById('aiCoachApplyCurrentBtn');
+      const applyNewBtn = document.getElementById('aiCoachApplyNewSystemBtn');
+      const loadingOverlay = document.getElementById('aiCoachLoadingOverlay');
       const totalUsed = 1 + Math.max(0, Number(state.aiCoach.retriesUsed || 0));
       const remaining = Math.max(0, Number(state.aiCoach.maxRetries || 3) - totalUsed);
       if (counter) {
@@ -9050,6 +9121,12 @@
         retryBtn.disabled = state.aiCoach.loading || remaining <= 0;
         retryBtn.classList.toggle('hidden', !state.aiCoach.hasResponse);
       }
+      if (askBtn) askBtn.disabled = state.aiCoach.loading;
+      if (modeEl) modeEl.disabled = state.aiCoach.loading;
+      if (inputEl) inputEl.disabled = state.aiCoach.loading;
+      if (applyCurrentBtn) applyCurrentBtn.disabled = state.aiCoach.loading;
+      if (applyNewBtn) applyNewBtn.disabled = state.aiCoach.loading;
+      if (loadingOverlay) loadingOverlay.classList.toggle('hidden', !state.aiCoach.loading);
     }
 
     function buildAiCoachPreviewText() {
@@ -9080,11 +9157,46 @@
               });
             });
           }
+          if (type === 'create_system_day') {
+            const exList = Array.isArray(it.exercises) ? it.exercises : [];
+            lines.push(`• День ${Number(it.day_index || 0)}:`);
+            exList.forEach((ex) => {
+              lines.push(`  - ${ex.exercise_name}: ${Number(ex.sets || 0)}×${Number(ex.reps || 0)}${Number(ex.weight_kg || 0) ? `, ${Number(ex.weight_kg || 0)} кг` : ''}${Number(ex.seconds || 0) ? `, ${Number(ex.seconds || 0)} сек` : ''}`);
+            });
+          }
           if (it?.reason) lines.push(`  ↳ ${String(it.reason)}`);
         });
         lines.push('');
       });
       return lines.join('\n').trim();
+    }
+
+    function normalizeAiCoachActions(plan, mode) {
+      const actions = Array.isArray(plan?.actions) ? plan.actions.filter(Boolean) : [];
+      if (!actions.length) return [];
+      if (mode !== 'new_system') return actions;
+
+      const hasCreateSystem = actions.some((a) => String(a?.type || '') === 'create_system');
+      if (hasCreateSystem) return actions;
+
+      const dayBased = actions.filter((a) => String(a?.type || '') === 'create_system_day' || (a?.day_index && Array.isArray(a?.exercises)));
+      if (!dayBased.length) return actions;
+
+      const days = dayBased
+        .map((a) => ({
+          day_index: Number(a.day_index || 0),
+          exercises: Array.isArray(a.exercises) ? a.exercises : [],
+        }))
+        .filter((d) => d.day_index > 0 && d.exercises.length)
+        .sort((a, b) => a.day_index - b.day_index);
+      if (!days.length) return actions;
+
+      return [{
+        type: 'create_system',
+        system_name: String(plan?.system_name || actions[0]?.system_name || 'Система от ИИ'),
+        days,
+        reason: String(actions[0]?.reason || ''),
+      }];
     }
 
     function renderAiCoachResult() {
@@ -9137,7 +9249,9 @@
         state.aiCoach.answerText = data.answer_text || '';
         state.aiCoach.summary = data.summary || '';
         state.aiCoach.rationale = Array.isArray(data.rationale) ? data.rationale : [];
-        state.aiCoach.parsed = data.parsed_action_plan || null;
+        const rawPlan = data.parsed_action_plan || null;
+        const normalizedActions = normalizeAiCoachActions(rawPlan, mode);
+        state.aiCoach.parsed = rawPlan ? { ...rawPlan, actions: normalizedActions } : null;
         if (retry) state.aiCoach.retriesUsed += 1;
         state.aiCoach.hasResponse = true;
         if (state.aiCoach.summary) state.aiCoach.rejectedVariants.push(state.aiCoach.summary);
@@ -9552,7 +9666,6 @@
       document.getElementById('textPrompt').addEventListener('click', (e) => { if (e.target.id === 'textPrompt') closeTextPrompt(); });
       document.getElementById('timerSheet').addEventListener('click', (e) => { if (e.target.id === 'timerSheet') closeTimerSheet(); });
       document.getElementById('aiCoachSheet').addEventListener('click', (e) => { if (e.target.id === 'aiCoachSheet') closeAiCoachSheet(); });
-      document.getElementById('aiCoachCloseBtn').addEventListener('click', closeAiCoachSheet);
       document.getElementById('aiCoachAskBtn').addEventListener('click', () => askAiCoach({ retry: false }).catch(console.error));
       document.getElementById('aiCoachRetryBtn').addEventListener('click', () => askAiCoach({ retry: true }).catch(console.error));
       document.getElementById('aiCoachApplyCurrentBtn').addEventListener('click', () => applyAiCoachPlan('current').catch(console.error));
