@@ -9165,7 +9165,10 @@
 
     function buildAiCoachPreviewText() {
       const actions = Array.isArray(state.aiCoach.parsed?.actions) ? state.aiCoach.parsed.actions : [];
-      if (!actions.length) return (state.aiCoach.answerText || '').trim();
+      if (!actions.length) {
+        if (String(state.aiCoach.mode || '') === 'mistakes_analysis') return '';
+        return (state.aiCoach.answerText || '').trim();
+      }
       const byDay = new Map();
       for (const item of actions) {
         const day = Number(item?.day_index || 1);

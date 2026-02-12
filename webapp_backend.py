@@ -694,7 +694,7 @@ def _build_ai_system_prompt(mode: str) -> str:
         'Ты — профессиональный тренер и спортивный ИИ-ассистент внутри фитнес-бота. '
         'Отвечай строго в JSON формате, без markdown и без любого текста вне JSON. '
         'Формат ответа всегда: объект с ключами summary, rationale, action_plan. '
-        'summary — кратко и по делу (1-3 предложения). '
+        'summary — понятный человеку итог без технических деталей и служебных комментариев. '
         'rationale — массив конкретных причин, почему предложены эти изменения. '
         'action_plan — объект с ключом actions (массив действий, может быть пустым только для mistakes_analysis). '
         'Разрешённые типы actions: update_sets, replace_exercise, add_exercise, create_system. '
@@ -730,8 +730,11 @@ def _build_ai_system_prompt(mode: str) -> str:
             'Минимум 4 упражнения на каждый день, без пустых блоков и обрывов.'
         ),
         'mistakes_analysis': (
-            'Режим mistakes_analysis: дай качественный разбор ошибок и узких мест в summary/rationale. '
-            'Можно вернуть actions=[], если изменения не нужно применять автоматически.'
+            'Режим mistakes_analysis: верни только полезный человеку анализ, без JSON-фрагментов в тексте summary и без технических предупреждений. '
+            'summary: 1-2 коротких предложения, простым языком. '
+            'rationale: ровно 3 пункта — топ-3 зоны роста, каждый пункт 1 короткое предложение: где проблема и что делать. '
+            'action_plan: всегда {"actions": []}. '
+            'Ничего лишнего: не дублируй summary, не упоминай внутренние ограничения, валидацию, каталог или формат ответа.'
         ),
     }.get(mode, 'Сфокусируйся на практической пользе, безопасности и прогрессии.')
     return base + ' ' + mode_guidance
@@ -4308,6 +4311,11 @@ async def ai_coach_query(payload: dict = Body(default_factory=dict), ctx: AuthCt
     rationale = parsed_root.get('rationale') if isinstance(parsed_root, dict) else None
     if not isinstance(rationale, list):
         rationale = []
+
+    if mode == 'mistakes_analysis':
+        sanitized_plan = {'actions': []}
+        plan_warnings = []
+        rationale = [str(item).strip() for item in rationale if str(item).strip()][:3]
 
     return {
         'ok': True,
