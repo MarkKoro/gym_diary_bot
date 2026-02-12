@@ -2,6 +2,7 @@ import os
 import json
 import random
 import logging
+import re
 import httpx
 import uuid
 from dataclasses import dataclass
@@ -495,15 +496,18 @@ async def _build_ai_context_payload(user_id: int) -> dict:
 def _build_ai_system_prompt(mode: str) -> str:
     base = (
         'Ты — спортивный ИИ-ассистент внутри фитнес-бота. Анализируй план и прогресс пользователя. '
-        'Отвечай по-русски. Сначала дай краткий анализ (3-6 пунктов), затем предложи actionable изменения. '
-        'ОБЯЗАТЕЛЬНО заверши ответ JSON-блоком в markdown fenced code block с языком json и ключом action_plan. '
-        'JSON должен быть валидным и содержать массив actions. '
+        'Отвечай строго в JSON формате без markdown и без дополнительного текста. '
+        'Формат ответа: объект с ключами summary, rationale, action_plan. '
+        'summary — короткий человеческий текст (1-3 предложения). '
+        'rationale — массив кратких причин/объяснений. '
+        'action_plan — объект с ключом actions (массив действий). '
         'Разрешённые типы actions: update_sets, replace_exercise, add_exercise, create_system. '
         'Каждый action должен включать day_index и необходимые поля: '
         'для update_sets: exercise_name, sets, reps, seconds, weight_kg; '
         'для replace_exercise: old_exercise_name, new_exercise_name, sets, reps, seconds, weight_kg; '
         'для add_exercise: exercise_name, sets, reps, seconds, weight_kg; '
         'для create_system: system_name и days (массив дней с упражнениями). '
+        'У каждого action добавляй поле reason с кратким объяснением. '
         'Используй только упражнения, которые уже есть в контексте пользователя, кроме случая create_system — там можно предложить новые. '
     )
     mode_guidance = {
@@ -511,7 +515,6 @@ def _build_ai_system_prompt(mode: str) -> str:
         'replace_exercises': 'Сфокусируйся на замене отдельных упражнений с сохранением структуры дня.',
         'new_system': 'Сфокусируйся на создании новой системы целиком на 3-7 дней.',
         'mistakes_analysis': 'Сфокусируйся на ошибках, узких местах и точечных правках.',
-        'free_request': 'Сфокусируйся на запросе пользователя и предложи минимум 2 рабочих варианта.',
     }.get(mode, 'Сфокусируйся на практической пользе и безопасности.')
     return base + ' ' + mode_guidance
 
@@ -525,11 +528,12 @@ async def _call_openai_chat(system_prompt: str, user_prompt: str) -> dict:
         raise HTTPException(status_code=503, detail='OPENAI_MODEL не задан')
     payload = {
         'model': openai_model,
-        'temperature': 0.6,
+        'temperature': 0.4,
         'messages': [
             {'role': 'system', 'content': system_prompt},
             {'role': 'user', 'content': user_prompt},
         ],
+        'response_format': {'type': 'json_object'},
     }
     headers = {
         'Authorization': f'Bearer {openai_api_key}',
@@ -550,24 +554,30 @@ async def _call_openai_chat(system_prompt: str, user_prompt: str) -> dict:
 
 
 def _extract_json_block(answer_text: str) -> dict | None:
-    src = answer_text or ''
-    start = src.find('```json')
-    if start == -1:
+    src = (answer_text or '').strip()
+    if not src:
         return None
-    start += len('```json')
-    end = src.find('```', start)
-    if end == -1:
-        return None
-    block = src[start:end].strip()
-    if not block:
-        return None
-    try:
-        payload = json.loads(block)
-    except json.JSONDecodeError:
-        return None
-    if not isinstance(payload, dict):
-        return None
-    return payload
+
+    candidates: list[str] = [src]
+    for marker in ('```json', '```'):
+        start = src.find(marker)
+        if start != -1:
+            tail = src[start + len(marker):]
+            end = tail.find('```')
+            if end != -1:
+                candidates.append(tail[:end].strip())
+
+    obj_matches = re.findall(r'\{[\s\S]*\}', src)
+    candidates.extend(obj_matches)
+
+    for candidate in candidates:
+        try:
+            payload = json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(payload, dict):
+            return payload
+    return None
 def _today_date() -> date:
     return datetime.now(UTC).date()
 
@@ -4021,10 +4031,20 @@ async def ai_coach_query(payload: dict = Body(default_factory=dict), ctx: AuthCt
     if not sub:
         raise HTTPException(status_code=403, detail='AI доступен только при активной подписке')
 
-    mode = str(payload.get('mode') or 'free_request').strip()
+    mode = str(payload.get('mode') or 'mistakes_analysis').strip()
     user_message = _clip_text(str(payload.get('message') or '').strip(), 1800)
-    if mode == 'free_request' and not user_message:
-        raise HTTPException(status_code=400, detail='Введите запрос для ИИ')
+    if mode not in {'replace_exercises', 'new_system', 'adjust_sets', 'mistakes_analysis'}:
+        raise HTTPException(status_code=400, detail='Неподдерживаемый AI-режим')
+    if mode in {'replace_exercises', 'new_system', 'adjust_sets'} and not user_message:
+        raise HTTPException(status_code=400, detail='Опиши, что хочешь улучшить')
+
+    rejected_variants = payload.get('rejected_variants')
+    rejected_list: list[str] = []
+    if isinstance(rejected_variants, list):
+        for item in rejected_variants[:3]:
+            text = _clip_text(str(item or '').strip(), 350)
+            if text:
+                rejected_list.append(text)
 
     context_payload = await _build_ai_context_payload(user_id)
     context_text = _build_user_context_summary(
@@ -4041,15 +4061,29 @@ async def ai_coach_query(payload: dict = Body(default_factory=dict), ctx: AuthCt
         "Контекст пользователя:\n"
         f"{context_text}\n"
     )
+    if rejected_list:
+        user_prompt += '\nПрошлые отклонённые варианты:\n'
+        for idx, reason in enumerate(rejected_list, start=1):
+            user_prompt += f"{idx}) {reason}\n"
+        user_prompt += 'Предложи новый вариант, который отличается от отклонённых.\n'
 
     result = await _call_openai_chat(_build_ai_system_prompt(mode), user_prompt)
-    parsed = _extract_json_block(result['text'])
+    parsed_root = _extract_json_block(result['text']) or {}
+    parsed_plan = parsed_root.get('action_plan') if isinstance(parsed_root, dict) else None
+    if not isinstance(parsed_plan, dict):
+        parsed_plan = parsed_root if isinstance(parsed_root, dict) else None
+    summary = str(parsed_root.get('summary') or '').strip() if isinstance(parsed_root, dict) else ''
+    rationale = parsed_root.get('rationale') if isinstance(parsed_root, dict) else None
+    if not isinstance(rationale, list):
+        rationale = []
 
     return {
         'ok': True,
         'mode': mode,
         'answer_text': result['text'],
-        'parsed_action_plan': parsed,
+        'summary': summary,
+        'rationale': rationale,
+        'parsed_action_plan': parsed_plan,
         'context_preview': context_text,
         'model': get_openai_model(),
     }
