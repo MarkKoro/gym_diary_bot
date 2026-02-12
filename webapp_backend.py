@@ -689,6 +689,105 @@ async def _build_ai_context_payload(user_id: int) -> dict:
     }
 
 
+
+
+def _build_mistakes_analysis_fallback(context_payload: dict, user_message: str) -> tuple[str, list[str]]:
+    day_snapshots = context_payload.get('day_snapshots') if isinstance(context_payload, dict) else []
+    measurement_trends = context_payload.get('measurement_trends') if isinstance(context_payload, dict) else []
+    workouts_per_week = _to_int(((context_payload.get('user_profile') or {}) if isinstance(context_payload, dict) else {}).get('workouts_per_week'), 0)
+
+    days = day_snapshots if isinstance(day_snapshots, list) else []
+    total_days = len(days)
+    total_exercises = 0
+    group_counts: dict[str, int] = {}
+    low_volume_exercises = 0
+    sparse_days = 0
+
+    for day in days:
+        exs = day.get('exercises') if isinstance(day, dict) else []
+        exs = exs if isinstance(exs, list) else []
+        if len(exs) < 4:
+            sparse_days += 1
+        total_exercises += len(exs)
+        for ex in exs:
+            group = str((ex or {}).get('group') or 'other').strip() or 'other'
+            group_counts[group] = group_counts.get(group, 0) + 1
+            sets = _to_int((ex or {}).get('sets'), 0)
+            reps = _to_int((ex or {}).get('reps'), 0)
+            seconds = _to_int((ex or {}).get('seconds'), 0)
+            if sets <= 0 or (reps <= 0 and seconds <= 0):
+                low_volume_exercises += 1
+
+    sorted_groups = sorted(group_counts.items(), key=lambda it: it[1], reverse=True)
+    dominant_group = sorted_groups[0][0] if sorted_groups else ''
+    low_groups = [name for name, count in sorted_groups if count == 1][:3]
+
+    if total_exercises == 0:
+        summary = (
+            'Пока данных по выполненным упражнениям мало, поэтому точную диагностику прогресса сделать нельзя. '
+            'Но уже по текущей структуре можно повысить качество тренировок: сделать план более сбалансированным, '
+            'задать понятные объёмы и убрать случайность в нагрузке.'
+        )
+        rationale = [
+            'Сначала зафиксируй базу на 1–2 недели: 2–4 тренировки в неделю и 4–6 упражнений на тренировку, чтобы появилось с чем сравнивать прогресс.',
+            'Для каждого упражнения задай рабочий формат (подходы и повторы или время под нагрузкой), иначе невозможно объективно понять, растёт нагрузка или нет.',
+            'Собери минимальный баланс по телу: добавь движения на ноги, спину, плечевой пояс и кор, чтобы развитие шло равномерно, а не только по любимым упражнениям.',
+            'Отслеживай восстановление: оставляй 1 лёгкий или выходной день между тяжёлыми сессиями, чтобы не упираться в усталость с первых недель.',
+            'Раз в неделю делай короткий аудит: что удалось выполнить, где были пропуски, какие упражнения нужно упростить или заменить.'
+        ]
+        return summary, rationale
+
+    summary_parts = [
+        f'В текущем плане видно {total_exercises} упражнений на {total_days} тренировочных дней, и уже можно выделить основные точки роста.'
+    ]
+    if dominant_group:
+        summary_parts.append(f'Нагрузка заметно концентрируется на группе «{dominant_group}», поэтому часть тела может получать непропорционально меньше работы.')
+    if low_volume_exercises > 0:
+        summary_parts.append('У части упражнений объём пока задан неполно, из-за этого сложно управлять прогрессией и отслеживать реальный рост.')
+    if sparse_days > 0:
+        summary_parts.append('Некоторые дни выглядят слишком короткими по набору упражнений, поэтому недельный объём набирается неравномерно.')
+    summary_parts.append('Оптимально выровнять структуру плана и на 1–2 недели зафиксировать простые правила прогрессии.')
+    summary = ' '.join(summary_parts)
+
+    rationale: list[str] = []
+    if dominant_group:
+        rationale.append(
+            f'Сейчас акцент смещён в сторону «{dominant_group}», из-за чего другие группы получают меньше стимула и прогресс может тормозиться. '
+            'Снизь долю похожих движений и добавь 2–3 упражнения на отстающие зоны в неделю.'
+        )
+    if low_groups:
+        rationale.append(
+            f'Редко встречаются или почти не покрыты группы: {", ".join(low_groups)}. '
+            'Добавь для них хотя бы по одному базовому упражнению в сплит, чтобы убрать перекосы.'
+        )
+    if low_volume_exercises > 0:
+        rationale.append(
+            f'У {low_volume_exercises} упражнений не хватает чёткой рабочей схемы (подходы/повторы или время), поэтому трудно держать системную нагрузку. '
+            'Пропиши конкретные диапазоны и повышай объём постепенно: +1 подход или +2–5% веса раз в 1–2 недели при хорошем самочувствии.'
+        )
+    if sparse_days > 0:
+        rationale.append(
+            f'В {sparse_days} дн. недели программа получается слишком короткой, поэтому общий тренировочный стимул проседает. '
+            'Добавь недостающие многосуставные движения и распредели объём равномернее между днями.'
+        )
+    if workouts_per_week > 0:
+        rationale.append(
+            f'Текущая частота — около {workouts_per_week} тренировок в неделю; чтобы прогресс был устойчивым, зафиксируй один формат сплита минимум на 4 недели. '
+            'Например, push/pull/legs или верх/низ с постепенным ростом рабочих весов.'
+        )
+    if not measurement_trends:
+        rationale.append(
+            'Нет динамики по замерам, поэтому сложно понять, как меняется форма и восстановление. '
+            'Добавь 2–3 контрольных метрики (вес, окружности, силовые ориентиры) и обновляй их еженедельно.'
+        )
+
+    if user_message:
+        rationale.append(
+            'Ориентируй изменения на свой запрос: выбери 1–2 приоритета на ближайшие недели и убери второстепенные задачи, чтобы не распыляться.'
+        )
+
+    return summary, rationale[:6]
+
 def _build_ai_system_prompt(mode: str) -> str:
     base = (
         'Ты — профессиональный тренер и спортивный ИИ-ассистент внутри фитнес-бота. '
@@ -731,8 +830,10 @@ def _build_ai_system_prompt(mode: str) -> str:
         ),
         'mistakes_analysis': (
             'Режим mistakes_analysis: верни только полезный человеку анализ, без JSON-фрагментов в тексте summary и без технических предупреждений. '
-            'summary: 1-2 коротких предложения, простым языком. '
-            'rationale: ровно 3 пункта — топ-3 зоны роста, каждый пункт 1 короткое предложение: где проблема и что делать. '
+            'summary: 3-5 полноценных предложений простым языком: что видно по данным, к чему это приводит и какой приоритет исправления. '
+            'Если данных мало (например, нет завершённых тренировок), прямо скажи об этом и всё равно дай практичный разбор на основе доступной структуры плана и запроса пользователя, без выдумывания фактов. '
+            'rationale: 4-6 содержательных пунктов в логике «проблема → почему это важно → конкретный шаг на ближайшие 1-2 недели». '
+            'Каждый пункт 1-3 предложения, с прикладными рекомендациями (варианты упражнений, перераспределение объёма, восстановление, прогрессия нагрузки). '
             'action_plan: всегда {"actions": []}. '
             'Ничего лишнего: не дублируй summary, не упоминай внутренние ограничения, валидацию, каталог или формат ответа.'
         ),
@@ -4315,7 +4416,12 @@ async def ai_coach_query(payload: dict = Body(default_factory=dict), ctx: AuthCt
     if mode == 'mistakes_analysis':
         sanitized_plan = {'actions': []}
         plan_warnings = []
-        rationale = [str(item).strip() for item in rationale if str(item).strip()][:3]
+        rationale = [str(item).strip() for item in rationale if str(item).strip()][:6]
+        fallback_summary, fallback_rationale = _build_mistakes_analysis_fallback(context_payload, user_message)
+        if len(summary) < 160:
+            summary = fallback_summary
+        if len(rationale) < 4:
+            rationale = fallback_rationale
 
     return {
         'ok': True,
