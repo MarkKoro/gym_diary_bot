@@ -568,11 +568,13 @@ def _sanitize_ai_action_plan(plan: dict | None, mode: str, *, workouts_per_week:
             picked = create_actions[0]
             days = sorted(picked.get('days') or [], key=lambda item: int(item.get('day_index') or 0))
             days = [d for d in days if isinstance(d, dict) and (d.get('exercises') or [])]
-            if len(days) > expected_days:
-                warnings.append(f'AI вернул {len(days)} дней, ограничено до {expected_days} по норме пользователя.')
-                days = days[:expected_days]
-            if len(days) < expected_days:
-                warnings.append(f'AI вернул {len(days)} дней вместо {expected_days}; часть недели не заполнена автоматически.')
+            if len(days) > 7:
+                warnings.append(f'AI вернул {len(days)} дней, ограничено до 7.')
+                days = days[:7]
+            if len(days) < 2:
+                warnings.append('AI вернул слишком мало дней новой системы; рекомендуется минимум 2 тренировочных дня.')
+            if len(days) > 0 and len(days) != expected_days:
+                warnings.append(f'AI предложил {len(days)} дней вместо текущей нормы {expected_days}; выбран более подходящий формат под запрос.')
             picked['days'] = days
             clean_actions = [picked]
         else:
@@ -821,9 +823,8 @@ def _build_ai_system_prompt(mode: str) -> str:
         ),
         'new_system': (
             'Режим new_system: верни один action типа create_system. '
-            'Количество дней в новой системе должно быть строго равно user_profile.workouts_per_week. '
-            'Если workouts_per_week не задан (>0), возьми количество активных дней из day_snapshots. '
-            'Нельзя менять число тренировочных дней относительно текущей нормы пользователя. '
+            'Количество дней подбирай под запрос пользователя и цель (например, full body может быть 2-3 дня, split 4-6 дней), но не больше 7. '
+            'Учитывай текущую норму user_profile.workouts_per_week как ориентир, но можно обоснованно отклоняться от неё. '
             'План только на 1 неделю, без месячной периодизации. '
             'Все дни должны быть полностью заполнены упражнениями. '
             'Минимум 4 упражнения на каждый день, без пустых блоков и обрывов.'
