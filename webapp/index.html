@@ -2640,7 +2640,7 @@
       isTelegram: false,
       isAdmin: false,
       systemSheetOpen: false,
-      aiCoach: { open: false, loading: false, mode: 'replace_exercises', answerText: '', parsed: null, summary: '', rationale: [], retriesUsed: 0, maxRetries: 3, rejectedVariants: [], hasResponse: false, requestDayKey: '', appliedByDay: {} },
+      aiCoach: { open: false, loading: false, mode: 'replace_exercises', answerText: '', parsed: null, summary: '', rationale: [], retriesUsed: 0, maxRetries: 3, rejectedVariants: [], hasResponse: false, requestDayKey: '', appliedByDay: {}, warnings: [] },
       subscription: { loading: false, active: false, activePlan: null, activeExpiresAt: null, plans: [], features: [], payment: { checking: false, paymentId: null } },
       paywall: { open: false, reason: '' },
       productivitySheetOpen: false,
@@ -9248,8 +9248,11 @@
       summaryEl.classList.toggle('hidden', !summary);
 
       const rationale = Array.isArray(state.aiCoach.rationale) ? state.aiCoach.rationale.filter(Boolean) : [];
-      rationaleEl.innerHTML = rationale.map((item) => `<li>${escapeHtml(String(item))}</li>`).join('');
-      rationaleEl.classList.toggle('hidden', !rationale.length);
+      const warnings = Array.isArray(state.aiCoach.warnings) ? state.aiCoach.warnings.filter(Boolean) : [];
+      const rationaleItems = rationale.map((item) => `<li>${escapeHtml(String(item))}</li>`).join('');
+      const warningItems = warnings.map((item) => `<li>⚠️ ${escapeHtml(String(item))}</li>`).join('');
+      rationaleEl.innerHTML = `${warningItems}${rationaleItems}`;
+      rationaleEl.classList.toggle('hidden', !(rationale.length || warnings.length));
 
       const hasPlan = Boolean(state.aiCoach.parsed && Array.isArray(state.aiCoach.parsed.actions) && state.aiCoach.parsed.actions.length);
       const isMistakes = String(state.aiCoach.mode || '') === 'mistakes_analysis';
@@ -9289,6 +9292,7 @@
         const rawPlan = data.parsed_action_plan || null;
         const normalizedActions = normalizeAiCoachActions(rawPlan, mode);
         state.aiCoach.parsed = rawPlan ? { ...rawPlan, actions: normalizedActions } : null;
+        state.aiCoach.warnings = Array.isArray(data.action_plan_warnings) ? data.action_plan_warnings.filter(Boolean) : [];
         if (retry) state.aiCoach.retriesUsed += 1;
         state.aiCoach.hasResponse = true;
         if (state.aiCoach.summary) state.aiCoach.rejectedVariants.push(state.aiCoach.summary);
@@ -9300,6 +9304,7 @@
         state.aiCoach.summary = '';
         state.aiCoach.rationale = [];
         state.aiCoach.parsed = null;
+        state.aiCoach.warnings = [];
         state.aiCoach.hasResponse = true;
         renderAiCoachResult();
       } finally {
@@ -9332,13 +9337,14 @@
             const exList = Array.isArray(day?.exercises) ? day.exercises : [];
             for (const ex of exList) {
               const exName = String(ex?.exercise_name || ex?.name || '').trim();
-              if (!exName) continue;
-              const search = await apiFetch(`/gymapi/catalog/search?query=${encodeURIComponent(exName)}`);
-              const found = (search.items || []).find((it) => String(it.name || '').toLowerCase() === exName.toLowerCase()) || (search.items || [])[0];
-              if (!found?.id) continue;
-              await apiFetch(`/gymapi/day/${dayIndex}/exercise`, { method: 'POST', body: JSON.stringify({ exercise_id: found.id }) });
+              const exId = Number(ex?.exercise_id || 0);
+              if (!exId && !exName) continue;
+              const resolvedId = exId > 0 ? exId : null;
+              if (!resolvedId) continue;
+              await apiFetch(`/gymapi/day/${dayIndex}/exercise`, { method: 'POST', body: JSON.stringify({ exercise_id: resolvedId }) });
               await loadSheet(dayIndex);
-              const target = Array.from(state.exercises.values()).find((x) => String(x.name || '').toLowerCase() === exName.toLowerCase());
+              const target = Array.from(state.exercises.values()).find((x) => Number(x.exercise_id || 0) === resolvedId)
+                || Array.from(state.exercises.values()).find((x) => String(x.name || '').toLowerCase() === exName.toLowerCase());
               if (!target?.user_exercise_id) continue;
               const ueId = Number(target.user_exercise_id);
               const currentSets = Array.isArray(target.sets) ? target.sets.length : 0;
@@ -9375,19 +9381,20 @@
             const type = String(action?.type || '');
             if (!type) continue;
             const exName = String(action.exercise_name || action.new_exercise_name || '').trim();
-            let target = Array.from(state.exercises.values()).find((x) => String(x.name || '').toLowerCase() === exName.toLowerCase());
-            if ((type === 'add_exercise' || type === 'replace_exercise') && !target && exName) {
-              const search = await apiFetch(`/gymapi/catalog/search?query=${encodeURIComponent(exName)}`);
-              const found = (search.items || []).find((it) => String(it.name || '').toLowerCase() === exName.toLowerCase()) || (search.items || [])[0];
-              if (found?.id) {
-                await apiFetch(`/gymapi/day/${dayIndex}/exercise`, { method: 'POST', body: JSON.stringify({ exercise_id: found.id }) });
-                await loadSheet(dayIndex);
-                target = Array.from(state.exercises.values()).find((x) => String(x.name || '').toLowerCase() === exName.toLowerCase());
-              }
+            const exId = Number(action.exercise_id || action.new_exercise_id || 0);
+            let target = Array.from(state.exercises.values()).find((x) => Number(x.exercise_id || 0) === exId);
+            if (!target && exName) target = Array.from(state.exercises.values()).find((x) => String(x.name || '').toLowerCase() === exName.toLowerCase());
+            if ((type === 'add_exercise' || type === 'replace_exercise') && !target && exId > 0) {
+              await apiFetch(`/gymapi/day/${dayIndex}/exercise`, { method: 'POST', body: JSON.stringify({ exercise_id: exId }) });
+              await loadSheet(dayIndex);
+              target = Array.from(state.exercises.values()).find((x) => Number(x.exercise_id || 0) === exId)
+                || Array.from(state.exercises.values()).find((x) => String(x.name || '').toLowerCase() === exName.toLowerCase());
             }
             if (type === 'replace_exercise') {
+              const oldExId = Number(action.old_exercise_id || 0);
               const oldName = String(action.old_exercise_name || '').trim().toLowerCase();
-              const oldItem = Array.from(state.exercises.values()).find((x) => String(x.name || '').toLowerCase() === oldName);
+              const oldItem = Array.from(state.exercises.values()).find((x) => Number(x.exercise_id || 0) === oldExId)
+                || Array.from(state.exercises.values()).find((x) => String(x.name || '').toLowerCase() === oldName);
               if (oldItem?.user_exercise_id) {
                 await apiFetch(`/gymapi/day/${dayIndex}/exercise/${oldItem.user_exercise_id}/toggle`, { method: 'POST' });
               }
