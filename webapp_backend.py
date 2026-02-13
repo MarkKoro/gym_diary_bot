@@ -470,150 +470,241 @@ def _parse_exercise_ref(value: object) -> int | None:
     return ex_id if ex_id > 0 else None
 
 
-def _sanitize_ai_action(action: dict, catalog_by_id: dict[int, dict], catalog_by_name: dict[str, dict]) -> dict | None:
+def _sanitize_ai_action(action: dict, *, max_day_index: int) -> dict | None:
+    """
+    Нормализует одиночное действие AI.
+    Возвращает чистый dict либо None.
+    Поддержка: add_exercise, remove_exercise, update_sets, create_system.
+    (replace_exercise можно оставить совместимо, но лучше его больше не использовать)
+    """
     if not isinstance(action, dict):
         return None
-    action_type = str(action.get('type') or '').strip()
-    if action_type not in {'update_sets', 'replace_exercise', 'add_exercise', 'create_system'}:
+
+    action_type = str(action.get("type") or "").strip()
+    allowed = {"add_exercise", "remove_exercise", "update_sets", "create_system", "replace_exercise"}
+    if action_type not in allowed:
         return None
 
-    def _pick_exercise(ref_key: str, name_key: str, muscle_key: str = 'muscle_group', *, allow_new: bool = False) -> tuple[int, dict] | tuple[None, None]:
-        ex_id = _parse_exercise_ref(action.get(ref_key))
-        item = catalog_by_id.get(ex_id) if ex_id else None
-        if not item:
-            by_name = catalog_by_name.get(_normalize_name(action.get(name_key)))
-            item = by_name
-            ex_id = _to_int(by_name.get('exercise_id'), 0) if by_name else None
-        if not item and allow_new:
-            new_name = str(action.get(name_key) or '').strip()
-            if not new_name:
-                return None, None
-            new_group = str(action.get(muscle_key) or action.get('group') or 'other').strip().lower() or 'other'
-            item = {
-                'exercise_ref': None,
-                'exercise_id': 0,
-                'name': new_name,
-                'group': new_group,
-                'source': 'ai_suggested',
-            }
-            return None, item
-        if not item or not ex_id:
-            return None, None
-        return ex_id, item
+    def _clamp_int(v, lo, hi, default):
+        try:
+            x = int(v)
+        except Exception:
+            x = int(default)
+        return max(lo, min(hi, x))
 
-    clean: dict[str, object] = {'type': action_type}
-    clean['reason'] = _clip_text(str(action.get('reason') or '').strip(), 280)
+    def _clamp_float(v, lo, hi, default):
+        try:
+            x = float(v)
+        except Exception:
+            x = float(default)
+        return max(lo, min(hi, x))
 
-    if action_type == 'create_system':
-        clean['system_name'] = _clip_text(str(action.get('system_name') or 'Система от ИИ').strip() or 'Система от ИИ', 80)
-        days = action.get('days') if isinstance(action.get('days'), list) else []
+    def _norm_name(v, max_len=120):
+        s = str(v or "").strip()
+        if not s:
+            return ""
+        return _clip_text(s, max_len)
+
+    def _norm_group(v):
+        s = str(v or "other").strip().lower()
+        s = re.sub(r"[^a-z0-9а-яё_\-\s]", "", s, flags=re.IGNORECASE)
+        return s or "other"
+
+    # общий reason
+    reason = _clip_text(str(action.get("reason") or "").strip(), 220)
+
+    # create_system (для new_system)
+    if action_type == "create_system":
+        system_name = _clip_text(str(action.get("system_name") or "Система от ИИ").strip() or "Система от ИИ", 80)
+
+        raw_days = action.get("days") if isinstance(action.get("days"), list) else []
         clean_days: list[dict] = []
-        for day in days:
-            if not isinstance(day, dict):
+        used_day_idx: set[int] = set()
+
+        for d in raw_days:
+            if not isinstance(d, dict):
                 continue
-            day_index = max(1, min(7, _to_int(day.get('day_index'), 0)))
-            if day_index <= 0:
+            day_idx = _clamp_int(d.get("day_index"), 1, 7, 1)
+            if day_idx in used_day_idx:
                 continue
-            ex_rows = day.get('exercises') if isinstance(day.get('exercises'), list) else []
-            clean_exercises: list[dict] = []
-            for ex in ex_rows:
+            used_day_idx.add(day_idx)
+
+            ex_list = d.get("exercises") if isinstance(d.get("exercises"), list) else []
+            clean_ex: list[dict] = []
+            for ex in ex_list:
                 if not isinstance(ex, dict):
                     continue
-                ex_action = {'type': 'add_exercise', **ex}
-                fake = _sanitize_ai_action(ex_action, catalog_by_id, catalog_by_name)
-                if not fake:
+                ex_name = _norm_name(ex.get("exercise_name") or ex.get("name"))
+                if not ex_name:
                     continue
-                clean_exercises.append({
-                    'exercise_ref': fake.get('exercise_ref'),
-                    'exercise_id': fake.get('exercise_id'),
-                    'exercise_name': fake.get('exercise_name'),
-                    'sets': fake.get('sets'),
-                    'reps': fake.get('reps'),
-                    'seconds': fake.get('seconds'),
-                    'weight_kg': fake.get('weight_kg'),
+
+                mg = _norm_group(ex.get("muscle_group") or ex.get("group"))
+                sets = _clamp_int(ex.get("sets"), 1, 12, 3)
+                reps = _clamp_int(ex.get("reps"), 0, 50, 10)
+                seconds = _clamp_int(ex.get("seconds"), 0, 600, 0)
+                weight = _clamp_float(ex.get("weight_kg"), 0.0, 500.0, 0.0)
+
+                # согласование reps/seconds
+                if reps > 0 and seconds > 0:
+                    seconds = 0
+                if reps == 0 and seconds == 0:
+                    reps = 10
+
+                clean_ex.append({
+                    "exercise_name": ex_name,
+                    "muscle_group": mg,
+                    "sets": sets,
+                    "reps": reps,
+                    "seconds": seconds,
+                    "weight_kg": weight,
+                    "note": _clip_text(str(ex.get("note") or "").strip(), 120),
                 })
-            if clean_exercises:
-                clean_days.append({'day_index': day_index, 'exercises': clean_exercises})
+
+            if clean_ex:
+                clean_days.append({
+                    "day_index": day_idx,
+                    "title": _clip_text(str(d.get("title") or "").strip(), 40),
+                    "exercises": clean_ex,
+                })
+
         if not clean_days:
             return None
-        clean['days'] = clean_days
-        return clean
 
-    day_index = max(1, min(7, _to_int(action.get('day_index'), 0)))
-    if day_index <= 0:
-        return None
-    clean['day_index'] = day_index
+        clean_days.sort(key=lambda x: int(x.get("day_index") or 0))
+        return {
+            "type": "create_system",
+            "system_name": system_name,
+            "days": clean_days[:7],
+            "reason": reason,
+            "rationale": action.get("rationale") if isinstance(action.get("rationale"), list) else [],
+        }
 
-    if action_type == 'replace_exercise':
-        old_ex_id, old_item = _pick_exercise('old_exercise_ref', 'old_exercise_name')
-        if not old_item:
-            old_ex_id, old_item = _pick_exercise('old_exercise_ref', 'exercise_name')
-        new_ex_id, new_item = _pick_exercise('new_exercise_ref', 'new_exercise_name', allow_new=True)
-        if not new_item:
-            new_ex_id, new_item = _pick_exercise('new_exercise_ref', 'replacement_exercise_name', allow_new=True)
-        if not old_ex_id or not new_item:
+    # остальные (дневные) action
+    day_idx = _clamp_int(action.get("day_index"), 1, max(1, min(7, max_day_index)), 1)
+
+    if action_type == "remove_exercise":
+        old_name = _norm_name(action.get("old_exercise_name"))
+        if not old_name:
             return None
-        clean.update({
-            'old_exercise_ref': old_item.get('exercise_ref'),
-            'old_exercise_id': old_ex_id,
-            'old_exercise_name': old_item.get('name'),
-            'new_exercise_ref': new_item.get('exercise_ref') if new_ex_id else None,
-            'new_exercise_id': new_ex_id if new_ex_id else 0,
-            'new_exercise_name': new_item.get('name'),
-            'new_muscle_group': str(new_item.get('group') or 'other').strip().lower() or 'other',
-        })
-    else:
-        ex_id, item = _pick_exercise('exercise_ref', 'exercise_name', allow_new=True)
-        if not item:
+        return {
+            "type": "remove_exercise",
+            "day_index": day_idx,
+            "old_exercise_name": old_name,
+            "reason": reason,
+        }
+
+    if action_type in {"add_exercise", "update_sets"}:
+        ex_name = _norm_name(action.get("exercise_name"))
+        if not ex_name:
             return None
-        clean.update({
-            'exercise_ref': item.get('exercise_ref') if ex_id else None,
-            'exercise_id': ex_id if ex_id else 0,
-            'exercise_name': item.get('name'),
-            'muscle_group': str(item.get('group') or 'other').strip().lower() or 'other',
-        })
 
-    clean['sets'] = max(1, min(12, _to_int(action.get('sets'), 1)))
-    clean['reps'] = max(0, min(100, _to_int(action.get('reps'), 0)))
-    clean['seconds'] = max(0, min(3600, _to_int(action.get('seconds'), 0)))
-    clean['weight_kg'] = max(0.0, min(500.0, _to_float(action.get('weight_kg'), 0.0)))
-    return clean
+        mg = _norm_group(action.get("muscle_group") or action.get("group"))
+        sets = _clamp_int(action.get("sets"), 1, 12, 3)
+        reps = _clamp_int(action.get("reps"), 0, 50, 10)
+        seconds = _clamp_int(action.get("seconds"), 0, 600, 0)
+        weight = _clamp_float(action.get("weight_kg"), 0.0, 500.0, 0.0)
+
+        if reps > 0 and seconds > 0:
+            seconds = 0
+        if reps == 0 and seconds == 0:
+            reps = 10
+
+        return {
+            "type": action_type,
+            "day_index": day_idx,
+            "exercise_name": ex_name,
+            "muscle_group": mg,
+            "sets": sets,
+            "reps": reps,
+            "seconds": seconds,
+            "weight_kg": weight,
+            "reason": reason,
+        }
+
+    # legacy: replace_exercise (на всякий случай)
+    if action_type == "replace_exercise":
+        old_name = _norm_name(action.get("old_exercise_name"))
+        new_name = _norm_name(action.get("new_exercise_name"))
+        if not old_name or not new_name:
+            return None
+        sets = _clamp_int(action.get("sets"), 1, 12, 3)
+        reps = _clamp_int(action.get("reps"), 0, 50, 10)
+        seconds = _clamp_int(action.get("seconds"), 0, 600, 0)
+        weight = _clamp_float(action.get("weight_kg"), 0.0, 500.0, 0.0)
+        if reps > 0 and seconds > 0:
+            seconds = 0
+        if reps == 0 and seconds == 0:
+            reps = 10
+        return {
+            "type": "replace_exercise",
+            "day_index": day_idx,
+            "old_exercise_name": old_name,
+            "new_exercise_name": new_name,
+            "sets": sets,
+            "reps": reps,
+            "seconds": seconds,
+            "weight_kg": weight,
+            "reason": reason,
+        }
+
+    return None
 
 
-def _sanitize_ai_action_plan(plan: dict | None, mode: str, *, workouts_per_week: int, active_day_count: int, catalog_by_id: dict[int, dict], catalog_by_name: dict[str, dict]) -> tuple[dict, list[str]]:
+def _sanitize_ai_action_plan(plan: dict | None, mode: str, *, workouts_per_week: int, active_day_count: int) -> tuple[dict, list[str]]:
     warnings: list[str] = []
     if not isinstance(plan, dict):
-        return {'actions': []}, ['Пустой или невалидный JSON action_plan от AI.']
-    raw_actions = plan.get('actions') if isinstance(plan.get('actions'), list) else []
+        return {"actions": []}, ["Пустой или невалидный JSON action_plan от AI."]
+
+    raw_actions = plan.get("actions") if isinstance(plan.get("actions"), list) else []
+    max_day_index = active_day_count if int(active_day_count or 0) > 0 else 7
+    max_day_index = max(1, min(7, int(max_day_index)))
+
     clean_actions: list[dict] = []
-    for action in raw_actions:
-        clean = _sanitize_ai_action(action, catalog_by_id, catalog_by_name)
+    for a in raw_actions:
+        clean = _sanitize_ai_action(a, max_day_index=max_day_index)
         if not clean:
-            warnings.append('Одно из действий AI было отброшено как невалидное/несопоставимое с каталогом.')
+            warnings.append("Одно из действий AI было отброшено как невалидное.")
             continue
         clean_actions.append(clean)
 
-    if mode == 'new_system':
-        create_actions = [a for a in clean_actions if str(a.get('type')) == 'create_system']
-        if create_actions:
-            expected_days = workouts_per_week if workouts_per_week > 0 else max(1, active_day_count)
-            picked = create_actions[0]
-            days = sorted(picked.get('days') or [], key=lambda item: int(item.get('day_index') or 0))
-            days = [d for d in days if isinstance(d, dict) and (d.get('exercises') or [])]
-            if len(days) > 7:
-                warnings.append(f'AI вернул {len(days)} дней, ограничено до 7.')
-                days = days[:7]
-            if len(days) < 2:
-                warnings.append('AI вернул слишком мало дней новой системы; рекомендуется минимум 2 тренировочных дня.')
-            if len(days) > 0 and len(days) != expected_days:
-                warnings.append(f'AI предложил {len(days)} дней вместо текущей нормы {expected_days}; выбран более подходящий формат под запрос.')
-            picked['days'] = days
-            clean_actions = [picked]
-        else:
-            warnings.append('Для режима new_system не найдено валидного create_system действия.')
-            clean_actions = []
+    # режимные фильтры
+    if mode == "mistakes_analysis":
+        return {"actions": []}, []
 
-    return {'actions': clean_actions}, warnings
+    if mode == "new_system":
+        create_actions = [a for a in clean_actions if a.get("type") == "create_system"]
+        if not create_actions:
+            return {"actions": []}, ["Для режима new_system не найдено валидного create_system действия."]
+        picked = create_actions[0]
+
+        # доп. нормализация количества дней
+        expected_days = int(workouts_per_week or 0) if int(workouts_per_week or 0) > 0 else max(1, int(active_day_count or 3))
+        days = picked.get("days") if isinstance(picked.get("days"), list) else []
+        days = [d for d in days if isinstance(d, dict) and isinstance(d.get("exercises"), list) and d.get("exercises")]
+        days.sort(key=lambda x: int(x.get("day_index") or 0))
+        if len(days) > 7:
+            warnings.append(f"AI вернул {len(days)} дней, ограничено до 7.")
+            days = days[:7]
+        if len(days) < 2:
+            warnings.append("AI вернул слишком мало дней новой системы; рекомендуется минимум 2.")
+        if len(days) and len(days) != expected_days:
+            warnings.append(f"AI предложил {len(days)} дней вместо нормы {expected_days}; это допустимо, но проверь логику сплита.")
+        picked["days"] = days
+        return {"actions": [picked]}, warnings
+
+    if mode == "adjust_sets":
+        upd = [a for a in clean_actions if a.get("type") == "update_sets"]
+        if not upd:
+            return {"actions": []}, ["Для режима adjust_sets не найдено валидных update_sets действий."]
+        # ограничим размер
+        return {"actions": upd[:40]}, warnings
+
+    # replace_exercises
+    allowed = {"add_exercise", "remove_exercise", "update_sets", "replace_exercise"}
+    filtered = [a for a in clean_actions if a.get("type") in allowed]
+    return {"actions": filtered[:60]}, warnings
+
+
 def _build_user_context_summary(user_profile: dict, active_system_id: int, systems: list[dict], day_snapshots: list[dict], measurement_trends: list[dict]) -> str:
     lines: list[str] = []
     lines.append(f"Профиль: user_id={user_profile.get('user_id')} workouts_per_week={user_profile.get('workouts_per_week', 0)} timezone={user_profile.get('timezone') or 'UTC'}")
@@ -645,6 +736,63 @@ def _build_user_context_summary(user_profile: dict, active_system_id: int, syste
     return _clip_text('\n'.join(lines), 8200)
 
 
+async def _bulk_fetch_baselines(user_id: int, day_indices: list[int], exercise_ids: list[int]) -> tuple[dict[tuple[int, int], tuple], dict[int, tuple]]:
+    """
+    Returns:
+      exact[(day_index, exercise_id)] = (sets, reps, seconds, weight_kg)
+      fallback[exercise_id]           = (sets, reps, seconds, weight_kg)   # earliest baseline by day_index
+    """
+    day_indices = [int(x) for x in day_indices if int(x) > 0]
+    exercise_ids = [int(x) for x in exercise_ids if int(x) > 0]
+    if not day_indices or not exercise_ids:
+        return {}, {}
+
+    day_ph = ','.join('?' for _ in day_indices)
+    ex_ph = ','.join('?' for _ in exercise_ids)
+
+    exact: dict[tuple[int, int], tuple] = {}
+    fallback: dict[int, tuple] = {}
+
+    async with db.connect_db() as conn:
+        params1: list[object] = [user_id, *day_indices, *exercise_ids]
+        cur = await conn.execute(
+            f"""
+            SELECT day_index, exercise_id, sets, reps, seconds, weight_kg
+            FROM exercise_baseline
+            WHERE user_id=?
+              AND day_index IN ({day_ph})
+              AND exercise_id IN ({ex_ph})
+              AND COALESCE(sets, 0) >= 0
+            """,
+            tuple(params1),
+        )
+        for d, ex_id, sets, reps, secs, w in await cur.fetchall():
+            exact[(int(d), int(ex_id))] = (sets, reps, secs, w)
+
+        params2: list[object] = [user_id, *exercise_ids, user_id]
+        cur = await conn.execute(
+            f"""
+            SELECT b.exercise_id, b.sets, b.reps, b.seconds, b.weight_kg
+            FROM exercise_baseline b
+            JOIN (
+                SELECT exercise_id, MIN(day_index) AS min_day
+                FROM exercise_baseline
+                WHERE user_id=?
+                  AND exercise_id IN ({ex_ph})
+                  AND COALESCE(sets, 0) >= 0
+                GROUP BY exercise_id
+            ) m ON m.exercise_id=b.exercise_id AND m.min_day=b.day_index
+            WHERE b.user_id=?
+              AND COALESCE(b.sets, 0) >= 0
+            """,
+            tuple(params2),
+        )
+        for ex_id, sets, reps, secs, w in await cur.fetchall():
+            fallback[int(ex_id)] = (sets, reps, secs, w)
+
+    return exact, fallback
+
+
 async def _build_ai_context_payload(user_id: int) -> dict:
     active_system_id = await get_active_training_system_id(user_id)
     systems = await list_training_systems(user_id)
@@ -660,30 +808,48 @@ async def _build_ai_context_payload(user_id: int) -> dict:
 
     day_snapshots: list[dict] = []
     today_iso = datetime.now(UTC).strftime('%Y-%m-%d')
+    pending: list[tuple[int, int, dict]] = []
+    all_ex_ids: set[int] = set()
+    all_day_ids: list[int] = []
     for day_index, day_label in active_days:
-        rows = await db.fetch_day_exercises(user_id, int(day_index), today_iso, active_system_id)
+        day_i = int(day_index)
+        all_day_ids.append(day_i)
+
+        rows = await db.fetch_day_exercises(user_id, day_i, today_iso, active_system_id)
         ex_list: list[dict] = []
         for ue_id, ex_name, muscle_group, _is_done, exercise_id in rows:
-            baseline = await db.get_baseline(user_id, int(day_index), int(exercise_id))
-            sets = _to_int(baseline[0], 0) if baseline else 0
-            reps = _to_int(baseline[1], 0) if baseline else 0
-            seconds = _to_int(baseline[2], 0) if baseline else 0
-            weight_kg = _to_float(baseline[3], 0.0) if baseline else 0.0
-            ex_list.append({
+            ex_id = int(exercise_id)
+            item = {
                 'user_exercise_id': int(ue_id),
-                'exercise_id': int(exercise_id),
+                'exercise_id': ex_id,
                 'name': ex_name,
                 'group': muscle_group or 'other',
-                'sets': sets,
-                'reps': reps,
-                'seconds': seconds,
-                'weight_kg': weight_kg,
-            })
+                'sets': 0,
+                'reps': 0,
+                'seconds': 0,
+                'weight_kg': 0.0,
+            }
+            ex_list.append(item)
+            pending.append((day_i, ex_id, item))
+            all_ex_ids.add(ex_id)
+
         day_snapshots.append({
-            'day_index': int(day_index),
+            'day_index': day_i,
             'day_label': day_label,
             'exercises': ex_list,
         })
+
+    exact_map, fallback_map = await _bulk_fetch_baselines(user_id, all_day_ids, sorted(all_ex_ids))
+
+    for day_i, ex_id, item in pending:
+        base = exact_map.get((day_i, ex_id)) or fallback_map.get(ex_id)
+        if not base:
+            continue
+        sets, reps, secs, w = base
+        item['sets'] = _to_int(sets, 0)
+        item['reps'] = _to_int(reps, 0)
+        item['seconds'] = _to_int(secs, 0)
+        item['weight_kg'] = _to_float(w, 0.0)
 
     catalog_items, catalog_by_id, catalog_by_name, catalog_groups = await _build_ai_catalog_lookup(user_id, day_snapshots)
 
@@ -4602,46 +4768,67 @@ async def ai_coach_query(payload: dict = Body(default_factory=dict), ctx: AuthCt
         'muscle_groups': (catalog_context.get('groups') or []),
     }
 
+    context_text = json.dumps(ctx, ensure_ascii=False)
     user_prompt = (
-        'Используй этот контекст (JSON) и сформируй ответ по схеме:\n'
-        + json.dumps(ctx, ensure_ascii=False)
+        'Используй этот контекст (JSON) и сформируй ответ по схеме:\\n'
+        + context_text
     )
 
-    result = await _call_openai_chat(_build_ai_system_prompt(mode), user_prompt, mode=mode)
-    parsed_root = result.get('parsed') if isinstance(result.get('parsed'), dict) else {}
-    parsed_plan = parsed_root.get('action_plan') if isinstance(parsed_root.get('action_plan'), dict) else {'actions': []}
+    # --- OpenAI call (mode-aware) ---
+    system_prompt = _build_ai_system_prompt(mode)
+    try:
+        result = await _call_openai_chat(system_prompt, user_prompt, mode=mode)
+    except TypeError:
+        # если _call_openai_chat еще старой сигнатуры
+        result = await _call_openai_chat(system_prompt, user_prompt)
+
+    # --- Parse structured root ---
+    parsed_root = None
+    if isinstance(result, dict):
+        parsed_root = result.get("parsed")
+
+    if not isinstance(parsed_root, dict):
+        # fallback на старый путь
+        raw_text = (result.get("text") if isinstance(result, dict) else "") or ""
+        parsed_root = _extract_json_block(raw_text) or {}
+
+    parsed_action_plan = parsed_root.get("action_plan") if isinstance(parsed_root.get("action_plan"), dict) else {"actions": []}
 
     sanitized_plan, plan_warnings = _sanitize_ai_action_plan(
-        parsed_plan,
+        parsed_action_plan,
         mode,
-        workouts_per_week=_to_int((context_payload.get('user_profile') or {}).get('workouts_per_week'), 0),
-        active_day_count=len(context_payload.get('day_snapshots') or []),
-        catalog_by_id=(catalog_context.get('by_id') or {}),
-        catalog_by_name=(catalog_context.get('by_name') or {}),
+        workouts_per_week=_to_int((context_payload.get("user_profile") or {}).get("workouts_per_week"), 0),
+        active_day_count=len(context_payload.get("day_snapshots") or []),
     )
-    summary = str(parsed_root.get('summary') or '').strip() if isinstance(parsed_root, dict) else ''
-    rationale = parsed_root.get('rationale') if isinstance(parsed_root, dict) else None
+
+    summary = str(parsed_root.get("summary") or "").strip()
+    rationale = parsed_root.get("rationale")
     if not isinstance(rationale, list):
         rationale = []
+    rationale = [str(x).strip() for x in rationale if str(x).strip()][:6]
 
-    if mode == 'mistakes_analysis':
-        sanitized_plan = {'actions': []}
+    if mode == "mistakes_analysis":
+        # гарантируем нулевые actions
+        sanitized_plan = {"actions": []}
         plan_warnings = []
-        rationale = [str(item).strip() for item in rationale if str(item).strip()][:6]
         fallback_summary, fallback_rationale = _build_mistakes_analysis_fallback(context_payload, user_message)
-        if len(summary) < 160:
+        if len(summary) < 120:
             summary = fallback_summary
-        if len(rationale) < 4:
+        if len(rationale) < 3:
             rationale = fallback_rationale
 
+    answer_text = ""
+    if isinstance(result, dict):
+        answer_text = str(result.get("text") or "").strip()
+
     return {
-        'ok': True,
-        'mode': mode,
-        'answer_text': result['text'],
-        'summary': summary,
-        'rationale': rationale,
-        'parsed_action_plan': sanitized_plan,
-        'action_plan_warnings': plan_warnings,
-        'context_preview': json.dumps(ctx, ensure_ascii=False),
-        'model': get_openai_model(),
+        "ok": True,
+        "mode": mode,
+        "answer_text": answer_text,
+        "summary": summary,
+        "rationale": rationale,
+        "parsed_action_plan": sanitized_plan,
+        "action_plan_warnings": plan_warnings,
+        "context_preview": context_text,
+        "model": get_openai_model(),
     }

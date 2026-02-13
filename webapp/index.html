@@ -9347,13 +9347,41 @@
     function normalizeAiCoachActions(plan, mode) {
       const actions = Array.isArray(plan?.actions) ? plan.actions.filter(Boolean) : [];
       if (!actions.length) return [];
-      if (mode !== 'new_system') return actions;
 
-      const hasCreateSystem = actions.some((a) => String(a?.type || '') === 'create_system');
-      if (hasCreateSystem) return actions;
+      const normalized = actions.flatMap((action) => {
+        if (String(action?.type || '') !== 'replace_exercise') return [action];
+        const out = [];
+        if (action.old_exercise_name) {
+          out.push({
+            type: 'remove_exercise',
+            day_index: action.day_index,
+            old_exercise_name: action.old_exercise_name,
+            reason: action.reason || '',
+          });
+        }
+        if (action.new_exercise_name) {
+          out.push({
+            type: 'add_exercise',
+            day_index: action.day_index,
+            exercise_name: action.new_exercise_name,
+            muscle_group: action.muscle_group || action.new_muscle_group || 'other',
+            sets: action.sets || 3,
+            reps: action.reps || 10,
+            seconds: action.seconds || 0,
+            weight_kg: action.weight_kg || 0,
+            reason: action.reason || '',
+          });
+        }
+        return out;
+      });
 
-      const dayBased = actions.filter((a) => String(a?.type || '') === 'create_system_day' || (a?.day_index && Array.isArray(a?.exercises)));
-      if (!dayBased.length) return actions;
+      if (mode !== 'new_system') return normalized;
+
+      const hasCreateSystem = normalized.some((a) => String(a?.type || '') === 'create_system');
+      if (hasCreateSystem) return normalized;
+
+      const dayBased = normalized.filter((a) => String(a?.type || '') === 'create_system_day' || (a?.day_index && Array.isArray(a?.exercises)));
+      if (!dayBased.length) return normalized;
 
       const days = dayBased
         .map((a) => ({
@@ -9362,13 +9390,13 @@
         }))
         .filter((d) => d.day_index > 0 && d.exercises.length)
         .sort((a, b) => a.day_index - b.day_index);
-      if (!days.length) return actions;
+      if (!days.length) return normalized;
 
       return [{
         type: 'create_system',
-        system_name: String(plan?.system_name || actions[0]?.system_name || 'Система от ИИ'),
+        system_name: String(plan?.system_name || normalized[0]?.system_name || 'Система от ИИ'),
         days,
-        reason: String(actions[0]?.reason || ''),
+        reason: String(normalized[0]?.reason || ''),
       }];
     }
 
@@ -9427,6 +9455,9 @@
           const apply = shouldApplyAiAction(action, idx);
           if (type === 'replace_exercise') {
             return `<div class="ai-action-item remove"><div class="title">Удалить: ${escapeHtml(String(action.old_exercise_name || 'Упражнение'))}</div><div class="hint">День ${day}</div><div class="ai-choice-row"><button class="btn ${apply ? 'selected' : ''}" data-ai-decision="apply" data-ai-idx="${idx}">✓ Удалить</button><button class="btn ${!apply ? 'selected' : ''}" data-ai-decision="skip" data-ai-idx="${idx}">✕ Оставить</button></div></div><div class="ai-action-item add"><div class="title">Добавить: ${escapeHtml(String(action.new_exercise_name || 'Упражнение'))}</div><div class="hint">${Number(action.sets || 0)}×${Number(action.reps || 0)}</div></div>`;
+          }
+          if (type === 'remove_exercise') {
+            return `<div class="ai-action-item remove"><div class="title">Удалить: ${escapeHtml(String(action.old_exercise_name || 'Упражнение'))}</div><div class="hint">День ${day}</div><div class="ai-choice-row"><button class="btn ${apply ? 'selected' : ''}" data-ai-decision="apply" data-ai-idx="${idx}">✓ Удалить</button><button class="btn ${!apply ? 'selected' : ''}" data-ai-decision="skip" data-ai-idx="${idx}">✕ Оставить</button></div></div>`;
           }
           if (type === 'add_exercise') {
             return `<div class="ai-action-item add"><div class="title">Добавить: ${escapeHtml(String(action.exercise_name || 'Упражнение'))}</div><div class="hint">${Number(action.sets || 0)}×${Number(action.reps || 0)}</div><div class="ai-choice-row"><button class="btn ${apply ? 'selected' : ''}" data-ai-decision="apply" data-ai-idx="${idx}">✓ Добавить</button><button class="btn ${!apply ? 'selected' : ''}" data-ai-decision="skip" data-ai-idx="${idx}">✕ Пропустить</button></div></div>`;
@@ -9553,7 +9584,7 @@
       const actions = Array.isArray(plan?.actions) ? plan.actions : [];
       return actions.filter((action, idx) => {
         const type = String(action?.type || '');
-        if (!forceAll && (type === 'replace_exercise' || type === 'add_exercise')) return shouldApplyAiAction(action, idx);
+        if (!forceAll && (type === 'replace_exercise' || type === 'remove_exercise' || type === 'add_exercise')) return shouldApplyAiAction(action, idx);
         return true;
       });
     }
@@ -9669,6 +9700,17 @@
               if (oldItem?.user_exercise_id) {
                 await apiFetch(`/gymapi/day/${dayIndex}/exercise/${oldItem.user_exercise_id}/toggle`, { method: 'POST' });
               }
+            }
+            if (type === 'remove_exercise') {
+              const oldName = String(action.old_exercise_name || '').trim();
+              const list = Array.from(state.exercises.values());
+              const oldItem = list.find((ex) => String(ex.name || '').trim() === oldName);
+              if (!oldItem?.user_exercise_id) {
+                toast(`Не найдено упражнение для удаления: ${oldName}`);
+                continue;
+              }
+              await apiFetch(`/gymapi/day/${dayIndex}/exercise/${oldItem.user_exercise_id}/toggle`, { method: 'POST' });
+              continue;
             }
             if (!target?.user_exercise_id) continue;
             const ueId = Number(target.user_exercise_id);
