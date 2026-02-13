@@ -1106,7 +1106,7 @@ def _ai_schema_base() -> dict:
         'type': 'object',
         'additionalProperties': False,
         'properties': {
-            'type': {'const': 'add_exercise'},
+            'type': {'type': 'string', 'const': 'add_exercise'},
             'day_index': day_index,
             'exercise_name': {'type': 'string', 'minLength': 2, 'maxLength': 120},
             'muscle_group': {'type': 'string', 'minLength': 1, 'maxLength': 40},
@@ -1123,7 +1123,7 @@ def _ai_schema_base() -> dict:
         'type': 'object',
         'additionalProperties': False,
         'properties': {
-            'type': {'const': 'remove_exercise'},
+            'type': {'type': 'string', 'const': 'remove_exercise'},
             'day_index': day_index,
             'old_exercise_name': {'type': 'string', 'minLength': 2, 'maxLength': 120},
             'reason': {'type': 'string', 'maxLength': 200},
@@ -1135,7 +1135,7 @@ def _ai_schema_base() -> dict:
         'type': 'object',
         'additionalProperties': False,
         'properties': {
-            'type': {'const': 'update_sets'},
+            'type': {'type': 'string', 'const': 'update_sets'},
             'day_index': day_index,
             'exercise_name': {'type': 'string', 'minLength': 2, 'maxLength': 120},
             'sets': sets,
@@ -1177,7 +1177,7 @@ def _ai_schema_base() -> dict:
         'type': 'object',
         'additionalProperties': False,
         'properties': {
-            'type': {'const': 'create_system'},
+            'type': {'type': 'string', 'const': 'create_system'},
             'system_name': {'type': 'string', 'minLength': 2, 'maxLength': 60},
             'days': {'type': 'array', 'minItems': 2, 'maxItems': 7, 'items': system_day},
             'rationale': {'type': 'array', 'maxItems': 8, 'items': {'type': 'string'}},
