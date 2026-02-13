@@ -824,92 +824,98 @@ def _build_mistakes_analysis_fallback(context_payload: dict, user_message: str) 
     return summary, rationale[:6]
 
 def _build_ai_system_prompt(mode: str) -> str:
-    base = (
-        'Ты — профессиональный тренер и спортивный ИИ-ассистент внутри фитнес-бота. '
-        'Отвечай строго в JSON формате, без markdown и без любого текста вне JSON. '
-        'Формат ответа всегда: объект с ключами summary, rationale, action_plan. '
-        'summary — понятный человеку итог без технических деталей и служебных комментариев. '
-        'rationale — массив конкретных причин, почему предложены эти изменения. '
-        'action_plan — объект с ключом actions (массив действий, может быть пустым только для mistakes_analysis). '
-        'Разрешённые типы actions: update_sets, replace_exercise, add_exercise, create_system. '
-        'Во всех действиях с упражнениями используй exercise_ref (строка вида ex_123) из каталога в контексте как основной идентификатор. '
-        'exercise_name добавляй как человекочитаемое поле, но без exercise_ref действие считается невалидным. '
-        'Для update_sets укажи: day_index, exercise_ref, exercise_name, sets, reps, seconds, weight_kg, reason. '
-        'Для replace_exercise укажи: day_index, old_exercise_ref, old_exercise_name, new_exercise_ref, new_exercise_name, sets, reps, seconds, weight_kg, reason. '
-        'Для add_exercise укажи: day_index, exercise_ref, exercise_name, sets, reps, seconds, weight_kg, reason. '
-        'Если уверен на 100%, что нужного упражнения нет в catalog_context.items, разрешено предложить новое упражнение без exercise_ref, '
-        'но тогда обязательно укажи muscle_group (код из catalog_context.groups) и exercise_name. '
-        'Для create_system укажи: day_index, system_name, days, reason. '
-        'В create_system поле days обязательно: массив дней с day_index и непустым массивом exercises; '
-        'каждое упражнение должно содержать exercise_name, sets, reps, seconds, weight_kg и по возможности exercise_ref. '
-        'Сначала выбирай упражнения из catalog_context.items, а новые предлагай только в исключительных случаях. '
-        'Запрещено возвращать пустые дни или дни без упражнений. '
-        'Учитывай ограничения пользователя из запроса (например, исключённые упражнения), его текущую систему, историю и замеры из контекста. '
-        'Ответ должен быть применим: без абстракций, только конкретные значения. '
-    )
-    mode_guidance = {
-        'adjust_sets': (
-            'Режим adjust_sets: меняй только объём/интенсивность в текущих упражнениях. '
-            'Не создавай новую систему. Обычно 3-8 actions.'
-        ),
-        'replace_exercises': (
-            'Режим replace_exercises: предлагай точечные замены упражнений в рамках текущих дней. '
-            'Сохраняй общий сплит и баланс нагрузки. Обычно 2-8 actions.'
-        ),
-        'new_system': (
-            'Режим new_system: верни один action типа create_system. '
-            'Количество дней подбирай под запрос пользователя и цель (например, full body может быть 2-3 дня, split 4-6 дней), но не больше 7. '
-            'Учитывай текущую норму user_profile.workouts_per_week как ориентир, но можно обоснованно отклоняться от неё. '
-            'План только на 1 неделю, без месячной периодизации. '
-            'Все дни должны быть полностью заполнены упражнениями. '
-            'Минимум 4 упражнения на каждый день, без пустых блоков и обрывов.'
-        ),
-        'mistakes_analysis': (
-            'Режим mistakes_analysis: верни только полезный человеку анализ, без JSON-фрагментов в тексте summary и без технических предупреждений. '
-            'summary: 3-5 полноценных предложений простым языком: что видно по данным, к чему это приводит и какой приоритет исправления. '
-            'Если данных мало (например, нет завершённых тренировок), прямо скажи об этом и всё равно дай практичный разбор на основе доступной структуры плана и запроса пользователя, без выдумывания фактов. '
-            'rationale: 4-6 содержательных пунктов в логике «проблема → почему это важно → конкретный шаг на ближайшие 1-2 недели». '
-            'Каждый пункт 1-3 предложения, с прикладными рекомендациями (варианты упражнений, перераспределение объёма, восстановление, прогрессия нагрузки). '
-            'action_plan: всегда {"actions": []}. '
-            'Ничего лишнего: не дублируй summary, не упоминай внутренние ограничения, валидацию, каталог или формат ответа.'
-        ),
-    }.get(mode, 'Сфокусируйся на практической пользе, безопасности и прогрессии.')
-    return base + ' ' + mode_guidance
+    # Важно: schema уже зафиксирована через response_format.
+    # Здесь даём правила качества и то, КАК ИМЕННО трактовать поля.
+    common = """
+Ты — AI Coach в дневнике тренировок. Отвечай строго по схеме Structured Outputs.
+Никакого markdown, никаких пояснений вне JSON.
+
+Правила полей упражнений:
+- Если упражнение на повторения: reps > 0, seconds = 0.
+- Если упражнение на время: reps = 0, seconds > 0.
+- weight_kg = 0 если вес неизвестен/не задан.
+- Названия упражнений: коротко, по-русски, без кавычек.
+- old_exercise_name и exercise_name для существующих упражнений должны совпадать с тем, что в current_plan.
+- Будь консервативен по нагрузке и технике (без травмоопасных рекомендаций).
+""".strip()
+
+    if mode == 'replace_exercises':
+        return (common + """
+Режим replace_exercises:
+- Верни actions только типов: remove_exercise, add_exercise, update_sets.
+- Сначала предложи remove_exercise (красные), затем add_exercise (зелёные).
+- Цель: улучшить план под запрос пользователя, не ломая логику сплита.
+""").strip()
+
+    if mode == 'new_system':
+        return (common + """
+Режим new_system:
+- Верни ровно 1 action: create_system.
+- Система должна быть пригодна к копированию как новая, с понятным system_name.
+""").strip()
+
+    if mode == 'adjust_sets':
+        return (common + """
+Режим adjust_sets:
+- Верни actions только типа update_sets.
+- Меняй подходы/повторы/время/вес для текущей системы по запросу пользователя.
+""").strip()
+
+    return (common + """
+Режим mistakes_analysis:
+- action_plan.actions должен быть пустой массив.
+- В summary + rationale дай разбор ошибок/рисков/что улучшить.
+""").strip()
 
 
-async def _call_openai_chat(system_prompt: str, user_prompt: str) -> dict:
+async def _call_openai_chat(system_prompt: str, user_prompt: str, *, mode: str) -> dict:
     openai_api_key = get_openai_api_key()
     if not openai_api_key:
         raise HTTPException(status_code=503, detail='OPENAI_API_KEY не задан')
     openai_model = get_openai_model().strip()
     if not openai_model:
         raise HTTPException(status_code=503, detail='OPENAI_MODEL не задан')
+
+    limits = _ai_limits_for_mode(mode)
+    response_format = _ai_response_format_for_mode(mode)
+
     payload = {
         'model': openai_model,
-        'temperature': 0.4,
+        'temperature': float(limits['temperature']),
         'messages': [
             {'role': 'system', 'content': system_prompt},
             {'role': 'user', 'content': user_prompt},
         ],
-        'response_format': {'type': 'json_object'},
-        'max_tokens': 3200,
+        'response_format': response_format,
+        'max_tokens': int(limits['max_tokens']),
     }
     headers = {
         'Authorization': f'Bearer {openai_api_key}',
         'Content-Type': 'application/json',
     }
+
     async with httpx.AsyncClient(timeout=120.0) as client:
         resp = await client.post('https://api.openai.com/v1/chat/completions', headers=headers, json=payload)
+
     if resp.status_code >= 400:
-        detail = resp.text[:700]
+        detail = resp.text[:900]
         raise HTTPException(status_code=502, detail=f'OpenAI error: {detail}')
+
     data = resp.json()
     text = ''
     try:
         text = data['choices'][0]['message']['content'] or ''
     except Exception:
         text = ''
-    return {'raw': data, 'text': text}
+
+    # text ДОЛЖЕН быть валидным JSON согласно schema
+    parsed = None
+    try:
+        parsed = json.loads(text) if isinstance(text, str) and text.strip() else None
+    except Exception:
+        parsed = None
+
+    return {'raw': data, 'text': text, 'parsed': parsed}
 
 
 def _ai_limits_for_mode(mode: str) -> dict:
@@ -4581,42 +4587,29 @@ async def ai_coach_query(payload: dict = Body(default_factory=dict), ctx: AuthCt
                 rejected_list.append(text)
 
     context_payload = await _build_ai_context_payload(user_id)
-    context_text = _build_user_context_summary(
-        user_profile=context_payload['user_profile'],
-        active_system_id=context_payload['active_system_id'],
-        systems=context_payload['systems'],
-        day_snapshots=context_payload['day_snapshots'],
-        measurement_trends=context_payload['measurement_trends'],
-    )
     catalog_context = context_payload.get('catalog_context') or {}
-    catalog_items = catalog_context.get('items') if isinstance(catalog_context.get('items'), list) else []
 
-    include_catalog = mode in {'replace_exercises', 'new_system'}
+    # компактный контекст: без каталога, без простыней
+    ctx = {
+        'mode': mode,
+        'user_message': user_message or '',
+        'rejected_variants': rejected_list,
+        'user_profile': context_payload.get('user_profile') or {},
+        'active_system_id': context_payload.get('active_system_id'),
+        'active_system_name': context_payload.get('active_system_name'),
+        'measurement_trends': (context_payload.get('measurement_trends') or [])[-3:],
+        'current_plan': context_payload.get('day_snapshots') or [],
+        'muscle_groups': (catalog_context.get('groups') or []),
+    }
+
     user_prompt = (
-        f"Режим запроса: {mode}\n"
-        f"Запрос пользователя: {user_message or '—'}\n\n"
-        "Контекст пользователя:\n"
-        f"{context_text}\n"
+        'Используй этот контекст (JSON) и сформируй ответ по схеме:\n'
+        + json.dumps(ctx, ensure_ascii=False)
     )
-    if include_catalog:
-        catalog_groups = catalog_context.get('groups') if isinstance(catalog_context.get('groups'), list) else []
-        user_prompt += (
-            "\nДоступные группы мышц:\n"
-            f"{json.dumps(catalog_groups, ensure_ascii=False)}\n"
-            "Доступные упражнения (в первую очередь выбирай из этого списка по exercise_ref):\n"
-            f"{json.dumps(catalog_items, ensure_ascii=False)}\n"
-        )
-    if rejected_list:
-        user_prompt += '\nПрошлые отклонённые варианты:\n'
-        for idx, reason in enumerate(rejected_list, start=1):
-            user_prompt += f"{idx}) {reason}\n"
-        user_prompt += 'Предложи новый вариант, который отличается от отклонённых.\n'
 
-    result = await _call_openai_chat(_build_ai_system_prompt(mode), user_prompt)
-    parsed_root = _extract_json_block(result['text']) or {}
-    parsed_plan = parsed_root.get('action_plan') if isinstance(parsed_root, dict) else None
-    if not isinstance(parsed_plan, dict):
-        parsed_plan = parsed_root if isinstance(parsed_root, dict) else None
+    result = await _call_openai_chat(_build_ai_system_prompt(mode), user_prompt, mode=mode)
+    parsed_root = result.get('parsed') if isinstance(result.get('parsed'), dict) else {}
+    parsed_plan = parsed_root.get('action_plan') if isinstance(parsed_root.get('action_plan'), dict) else {'actions': []}
 
     sanitized_plan, plan_warnings = _sanitize_ai_action_plan(
         parsed_plan,
@@ -4649,6 +4642,6 @@ async def ai_coach_query(payload: dict = Body(default_factory=dict), ctx: AuthCt
         'rationale': rationale,
         'parsed_action_plan': sanitized_plan,
         'action_plan_warnings': plan_warnings,
-        'context_preview': context_text,
+        'context_preview': json.dumps(ctx, ensure_ascii=False),
         'model': get_openai_model(),
     }
