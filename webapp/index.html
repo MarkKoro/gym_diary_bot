@@ -2346,6 +2346,7 @@
             <option value="mistakes_analysis">Анализ ошибок</option>
           </select>
           <div id="aiCoachRetryCounter" class="ai-coach-counter hidden">Ещё запросов сегодня: 2 из 3</div>
+          <button class="btn" id="aiCoachCloseBtn" type="button">Закрыть</button>
         </div>
         <textarea id="aiCoachInput" class="settings-input" rows="4" placeholder="Опиши ситуацию и что хочешь улучшить"></textarea>
         <div id="aiCoachExamples" class="ai-coach-examples" aria-live="polite"></div>
@@ -2375,6 +2376,7 @@
         <div id="aiCoachApplyFrame" class="ai-coach-apply-frame hidden">
         <div id="aiCoachApplyRow" class="ai-coach-actions hidden">
           <button class="btn" id="aiCoachApplyCurrentBtn">Применить изменения</button>
+          <button class="btn" id="aiCoachApplyAllBtn">Просто применить изменения</button>
           <button class="btn hidden" id="aiCoachCopySystemBtn">Скопировать систему</button>
         </div>
         </div>
@@ -6523,7 +6525,11 @@
       const systemsLimitOpen = document.getElementById('systemsLimitSheet')?.classList.contains('show');
       if (systemsLimitOpen) { return; }
       const aiCoachSheetOpen = document.getElementById('aiCoachSheet')?.classList.contains('show');
-      if (aiCoachSheetOpen) { closeAiCoachSheet(); return; }
+      if (aiCoachSheetOpen) {
+        if (state.aiCoach.loading) return;
+        closeAiCoachSheet();
+        return;
+      }
       const measurementSheetOpen = document.getElementById('measurementSheet')?.classList.contains('show');
       if (measurementSheetOpen) { closeMeasurementSheet(); return; }
       const manageSheetOpen = document.getElementById('manageExerciseSheet')?.classList.contains('show');
@@ -9270,8 +9276,10 @@
       const modeEl = document.getElementById('aiCoachMode');
       const inputEl = document.getElementById('aiCoachInput');
       const applyCurrentBtn = document.getElementById('aiCoachApplyCurrentBtn');
+      const applyAllBtn = document.getElementById('aiCoachApplyAllBtn');
       const copySystemBtn = document.getElementById('aiCoachCopySystemBtn');
       const loadingOverlay = document.getElementById('aiCoachLoadingOverlay');
+      const closeBtn = document.getElementById('aiCoachCloseBtn');
       const totalUsed = 1 + Math.max(0, Number(state.aiCoach.retriesUsed || 0));
       const remaining = Math.max(0, Number(state.aiCoach.maxRetries || 3) - totalUsed);
       if (counter) {
@@ -9285,8 +9293,10 @@
       if (modeEl) modeEl.disabled = state.aiCoach.loading;
       if (inputEl) inputEl.disabled = state.aiCoach.loading;
       if (applyCurrentBtn) applyCurrentBtn.disabled = state.aiCoach.loading;
+      if (applyAllBtn) applyAllBtn.disabled = state.aiCoach.loading;
       if (copySystemBtn) copySystemBtn.disabled = state.aiCoach.loading;
       if (loadingOverlay) loadingOverlay.classList.toggle('hidden', !state.aiCoach.loading);
+      if (closeBtn) closeBtn.disabled = state.aiCoach.loading;
     }
 
     function buildAiCoachPreviewText() {
@@ -9445,7 +9455,7 @@
       const mode = String(state.aiCoach.mode || 'replace_exercises');
       const hasStructured = renderAiCoachStructuredResult(structuredEl);
 
-      const text = mode === 'mistakes_analysis' ? buildAiCoachPreviewText() : '';
+      const text = (mode === 'mistakes_analysis' || !hasStructured) ? buildAiCoachPreviewText() : '';
       answerEl.textContent = text || '';
       answerEl.classList.toggle('hidden', !text);
 
@@ -9454,7 +9464,7 @@
       summaryEl.classList.toggle('hidden', !summary);
 
       const rationale = mode === 'mistakes_analysis' && Array.isArray(state.aiCoach.rationale) ? state.aiCoach.rationale.filter(Boolean) : [];
-      const warnings = mode === 'mistakes_analysis' && Array.isArray(state.aiCoach.warnings) ? state.aiCoach.warnings.filter(Boolean) : [];
+      const warnings = Array.isArray(state.aiCoach.warnings) ? state.aiCoach.warnings.filter(Boolean) : [];
       const rationaleItems = rationale.map((item) => `<li>${escapeHtml(String(item))}</li>`).join('');
       const warningItems = warnings.map((item) => `<li>⚠️ ${escapeHtml(String(item))}</li>`).join('');
       rationaleEl.innerHTML = `${warningItems}${rationaleItems}`;
@@ -9471,6 +9481,8 @@
       if (applyFrame) applyFrame.classList.toggle('hidden', !hasPlan || isMistakes);
       const applyBtn = document.getElementById('aiCoachApplyCurrentBtn');
       if (applyBtn) applyBtn.classList.toggle('hidden', mode === 'new_system');
+      const applyAllBtn = document.getElementById('aiCoachApplyAllBtn');
+      if (applyAllBtn) applyAllBtn.classList.toggle('hidden', mode === 'new_system' || isMistakes);
       renderAiCoachExamples();
       if (state.aiCoach.hasResponse || hasStructured) scrollAiCoachToAnswer();
       updateAiCoachCounter();
@@ -9496,8 +9508,13 @@
       state.aiCoach.mode = mode;
       state.aiCoach.decisions = {};
       state.aiCoach.replaceDayCursor = 1;
+      state.aiCoach.answerText = '';
+      state.aiCoach.summary = '';
+      state.aiCoach.rationale = [];
+      state.aiCoach.parsed = null;
+      state.aiCoach.warnings = [];
       state.aiCoach.loading = true;
-      updateAiCoachCounter();
+      renderAiCoachResult();
       try {
         const data = await apiFetch('/gymapi/ai/coach/query', {
           method: 'POST',
@@ -9527,23 +9544,23 @@
         renderAiCoachResult();
       } finally {
         state.aiCoach.loading = false;
-        updateAiCoachCounter();
+        renderAiCoachResult();
       }
     }
 
-    function getSelectedAiActions() {
+    function getSelectedAiActions({ forceAll = false } = {}) {
       const plan = state.aiCoach.parsed;
       const actions = Array.isArray(plan?.actions) ? plan.actions : [];
       return actions.filter((action, idx) => {
         const type = String(action?.type || '');
-        if (type === 'replace_exercise' || type === 'add_exercise') return shouldApplyAiAction(action, idx);
+        if (!forceAll && (type === 'replace_exercise' || type === 'add_exercise')) return shouldApplyAiAction(action, idx);
         return true;
       });
     }
 
-    async function applyAiCoachPlan() {
+    async function applyAiCoachPlan({ forceAll = false } = {}) {
       try {
-        const actions = getSelectedAiActions();
+        const actions = getSelectedAiActions({ forceAll });
         if (!actions.length) {
           toast('Нет действий для применения');
           return;
@@ -9991,11 +10008,13 @@
         renderAiCoachExamples();
         renderAiCoachResult();
       });
+      document.getElementById('aiCoachCloseBtn')?.addEventListener('click', () => { if (!state.aiCoach.loading) closeAiCoachSheet(); });
       document.getElementById('aiCoachAskBtn').addEventListener('click', () => {
         const retry = state.aiCoach.hasResponse && state.aiCoach.requestDayKey === getAiCoachDayKey();
         askAiCoach({ retry }).catch(console.error);
       });
       document.getElementById('aiCoachApplyCurrentBtn').addEventListener('click', () => applyAiCoachPlan().catch(console.error));
+      document.getElementById('aiCoachApplyAllBtn').addEventListener('click', () => applyAiCoachPlan({ forceAll: true }).catch(console.error));
       document.getElementById('aiCoachCopySystemBtn').addEventListener('click', () => applyAiCoachPlan().catch(console.error));
       document.getElementById('aiCoachResultScroll').addEventListener('click', (e) => {
         const btn = e.target.closest('[data-ai-decision]');

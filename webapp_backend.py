@@ -546,7 +546,11 @@ def _sanitize_ai_action(action: dict, catalog_by_id: dict[int, dict], catalog_by
 
     if action_type == 'replace_exercise':
         old_ex_id, old_item = _pick_exercise('old_exercise_ref', 'old_exercise_name')
+        if not old_item:
+            old_ex_id, old_item = _pick_exercise('old_exercise_ref', 'exercise_name')
         new_ex_id, new_item = _pick_exercise('new_exercise_ref', 'new_exercise_name', allow_new=True)
+        if not new_item:
+            new_ex_id, new_item = _pick_exercise('new_exercise_ref', 'replacement_exercise_name', allow_new=True)
         if not old_ex_id or not new_item:
             return None
         clean.update({
