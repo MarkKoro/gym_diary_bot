@@ -1240,13 +1240,28 @@ def _ai_response_format_for_mode(mode: str) -> dict:
         }
     else:
         root = json.loads(json.dumps(root, ensure_ascii=False))
+        action_item = {
+            'type': 'object',
+            'additionalProperties': False,
+            'properties': {
+                'type': {'type': 'string', 'enum': ['add_exercise', 'remove_exercise', 'update_sets']},
+                'day_index': {'type': 'integer', 'minimum': 1, 'maximum': 7},
+                'exercise_name': {'type': 'string', 'minLength': 2, 'maxLength': 120},
+                'muscle_group': {'type': 'string', 'minLength': 1, 'maxLength': 40},
+                'sets': {'type': 'integer', 'minimum': 1, 'maximum': 12},
+                'reps': {'type': 'integer', 'minimum': 0, 'maximum': 50},
+                'seconds': {'type': 'integer', 'minimum': 0, 'maximum': 600},
+                'weight_kg': {'type': 'number', 'minimum': 0, 'maximum': 500},
+                'old_exercise_name': {'type': 'string', 'minLength': 2, 'maxLength': 120},
+                'reason': {'type': 'string', 'maxLength': 220},
+            },
+            'required': ['type', 'day_index'],
+        }
         root['properties']['action_plan']['properties']['actions'] = {
             'type': 'array',
             'minItems': 1,
             'maxItems': 60,
-            'items': {
-                'oneOf': [defs['remove_exercise'], defs['add_exercise'], defs['update_sets']],
-            },
+            'items': action_item,
         }
 
     return {
