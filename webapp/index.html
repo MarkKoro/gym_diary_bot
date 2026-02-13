@@ -139,6 +139,9 @@
       position: relative;
       overflow: hidden;
     }
+    .ai-coach-response-wrap.hidden {
+      display: none;
+    }
     .ai-coach-title { font-size: 15px; font-weight: 700; user-select: text; -webkit-user-select: text; }
     .ai-coach-list { margin: 0; padding-left: 18px; color: var(--text); font-size: 14px; line-height: 1.45; display: grid; gap: 5px; user-select: text; -webkit-user-select: text; }
     .ai-coach-result-scroll { min-height: 0; overflow: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; display: grid; gap: 8px; align-content: start; }
@@ -2349,7 +2352,7 @@
         <div class="ai-coach-actions">
           <button class="btn primary" id="aiCoachAskBtn">Сделать запрос</button>
         </div>
-        <div class="ai-coach-response-wrap">
+        <div id="aiCoachResponseWrap" class="ai-coach-response-wrap hidden">
           <div id="aiCoachLoadingOverlay" class="ai-coach-loading-overlay hidden" aria-live="polite" aria-busy="true">
             <div class="ai-coach-loading-head" aria-hidden="true">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
@@ -2369,7 +2372,7 @@
             <div id="aiCoachAnswer" class="ai-coach-response hidden"></div>
           </div>
         </div>
-        <div class="ai-coach-apply-frame">
+        <div id="aiCoachApplyFrame" class="ai-coach-apply-frame hidden">
         <div id="aiCoachApplyRow" class="ai-coach-actions hidden">
           <button class="btn" id="aiCoachApplyCurrentBtn">Применить изменения</button>
           <button class="btn hidden" id="aiCoachCopySystemBtn">Скопировать систему</button>
@@ -9459,8 +9462,13 @@
 
       const hasPlan = Boolean(state.aiCoach.parsed && Array.isArray(state.aiCoach.parsed.actions) && state.aiCoach.parsed.actions.length);
       const isMistakes = mode === 'mistakes_analysis';
+      const responseWrap = document.getElementById('aiCoachResponseWrap');
+      const hasTextualContent = Boolean(text || summary || rationale.length || warnings.length);
+      if (responseWrap) responseWrap.classList.toggle('hidden', !(state.aiCoach.loading || state.aiCoach.hasResponse || hasStructured || hasTextualContent));
       applyRow.classList.toggle('hidden', !hasPlan || isMistakes);
       if (copyBtn) copyBtn.classList.toggle('hidden', mode !== 'new_system');
+      const applyFrame = document.getElementById('aiCoachApplyFrame');
+      if (applyFrame) applyFrame.classList.toggle('hidden', !hasPlan || isMistakes);
       const applyBtn = document.getElementById('aiCoachApplyCurrentBtn');
       if (applyBtn) applyBtn.classList.toggle('hidden', mode === 'new_system');
       renderAiCoachExamples();
@@ -9563,7 +9571,10 @@
               if (!resolvedId && exName) {
                 const created = await apiFetch(`/gymapi/catalog/exercise?day_index=${dayIndex}`, {
                   method: 'POST',
-                  body: JSON.stringify({ name: exName, muscle_group: 'other' }),
+                  body: JSON.stringify({
+                    name: exName,
+                    muscle_group: String(ex?.muscle_group || ex?.group || 'other').trim().toLowerCase() || 'other',
+                  }),
                 });
                 resolvedId = Number(created?.exercise_id || 0) || null;
                 alreadyAdded = Boolean(resolvedId);
@@ -9618,7 +9629,10 @@
               if (!resolvedId && exName) {
                 const created = await apiFetch(`/gymapi/catalog/exercise?day_index=${dayIndex}`, {
                   method: 'POST',
-                  body: JSON.stringify({ name: exName, muscle_group: 'other' }),
+                  body: JSON.stringify({
+                    name: exName,
+                    muscle_group: String(action.muscle_group || action.new_muscle_group || action.group || 'other').trim().toLowerCase() || 'other',
+                  }),
                 });
                 resolvedId = Number(created?.exercise_id || 0);
                 alreadyAdded = resolvedId > 0;

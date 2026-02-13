@@ -395,9 +395,14 @@ def _normalize_name(value: object) -> str:
     return re.sub(r'\s+', ' ', str(value or '').strip()).lower()
 
 
-async def _build_ai_catalog_lookup(day_snapshots: list[dict], *, per_group_limit: int = 30) -> tuple[list[dict], dict[int, dict], dict[str, dict]]:
+async def _build_ai_catalog_lookup(user_id: int, day_snapshots: list[dict], *, per_group_limit: int = 30) -> tuple[list[dict], dict[int, dict], dict[str, dict], list[dict]]:
     groups: set[str] = set()
     direct_exercises: dict[int, dict] = {}
+
+    groups.update(MG_NAMES.keys())
+    custom_groups = await list_user_muscle_groups(int(user_id))
+    custom_group_map = {str(code): str(name or '').strip() for code, name in custom_groups}
+    groups.update(custom_group_map.keys())
 
     for day in day_snapshots:
         for ex in day.get('exercises') or []:
@@ -436,12 +441,20 @@ async def _build_ai_catalog_lookup(day_snapshots: list[dict], *, per_group_limit
                 }
 
     ordered = sorted(by_id.values(), key=lambda item: (0 if item.get('source') == 'current_plan' else 1, item.get('group') or '', item.get('name') or ''))
+    groups_payload = [
+        {
+            'code': code,
+            'name': custom_group_map.get(code) or MG_NAMES.get(code) or code,
+            'is_custom': code in custom_group_map,
+        }
+        for code in sorted(groups)
+    ]
     by_name = {
         _normalize_name(item.get('name')): item
         for item in ordered
         if _normalize_name(item.get('name'))
     }
-    return ordered, by_id, by_name
+    return ordered, by_id, by_name, groups_payload
 
 
 
@@ -464,13 +477,26 @@ def _sanitize_ai_action(action: dict, catalog_by_id: dict[int, dict], catalog_by
     if action_type not in {'update_sets', 'replace_exercise', 'add_exercise', 'create_system'}:
         return None
 
-    def _pick_exercise(ref_key: str, name_key: str) -> tuple[int, dict] | tuple[None, None]:
+    def _pick_exercise(ref_key: str, name_key: str, muscle_key: str = 'muscle_group', *, allow_new: bool = False) -> tuple[int, dict] | tuple[None, None]:
         ex_id = _parse_exercise_ref(action.get(ref_key))
         item = catalog_by_id.get(ex_id) if ex_id else None
         if not item:
             by_name = catalog_by_name.get(_normalize_name(action.get(name_key)))
             item = by_name
             ex_id = _to_int(by_name.get('exercise_id'), 0) if by_name else None
+        if not item and allow_new:
+            new_name = str(action.get(name_key) or '').strip()
+            if not new_name:
+                return None, None
+            new_group = str(action.get(muscle_key) or action.get('group') or 'other').strip().lower() or 'other'
+            item = {
+                'exercise_ref': None,
+                'exercise_id': 0,
+                'name': new_name,
+                'group': new_group,
+                'source': 'ai_suggested',
+            }
+            return None, item
         if not item or not ex_id:
             return None, None
         return ex_id, item
@@ -520,25 +546,27 @@ def _sanitize_ai_action(action: dict, catalog_by_id: dict[int, dict], catalog_by
 
     if action_type == 'replace_exercise':
         old_ex_id, old_item = _pick_exercise('old_exercise_ref', 'old_exercise_name')
-        new_ex_id, new_item = _pick_exercise('new_exercise_ref', 'new_exercise_name')
-        if not old_ex_id or not new_ex_id:
+        new_ex_id, new_item = _pick_exercise('new_exercise_ref', 'new_exercise_name', allow_new=True)
+        if not old_ex_id or not new_item:
             return None
         clean.update({
             'old_exercise_ref': old_item.get('exercise_ref'),
             'old_exercise_id': old_ex_id,
             'old_exercise_name': old_item.get('name'),
-            'new_exercise_ref': new_item.get('exercise_ref'),
-            'new_exercise_id': new_ex_id,
+            'new_exercise_ref': new_item.get('exercise_ref') if new_ex_id else None,
+            'new_exercise_id': new_ex_id if new_ex_id else 0,
             'new_exercise_name': new_item.get('name'),
+            'new_muscle_group': str(new_item.get('group') or 'other').strip().lower() or 'other',
         })
     else:
-        ex_id, item = _pick_exercise('exercise_ref', 'exercise_name')
-        if not ex_id:
+        ex_id, item = _pick_exercise('exercise_ref', 'exercise_name', allow_new=True)
+        if not item:
             return None
         clean.update({
-            'exercise_ref': item.get('exercise_ref'),
-            'exercise_id': ex_id,
+            'exercise_ref': item.get('exercise_ref') if ex_id else None,
+            'exercise_id': ex_id if ex_id else 0,
             'exercise_name': item.get('name'),
+            'muscle_group': str(item.get('group') or 'other').strip().lower() or 'other',
         })
 
     clean['sets'] = max(1, min(12, _to_int(action.get('sets'), 1)))
@@ -653,7 +681,7 @@ async def _build_ai_context_payload(user_id: int) -> dict:
             'exercises': ex_list,
         })
 
-    catalog_items, catalog_by_id, catalog_by_name = await _build_ai_catalog_lookup(day_snapshots)
+    catalog_items, catalog_by_id, catalog_by_name, catalog_groups = await _build_ai_catalog_lookup(user_id, day_snapshots)
 
     measurement_codes = ['weight', 'waist', 'chest', 'hips', 'biceps', 'thigh', 'run_5k', 'resting_pulse']
     measurement_trends: list[dict] = []
@@ -685,6 +713,7 @@ async def _build_ai_context_payload(user_id: int) -> dict:
         'measurement_trends': measurement_trends,
         'catalog_context': {
             'items': catalog_items,
+            'groups': catalog_groups,
             'by_id': catalog_by_id,
             'by_name': catalog_by_name,
         },
@@ -804,10 +833,12 @@ def _build_ai_system_prompt(mode: str) -> str:
         'Для update_sets укажи: day_index, exercise_ref, exercise_name, sets, reps, seconds, weight_kg, reason. '
         'Для replace_exercise укажи: day_index, old_exercise_ref, old_exercise_name, new_exercise_ref, new_exercise_name, sets, reps, seconds, weight_kg, reason. '
         'Для add_exercise укажи: day_index, exercise_ref, exercise_name, sets, reps, seconds, weight_kg, reason. '
+        'Если уверен на 100%, что нужного упражнения нет в catalog_context.items, разрешено предложить новое упражнение без exercise_ref, '
+        'но тогда обязательно укажи muscle_group (код из catalog_context.groups) и exercise_name. '
         'Для create_system укажи: day_index, system_name, days, reason. '
         'В create_system поле days обязательно: массив дней с day_index и непустым массивом exercises; '
-        'каждое упражнение должно содержать exercise_ref, exercise_name, sets, reps, seconds, weight_kg. '
-        'Категорически запрещено придумывать упражнения вне catalog_context.items. '
+        'каждое упражнение должно содержать exercise_name, sets, reps, seconds, weight_kg и по возможности exercise_ref. '
+        'Сначала выбирай упражнения из catalog_context.items, а новые предлагай только в исключительных случаях. '
         'Запрещено возвращать пустые дни или дни без упражнений. '
         'Учитывай ограничения пользователя из запроса (например, исключённые упражнения), его текущую систему, историю и замеры из контекста. '
         'Ответ должен быть применим: без абстракций, только конкретные значения. '
@@ -4381,14 +4412,21 @@ async def ai_coach_query(payload: dict = Body(default_factory=dict), ctx: AuthCt
     catalog_context = context_payload.get('catalog_context') or {}
     catalog_items = catalog_context.get('items') if isinstance(catalog_context.get('items'), list) else []
 
+    include_catalog = mode in {'replace_exercises', 'new_system'}
     user_prompt = (
         f"Режим запроса: {mode}\n"
         f"Запрос пользователя: {user_message or '—'}\n\n"
         "Контекст пользователя:\n"
-        f"{context_text}\n\n"
-        "Доступные упражнения (выбирай только из списка, по exercise_ref):\n"
-        f"{json.dumps(catalog_items, ensure_ascii=False)}\n"
+        f"{context_text}\n"
     )
+    if include_catalog:
+        catalog_groups = catalog_context.get('groups') if isinstance(catalog_context.get('groups'), list) else []
+        user_prompt += (
+            "\nДоступные группы мышц:\n"
+            f"{json.dumps(catalog_groups, ensure_ascii=False)}\n"
+            "Доступные упражнения (в первую очередь выбирай из этого списка по exercise_ref):\n"
+            f"{json.dumps(catalog_items, ensure_ascii=False)}\n"
+        )
     if rejected_list:
         user_prompt += '\nПрошлые отклонённые варианты:\n'
         for idx, reason in enumerate(rejected_list, start=1):
