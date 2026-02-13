@@ -1011,6 +1011,11 @@ def _build_ai_system_prompt(mode: str) -> str:
 - Верни actions только типов: remove_exercise, add_exercise, update_sets.
 - Сначала предложи remove_exercise (красные), затем add_exercise (зелёные).
 - Цель: улучшить план под запрос пользователя, не ломая логику сплита.
+Формат полей (важно):
+- Для type="remove_exercise": заполни old_exercise_name, а остальные поля выставь так:
+  exercise_name="", muscle_group="", sets=0, reps=0, seconds=0, weight_kg=0, reason может быть "".
+- Для type="add_exercise" или "update_sets": заполни exercise_name/muscle_group/sets/reps/seconds/weight_kg, а old_exercise_name="".
+- Поле reason присутствует всегда (может быть пустым).
 """).strip()
 
     if mode == 'new_system':
@@ -1018,6 +1023,10 @@ def _build_ai_system_prompt(mode: str) -> str:
 Режим new_system:
 - Верни ровно 1 action: create_system.
 - Система должна быть пригодна к копированию как новая, с понятным system_name.
+Технически важно:
+- Всегда возвращай rationale (список строк, можно пустой []).
+- В каждом дне всегда возвращай title (может быть пустой строкой "").
+- В каждом упражнении всегда возвращай note (может быть пустой строкой "").
 """).strip()
 
     if mode == 'adjust_sets':
@@ -1025,6 +1034,7 @@ def _build_ai_system_prompt(mode: str) -> str:
 Режим adjust_sets:
 - Верни actions только типа update_sets.
 - Меняй подходы/повторы/время/вес для текущей системы по запросу пользователя.
+- Поле reason присутствует всегда (может быть пустым).
 """).strip()
 
     return (common + """
@@ -1116,7 +1126,7 @@ def _ai_schema_base() -> dict:
             'weight_kg': weight,
             'reason': {'type': 'string', 'maxLength': 200},
         },
-        'required': ['type', 'day_index', 'exercise_name', 'muscle_group', 'sets', 'reps', 'seconds', 'weight_kg'],
+        'required': ['type', 'day_index', 'exercise_name', 'muscle_group', 'sets', 'reps', 'seconds', 'weight_kg', 'reason'],
     }
 
     remove_exercise = {
@@ -1128,7 +1138,7 @@ def _ai_schema_base() -> dict:
             'old_exercise_name': {'type': 'string', 'minLength': 2, 'maxLength': 120},
             'reason': {'type': 'string', 'maxLength': 200},
         },
-        'required': ['type', 'day_index', 'old_exercise_name'],
+        'required': ['type', 'day_index', 'old_exercise_name', 'reason'],
     }
 
     update_sets = {
@@ -1144,7 +1154,7 @@ def _ai_schema_base() -> dict:
             'weight_kg': weight,
             'reason': {'type': 'string', 'maxLength': 200},
         },
-        'required': ['type', 'day_index', 'exercise_name', 'sets', 'reps', 'seconds', 'weight_kg'],
+        'required': ['type', 'day_index', 'exercise_name', 'sets', 'reps', 'seconds', 'weight_kg', 'reason'],
     }
 
     system_exercise = {
@@ -1159,7 +1169,7 @@ def _ai_schema_base() -> dict:
             'weight_kg': weight,
             'note': {'type': 'string', 'maxLength': 120},
         },
-        'required': ['exercise_name', 'muscle_group', 'sets', 'reps', 'seconds', 'weight_kg'],
+        'required': ['exercise_name', 'muscle_group', 'sets', 'reps', 'seconds', 'weight_kg', 'note'],
     }
 
     system_day = {
@@ -1170,7 +1180,7 @@ def _ai_schema_base() -> dict:
             'title': {'type': 'string', 'maxLength': 40},
             'exercises': {'type': 'array', 'minItems': 3, 'maxItems': 12, 'items': system_exercise},
         },
-        'required': ['day_index', 'exercises'],
+        'required': ['day_index', 'title', 'exercises'],
     }
 
     create_system = {
@@ -1182,7 +1192,7 @@ def _ai_schema_base() -> dict:
             'days': {'type': 'array', 'minItems': 2, 'maxItems': 7, 'items': system_day},
             'rationale': {'type': 'array', 'maxItems': 8, 'items': {'type': 'string'}},
         },
-        'required': ['type', 'system_name', 'days'],
+        'required': ['type', 'system_name', 'days', 'rationale'],
     }
 
     root = {
@@ -1240,23 +1250,27 @@ def _ai_response_format_for_mode(mode: str) -> dict:
         }
     else:
         root = json.loads(json.dumps(root, ensure_ascii=False))
+
+        action_item_props = {
+            'type': {'type': 'string', 'enum': ['add_exercise', 'remove_exercise', 'update_sets']},
+            'day_index': {'type': 'integer', 'minimum': 1, 'maximum': 7},
+            'exercise_name': {'type': 'string', 'maxLength': 120},
+            'muscle_group': {'type': 'string', 'maxLength': 40},
+            'sets': {'type': 'integer', 'minimum': 0, 'maximum': 12},
+            'reps': {'type': 'integer', 'minimum': 0, 'maximum': 50},
+            'seconds': {'type': 'integer', 'minimum': 0, 'maximum': 600},
+            'weight_kg': {'type': 'number', 'minimum': 0, 'maximum': 500},
+            'old_exercise_name': {'type': 'string', 'maxLength': 120},
+            'reason': {'type': 'string', 'maxLength': 220},
+        }
+
         action_item = {
             'type': 'object',
             'additionalProperties': False,
-            'properties': {
-                'type': {'type': 'string', 'enum': ['add_exercise', 'remove_exercise', 'update_sets']},
-                'day_index': {'type': 'integer', 'minimum': 1, 'maximum': 7},
-                'exercise_name': {'type': 'string', 'minLength': 2, 'maxLength': 120},
-                'muscle_group': {'type': 'string', 'minLength': 1, 'maxLength': 40},
-                'sets': {'type': 'integer', 'minimum': 1, 'maximum': 12},
-                'reps': {'type': 'integer', 'minimum': 0, 'maximum': 50},
-                'seconds': {'type': 'integer', 'minimum': 0, 'maximum': 600},
-                'weight_kg': {'type': 'number', 'minimum': 0, 'maximum': 500},
-                'old_exercise_name': {'type': 'string', 'minLength': 2, 'maxLength': 120},
-                'reason': {'type': 'string', 'maxLength': 220},
-            },
-            'required': ['type', 'day_index'],
+            'properties': action_item_props,
+            'required': list(action_item_props.keys()),
         }
+
         root['properties']['action_plan']['properties']['actions'] = {
             'type': 'array',
             'minItems': 1,
