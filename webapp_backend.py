@@ -912,6 +912,181 @@ async def _call_openai_chat(system_prompt: str, user_prompt: str) -> dict:
     return {'raw': data, 'text': text}
 
 
+def _ai_limits_for_mode(mode: str) -> dict:
+    if mode == 'new_system':
+        return {'max_tokens': 2200, 'temperature': 0.35}
+    if mode == 'replace_exercises':
+        return {'max_tokens': 1600, 'temperature': 0.35}
+    if mode == 'adjust_sets':
+        return {'max_tokens': 1200, 'temperature': 0.30}
+    return {'max_tokens': 900, 'temperature': 0.45}
+
+
+def _ai_schema_base() -> dict:
+    int_pos = {'type': 'integer', 'minimum': 0}
+    day_index = {'type': 'integer', 'minimum': 1, 'maximum': 7}
+    sets = {'type': 'integer', 'minimum': 1, 'maximum': 12}
+    reps = {'type': 'integer', 'minimum': 0, 'maximum': 50}
+    seconds = {'type': 'integer', 'minimum': 0, 'maximum': 600}
+    weight = {'type': 'number', 'minimum': 0, 'maximum': 500}
+
+    add_exercise = {
+        'type': 'object',
+        'additionalProperties': False,
+        'properties': {
+            'type': {'const': 'add_exercise'},
+            'day_index': day_index,
+            'exercise_name': {'type': 'string', 'minLength': 2, 'maxLength': 120},
+            'muscle_group': {'type': 'string', 'minLength': 1, 'maxLength': 40},
+            'sets': sets,
+            'reps': reps,
+            'seconds': seconds,
+            'weight_kg': weight,
+            'reason': {'type': 'string', 'maxLength': 200},
+        },
+        'required': ['type', 'day_index', 'exercise_name', 'muscle_group', 'sets', 'reps', 'seconds', 'weight_kg'],
+    }
+
+    remove_exercise = {
+        'type': 'object',
+        'additionalProperties': False,
+        'properties': {
+            'type': {'const': 'remove_exercise'},
+            'day_index': day_index,
+            'old_exercise_name': {'type': 'string', 'minLength': 2, 'maxLength': 120},
+            'reason': {'type': 'string', 'maxLength': 200},
+        },
+        'required': ['type', 'day_index', 'old_exercise_name'],
+    }
+
+    update_sets = {
+        'type': 'object',
+        'additionalProperties': False,
+        'properties': {
+            'type': {'const': 'update_sets'},
+            'day_index': day_index,
+            'exercise_name': {'type': 'string', 'minLength': 2, 'maxLength': 120},
+            'sets': sets,
+            'reps': reps,
+            'seconds': seconds,
+            'weight_kg': weight,
+            'reason': {'type': 'string', 'maxLength': 200},
+        },
+        'required': ['type', 'day_index', 'exercise_name', 'sets', 'reps', 'seconds', 'weight_kg'],
+    }
+
+    system_exercise = {
+        'type': 'object',
+        'additionalProperties': False,
+        'properties': {
+            'exercise_name': {'type': 'string', 'minLength': 2, 'maxLength': 120},
+            'muscle_group': {'type': 'string', 'minLength': 1, 'maxLength': 40},
+            'sets': sets,
+            'reps': reps,
+            'seconds': seconds,
+            'weight_kg': weight,
+            'note': {'type': 'string', 'maxLength': 120},
+        },
+        'required': ['exercise_name', 'muscle_group', 'sets', 'reps', 'seconds', 'weight_kg'],
+    }
+
+    system_day = {
+        'type': 'object',
+        'additionalProperties': False,
+        'properties': {
+            'day_index': day_index,
+            'title': {'type': 'string', 'maxLength': 40},
+            'exercises': {'type': 'array', 'minItems': 3, 'maxItems': 12, 'items': system_exercise},
+        },
+        'required': ['day_index', 'exercises'],
+    }
+
+    create_system = {
+        'type': 'object',
+        'additionalProperties': False,
+        'properties': {
+            'type': {'const': 'create_system'},
+            'system_name': {'type': 'string', 'minLength': 2, 'maxLength': 60},
+            'days': {'type': 'array', 'minItems': 2, 'maxItems': 7, 'items': system_day},
+            'rationale': {'type': 'array', 'maxItems': 8, 'items': {'type': 'string'}},
+        },
+        'required': ['type', 'system_name', 'days'],
+    }
+
+    root = {
+        'type': 'object',
+        'additionalProperties': False,
+        'properties': {
+            'summary': {'type': 'string', 'minLength': 10, 'maxLength': 600},
+            'rationale': {'type': 'array', 'maxItems': 8, 'items': {'type': 'string', 'maxLength': 220}},
+            'action_plan': {
+                'type': 'object',
+                'additionalProperties': False,
+                'properties': {
+                    'actions': {'type': 'array'},
+                },
+                'required': ['actions'],
+            },
+        },
+        'required': ['summary', 'rationale', 'action_plan'],
+    }
+
+    return {
+        'defs': {
+            'add_exercise': add_exercise,
+            'remove_exercise': remove_exercise,
+            'update_sets': update_sets,
+            'create_system': create_system,
+            'root': root,
+        }
+    }
+
+
+def _ai_response_format_for_mode(mode: str) -> dict:
+    base = _ai_schema_base()
+    defs = base['defs']
+    root = defs['root']
+
+    if mode == 'mistakes_analysis':
+        root = json.loads(json.dumps(root, ensure_ascii=False))
+        root['properties']['action_plan']['properties']['actions'] = {'type': 'array', 'maxItems': 0}
+    elif mode == 'new_system':
+        root = json.loads(json.dumps(root, ensure_ascii=False))
+        root['properties']['action_plan']['properties']['actions'] = {
+            'type': 'array',
+            'minItems': 1,
+            'maxItems': 1,
+            'items': defs['create_system'],
+        }
+    elif mode == 'adjust_sets':
+        root = json.loads(json.dumps(root, ensure_ascii=False))
+        root['properties']['action_plan']['properties']['actions'] = {
+            'type': 'array',
+            'minItems': 1,
+            'maxItems': 40,
+            'items': defs['update_sets'],
+        }
+    else:
+        root = json.loads(json.dumps(root, ensure_ascii=False))
+        root['properties']['action_plan']['properties']['actions'] = {
+            'type': 'array',
+            'minItems': 1,
+            'maxItems': 60,
+            'items': {
+                'oneOf': [defs['remove_exercise'], defs['add_exercise'], defs['update_sets']],
+            },
+        }
+
+    return {
+        'type': 'json_schema',
+        'json_schema': {
+            'name': f'ai_coach_{mode}',
+            'strict': True,
+            'schema': root,
+        },
+    }
+
+
 def _extract_json_block(answer_text: str) -> dict | None:
     src = (answer_text or '').strip()
     if not src:
