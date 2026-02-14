@@ -680,14 +680,7 @@ def _sanitize_ai_action(action: dict, *, max_day_index: int) -> dict | None:
     return None
 
 
-def _sanitize_ai_action_plan(
-    plan: dict | None,
-    mode: str,
-    *,
-    workouts_per_week: int,
-    active_day_count: int,
-    expected_new_system_days: int | None = None,
-) -> tuple[dict, list[str]]:
+def _sanitize_ai_action_plan(plan: dict | None, mode: str, *, workouts_per_week: int, active_day_count: int) -> tuple[dict, list[str]]:
     warnings: list[str] = []
     if not isinstance(plan, dict):
         return {"actions": []}, ["Пустой или невалидный JSON action_plan от AI."]
@@ -714,34 +707,27 @@ def _sanitize_ai_action_plan(
             return {"actions": []}, ["Для режима new_system не найдено валидного create_system действия."]
         picked = create_actions[0]
 
-        target_days = int(expected_new_system_days or 0)
-        if target_days < 2 or target_days > 7:
-            target_days = int(workouts_per_week or 0)
-        if target_days < 2 or target_days > 7:
-            target_days = max(2, min(7, int(active_day_count or 3) or 3))
-
+        # доп. нормализация количества дней
+        expected_days = int(workouts_per_week or 0) if int(workouts_per_week or 0) > 0 else max(1, int(active_day_count or 3))
         days = picked.get("days") if isinstance(picked.get("days"), list) else []
         days = [d for d in days if isinstance(d, dict) and isinstance(d.get("exercises"), list) and d.get("exercises")]
         days.sort(key=lambda x: int(x.get("day_index") or 0))
-
-        if len(days) > target_days:
-            days = days[:target_days]
+        if len(days) > 7:
+            warnings.append(f"AI вернул {len(days)} дней, ограничено до 7.")
+            days = days[:7]
         if len(days) < 2:
-            return {"actions": []}, ["Для режима new_system недостаточно валидных дней в ответе AI (минимум 2)."]
-
-        while len(days) < target_days:
-            days.append({"day_index": len(days) + 1, "title": "", "exercises": []})
-
-        normalized_days: list[dict] = []
-        for idx, day in enumerate(days, start=1):
-            normalized_days.append({
-                "day_index": idx,
-                "title": _clip_text(str(day.get("title") or "").strip(), 40),
-                "exercises": day.get("exercises") if isinstance(day.get("exercises"), list) else [],
-            })
-
-        picked["days"] = normalized_days
+            warnings.append("AI вернул слишком мало дней новой системы; рекомендуется минимум 2.")
+        if len(days) and len(days) != expected_days:
+            warnings.append(f"AI предложил {len(days)} дней вместо нормы {expected_days}; это допустимо, но проверь логику сплита.")
+        picked["days"] = days
         return {"actions": [picked]}, warnings
+
+    if mode == "adjust_sets":
+        upd = [a for a in clean_actions if a.get("type") == "update_sets"]
+        if not upd:
+            return {"actions": []}, ["Для режима adjust_sets не найдено валидных update_sets действий."]
+        # ограничим размер
+        return {"actions": upd[:40]}, warnings
 
     # replace_exercises
     allowed = {"add_exercise", "remove_exercise", "update_sets", "replace_exercise"}
@@ -980,42 +966,7 @@ def _build_mistakes_analysis_fallback(context_payload: dict, user_message: str) 
             'Отслеживай восстановление: оставляй 1 лёгкий или выходной день между тяжёлыми сессиями, чтобы не упираться в усталость с первых недель.',
             'Раз в неделю делай короткий аудит: что удалось выполнить, где были пропуски, какие упражнения нужно упростить или заменить.'
         ]
-    return summary, rationale
-
-
-def _extract_requested_days_from_message(user_message: str) -> int | None:
-    msg = str(user_message or '').lower()
-    if not msg:
-        return None
-
-    patterns = [
-        r'(?:на|по)\s*(\d)\s*(?:дн(?:я|ей)?|тренир(?:овк[аи]?|ки)|раз[а]?\s+в\s+недел)',
-        r'(\d)\s*(?:дн(?:я|ей)?|тренир(?:овк[аи]?|ки)|раз[а]?\s+в\s+недел)',
-    ]
-    for pattern in patterns:
-        match = re.search(pattern, msg)
-        if not match:
-            continue
-        try:
-            days = int(match.group(1))
-        except Exception:
-            continue
-        if 2 <= days <= 7:
-            return days
-    return None
-
-
-def _resolve_new_system_day_target(user_message: str, workouts_per_week: int, active_day_count: int) -> int:
-    requested_days = _extract_requested_days_from_message(user_message)
-    if requested_days is not None:
-        return requested_days
-
-    base_days = int(workouts_per_week or 0)
-    if base_days <= 0:
-        base_days = int(active_day_count or 0)
-    if base_days <= 0:
-        base_days = 3
-    return max(2, min(7, base_days))
+        return summary, rationale
 
     summary_parts = [
         f'В текущем плане видно {total_exercises} упражнений на {total_days} тренировочных дней, и уже можно выделить основные точки роста.'
@@ -1068,10 +1019,10 @@ def _resolve_new_system_day_target(user_message: str, workouts_per_week: int, ac
 
     return summary, rationale[:6]
 
-def _build_ai_system_prompt(mode: str, *, target_days: int | None = None) -> str:
+def _build_ai_system_prompt(mode: str) -> str:
     # Важно: schema уже зафиксирована через response_format.
     # Здесь даём правила качества и то, КАК ИМЕННО трактовать поля.
-    common = f"""
+    common = """
 Ты — AI Coach в дневнике тренировок. Отвечай строго по схеме Structured Outputs.
 Никакого markdown, никаких пояснений вне JSON.
 
@@ -1082,7 +1033,6 @@ def _build_ai_system_prompt(mode: str, *, target_days: int | None = None) -> str
 - Названия упражнений: коротко, по-русски, без кавычек.
 - old_exercise_name и exercise_name для существующих упражнений должны совпадать с тем, что в current_plan.
 - Будь консервативен по нагрузке и технике (без травмоопасных рекомендаций).
-- target_days для режима new_system: {target_days if isinstance(target_days, int) and 2 <= target_days <= 7 else 'auto'}.
 """.strip()
 
     if mode == 'replace_exercises':
@@ -1132,7 +1082,7 @@ muscle_group:
 
 Жёсткие правила:
 - Верни ровно ОДНО действие create_system в action_plan.actions (один объект).
-- Количество тренировочных дней = target_days из контекста (это согласованная норма в диапазоне 2..7 и с учётом запроса пользователя).
+- Количество тренировочных дней = workouts_per_week из профиля (если есть). Если нет — используй столько, сколько дней в current_plan (или 3 по умолчанию).
 - Каждый день должен быть самодостаточным: 5–8 упражнений (если full-body) или 4–7 (если сплит), без дублирования одного и того же упражнения дважды в один день.
 - Не делай “всё на руки” при запросе массы: масса = база + прогрессия + умеренный объём.
 - Для массы: приоритет базовым движениям, но с понятной нагрузкой; избегай экстремальных объёмов.
@@ -1162,6 +1112,30 @@ muscle_group:
 
 """).strip()
 
+    if mode == 'adjust_sets':
+        return (common + """
+Ты — AI Coach. Твоя задача: изменить параметры нагрузки (sets/reps/seconds/weight_kg) у текущих упражнений без перестройки плана. Никаких remove/add. Только update_sets.
+
+Жёсткие правила:
+muscle_group:
+- Старайся возвращать КОД группы: chest/back/shoulders/biceps/triceps/legs/abs/other (или u123 для пользовательских).
+- Если не уверен в коде — верни русское слово ("бицепс", "спина" и т.д.), система нормализует.(точно убедиться что система сможет эта нормализовать, абсолютно каждую группу мышц)
+- actions содержит только type="update_sets".
+- Работай по всем дням, которые существуют (day_index 1..N).
+- Если пользователь просит "чуть сложнее/чуть легче" — меняй объём умеренно:
+  - легче: -15%..-30% по объёму (sets/reps/weight)
+  - сложнее: +10%..+20%
+- Если просит "масса" — предпочтение 6–12 повторений, если "сила" — 3–6 повторений (но не всегда).
+
+Формат update_sets:
+- day_index обязателен
+- exercise_name — возьми из текущего плана, не придумывай новое
+- sets/reps/seconds/weight_kg — заполни
+- old_exercise_name="" (пусто)
+- reason можно пусто
+- how_to можно пусто
+""").strip()
+
     return (common + """
 Ты — AI Coach. Режим mistakes_analysis: дай короткий, практичный разбор ошибок/рисков и что улучшить. Никаких действий, не меняй план.
 
@@ -1173,13 +1147,7 @@ muscle_group:
 """).strip()
 
 
-async def _call_openai_chat(
-    system_prompt: str,
-    user_prompt: str,
-    *,
-    mode: str,
-    response_format_override: dict | None = {'type': 'json_object'},
-) -> dict:
+async def _call_openai_chat(system_prompt: str, user_prompt: str, *, mode: str) -> dict:
     openai_api_key = get_openai_api_key()
     if not openai_api_key:
         raise HTTPException(status_code=503, detail='OPENAI_API_KEY не задан')
@@ -1188,6 +1156,8 @@ async def _call_openai_chat(
         raise HTTPException(status_code=503, detail='OPENAI_MODEL не задан')
 
     limits = _ai_limits_for_mode(mode)
+    response_format = _ai_response_format_for_mode(mode)
+
     payload = {
         'model': openai_model,
         'temperature': float(limits['temperature']),
@@ -1195,10 +1165,9 @@ async def _call_openai_chat(
             {'role': 'system', 'content': system_prompt},
             {'role': 'user', 'content': user_prompt},
         ],
+        'response_format': response_format,
         'max_tokens': int(limits['max_tokens']),
     }
-    if response_format_override is not None:
-        payload['response_format'] = response_format_override
     headers = {
         'Authorization': f'Bearer {openai_api_key}',
         'Content-Type': 'application/json',
@@ -1233,6 +1202,8 @@ def _ai_limits_for_mode(mode: str) -> dict:
         return {'max_tokens': 2200, 'temperature': 0.35}
     if mode == 'replace_exercises':
         return {'max_tokens': 1600, 'temperature': 0.35}
+    if mode == 'adjust_sets':
+        return {'max_tokens': 1200, 'temperature': 0.30}
     return {'max_tokens': 900, 'temperature': 0.45}
 
 
@@ -1372,6 +1343,14 @@ def _ai_response_format_for_mode(mode: str) -> dict:
             'minItems': 1,
             'maxItems': 1,
             'items': defs['create_system'],
+        }
+    elif mode == 'adjust_sets':
+        root = json.loads(json.dumps(root, ensure_ascii=False))
+        root['properties']['action_plan']['properties']['actions'] = {
+            'type': 'array',
+            'minItems': 1,
+            'maxItems': 40,
+            'items': defs['update_sets'],
         }
     else:
         root = json.loads(json.dumps(root, ensure_ascii=False))
@@ -4953,9 +4932,9 @@ async def ai_coach_query(payload: dict = Body(default_factory=dict), ctx: AuthCt
 
     mode = str(payload.get('mode') or 'mistakes_analysis').strip()
     user_message = _clip_text(str(payload.get('message') or '').strip(), 1800)
-    if mode not in {'replace_exercises', 'new_system', 'mistakes_analysis'}:
+    if mode not in {'replace_exercises', 'new_system', 'adjust_sets', 'mistakes_analysis'}:
         raise HTTPException(status_code=400, detail='Неподдерживаемый AI-режим')
-    if mode in {'replace_exercises', 'new_system'} and not user_message:
+    if mode in {'replace_exercises', 'new_system', 'adjust_sets'} and not user_message:
         raise HTTPException(status_code=400, detail='Опиши, что хочешь улучшить')
 
     rejected_variants = payload.get('rejected_variants')
@@ -4983,45 +4962,18 @@ async def ai_coach_query(payload: dict = Body(default_factory=dict), ctx: AuthCt
     }
 
     context_text = json.dumps(ctx, ensure_ascii=False)
-    new_system_target_days = _resolve_new_system_day_target(
-        user_message,
-        workouts_per_week=_to_int((context_payload.get('user_profile') or {}).get('workouts_per_week'), 0),
-        active_day_count=len(context_payload.get('day_snapshots') or []),
-    )
     user_prompt = (
         'Используй этот контекст (JSON) и сформируй ответ по схеме:\\n'
         + context_text
     )
 
-    if mode == 'mistakes_analysis':
-        system_prompt = (
-            "Ты — AI Coach. Дай анализ ошибок и рисков по тренировкам пользователя.\n"
-            "Формат ответа: обычный текст на русском, без JSON.\n"
-            "Структура:\n"
-            "1) Короткий вывод (3–6 предложений).\n"
-            "2) Список 6–10 пунктов 'ошибка → почему важно → что сделать'.\n"
-            "3) Если пользователь спросил про боль/дискомфорт — аккуратно: возможные причины тренинга/техники/объёма, "
-            "4) Логиичный вывод и сруктура общения но приоднести по-человечески и понятным языком.\n"
-        )
-
-        result = await _call_openai_chat(system_prompt, user_prompt, mode=mode, response_format_override=None)
-        answer = (result.get('text') or '').strip()
-
-        return {
-            'ok': True,
-            'mode': mode,
-            'answer_text': answer,
-            'summary': '',
-            'rationale': [],
-            'parsed_action_plan': {'actions': []},
-            'action_plan_warnings': [],
-            'context_preview': context_text,
-            'model': get_openai_model(),
-        }
-
     # --- OpenAI call (mode-aware) ---
-    system_prompt = _build_ai_system_prompt(mode, target_days=new_system_target_days if mode == 'new_system' else None)
-    result = await _call_openai_chat(system_prompt, user_prompt, mode=mode)
+    system_prompt = _build_ai_system_prompt(mode)
+    try:
+        result = await _call_openai_chat(system_prompt, user_prompt, mode=mode)
+    except TypeError:
+        # если _call_openai_chat еще старой сигнатуры
+        result = await _call_openai_chat(system_prompt, user_prompt)
 
     # --- Parse structured root ---
     parsed_root = None
@@ -5040,7 +4992,6 @@ async def ai_coach_query(payload: dict = Body(default_factory=dict), ctx: AuthCt
         mode,
         workouts_per_week=_to_int((context_payload.get("user_profile") or {}).get("workouts_per_week"), 0),
         active_day_count=len(context_payload.get("day_snapshots") or []),
-        expected_new_system_days=new_system_target_days if mode == 'new_system' else None,
     )
 
     summary = str(parsed_root.get("summary") or "").strip()
@@ -5048,6 +4999,16 @@ async def ai_coach_query(payload: dict = Body(default_factory=dict), ctx: AuthCt
     if not isinstance(rationale, list):
         rationale = []
     rationale = [str(x).strip() for x in rationale if str(x).strip()][:6]
+
+    if mode == "mistakes_analysis":
+        # гарантируем нулевые actions
+        sanitized_plan = {"actions": []}
+        plan_warnings = []
+        fallback_summary, fallback_rationale = _build_mistakes_analysis_fallback(context_payload, user_message)
+        if len(summary) < 120:
+            summary = fallback_summary
+        if len(rationale) < 3:
+            rationale = fallback_rationale
 
     answer_text = ""
     if isinstance(result, dict):
