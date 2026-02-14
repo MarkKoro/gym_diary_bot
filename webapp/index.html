@@ -165,6 +165,7 @@
     .ai-coach-example-item { font-size: 13px; line-height: 1.35; color: var(--text); user-select: text; -webkit-user-select: text; }
     .ai-coach-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
     #aiCoachAskBtn { flex: 0 0 auto; width: auto; min-width: 156px; padding: 10px 16px; font-size: 14px; }
+    #aiCoachInput { min-height: 112px; max-height: 220px; resize: vertical; flex-shrink: 0; }
     body.ai-coach-open #finishFabWrap,
     body.ai-coach-open #addExerciseBtn,
     body.ai-coach-open #deleteModeFooter {
@@ -2699,7 +2700,7 @@
       isTelegram: false,
       isAdmin: false,
       systemSheetOpen: false,
-      aiCoach: { open: false, loading: false, mode: 'replace_exercises', answerText: '', parsed: null, summary: '', rationale: [], retriesUsed: 0, maxRetries: 3, rejectedVariants: [], hasResponse: false, requestDayKey: '', appliedByDay: {}, warnings: [], decisions: {}, done: {}, replaceDayCursor: 1 },
+      aiCoach: { open: false, loading: false, mode: 'replace_exercises', answerText: '', parsed: null, summary: '', rationale: [], retriesUsed: 0, maxRetries: 3, usedRequests: 0, rejectedVariants: [], hasResponse: false, requestDayKey: '', appliedByDay: {}, warnings: [], decisions: {}, done: {}, replaceDayCursor: 1 },
       subscription: { loading: false, active: false, activePlan: null, activeExpiresAt: null, plans: [], features: [], payment: { checking: false, paymentId: null } },
       paywall: { open: false, reason: '' },
       productivitySheetOpen: false,
@@ -3694,6 +3695,7 @@
                 <div class="system-menu" id="system-menu-${sys.id}">
                   <button data-action="system-rename" data-system-id="${sys.id}">Переименовать</button>
                   <button data-action="system-notifications" data-system-id="${sys.id}">Уведомления</button>
+                  <button data-action="system-days-settings" data-system-id="${sys.id}">Изменить количество дней</button>
                   <label>
                     Цвет
                     <input type="color" data-action="system-color" data-system-id="${sys.id}" value="${safeColor}" title="Цвет системы">
@@ -3797,7 +3799,7 @@
       if (action === 'system-select' && id > 0) {
         await apiFetch(`/gymapi/systems/${id}/select`, { method: 'POST', body: JSON.stringify({}) });
         await loadSystems();
-        if (state.currentRoute === 'settings' && state.settings.view === 'notifications') {
+        if (state.currentRoute === 'settings' && ['notifications', 'plan'].includes(state.settings.view)) {
           await loadSettingsOverview();
           renderSettings();
         }
@@ -3828,6 +3830,18 @@
         navigateTo('settings');
         setTimeout(() => {
           document.querySelector('[data-settings-timezone]')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }, 20);
+        return;
+      }
+      if (action === 'system-days-settings' && id > 0) {
+        await apiFetch(`/gymapi/systems/${id}/select`, { method: 'POST', body: JSON.stringify({}) });
+        await loadSystems();
+        await loadSettingsOverview();
+        state.settings.view = 'plan';
+        closeSystemSheet();
+        navigateTo('settings');
+        setTimeout(() => {
+          document.querySelector('.settings-chip-row')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
         }, 20);
         return;
       }
@@ -5259,6 +5273,16 @@
         plan: `
           <div class="card">
             <div class="card-title">План тренировок</div>
+            <div class="settings-row settings-panel">
+              <div class="label">Система тренировок</div>
+              <div class="hint">Сейчас активна: <b>${escapeHtml(s.systems.activeSystemName || '—')}</b>. Выбор ниже сразу обновляет план дней для выбранной системы.</div>
+              <div class="settings-pill-row">
+                ${(s.systems.items || []).map((sys) => {
+                  const isActive = Number(sys.id) === Number(s.systems.activeSystemId);
+                  return `<button class="system-select-btn quick ${isActive ? 'active' : ''}" data-action="system-select" data-system-id="${sys.id}">${isActive ? '✅ ' : ''}${escapeHtml(sys.name || 'Система')}</button>`;
+                }).join('') || '<span class="settings-pill">Системы ещё не созданы</span>'}
+              </div>
+            </div>
             <div class="settings-row">
               <div class="label">Количество тренировок в неделю</div>
               <div class="settings-chip-row">${chips}</div>
@@ -8047,10 +8071,12 @@
 
     function toggleSourceMetaPopover(ueId, btn, pop) {
       if (!btn || !pop) return;
-      const opening = state.sourceMetaOpenFor !== ueId;
+      const key = String(ueId || '').trim();
+      if (!key) return;
+      const opening = String(state.sourceMetaOpenFor || '').trim() !== key;
       closeSourceMetaPopover();
       if (!opening) return;
-      state.sourceMetaOpenFor = ueId;
+      state.sourceMetaOpenFor = key;
       btn.classList.add('active');
       pop.classList.add('show');
     }
@@ -8140,7 +8166,7 @@
           ev.preventDefault();
           ev.stopPropagation();
 
-          const opening = state.sourceMetaOpenFor !== exercise.user_exercise_id;
+          const opening = String(state.sourceMetaOpenFor || '').trim() !== String(exercise.user_exercise_id || '').trim();
           if (!opening) {
             toggleSourceMetaPopover(exercise.user_exercise_id, sourceBtn, sourcePop);
             return;
@@ -9195,6 +9221,20 @@
     }
 
 
+    function resetAiCoachViewState() {
+      state.aiCoach.hasResponse = false;
+      state.aiCoach.answerText = '';
+      state.aiCoach.summary = '';
+      state.aiCoach.rationale = [];
+      state.aiCoach.parsed = null;
+      state.aiCoach.warnings = [];
+      state.aiCoach.decisions = {};
+      state.aiCoach.done = {};
+      state.aiCoach.replaceDayCursor = 1;
+      const inputEl = document.getElementById('aiCoachInput');
+      if (inputEl) inputEl.value = '';
+    }
+
     function openAiCoachSheet() {
       const sheet = document.getElementById('aiCoachSheet');
       if (!sheet) return;
@@ -9202,6 +9242,7 @@
       if (state.aiCoach.requestDayKey && state.aiCoach.requestDayKey !== currentDayKey) {
         state.aiCoach.hasResponse = false;
         state.aiCoach.retriesUsed = 0;
+        state.aiCoach.usedRequests = 0;
         state.aiCoach.rejectedVariants = [];
       }
       state.aiCoach.open = true;
@@ -9221,6 +9262,9 @@
       state.aiCoach.open = false;
       document.body.classList.remove('drawer-open', 'ai-coach-open');
       sheet.classList.remove('show');
+      resetAiCoachViewState();
+      renderAiCoachExamples();
+      renderAiCoachResult();
       updateBackButton(state.currentRoute);
     }
 
@@ -9316,11 +9360,12 @@
       const copySystemBtn = document.getElementById('aiCoachCopySystemBtn');
       const loadingOverlay = document.getElementById('aiCoachLoadingOverlay');
       const closeBtn = document.getElementById('aiCoachCloseBtn');
-      const totalUsed = 1 + Math.max(0, Number(state.aiCoach.retriesUsed || 0));
-      const remaining = Math.max(0, Number(state.aiCoach.maxRetries || 3) - totalUsed);
+      const currentDayKey = getAiCoachDayKey();
+      const used = state.aiCoach.requestDayKey === currentDayKey ? Math.max(0, Number(state.aiCoach.usedRequests || 0)) : 0;
+      const remaining = Math.max(0, Number(state.aiCoach.maxRetries || 3) - used);
       if (counter) {
         counter.textContent = `Ещё запросов сегодня: ${remaining} из ${state.aiCoach.maxRetries}`;
-        counter.classList.toggle('hidden', !state.aiCoach.hasResponse);
+        counter.classList.toggle('hidden', used <= 0);
       }
       if (askBtn) {
         askBtn.disabled = state.aiCoach.loading;
@@ -9625,6 +9670,7 @@
       const currentDayKey = getAiCoachDayKey();
       if (!retry || state.aiCoach.requestDayKey !== currentDayKey) {
         state.aiCoach.retriesUsed = 0;
+        state.aiCoach.usedRequests = 0;
         state.aiCoach.rejectedVariants = [];
         state.aiCoach.hasResponse = false;
       }
@@ -9655,6 +9701,7 @@
         state.aiCoach.done = {};
         state.aiCoach.warnings = Array.isArray(data.action_plan_warnings) ? data.action_plan_warnings.filter(Boolean) : [];
         if (retry) state.aiCoach.retriesUsed += 1;
+        state.aiCoach.usedRequests = retry ? Math.max(1, Number(state.aiCoach.usedRequests || 1)) + 1 : 1;
         state.aiCoach.hasResponse = true;
         if (state.aiCoach.summary) state.aiCoach.rejectedVariants.push(state.aiCoach.summary);
         else if (state.aiCoach.answerText) state.aiCoach.rejectedVariants.push(state.aiCoach.answerText.slice(0, 250));
@@ -9856,9 +9903,6 @@
         state.aiCoach.appliedByDay = applied;
         toast('Изменения применены');
         closeAiCoachSheet();
-        state.aiCoach.parsed = null;
-        state.aiCoach.decisions = {};
-        state.aiCoach.hasResponse = false;
       } catch (e) {
         toast(`Не удалось применить изменения: ${normalizeError(e).split('\n')[0].slice(0, 100)}`);
         throw e;

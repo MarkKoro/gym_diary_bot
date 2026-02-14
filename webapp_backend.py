@@ -583,6 +583,7 @@ def _sanitize_ai_action(action: dict, *, max_day_index: int) -> dict | None:
                     "seconds": seconds,
                     "weight_kg": weight,
                     "note": _clip_text(str(ex.get("note") or "").strip(), 120),
+                    "how_to": _clip_text(str(ex.get("how_to") or "").strip(), 280),
                 })
 
             if clean_ex:
@@ -1107,7 +1108,7 @@ muscle_group:
      - sets, reps или seconds, weight_kg
      - note: ""
 
-- how_to — ОБЯЗАТЕЛЬНО: 1 короткая фраза (1–2 предложения) с техникой или ключевым акцентом именно для этого упражнения.
+- how_to — ОБЯЗАТЕЛЬНО: 1–2 коротких предложения (без воды) с техникой/дыханием/ключевым акцентом именно для этого упражнения.
 
 """).strip()
 
@@ -1270,8 +1271,9 @@ def _ai_schema_base() -> dict:
             'seconds': seconds,
             'weight_kg': weight,
             'note': {'type': 'string', 'maxLength': 120},
+            'how_to': {'type': 'string', 'maxLength': 280},
         },
-        'required': ['exercise_name', 'muscle_group', 'sets', 'reps', 'seconds', 'weight_kg', 'note'],
+        'required': ['exercise_name', 'muscle_group', 'sets', 'reps', 'seconds', 'weight_kg', 'note', 'how_to'],
     }
 
     system_day = {
