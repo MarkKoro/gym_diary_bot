@@ -3379,6 +3379,25 @@ async def fetch_last_session_sets(user_id: int, day_index: int, ue_id: int, toda
         )
         return await cur.fetchall()
 
+
+async def count_completed_sessions_for_user_exercise(conn, user_id: int, ue_id: int) -> int:
+    """
+    Сколько раз пользователь завершал упражнение (is_done=1) в любых сессиях.
+    """
+    cur = await conn.execute(
+        """
+        SELECT COUNT(*)
+        FROM session_exercises se
+        JOIN sessions s ON s.id = se.session_id
+        WHERE s.user_id = ?
+          AND se.user_exercise_id = ?
+          AND se.is_done = 1
+        """,
+        (int(user_id), int(ue_id)),
+    )
+    row = await cur.fetchone()
+    return int((row[0] if row else 0) or 0)
+
 async def fetch_exercise_sets(session_id: int, ue_id: int):
     async with connect_db() as db:
         cur = await db.execute(
