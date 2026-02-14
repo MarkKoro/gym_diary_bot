@@ -1311,6 +1311,20 @@ async def fetch_training_system_exercise_sources(system_id: int, day_index: int)
     return result
 
 
+async def upsert_training_system_exercise_source(system_id: int, day_index: int, exercise_id: int, source_payload: dict):
+    async with connect_db() as db:
+        await db.execute(
+            """
+            INSERT INTO training_system_exercise_sources(system_id, day_index, exercise_id, source_payload)
+            VALUES(?, ?, ?, ?)
+            ON CONFLICT(system_id, day_index, exercise_id)
+            DO UPDATE SET source_payload=excluded.source_payload
+            """,
+            (system_id, day_index, exercise_id, json.dumps(source_payload, ensure_ascii=False)),
+        )
+        await db.commit()
+
+
 async def sync_current_plan_to_system(user_id: int, system_id: int):
     async with connect_db() as db:
         await db.execute("DELETE FROM training_system_days WHERE system_id=?", (system_id,))

@@ -450,7 +450,7 @@
       .exercise-info { display: grid; gap: 6px; min-width: 0; }
       .exercise-meta { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
     .source-meta-wrap { position: relative; margin-left: auto; }
-      .source-meta-btn { width: 24px; height: 24px; border-radius: 999px; border: 1px solid var(--border); background: color-mix(in srgb, var(--card) 85%, transparent); color: var(--muted); font-size: 13px; cursor: pointer; }
+      .source-meta-btn { min-height: 24px; border-radius: 999px; border: 1px solid var(--border); padding: 0 10px; background: color-mix(in srgb, var(--card) 85%, transparent); color: var(--muted); font-size: 12px; cursor: pointer; white-space: nowrap; }
       .source-meta-btn.active { border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); color: var(--accent); }
       .source-meta-pop { position: absolute; z-index: 20; right: 0; top: calc(100% + 8px); min-width: 220px; max-width: 280px; border: 1px solid var(--border); border-radius: 12px; padding: 10px; background: var(--card); box-shadow: var(--shadow); display: none; font-size: 12px; color: var(--muted); }
     .source-meta-pop.show { display: grid; gap: 6px; }
@@ -458,6 +458,7 @@
     .ai-proposed-summary { margin-top: 8px; border: 1px dashed color-mix(in srgb, var(--accent) 45%, var(--border)); border-radius: 10px; padding: 8px; font-size: 12px; color: var(--muted); }
     .ai-proposed-summary b { color: var(--text); }
       .source-meta-title { font-size: 13px; font-weight: 700; color: var(--text); }
+      .source-meta-howto { font-size: 12px; color: var(--text); line-height: 1.35; }
       .source-meta-row { display: flex; justify-content: space-between; gap: 8px; }
       .finish-flag { font-size: 18px; filter: drop-shadow(0 4px 10px rgba(52,199,89,0.35)); }
       .exercise-card:not(.is-done) .finish-flag { display: none; }
@@ -2539,7 +2540,7 @@
             <div class="sheet-subtitle" id="sheetSubtitle"></div>
           </div>
           <div class="sheet-header-source" id="sheetSourceMetaWrap" style="display:none;">
-            <button type="button" class="source-meta-btn" id="sheetSourceMetaBtn" title="Данные источника">👻</button>
+            <button type="button" class="source-meta-btn" id="sheetSourceMetaBtn" title="Данные источника">Источник (?)</button>
             <div class="source-meta-pop" id="sheetSourceMetaPop"></div>
           </div>
         </div>
@@ -8114,7 +8115,7 @@
         sourceBtn.type = 'button';
         sourceBtn.className = 'source-meta-btn';
         sourceBtn.title = 'Данные источника';
-        sourceBtn.textContent = '👻';
+        sourceBtn.textContent = getSourceMetaButtonLabel(exercise);
         const sourcePop = document.createElement('div');
         sourcePop.className = 'source-meta-pop';
         sourcePop.innerHTML = buildSourceMetaContent(exercise);
@@ -9691,20 +9692,27 @@
               await loadSheet(dayIndex);
               const target = Array.from(state.exercises.values()).find((x) => Number(x.exercise_id || 0) === resolvedId)
                 || Array.from(state.exercises.values()).find((x) => String(x.name || '').toLowerCase() === exName.toLowerCase());
-              if (!target?.user_exercise_id) continue;
-              const ueId = Number(target.user_exercise_id);
-              const currentSets = Array.isArray(target.sets) ? target.sets.length : 0;
-              for (let i = 0; i < currentSets; i += 1) await apiFetch(`/gymapi/day/${dayIndex}/exercise/${ueId}/set/remove_last`, { method: 'POST' });
+              const targetExerciseId = Number(target?.exercise_id || resolvedId || 0);
+              if (!targetExerciseId) continue;
               const sets = Math.max(1, Number(ex?.sets || 1));
               const reps = Math.max(0, Number(ex?.reps || 0));
               const seconds = Math.max(0, Number(ex?.seconds || 0));
               const weight = Math.max(0, Number(ex?.weight_kg || 0));
-              for (let i = 0; i < sets; i += 1) {
-                await apiFetch(`/gymapi/day/${dayIndex}/exercise/${ueId}/set/add`, {
-                  method: 'POST',
-                  body: JSON.stringify({ reps, seconds, weight_kg: weight }),
-                });
-              }
+              await apiFetch(`/gymapi/day/${dayIndex}/exercise/${targetExerciseId}/baseline`, {
+                method: 'POST',
+                body: JSON.stringify({ sets, reps, seconds, weight_kg: weight }),
+              });
+              await apiFetch(`/gymapi/day/${dayIndex}/exercise/${targetExerciseId}/ai_meta`, {
+                method: 'POST',
+                body: JSON.stringify({
+                  how_to: String(ex?.how_to || ''),
+                  sets,
+                  reps,
+                  seconds,
+                  weight_kg: weight,
+                  muscle_group: String(ex?.muscle_group || ex?.group || 'other'),
+                }),
+              });
             }
           }
 
@@ -9771,20 +9779,27 @@
               await apiFetch(`/gymapi/day/${dayIndex}/exercise/${oldItem.exercise_id}/toggle`, { method: 'POST' });
               continue;
             }
-            if (!target?.user_exercise_id) continue;
-            const ueId = Number(target.user_exercise_id);
-            const currentSets = Array.isArray(target.sets) ? target.sets.length : 0;
-            for (let i = 0; i < currentSets; i += 1) await apiFetch(`/gymapi/day/${dayIndex}/exercise/${ueId}/set/remove_last`, { method: 'POST' });
+            const targetExerciseId = Number(target?.exercise_id || exId || 0);
+            if (!targetExerciseId) continue;
             const sets = Math.max(1, Number(action.sets || 1));
             const reps = Math.max(0, Number(action.reps || 0));
             const seconds = Math.max(0, Number(action.seconds || 0));
             const weight = Math.max(0, Number(action.weight_kg || 0));
-            for (let i = 0; i < sets; i += 1) {
-              await apiFetch(`/gymapi/day/${dayIndex}/exercise/${ueId}/set/add`, {
-                method: 'POST',
-                body: JSON.stringify({ reps, seconds, weight_kg: weight }),
-              });
-            }
+            await apiFetch(`/gymapi/day/${dayIndex}/exercise/${targetExerciseId}/baseline`, {
+              method: 'POST',
+              body: JSON.stringify({ sets, reps, seconds, weight_kg: weight }),
+            });
+            await apiFetch(`/gymapi/day/${dayIndex}/exercise/${targetExerciseId}/ai_meta`, {
+              method: 'POST',
+              body: JSON.stringify({
+                how_to: String(action.how_to || ''),
+                sets,
+                reps,
+                seconds,
+                weight_kg: weight,
+                muscle_group: String(action.muscle_group || action.new_muscle_group || action.group || 'other'),
+              }),
+            });
           }
         }
         await loadSheet(state.dayIndex || 1);
@@ -9804,8 +9819,11 @@
           };
         }
         state.aiCoach.appliedByDay = applied;
-        toast('План от ИИ применён');
+        toast('Изменения применены');
         closeAiCoachSheet();
+        state.aiCoach.parsed = null;
+        state.aiCoach.decisions = {};
+        state.aiCoach.hasResponse = false;
       } catch (e) {
         toast(`Не удалось применить изменения: ${normalizeError(e).split('\n')[0].slice(0, 100)}`);
         throw e;
@@ -10666,27 +10684,43 @@
 
     function hasExerciseSourceMeta(exercise) {
       const meta = exercise?.source_meta || {};
-      return Number(meta.source_user_id || 0) > 0
+      return String(meta.source_kind || '').trim().length > 0
+        || Number(meta.source_user_id || 0) > 0
         || Number(meta.source_system_id || 0) > 0
         || Number(meta.source_exercise_id || 0) > 0
         || String(meta.source_exercise_name || '').trim().length > 0
+        || String(meta.how_to || '').trim().length > 0
         || Number(meta.sets_count || 0) > 0
         || Number(meta.reps || 0) > 0
+        || Number(meta.seconds || 0) > 0
         || Number(meta.weight_kg || 0) > 0;
+    }
+
+    function getSourceMetaButtonLabel(exercise) {
+      const meta = exercise?.source_meta || {};
+      if (String(meta.source_kind || '').toLowerCase() === 'ai') return 'Предложено ИИ (?)';
+      return 'Источник (?)';
     }
 
     function buildSourceMetaContent(exercise) {
       const meta = exercise?.source_meta || {};
+      const sourceKind = String(meta.source_kind || '').toLowerCase();
       const setsCount = Number(meta.sets_count || 0);
       const reps = Number(meta.reps || 0);
+      const seconds = Number(meta.seconds || 0);
       const weight = Number(meta.weight_kg || 0);
-      return `
-        <div class="source-meta-title">Источник упражнения</div>
-        <div class="source-meta-row"><span>Упражнение</span><b>${escapeHtml(meta.source_exercise_name || exercise?.name || '—')}</b></div>
-        <div class="source-meta-row"><span>Подходы</span><b>${setsCount || '—'}</b></div>
-        <div class="source-meta-row"><span>Повторы</span><b>${reps || '—'}</b></div>
-        <div class="source-meta-row"><span>Вес, кг</span><b>${weight ? Number(weight).toFixed(1).replace(/\.0$/, '') : '—'}</b></div>
-      `;
+      let html = '';
+      if (sourceKind === 'ai') {
+        html += `<div class="source-meta-title">Предложено ИИ</div>`;
+        if (meta.how_to) html += `<div class="source-meta-howto">${escapeHtml(meta.how_to)}</div>`;
+      } else {
+        html += `<div class="source-meta-title">Источник упражнения</div>`;
+        html += `<div class="source-meta-row"><span>Упражнение</span><b>${escapeHtml(meta.source_exercise_name || exercise?.name || '—')}</b></div>`;
+      }
+      html += `<div class="source-meta-row"><span>Подходы</span><b>${setsCount || '—'}</b></div>`;
+      html += `<div class="source-meta-row"><span>${seconds > 0 ? 'Время, сек' : 'Повторы'}</span><b>${seconds > 0 ? seconds : (reps || '—')}</b></div>`;
+      html += `<div class="source-meta-row"><span>Вес, кг</span><b>${weight ? Number(weight).toFixed(1).replace(/\.0$/, '') : '—'}</b></div>`;
+      return html;
     }
 
     function updateSheetSourceMeta(exercise) {
@@ -10704,6 +10738,7 @@
         return;
       }
       wrap.style.display = '';
+      btn.textContent = getSourceMetaButtonLabel(exercise);
       pop.innerHTML = buildSourceMetaContent(exercise);
       btn.onclick = (ev) => {
         ev.stopPropagation();

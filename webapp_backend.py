@@ -506,9 +506,34 @@ def _sanitize_ai_action(action: dict, *, max_day_index: int) -> dict | None:
         return _clip_text(s, max_len)
 
     def _norm_group(v):
-        s = str(v or "other").strip().lower()
+        s = str(v or "").strip().lower()
         s = re.sub(r"[^a-z0-9а-яё_\-\s]", "", s, flags=re.IGNORECASE)
-        return s or "other"
+        s = re.sub(r"\s+", " ", s).strip()
+
+        # allow user custom codes like u123
+        if re.fullmatch(r"u\d+", s):
+            return s
+
+        # direct known codes
+        if s in MG_NAMES:
+            return s
+
+        # ru/en synonyms -> known codes
+        alias = {
+            "грудь": "chest", "грудные": "chest",
+            "спина": "back",
+            "плечи": "shoulders", "дельты": "shoulders",
+            "бицепс": "biceps", "бицепсы": "biceps", "biceps": "biceps",
+            "трицепс": "triceps", "triceps": "triceps",
+            "руки": "biceps", "arms": "biceps",
+            "ноги": "legs", "legs": "legs", "квадрицепс": "legs", "бедра": "legs", "икры": "legs",
+            "пресс": "abs", "живот": "abs", "abs": "abs",
+            "другое": "other", "other": "other",
+        }
+        if s in alias:
+            return alias[s]
+
+        return "other"
 
     # общий reason
     reason = _clip_text(str(action.get("reason") or "").strip(), 220)
@@ -603,6 +628,7 @@ def _sanitize_ai_action(action: dict, *, max_day_index: int) -> dict | None:
         reps = _clamp_int(action.get("reps"), 0, 50, 10)
         seconds = _clamp_int(action.get("seconds"), 0, 600, 0)
         weight = _clamp_float(action.get("weight_kg"), 0.0, 500.0, 0.0)
+        how_to = _clip_text(str(action.get("how_to") or "").strip(), 280)
 
         if reps > 0 and seconds > 0:
             seconds = 0
@@ -619,6 +645,7 @@ def _sanitize_ai_action(action: dict, *, max_day_index: int) -> dict | None:
             "seconds": seconds,
             "weight_kg": weight,
             "reason": reason,
+            "how_to": how_to,
         }
 
     # legacy: replace_exercise (на всякий случай)
@@ -631,6 +658,7 @@ def _sanitize_ai_action(action: dict, *, max_day_index: int) -> dict | None:
         reps = _clamp_int(action.get("reps"), 0, 50, 10)
         seconds = _clamp_int(action.get("seconds"), 0, 600, 0)
         weight = _clamp_float(action.get("weight_kg"), 0.0, 500.0, 0.0)
+        how_to = _clip_text(str(action.get("how_to") or "").strip(), 280)
         if reps > 0 and seconds > 0:
             seconds = 0
         if reps == 0 and seconds == 0:
@@ -645,6 +673,7 @@ def _sanitize_ai_action(action: dict, *, max_day_index: int) -> dict | None:
             "seconds": seconds,
             "weight_kg": weight,
             "reason": reason,
+            "how_to": how_to,
         }
 
     return None
@@ -1010,12 +1039,28 @@ def _build_ai_system_prompt(mode: str) -> str:
 Режим replace_exercises:
 - Верни actions только типов: remove_exercise, add_exercise, update_sets.
 - Сначала предложи remove_exercise (красные), затем add_exercise (зелёные).
+Ключевые правила здравого смысла (важно):
+- Если запрос пользователя содержит слова типа "разгрузить", "делоад", "слегка уменьшить", "чуть меньше", "поменьше ног", "снизить нагрузку" — НЕ удаляй упражнения полностью.
+  Вместо remove_exercise используй update_sets и уменьшай объём на 20–40% (меньше подходов/повторов/веса), сохраняя упражнения.
+- remove_exercise разрешён только если пользователь явно просит "убрать/удалить полностью/исключить/не делать вообще" конкретную мышечную группу или упражнение.
+- Изменения должны распределяться по тренировочным дням:
+  если в current_plan есть 2+ тренировочных дня, НЕ концентрируй все добавления/изменения только в Day 1.
+  Делай изменения минимум в 2 разных днях (если дней >=2), и старайся улучшать КАЖДЫЙ день хотя бы одной правкой (update_sets/add/remove) если это уместно.
+- "Акцент на руки" не означает "руки только в первый день": добавляй/усиливай руки в 2–3 дня (в зависимости от количества дней), но сохраняй баланс и восстановление.
+- Всегда сохраняй логику сплита: не превращай план в случайный набор; не убирай полностью ноги/спину/базовые группы без явного запроса.
+- Если пользователь просит "разгрузить ноги", минимум оставь 1 упражнение на ноги в неделю (если не было прямого запроса убрать полностью), просто сделай его легче через update_sets.
+- Для каждого day_index работай только в пределах 1..кол-во дней в current_plan. Если у пользователя 3 дня — day_index должен быть 1..3.
+- Изменения должны быть логичны и рациональны и подобраны исходя из знаний о самых качественных тренировках.
 - Цель: улучшить план под запрос пользователя, не ломая логику сплита.
 Формат полей (важно):
 - Для type="remove_exercise": заполни old_exercise_name, а остальные поля выставь так:
   exercise_name="", muscle_group="", sets=0, reps=0, seconds=0, weight_kg=0, reason может быть "".
 - Для type="add_exercise" или "update_sets": заполни exercise_name/muscle_group/sets/reps/seconds/weight_kg, а old_exercise_name="".
 - Поле reason присутствует всегда (может быть пустым).
+Выбор типа действия (очень важно):
+- Когда цель — снизить нагрузку (разгрузить), почти всегда это update_sets.
+- Когда цель — заменить упражнение на более подходящее, это пара: remove_exercise + add_exercise (в одном и том же day_index).
+- Когда цель — добавить акцент без удаления, это add_exercise (и при необходимости update_sets на соседних упражнениях).
 """).strip()
 
     if mode == 'new_system':
@@ -1262,6 +1307,7 @@ def _ai_response_format_for_mode(mode: str) -> dict:
             'weight_kg': {'type': 'number', 'minimum': 0, 'maximum': 500},
             'old_exercise_name': {'type': 'string', 'maxLength': 120},
             'reason': {'type': 'string', 'maxLength': 220},
+            'how_to': {'type': 'string', 'maxLength': 280},
         }
 
         action_item = {
@@ -1890,13 +1936,17 @@ async def day_sheet(
         source_meta = exercise_sources.get(int(exercise_id), {}) if exercise_sources else {}
         if source_meta:
             exercise_payload["source_meta"] = {
+                "source_kind": str(source_meta.get("source_kind") or ""),
                 "source_user_id": int(source_meta.get("source_user_id") or 0),
                 "source_system_id": int(source_meta.get("source_system_id") or 0),
                 "source_exercise_id": int(source_meta.get("source_exercise_id") or 0),
                 "source_exercise_name": (source_meta.get("source_exercise_name") or name or "").strip(),
+                "how_to": _clip_text(str(source_meta.get("how_to") or "").strip(), 280),
                 "sets_count": int(source_meta.get("sets_count") or 0),
                 "reps": int(source_meta.get("reps") or 0),
+                "seconds": int(source_meta.get("seconds") or 0),
                 "weight_kg": float(source_meta.get("weight_kg") or 0.0),
+                "muscle_group": _clip_text(str(source_meta.get("muscle_group") or "").strip(), 40),
             }
         if normalized_group == "run":
             running_state = await _build_running_state(
@@ -2054,6 +2104,58 @@ async def toggle_day_exercise(
     await _require_catalog_exercise(exercise_id)
     enabled = await db.toggle_user_exercise(user_id, day_index, exercise_id)
     return {"ok": True, "enabled": bool(enabled)}
+
+
+@app.post("/day/{day_index}/exercise/{exercise_id}/baseline")
+async def set_day_exercise_baseline(
+    day_index: int,
+    exercise_id: int,
+    payload: dict = Body(...),
+    ctx: AuthCtx = Depends(get_auth_ctx),
+):
+    user_id = ctx.user_id
+    await _validate_day(user_id, day_index)
+    await _require_catalog_exercise(exercise_id)
+
+    sets = int(payload.get("sets") or 3)
+    reps = int(payload.get("reps") or 10)
+    seconds = int(payload.get("seconds") or 0)
+    weight_kg = float(payload.get("weight_kg") or 0)
+
+    # normalize: reps XOR seconds
+    if reps > 0 and seconds > 0:
+        seconds = 0
+    if reps == 0 and seconds == 0:
+        reps = 10
+
+    await db.set_baseline(user_id, day_index, exercise_id, sets, reps, seconds, weight_kg)
+    return {"ok": True}
+
+
+@app.post("/day/{day_index}/exercise/{exercise_id}/ai_meta")
+async def set_ai_meta_for_exercise(
+    day_index: int,
+    exercise_id: int,
+    payload: dict = Body(...),
+    ctx: AuthCtx = Depends(get_auth_ctx),
+):
+    user_id = ctx.user_id
+    await _validate_day(user_id, day_index)
+    await _require_catalog_exercise(exercise_id)
+    system_id = await get_active_training_system_id(user_id)
+
+    sp = {
+        "source_kind": "ai",
+        "how_to": str(payload.get("how_to") or "")[:280],
+        "sets_count": int(payload.get("sets") or 0),
+        "reps": int(payload.get("reps") or 0),
+        "seconds": int(payload.get("seconds") or 0),
+        "weight_kg": float(payload.get("weight_kg") or 0),
+        "muscle_group": str(payload.get("muscle_group") or "other")[:40],
+    }
+
+    await db.upsert_training_system_exercise_source(system_id, day_index, exercise_id, sp)
+    return {"ok": True}
 
 
 @app.post("/day/{day_index}/complete")
