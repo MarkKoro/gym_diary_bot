@@ -480,6 +480,17 @@ def _sanitize_ai_action(action: dict, *, max_day_index: int) -> dict | None:
     if not isinstance(action, dict):
         return None
 
+    # --- legacy unwrap: иногда AI присылает действие в виде {"create_system": {...}} ---
+    # Это НЕ меняет поведение для корректных ответов (где уже есть "type"),
+    # но спасает ответы старого/альтернативного формата.
+    if "type" not in action:
+        for k in ("create_system", "add_exercise", "remove_exercise", "update_sets", "replace_exercise"):
+            v = action.get(k)
+            if isinstance(v, dict):
+                action = dict(v)
+                action.setdefault("type", k)
+                break
+
     action_type = str(action.get("type") or "").strip()
     allowed = {"add_exercise", "remove_exercise", "update_sets", "create_system", "replace_exercise"}
     if action_type not in allowed:
@@ -710,37 +721,42 @@ def _sanitize_ai_action_plan(
 
     if mode == "new_system":
         create_actions = [a for a in clean_actions if a.get("type") == "create_system"]
+
+        # salvage: если create_system не распознался, попробуем восстановить из raw_actions
+        # (например, когда AI вернул create_system без поля type или в нестандартной форме)
+        if not create_actions:
+            for ra in raw_actions:
+                if not isinstance(ra, dict):
+                    continue
+
+                # вариант A: плоский объект с days/system_name без type
+                if isinstance(ra.get("days"), list) and isinstance(ra.get("system_name"), str):
+                    candidate = dict(ra)
+                    candidate.setdefault("type", "create_system")
+                    fixed = _sanitize_ai_action(candidate, max_day_index=max_day_index)
+                    if fixed and fixed.get("type") == "create_system":
+                        create_actions = [fixed]
+                        warnings.append("AI вернул create_system в нестандартном формате; автоматически исправлено.")
+                        break
+
         if not create_actions:
             return {"actions": []}, ["Для режима new_system не найдено валидного create_system действия."]
+
         picked = create_actions[0]
 
-        target_days = int(expected_new_system_days or 0)
-        if target_days < 2 or target_days > 7:
-            target_days = int(workouts_per_week or 0)
-        if target_days < 2 or target_days > 7:
-            target_days = max(2, min(7, int(active_day_count or 3) or 3))
-
+        # доп. нормализация количества дней (не блокирует применение)
+        expected_days = int(workouts_per_week or 0) if int(workouts_per_week or 0) > 0 else max(1, int(active_day_count or 3))
         days = picked.get("days") if isinstance(picked.get("days"), list) else []
         days = [d for d in days if isinstance(d, dict) and isinstance(d.get("exercises"), list) and d.get("exercises")]
         days.sort(key=lambda x: int(x.get("day_index") or 0))
-
-        if len(days) > target_days:
-            days = days[:target_days]
+        if len(days) > 7:
+            warnings.append(f"AI вернул {len(days)} дней, ограничено до 7.")
+            days = days[:7]
         if len(days) < 2:
-            return {"actions": []}, ["Для режима new_system недостаточно валидных дней в ответе AI (минимум 2)."]
-
-        while len(days) < target_days:
-            days.append({"day_index": len(days) + 1, "title": "", "exercises": []})
-
-        normalized_days: list[dict] = []
-        for idx, day in enumerate(days, start=1):
-            normalized_days.append({
-                "day_index": idx,
-                "title": _clip_text(str(day.get("title") or "").strip(), 40),
-                "exercises": day.get("exercises") if isinstance(day.get("exercises"), list) else [],
-            })
-
-        picked["days"] = normalized_days
+            warnings.append("AI вернул слишком мало дней новой системы; рекомендуется минимум 2.")
+        if len(days) and len(days) != expected_days:
+            warnings.append(f"AI предложил {len(days)} дней вместо нормы {expected_days}; это допустимо, но проверь логику сплита.")
+        picked["days"] = days
         return {"actions": [picked]}, warnings
 
     # replace_exercises
@@ -1132,7 +1148,9 @@ muscle_group:
 
 Жёсткие правила:
 - Верни ровно ОДНО действие create_system в action_plan.actions (один объект).
-- Количество тренировочных дней = target_days из контекста (это согласованная норма в диапазоне 2..7 и с учётом запроса пользователя).
+- Если в user_message явно указано количество тренировочных дней (например: "4 дня", "4 тренировки", "четыре дня") — используй именно это число (2..7).
+- Иначе количество тренировочных дней = workouts_per_week из профиля (если есть). Если нет — используй столько, сколько дней в current_plan (или 3 по умолчанию).
+- day_index должен быть подряд: 1..D без пропусков, где D = число тренировочных дней.
 - Каждый день должен быть самодостаточным: 5–8 упражнений (если full-body) или 4–7 (если сплит), без дублирования одного и того же упражнения дважды в один день.
 - Не делай “всё на руки” при запросе массы: масса = база + прогрессия + умеренный объём.
 - Для массы: приоритет базовым движениям, но с понятной нагрузкой; избегай экстремальных объёмов.
