@@ -2348,7 +2348,6 @@
           <select id="aiCoachMode" class="settings-select">
             <option value="replace_exercises">Попросить новые упражнения</option>
             <option value="new_system">Попросить новую систему</option>
-            <option value="adjust_sets">Изменить количество подходов</option>
             <option value="mistakes_analysis">Анализ ошибок</option>
           </select>
           <div id="aiCoachRetryCounter" class="ai-coach-counter hidden">Ещё запросов сегодня: 2 из 3</div>
@@ -9249,7 +9248,11 @@
       document.body.classList.add('drawer-open', 'ai-coach-open');
       sheet.classList.add('show');
       const modeEl = document.getElementById('aiCoachMode');
-      if (modeEl) modeEl.value = state.aiCoach.mode || 'replace_exercises';
+      const allowedModes = new Set(['replace_exercises', 'new_system', 'mistakes_analysis']);
+      if (!allowedModes.has(String(state.aiCoach.mode || ''))) {
+        state.aiCoach.mode = 'replace_exercises';
+      }
+      if (modeEl) modeEl.value = state.aiCoach.mode;
       renderAiCoachExamples();
       updateAiCoachCounter();
       renderAiCoachResult();
@@ -9294,14 +9297,6 @@
           examples: [
             'Собери новую систему на 3 тренировки в неделю для набора мышечной массы.',
             'Хочу новую программу с упором на силовой прогресс и минимумом упражнений с осевой нагрузкой.'
-          ],
-        },
-        adjust_sets: {
-          placeholder: 'Опиши, как хочешь изменить объём/интенсивность',
-          title: 'Подходящие формулировки:',
-          examples: [
-            'Слишком устаю к концу недели — перераспредели подходы, чтобы восстановление было лучше.',
-            'Хочу аккуратно повысить нагрузку в базовых упражнениях на ближайшие 2 недели.'
           ],
         },
         mistakes_analysis: {
@@ -9616,20 +9611,26 @@
       const mode = String(state.aiCoach.mode || 'replace_exercises');
       const hasStructured = renderAiCoachStructuredResult(structuredEl);
 
-      const text = (mode === 'mistakes_analysis' || !hasStructured) ? buildAiCoachPreviewText() : '';
+      const text = (mode === 'mistakes_analysis')
+        ? String(state.aiCoach.answerText || '').trim()
+        : (!hasStructured ? buildAiCoachPreviewText() : '');
       answerEl.textContent = text || '';
       answerEl.classList.toggle('hidden', !text);
 
-      const summary = mode === 'mistakes_analysis' ? (state.aiCoach.summary || '').trim() : '';
-      summaryEl.textContent = summary;
-      summaryEl.classList.toggle('hidden', !summary);
-
-      const rationale = mode === 'mistakes_analysis' && Array.isArray(state.aiCoach.rationale) ? state.aiCoach.rationale.filter(Boolean) : [];
+      const summary = mode === 'mistakes_analysis' ? '' : (state.aiCoach.summary || '').trim();
+      const rationale = mode === 'mistakes_analysis' ? [] : (Array.isArray(state.aiCoach.rationale) ? state.aiCoach.rationale.filter(Boolean) : []);
       const warnings = Array.isArray(state.aiCoach.warnings) ? state.aiCoach.warnings.filter(Boolean) : [];
-      const rationaleItems = rationale.map((item) => `<li>${escapeHtml(String(item))}</li>`).join('');
-      const warningItems = warnings.map((item) => `<li>⚠️ ${escapeHtml(String(item))}</li>`).join('');
-      rationaleEl.innerHTML = `${warningItems}${rationaleItems}`;
-      rationaleEl.classList.toggle('hidden', !(rationale.length || warnings.length));
+      if (mode === 'mistakes_analysis') {
+        summaryEl.classList.add('hidden');
+        rationaleEl.classList.add('hidden');
+      } else {
+        summaryEl.textContent = summary;
+        summaryEl.classList.toggle('hidden', !summary);
+        const rationaleItems = rationale.map((item) => `<li>${escapeHtml(String(item))}</li>`).join('');
+        const warningItems = warnings.map((item) => `<li>⚠️ ${escapeHtml(String(item))}</li>`).join('');
+        rationaleEl.innerHTML = `${warningItems}${rationaleItems}`;
+        rationaleEl.classList.toggle('hidden', !(rationale.length || warnings.length));
+      }
 
       const allActions = Array.isArray(state.aiCoach.parsed?.actions) ? state.aiCoach.parsed.actions : [];
       const hasPlan = Boolean(state.aiCoach.parsed && allActions.length);
