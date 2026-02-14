@@ -123,12 +123,12 @@
     .ai-coach-fullscreen .sheet-handle { display: none; }
     .ai-coach-fullscreen .sheet-title { font-size: 20px; margin-bottom: 4px; }
     .ai-coach-subtitle { font-size: 13px; color: var(--muted); margin-bottom: 4px; }
-    .ai-coach-main { display: flex; flex-direction: column; gap: 10px; min-height: 0; flex: 1; }
+    .ai-coach-main { display: flex; flex-direction: column; gap: 10px; min-height: 0; flex: 1; overflow: hidden; }
     .ai-coach-toolbar { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
     .ai-coach-counter { font-size: 12px; color: var(--muted); padding: 6px 10px; border-radius: 999px; border: 1px solid var(--border); background: var(--bg); }
     .ai-coach-response-wrap {
       flex: 1;
-      min-height: 0;
+      min-height: clamp(320px, 56dvh, 760px);
       display: grid;
       gap: 8px;
       grid-template-rows: minmax(0, 1fr);
@@ -144,7 +144,7 @@
     }
     .ai-coach-title { font-size: 15px; font-weight: 700; user-select: text; -webkit-user-select: text; }
     .ai-coach-list { margin: 0; padding-left: 18px; color: var(--text); font-size: 14px; line-height: 1.45; display: grid; gap: 5px; user-select: text; -webkit-user-select: text; }
-    .ai-coach-result-scroll { min-height: 0; overflow: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; display: grid; gap: 8px; align-content: start; }
+    .ai-coach-result-scroll { min-height: 0; overflow: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; display: grid; gap: 8px; align-content: start; padding-bottom: 10px; }
     .ai-coach-result-scroll:empty { overflow: hidden; }
     .ai-coach-structured { display: grid; gap: 10px; }
     .ai-day-card { border: 1px solid var(--border); border-radius: 12px; padding: 10px; display: grid; gap: 10px; background: color-mix(in srgb, var(--card) 82%, var(--bg)); }
@@ -2375,8 +2375,7 @@
         </div>
         <div id="aiCoachApplyFrame" class="ai-coach-apply-frame hidden">
         <div id="aiCoachApplyRow" class="ai-coach-actions hidden">
-          <button class="btn" id="aiCoachApplyCurrentBtn">Применить изменения</button>
-          <button class="btn" id="aiCoachApplyAllBtn">Просто применить изменения</button>
+          <button class="btn" id="aiCoachApplyAllBtn">Применить все изменения</button>
           <button class="btn hidden" id="aiCoachCopySystemBtn">Скопировать систему</button>
         </div>
         </div>
@@ -2687,7 +2686,7 @@
       isTelegram: false,
       isAdmin: false,
       systemSheetOpen: false,
-      aiCoach: { open: false, loading: false, mode: 'replace_exercises', answerText: '', parsed: null, summary: '', rationale: [], retriesUsed: 0, maxRetries: 3, rejectedVariants: [], hasResponse: false, requestDayKey: '', appliedByDay: {}, warnings: [], decisions: {}, replaceDayCursor: 1 },
+      aiCoach: { open: false, loading: false, mode: 'replace_exercises', answerText: '', parsed: null, summary: '', rationale: [], retriesUsed: 0, maxRetries: 3, rejectedVariants: [], hasResponse: false, requestDayKey: '', appliedByDay: {}, warnings: [], decisions: {}, done: {}, replaceDayCursor: 1 },
       subscription: { loading: false, active: false, activePlan: null, activeExpiresAt: null, plans: [], features: [], payment: { checking: false, paymentId: null } },
       paywall: { open: false, reason: '' },
       productivitySheetOpen: false,
@@ -9265,7 +9264,9 @@
     function scrollAiCoachToAnswer() {
       const resultScroll = document.getElementById('aiCoachResultScroll');
       if (!resultScroll) return;
+      const sheet = document.querySelector('#aiCoachSheet .sheet');
       requestAnimationFrame(() => {
+        if (sheet) sheet.scrollTop = sheet.scrollHeight;
         resultScroll.scrollTop = resultScroll.scrollHeight;
       });
     }
@@ -9275,7 +9276,6 @@
       const askBtn = document.getElementById('aiCoachAskBtn');
       const modeEl = document.getElementById('aiCoachMode');
       const inputEl = document.getElementById('aiCoachInput');
-      const applyCurrentBtn = document.getElementById('aiCoachApplyCurrentBtn');
       const applyAllBtn = document.getElementById('aiCoachApplyAllBtn');
       const copySystemBtn = document.getElementById('aiCoachCopySystemBtn');
       const loadingOverlay = document.getElementById('aiCoachLoadingOverlay');
@@ -9292,7 +9292,6 @@
       }
       if (modeEl) modeEl.disabled = state.aiCoach.loading;
       if (inputEl) inputEl.disabled = state.aiCoach.loading;
-      if (applyCurrentBtn) applyCurrentBtn.disabled = state.aiCoach.loading;
       if (applyAllBtn) applyAllBtn.disabled = state.aiCoach.loading;
       if (copySystemBtn) copySystemBtn.disabled = state.aiCoach.loading;
       if (loadingOverlay) loadingOverlay.classList.toggle('hidden', !state.aiCoach.loading);
@@ -9413,6 +9412,34 @@
       return val !== false;
     }
 
+    function getAiCoachPendingDays(actions) {
+      const byDay = new Map();
+      actions.forEach((action, idx) => {
+        if (!action || String(action.type || '') === 'create_system') return;
+        const type = String(action.type || '');
+        if (!['replace_exercise', 'remove_exercise', 'add_exercise'].includes(type)) return;
+        const key = getAiActionDecisionKey(action, idx);
+        if (state.aiCoach.done?.[key] === true) return;
+        const day = Number(action.day_index || 1);
+        if (!byDay.has(day)) byDay.set(day, []);
+        byDay.get(day).push({ action, idx, key });
+      });
+      const days = [...byDay.keys()].sort((a, b) => a - b);
+      return { byDay, days };
+    }
+
+    function syncAiCoachDayCursor(actions) {
+      const mode = String(state.aiCoach.mode || 'replace_exercises');
+      if (mode !== 'replace_exercises') return false;
+      const { days } = getAiCoachPendingDays(actions);
+      if (!days.length) return false;
+      const current = Number(state.aiCoach.replaceDayCursor || days[0]);
+      if (days.includes(current)) return false;
+      const nextDay = days.find((d) => d > current) || days[0];
+      state.aiCoach.replaceDayCursor = nextDay;
+      return true;
+    }
+
     function renderAiCoachStructuredResult(container) {
       const actions = Array.isArray(state.aiCoach.parsed?.actions) ? state.aiCoach.parsed.actions : [];
       if (!container) return false;
@@ -9424,9 +9451,11 @@
       const byDay = new Map();
       actions.forEach((action, idx) => {
         if (!action || String(action.type || '') === 'create_system') return;
+        const key = getAiActionDecisionKey(action, idx);
+        if (state.aiCoach.done?.[key] === true) return;
         const day = Number(action.day_index || 1);
         if (!byDay.has(day)) byDay.set(day, []);
-        byDay.get(day).push({ action, idx });
+        byDay.get(day).push({ action, idx, key });
       });
       const createAction = actions.find((a) => String(a?.type || '') === 'create_system');
       if (createAction && Array.isArray(createAction.days)) {
@@ -9435,7 +9464,11 @@
           const exs = Array.isArray(day?.exercises) ? day.exercises : [];
           exs.forEach((ex, idx) => {
             if (!byDay.has(dayIndex)) byDay.set(dayIndex, []);
-            byDay.get(dayIndex).push({ action: { type: 'add_exercise', day_index: dayIndex, ...ex }, idx: 1000 + idx + dayIndex * 100 });
+            const action = { type: 'add_exercise', day_index: dayIndex, ...ex };
+            const syntheticIdx = 1000 + idx + dayIndex * 100;
+            const key = getAiActionDecisionKey(action, syntheticIdx);
+            if (state.aiCoach.done?.[key] === true) return;
+            byDay.get(dayIndex).push({ action, idx: syntheticIdx, key });
           });
         });
       }
@@ -9443,6 +9476,22 @@
       const mode = String(state.aiCoach.mode || 'replace_exercises');
       const minDay = allDays[0] || 1;
       const maxDay = allDays[allDays.length - 1] || 1;
+      if (mode === 'replace_exercises' && allDays.length) {
+        const pendingDays = allDays.filter((day) => {
+          const items = byDay.get(day) || [];
+          return items.some(({ action, idx }) => {
+            const type = String(action?.type || '');
+            if (!['replace_exercise', 'remove_exercise', 'add_exercise'].includes(type)) return false;
+            return state.aiCoach.done?.[getAiActionDecisionKey(action, idx)] !== true;
+          });
+        });
+        if (pendingDays.length) {
+          const currentCursor = Number(state.aiCoach.replaceDayCursor || pendingDays[0]);
+          if (!pendingDays.includes(currentCursor)) {
+            state.aiCoach.replaceDayCursor = pendingDays.find((d) => d > currentCursor) || pendingDays[0];
+          }
+        }
+      }
       const cursor = Math.min(maxDay, Math.max(minDay, Number(state.aiCoach.replaceDayCursor || minDay)));
       state.aiCoach.replaceDayCursor = cursor;
       const visibleDays = mode === 'replace_exercises' ? allDays.filter((d) => d === cursor) : allDays;
@@ -9450,17 +9499,17 @@
 
       const blocks = visibleDays.map((day) => {
         const items = byDay.get(day) || [];
-        const rows = items.map(({ action, idx }) => {
+        const rows = items.map(({ action, idx, key }) => {
           const type = String(action?.type || '');
           const apply = shouldApplyAiAction(action, idx);
           if (type === 'replace_exercise') {
-            return `<div class="ai-action-item remove"><div class="title">Удалить: ${escapeHtml(String(action.old_exercise_name || 'Упражнение'))}</div><div class="hint">День ${day}</div><div class="ai-choice-row"><button class="btn ${apply ? 'selected' : ''}" data-ai-decision="apply" data-ai-idx="${idx}">✓ Удалить</button><button class="btn ${!apply ? 'selected' : ''}" data-ai-decision="skip" data-ai-idx="${idx}">✕ Оставить</button></div></div><div class="ai-action-item add"><div class="title">Добавить: ${escapeHtml(String(action.new_exercise_name || 'Упражнение'))}</div><div class="hint">${Number(action.sets || 0)}×${Number(action.reps || 0)}</div></div>`;
+            return `<div class="ai-action-item remove"><div class="title">Удалить: ${escapeHtml(String(action.old_exercise_name || 'Упражнение'))}</div><div class="hint">День ${day}</div><div class="ai-choice-row"><button class="btn ${apply ? 'selected' : ''}" data-ai-decision="apply" data-ai-key="${key}" data-ai-idx="${idx}">✓ Удалить</button><button class="btn ${!apply ? 'selected' : ''}" data-ai-decision="skip" data-ai-key="${key}" data-ai-idx="${idx}">✕ Оставить</button></div></div><div class="ai-action-item add"><div class="title">Добавить: ${escapeHtml(String(action.new_exercise_name || 'Упражнение'))}</div><div class="hint">${Number(action.sets || 0)}×${Number(action.reps || 0)}</div></div>`;
           }
           if (type === 'remove_exercise') {
-            return `<div class="ai-action-item remove"><div class="title">Удалить: ${escapeHtml(String(action.old_exercise_name || 'Упражнение'))}</div><div class="hint">День ${day}</div><div class="ai-choice-row"><button class="btn ${apply ? 'selected' : ''}" data-ai-decision="apply" data-ai-idx="${idx}">✓ Удалить</button><button class="btn ${!apply ? 'selected' : ''}" data-ai-decision="skip" data-ai-idx="${idx}">✕ Оставить</button></div></div>`;
+            return `<div class="ai-action-item remove"><div class="title">Удалить: ${escapeHtml(String(action.old_exercise_name || 'Упражнение'))}</div><div class="hint">День ${day}</div><div class="ai-choice-row"><button class="btn ${apply ? 'selected' : ''}" data-ai-decision="apply" data-ai-key="${key}" data-ai-idx="${idx}">✓ Удалить</button><button class="btn ${!apply ? 'selected' : ''}" data-ai-decision="skip" data-ai-key="${key}" data-ai-idx="${idx}">✕ Оставить</button></div></div>`;
           }
           if (type === 'add_exercise') {
-            return `<div class="ai-action-item add"><div class="title">Добавить: ${escapeHtml(String(action.exercise_name || 'Упражнение'))}</div><div class="hint">${Number(action.sets || 0)}×${Number(action.reps || 0)}</div><div class="ai-choice-row"><button class="btn ${apply ? 'selected' : ''}" data-ai-decision="apply" data-ai-idx="${idx}">✓ Добавить</button><button class="btn ${!apply ? 'selected' : ''}" data-ai-decision="skip" data-ai-idx="${idx}">✕ Пропустить</button></div></div>`;
+            return `<div class="ai-action-item add"><div class="title">Добавить: ${escapeHtml(String(action.exercise_name || 'Упражнение'))}</div><div class="hint">${Number(action.sets || 0)}×${Number(action.reps || 0)}</div><div class="ai-choice-row"><button class="btn ${apply ? 'selected' : ''}" data-ai-decision="apply" data-ai-key="${key}" data-ai-idx="${idx}">✓ Добавить</button><button class="btn ${!apply ? 'selected' : ''}" data-ai-decision="skip" data-ai-key="${key}" data-ai-idx="${idx}">✕ Пропустить</button></div></div>`;
           }
           if (type === 'update_sets') {
             return `<div class="ai-action-item sets"><div class="title">${escapeHtml(String(action.exercise_name || 'Упражнение'))}</div><div class="hint">Рекомендация: ${Number(action.sets || 0)}×${Number(action.reps || 0)}${Number(action.weight_kg || 0) ? `, ${Number(action.weight_kg || 0)} кг` : ''}</div></div>`;
@@ -9501,21 +9550,29 @@
       rationaleEl.innerHTML = `${warningItems}${rationaleItems}`;
       rationaleEl.classList.toggle('hidden', !(rationale.length || warnings.length));
 
-      const hasPlan = Boolean(state.aiCoach.parsed && Array.isArray(state.aiCoach.parsed.actions) && state.aiCoach.parsed.actions.length);
+      const allActions = Array.isArray(state.aiCoach.parsed?.actions) ? state.aiCoach.parsed.actions : [];
+      const hasPlan = Boolean(state.aiCoach.parsed && allActions.length);
+      const { days: pendingDays } = getAiCoachPendingDays(allActions);
+      const allDone = hasPlan && !pendingDays.length;
       const isMistakes = mode === 'mistakes_analysis';
       const responseWrap = document.getElementById('aiCoachResponseWrap');
       const hasTextualContent = Boolean(text || summary || rationale.length || warnings.length);
       if (responseWrap) responseWrap.classList.toggle('hidden', !(state.aiCoach.loading || state.aiCoach.hasResponse || hasStructured || hasTextualContent));
       applyRow.classList.toggle('hidden', !hasPlan || isMistakes);
+      if (allDone && mode === 'replace_exercises') {
+        structuredEl.innerHTML = '<div class="timer-hint">Все рекомендации разобраны. Можно применять изменения.</div>';
+        structuredEl.classList.remove('hidden');
+      }
       if (copyBtn) copyBtn.classList.toggle('hidden', mode !== 'new_system');
       const applyFrame = document.getElementById('aiCoachApplyFrame');
       if (applyFrame) applyFrame.classList.toggle('hidden', !hasPlan || isMistakes);
-      const applyBtn = document.getElementById('aiCoachApplyCurrentBtn');
-      if (applyBtn) applyBtn.classList.toggle('hidden', mode === 'new_system');
       const applyAllBtn = document.getElementById('aiCoachApplyAllBtn');
-      if (applyAllBtn) applyAllBtn.classList.toggle('hidden', mode === 'new_system' || isMistakes);
+      if (applyAllBtn) applyAllBtn.classList.toggle('hidden', isMistakes);
       renderAiCoachExamples();
       if (state.aiCoach.hasResponse || hasStructured) scrollAiCoachToAnswer();
+      if (allDone) {
+        document.getElementById('aiCoachApplyAllBtn')?.focus();
+      }
       updateAiCoachCounter();
     }
 
@@ -9538,6 +9595,7 @@
       state.aiCoach.requestDayKey = currentDayKey;
       state.aiCoach.mode = mode;
       state.aiCoach.decisions = {};
+      state.aiCoach.done = {};
       state.aiCoach.replaceDayCursor = 1;
       state.aiCoach.answerText = '';
       state.aiCoach.summary = '';
@@ -9558,6 +9616,7 @@
         const rawPlan = data.parsed_action_plan || null;
         const normalizedActions = normalizeAiCoachActions(rawPlan, mode);
         state.aiCoach.parsed = rawPlan ? { ...rawPlan, actions: normalizedActions } : null;
+        state.aiCoach.done = {};
         state.aiCoach.warnings = Array.isArray(data.action_plan_warnings) ? data.action_plan_warnings.filter(Boolean) : [];
         if (retry) state.aiCoach.retriesUsed += 1;
         state.aiCoach.hasResponse = true;
@@ -9697,19 +9756,19 @@
               const oldName = String(action.old_exercise_name || '').trim().toLowerCase();
               const oldItem = Array.from(state.exercises.values()).find((x) => Number(x.exercise_id || 0) === oldExId)
                 || Array.from(state.exercises.values()).find((x) => String(x.name || '').toLowerCase() === oldName);
-              if (oldItem?.user_exercise_id) {
-                await apiFetch(`/gymapi/day/${dayIndex}/exercise/${oldItem.user_exercise_id}/toggle`, { method: 'POST' });
+              if (oldItem?.exercise_id) {
+                await apiFetch(`/gymapi/day/${dayIndex}/exercise/${oldItem.exercise_id}/toggle`, { method: 'POST' });
               }
             }
             if (type === 'remove_exercise') {
               const oldName = String(action.old_exercise_name || '').trim();
               const list = Array.from(state.exercises.values());
               const oldItem = list.find((ex) => String(ex.name || '').trim() === oldName);
-              if (!oldItem?.user_exercise_id) {
+              if (!oldItem?.exercise_id) {
                 toast(`Не найдено упражнение для удаления: ${oldName}`);
                 continue;
               }
-              await apiFetch(`/gymapi/day/${dayIndex}/exercise/${oldItem.user_exercise_id}/toggle`, { method: 'POST' });
+              await apiFetch(`/gymapi/day/${dayIndex}/exercise/${oldItem.exercise_id}/toggle`, { method: 'POST' });
               continue;
             }
             if (!target?.user_exercise_id) continue;
@@ -10046,6 +10105,7 @@
         state.aiCoach.rationale = [];
         state.aiCoach.warnings = [];
         state.aiCoach.decisions = {};
+        state.aiCoach.done = {};
         state.aiCoach.replaceDayCursor = 1;
         renderAiCoachExamples();
         renderAiCoachResult();
@@ -10055,20 +10115,19 @@
         const retry = state.aiCoach.hasResponse && state.aiCoach.requestDayKey === getAiCoachDayKey();
         askAiCoach({ retry }).catch(console.error);
       });
-      document.getElementById('aiCoachApplyCurrentBtn').addEventListener('click', () => applyAiCoachPlan().catch(console.error));
-      document.getElementById('aiCoachApplyAllBtn').addEventListener('click', () => applyAiCoachPlan({ forceAll: true }).catch(console.error));
+      document.getElementById('aiCoachApplyAllBtn').addEventListener('click', () => applyAiCoachPlan().catch(console.error));
       document.getElementById('aiCoachCopySystemBtn').addEventListener('click', () => applyAiCoachPlan().catch(console.error));
       document.getElementById('aiCoachResultScroll').addEventListener('click', (e) => {
         const btn = e.target.closest('[data-ai-decision]');
         if (btn) {
-          const idx = Number(btn.dataset.aiIdx || -1);
+          const key = String(btn.dataset.aiKey || '').trim();
+          if (!key) return;
+          state.aiCoach.decisions[key] = btn.dataset.aiDecision === 'apply';
+          state.aiCoach.done[key] = true;
           const actions = Array.isArray(state.aiCoach.parsed?.actions) ? state.aiCoach.parsed.actions : [];
-          if (idx >= 0 && idx < actions.length) {
-            const action = actions[idx];
-            const key = getAiActionDecisionKey(action, idx);
-            state.aiCoach.decisions[key] = btn.dataset.aiDecision === 'apply';
-            renderAiCoachResult();
-          }
+          const cursorChanged = syncAiCoachDayCursor(actions);
+          renderAiCoachResult();
+          if (cursorChanged) scrollAiCoachToAnswer();
           return;
         }
         if (e.target.closest('#aiPrevDayBtn')) {
