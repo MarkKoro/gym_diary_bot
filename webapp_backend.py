@@ -708,7 +708,6 @@ def _sanitize_ai_action_plan(plan: dict | None, mode: str, *, workouts_per_week:
         picked = create_actions[0]
 
         # доп. нормализация количества дней
-        expected_days = int(workouts_per_week or 0) if int(workouts_per_week or 0) > 0 else max(1, int(active_day_count or 3))
         days = picked.get("days") if isinstance(picked.get("days"), list) else []
         days = [d for d in days if isinstance(d, dict) and isinstance(d.get("exercises"), list) and d.get("exercises")]
         days.sort(key=lambda x: int(x.get("day_index") or 0))
@@ -717,17 +716,8 @@ def _sanitize_ai_action_plan(plan: dict | None, mode: str, *, workouts_per_week:
             days = days[:7]
         if len(days) < 2:
             warnings.append("AI вернул слишком мало дней новой системы; рекомендуется минимум 2.")
-        if len(days) and len(days) != expected_days:
-            warnings.append(f"AI предложил {len(days)} дней вместо нормы {expected_days}; это допустимо, но проверь логику сплита.")
         picked["days"] = days
         return {"actions": [picked]}, warnings
-
-    if mode == "adjust_sets":
-        upd = [a for a in clean_actions if a.get("type") == "update_sets"]
-        if not upd:
-            return {"actions": []}, ["Для режима adjust_sets не найдено валидных update_sets действий."]
-        # ограничим размер
-        return {"actions": upd[:40]}, warnings
 
     # replace_exercises
     allowed = {"add_exercise", "remove_exercise", "update_sets", "replace_exercise"}
@@ -1112,30 +1102,6 @@ muscle_group:
 
 """).strip()
 
-    if mode == 'adjust_sets':
-        return (common + """
-Ты — AI Coach. Твоя задача: изменить параметры нагрузки (sets/reps/seconds/weight_kg) у текущих упражнений без перестройки плана. Никаких remove/add. Только update_sets.
-
-Жёсткие правила:
-muscle_group:
-- Старайся возвращать КОД группы: chest/back/shoulders/biceps/triceps/legs/abs/other (или u123 для пользовательских).
-- Если не уверен в коде — верни русское слово ("бицепс", "спина" и т.д.), система нормализует.(точно убедиться что система сможет эта нормализовать, абсолютно каждую группу мышц)
-- actions содержит только type="update_sets".
-- Работай по всем дням, которые существуют (day_index 1..N).
-- Если пользователь просит "чуть сложнее/чуть легче" — меняй объём умеренно:
-  - легче: -15%..-30% по объёму (sets/reps/weight)
-  - сложнее: +10%..+20%
-- Если просит "масса" — предпочтение 6–12 повторений, если "сила" — 3–6 повторений (но не всегда).
-
-Формат update_sets:
-- day_index обязателен
-- exercise_name — возьми из текущего плана, не придумывай новое
-- sets/reps/seconds/weight_kg — заполни
-- old_exercise_name="" (пусто)
-- reason можно пусто
-- how_to можно пусто
-""").strip()
-
     return (common + """
 Ты — AI Coach. Режим mistakes_analysis: дай короткий, практичный разбор ошибок/рисков и что улучшить. Никаких действий, не меняй план.
 
@@ -1147,7 +1113,11 @@ muscle_group:
 """).strip()
 
 
-async def _call_openai_chat(system_prompt: str, user_prompt: str, *, mode: str) -> dict:
+async def _call_openai_chat(
+    system_prompt: str,
+    user_prompt: str,
+    response_format_override: dict | None = {'type': 'json_object'},
+) -> dict:
     openai_api_key = get_openai_api_key()
     if not openai_api_key:
         raise HTTPException(status_code=503, detail='OPENAI_API_KEY не задан')
@@ -1155,19 +1125,17 @@ async def _call_openai_chat(system_prompt: str, user_prompt: str, *, mode: str) 
     if not openai_model:
         raise HTTPException(status_code=503, detail='OPENAI_MODEL не задан')
 
-    limits = _ai_limits_for_mode(mode)
-    response_format = _ai_response_format_for_mode(mode)
-
     payload = {
         'model': openai_model,
-        'temperature': float(limits['temperature']),
+        'temperature': 0.4,
         'messages': [
             {'role': 'system', 'content': system_prompt},
             {'role': 'user', 'content': user_prompt},
         ],
-        'response_format': response_format,
-        'max_tokens': int(limits['max_tokens']),
+        'max_tokens': 3200,
     }
+    if response_format_override is not None:
+        payload['response_format'] = response_format_override
     headers = {
         'Authorization': f'Bearer {openai_api_key}',
         'Content-Type': 'application/json',
@@ -1202,8 +1170,6 @@ def _ai_limits_for_mode(mode: str) -> dict:
         return {'max_tokens': 2200, 'temperature': 0.35}
     if mode == 'replace_exercises':
         return {'max_tokens': 1600, 'temperature': 0.35}
-    if mode == 'adjust_sets':
-        return {'max_tokens': 1200, 'temperature': 0.30}
     return {'max_tokens': 900, 'temperature': 0.45}
 
 
@@ -1343,14 +1309,6 @@ def _ai_response_format_for_mode(mode: str) -> dict:
             'minItems': 1,
             'maxItems': 1,
             'items': defs['create_system'],
-        }
-    elif mode == 'adjust_sets':
-        root = json.loads(json.dumps(root, ensure_ascii=False))
-        root['properties']['action_plan']['properties']['actions'] = {
-            'type': 'array',
-            'minItems': 1,
-            'maxItems': 40,
-            'items': defs['update_sets'],
         }
     else:
         root = json.loads(json.dumps(root, ensure_ascii=False))
@@ -4932,9 +4890,9 @@ async def ai_coach_query(payload: dict = Body(default_factory=dict), ctx: AuthCt
 
     mode = str(payload.get('mode') or 'mistakes_analysis').strip()
     user_message = _clip_text(str(payload.get('message') or '').strip(), 1800)
-    if mode not in {'replace_exercises', 'new_system', 'adjust_sets', 'mistakes_analysis'}:
+    if mode not in {'replace_exercises', 'new_system', 'mistakes_analysis'}:
         raise HTTPException(status_code=400, detail='Неподдерживаемый AI-режим')
-    if mode in {'replace_exercises', 'new_system', 'adjust_sets'} and not user_message:
+    if mode in {'replace_exercises', 'new_system'} and not user_message:
         raise HTTPException(status_code=400, detail='Опиши, что хочешь улучшить')
 
     rejected_variants = payload.get('rejected_variants')
@@ -4968,12 +4926,34 @@ async def ai_coach_query(payload: dict = Body(default_factory=dict), ctx: AuthCt
     )
 
     # --- OpenAI call (mode-aware) ---
+    if mode == 'mistakes_analysis':
+        system_prompt = (
+            "Ты — AI Coach. Дай анализ ошибок и рисков по тренировкам пользователя.\n"
+            "Формат ответа: обычный текст на русском, без JSON.\n"
+            "Структура:\n"
+            "1) Короткий вывод (3–6 предложений).\n"
+            "2) Список 6–10 пунктов 'ошибка → почему важно → что сделать'.\n"
+            "3) Если пользователь спросил про боль/дискомфорт — аккуратно: возможные причины тренинга/техники/объёма, "
+            "4) Логиичный вывод и сруктура общения но приоднести по-человечески и понятным языком.\n"
+        )
+
+        result = await _call_openai_chat(system_prompt, user_prompt, response_format_override=None)
+        answer = (result.get('text') or '').strip()
+
+        return {
+            'ok': True,
+            'mode': mode,
+            'answer_text': answer,
+            'summary': '',
+            'rationale': [],
+            'parsed_action_plan': {'actions': []},
+            'action_plan_warnings': [],
+            'context_preview': context_text,
+            'model': get_openai_model(),
+        }
+
     system_prompt = _build_ai_system_prompt(mode)
-    try:
-        result = await _call_openai_chat(system_prompt, user_prompt, mode=mode)
-    except TypeError:
-        # если _call_openai_chat еще старой сигнатуры
-        result = await _call_openai_chat(system_prompt, user_prompt)
+    result = await _call_openai_chat(system_prompt, user_prompt)
 
     # --- Parse structured root ---
     parsed_root = None
