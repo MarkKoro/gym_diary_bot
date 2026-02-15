@@ -99,6 +99,7 @@ from db import (
     sync_current_plan_to_system,
     sync_reminders_to_system,
     apply_system_to_current_plan,
+    consume_ai_coach_quota,
 )
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -680,7 +681,7 @@ def _sanitize_ai_action(action: dict, *, max_day_index: int) -> dict | None:
     return None
 
 
-def _sanitize_ai_action_plan(plan: dict | None, mode: str, *, workouts_per_week: int, active_day_count: int) -> tuple[dict, list[str]]:
+def _sanitize_ai_action_plan(plan: dict | None, mode: str, *, workouts_per_week: int, active_day_count: int, requested_days: int | None = None) -> tuple[dict, list[str]]:
     warnings: list[str] = []
     if not isinstance(plan, dict):
         return {"actions": []}, ["Пустой или невалидный JSON action_plan от AI."]
@@ -708,7 +709,8 @@ def _sanitize_ai_action_plan(plan: dict | None, mode: str, *, workouts_per_week:
         picked = create_actions[0]
 
         # доп. нормализация количества дней
-        expected_days = int(workouts_per_week or 0) if int(workouts_per_week or 0) > 0 else max(1, int(active_day_count or 3))
+        requested_days = int(requested_days or 0) if int(requested_days or 0) > 0 else 0
+        expected_days = requested_days if requested_days > 0 else (int(workouts_per_week or 0) if int(workouts_per_week or 0) > 0 else max(1, int(active_day_count or 3)))
         days = picked.get("days") if isinstance(picked.get("days"), list) else []
         days = [d for d in days if isinstance(d, dict) and isinstance(d.get("exercises"), list) and d.get("exercises")]
         days.sort(key=lambda x: int(x.get("day_index") or 0))
@@ -1019,7 +1021,43 @@ def _build_mistakes_analysis_fallback(context_payload: dict, user_message: str) 
 
     return summary, rationale[:6]
 
-def _build_ai_system_prompt(mode: str) -> str:
+def _extract_requested_workout_days(user_message: str) -> int | None:
+    text = str(user_message or '').lower().replace('ё', 'е')
+    if not text:
+        return None
+
+    words = {
+        'один': 1, 'одну': 1, 'одна': 1,
+        'два': 2, 'две': 2,
+        'три': 3,
+        'четыре': 4,
+        'пять': 5,
+        'шесть': 6,
+        'семь': 7,
+    }
+    for word, value in words.items():
+        if re.search(rf"\b{word}\b\s*(трен|дн|дня|дней)", text):
+            return value
+
+    patterns = (
+        r"(?:на|по|под)\s*(\d)\s*(?:трен|дн|дня|дней)",
+        r"(\d)\s*(?:трениров(?:к[аиу])?|дн(?:я|ей)?)\s*(?:в\s*неделю|на\s*неделю)?",
+        r"(?:система|программа|план)\s*на\s*(\d)\b",
+    )
+    for pattern in patterns:
+        m = re.search(pattern, text)
+        if m:
+            try:
+                val = int(m.group(1))
+            except Exception:
+                continue
+            if 1 <= val <= 7:
+                return val
+
+    return None
+
+
+def _build_ai_system_prompt(mode: str, requested_days: int | None = None) -> str:
     # Важно: schema уже зафиксирована через response_format.
     # Здесь даём правила качества и то, КАК ИМЕННО трактовать поля.
     common = """
@@ -1077,12 +1115,14 @@ muscle_group:
 """).strip()
 
     if mode == 'new_system':
+        requested_days_hint = f"\n- Явный запрос пользователя сейчас: {requested_days} дня(ей). Это приоритет при формировании days." if requested_days else ""
         return (common + """
 Ты — AI Coach. Твоя задача: создать НОВУЮ тренировочную систему (create_system) под запрос пользователя и под контекст (user_profile + history_summary). Ты должен выдать одну структуру create_system с днями и упражнениями.
 
 Жёсткие правила:
 - Верни ровно ОДНО действие create_system в action_plan.actions (один объект).
-- Количество тренировочных дней = workouts_per_week из профиля (если есть). Если нет — используй столько, сколько дней в current_plan (или 3 по умолчанию).
+- Если пользователь явно указал в запросе количество дней — используй это число как приоритет (1..7).
+- Если в запросе число дней не указано — используй workouts_per_week из профиля. Если и его нет — столько, сколько дней в current_plan (или 3 по умолчанию).
 - Каждый день должен быть самодостаточным: 5–8 упражнений (если full-body) или 4–7 (если сплит), без дублирования одного и того же упражнения дважды в один день.
 - Не делай “всё на руки” при запросе массы: масса = база + прогрессия + умеренный объём.
 - Для массы: приоритет базовым движениям, но с понятной нагрузкой; избегай экстремальных объёмов.
@@ -1109,8 +1149,7 @@ muscle_group:
      - note: ""
 
 - how_to — ОБЯЗАТЕЛЬНО: 1–2 коротких предложения (без воды) с техникой/дыханием/ключевым акцентом именно для этого упражнения.
-
-""").strip()
+""" + requested_days_hint).strip()
 
     if mode == 'adjust_sets':
         return (common + """
@@ -4923,6 +4962,49 @@ async def systems_resolve_limit(payload: dict = Body(default_factory=dict), ctx:
     return {'ok': True, 'keep_system_id': keep_system_id}
 
 
+def _build_fallback_new_system_plan(parsed_root: dict | None) -> dict | None:
+    if not isinstance(parsed_root, dict):
+        return None
+    raw_days = parsed_root.get('days')
+    if not isinstance(raw_days, list):
+        return None
+    clean_days: list[dict] = []
+    for item in raw_days:
+        if not isinstance(item, dict):
+            continue
+        exercises = item.get('exercises')
+        if not isinstance(exercises, list) or not exercises:
+            continue
+        clean_days.append({
+            'day_index': int(item.get('day_index') or 0),
+            'title': str(item.get('title') or '').strip(),
+            'exercises': exercises,
+        })
+    if not clean_days:
+        return None
+    return {
+        'actions': [{
+            'type': 'create_system',
+            'system_name': str(parsed_root.get('system_name') or 'Система от ИИ').strip() or 'Система от ИИ',
+            'days': clean_days,
+            'reason': str(parsed_root.get('reason') or '').strip(),
+        }]
+    }
+
+
+def _format_ai_quota_reset_at(reset_at: str | None, tz_name: str | None) -> str:
+    dt = _parse_iso_datetime(reset_at)
+    if dt is None:
+        return ''
+    zone_name = tz_name or 'UTC'
+    try:
+        zone = ZoneInfo(zone_name)
+    except Exception:
+        zone = ZoneInfo('UTC')
+    local_dt = dt.astimezone(zone)
+    return local_dt.strftime('%d.%m.%Y %H:%M')
+
+
 @app.post('/ai/coach/query')
 async def ai_coach_query(payload: dict = Body(default_factory=dict), ctx: AuthCtx = Depends(get_auth_ctx)):
     user_id = ctx.user_id
@@ -4932,10 +5014,24 @@ async def ai_coach_query(payload: dict = Body(default_factory=dict), ctx: AuthCt
 
     mode = str(payload.get('mode') or 'mistakes_analysis').strip()
     user_message = _clip_text(str(payload.get('message') or '').strip(), 1800)
-    if mode not in {'replace_exercises', 'new_system', 'adjust_sets', 'mistakes_analysis'}:
+    if mode not in {'replace_exercises', 'new_system', 'mistakes_analysis'}:
         raise HTTPException(status_code=400, detail='Неподдерживаемый AI-режим')
-    if mode in {'replace_exercises', 'new_system', 'adjust_sets'} and not user_message:
+    if mode in {'replace_exercises', 'new_system'} and not user_message:
         raise HTTPException(status_code=400, detail='Опиши, что хочешь улучшить')
+
+    timezone = await get_user_timezone(user_id)
+    quota_state = await consume_ai_coach_quota(user_id, mode)
+    if not quota_state.get('ok'):
+        blocked_scope = str(quota_state.get('blocked_scope') or 'day')
+        detail = 'Извините, вы превысили количество допустимых запросов за сегодня.'
+        if blocked_scope == 'week':
+            detail = 'Извините, вы превысили количество допустимых запросов в неделю.'
+        elif blocked_scope == 'month':
+            reset_text = _format_ai_quota_reset_at(quota_state.get('reset_at'), timezone)
+            detail = 'Извините, вы превысили количество допустимых запросов в месяц.'
+            if reset_text:
+                detail += f' Следующий доступ: {reset_text}.'
+        raise HTTPException(status_code=429, detail=detail)
 
     rejected_variants = payload.get('rejected_variants')
     rejected_list: list[str] = []
@@ -4944,6 +5040,8 @@ async def ai_coach_query(payload: dict = Body(default_factory=dict), ctx: AuthCt
             text = _clip_text(str(item or '').strip(), 350)
             if text:
                 rejected_list.append(text)
+
+    requested_days = _extract_requested_workout_days(user_message) if mode == "new_system" else None
 
     context_payload = await _build_ai_context_payload(user_id)
     catalog_context = context_payload.get('catalog_context') or {}
@@ -4968,7 +5066,7 @@ async def ai_coach_query(payload: dict = Body(default_factory=dict), ctx: AuthCt
     )
 
     # --- OpenAI call (mode-aware) ---
-    system_prompt = _build_ai_system_prompt(mode)
+    system_prompt = _build_ai_system_prompt(mode, requested_days=requested_days)
     try:
         result = await _call_openai_chat(system_prompt, user_prompt, mode=mode)
     except TypeError:
@@ -4986,12 +5084,17 @@ async def ai_coach_query(payload: dict = Body(default_factory=dict), ctx: AuthCt
         parsed_root = _extract_json_block(raw_text) or {}
 
     parsed_action_plan = parsed_root.get("action_plan") if isinstance(parsed_root.get("action_plan"), dict) else {"actions": []}
+    if mode == "new_system" and not (parsed_action_plan.get("actions") if isinstance(parsed_action_plan, dict) else None):
+        fallback_plan = _build_fallback_new_system_plan(parsed_root)
+        if fallback_plan:
+            parsed_action_plan = fallback_plan
 
     sanitized_plan, plan_warnings = _sanitize_ai_action_plan(
         parsed_action_plan,
         mode,
         workouts_per_week=_to_int((context_payload.get("user_profile") or {}).get("workouts_per_week"), 0),
         active_day_count=len(context_payload.get("day_snapshots") or []),
+        requested_days=requested_days,
     )
 
     summary = str(parsed_root.get("summary") or "").strip()
@@ -5017,6 +5120,10 @@ async def ai_coach_query(payload: dict = Body(default_factory=dict), ctx: AuthCt
     return {
         "ok": True,
         "mode": mode,
+        "quota": {
+            "daily_remaining": int(((quota_state.get("remaining") or {}).get("day") or 0)),
+            "daily_limit": int(((quota_state.get("limits") or {}).get("day") or 3)),
+        },
         "answer_text": answer_text,
         "summary": summary,
         "rationale": rationale,

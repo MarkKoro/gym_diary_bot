@@ -253,6 +253,7 @@ from db import (
     clear_onboarding_video_message,
     set_onboarding_completed,
     count_active_subscriptions,
+    reset_ai_coach_quota,
 )
 from text_utils import normalize_whitespace
 from ui_texts import t, e, ONBOARDING_TIPS
@@ -7868,6 +7869,18 @@ async def splash_reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await chat.send_message("Данные очищены. Нажми /start, чтобы начать заново.")
 
 
+async def ai_pass_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    message = update.effective_message
+    user = update.effective_user
+    if not message or not user:
+        return
+    user_id = await get_or_create_user(user.id, user.username)
+    removed = await reset_ai_coach_quota(user_id)
+    await message.reply_text(
+        f"AI-квота сброшена. Удалено записей: {removed}. Теперь можно снова делать запросы в webapp."
+    )
+
+
 async def cancel_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     if not update.message:
@@ -13937,6 +13950,7 @@ def main():
     app.add_handler(CommandHandler("stats", cmd_stats))
     app.add_handler(CommandHandler(("checkprems", "check_prems", "prems"), check_prems_command))
     app.add_handler(CommandHandler("cancel", cancel_command))
+    app.add_handler(CommandHandler("admin_ai_pass", ai_pass_command))
     app.add_handler(CommandHandler(("grant", "grunt"), grant_command))
     app.add_handler(CommandHandler("degrant", degrant_command))
     app.add_handler(MessageHandler(filters.VIDEO | filters.Document.VIDEO, capture_intro_video))
@@ -13947,6 +13961,7 @@ def main():
     app.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment_handler))
     app.add_handler(CallbackQueryHandler(menu_router))
     app.add_handler(MessageHandler(filters.PHOTO, photo_router))
+    app.add_handler(MessageHandler(filters.Regex(re.compile(r"^\s*admin\s+ai\s+pass\s*$", re.IGNORECASE)) & (~filters.COMMAND), ai_pass_command))
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), text_router))
     app.add_error_handler(on_error)
     app.run_polling()
