@@ -336,6 +336,146 @@ ONBOARDING_VIDEO_MESSAGE_ID_KEY = "onboarding_video_message_id"
 ONBOARDING_INTRO_CHAT_ID_KEY = "onboarding_intro_chat_id"
 ONBOARDING_INTRO_MESSAGE_ID_KEY = "onboarding_intro_message_id"
 
+AI_COACH_DAILY_LIMIT = 3
+AI_COACH_WEEKLY_LIMIT = 7
+AI_COACH_MONTHLY_LIMIT = 15
+
+
+def _iso_utc(dt: datetime) -> str:
+    return dt.astimezone(UTC).isoformat()
+
+
+async def _fetch_ai_coach_quota_state(db, user_id: int, now_utc: datetime) -> dict:
+    day_cutoff = now_utc - timedelta(days=1)
+    week_cutoff = now_utc - timedelta(days=7)
+    month_cutoff = now_utc - timedelta(days=30)
+
+    day_cutoff_iso = _iso_utc(day_cutoff)
+    week_cutoff_iso = _iso_utc(week_cutoff)
+    month_cutoff_iso = _iso_utc(month_cutoff)
+
+    cur = await db.execute(
+        """
+        SELECT
+            SUM(CASE WHEN created_at >= ? THEN 1 ELSE 0 END) AS day_count,
+            SUM(CASE WHEN created_at >= ? THEN 1 ELSE 0 END) AS week_count,
+            SUM(CASE WHEN created_at >= ? THEN 1 ELSE 0 END) AS month_count
+        FROM ai_coach_requests
+        WHERE user_id = ?
+        """,
+        (day_cutoff_iso, week_cutoff_iso, month_cutoff_iso, user_id),
+    )
+    row = await cur.fetchone()
+    day_count = int((row[0] if row and row[0] is not None else 0) or 0)
+    week_count = int((row[1] if row and row[1] is not None else 0) or 0)
+    month_count = int((row[2] if row and row[2] is not None else 0) or 0)
+
+    week_reset_at: datetime | None = None
+    if week_count >= AI_COACH_WEEKLY_LIMIT:
+        cur = await db.execute(
+            """
+            SELECT created_at
+            FROM ai_coach_requests
+            WHERE user_id = ? AND created_at >= ?
+            ORDER BY created_at ASC
+            LIMIT 1
+            """,
+            (user_id, week_cutoff_iso),
+        )
+        row = await cur.fetchone()
+        if row and row[0]:
+            first = datetime.fromisoformat(str(row[0]))
+            week_reset_at = (first if first.tzinfo else first.replace(tzinfo=UTC)) + timedelta(days=7)
+
+    month_reset_at: datetime | None = None
+    if month_count >= AI_COACH_MONTHLY_LIMIT:
+        cur = await db.execute(
+            """
+            SELECT created_at
+            FROM ai_coach_requests
+            WHERE user_id = ? AND created_at >= ?
+            ORDER BY created_at ASC
+            LIMIT 1
+            """,
+            (user_id, month_cutoff_iso),
+        )
+        row = await cur.fetchone()
+        if row and row[0]:
+            first = datetime.fromisoformat(str(row[0]))
+            month_reset_at = (first if first.tzinfo else first.replace(tzinfo=UTC)) + timedelta(days=30)
+
+    return {
+        "limits": {
+            "day": AI_COACH_DAILY_LIMIT,
+            "week": AI_COACH_WEEKLY_LIMIT,
+            "month": AI_COACH_MONTHLY_LIMIT,
+        },
+        "usage": {
+            "day": day_count,
+            "week": week_count,
+            "month": month_count,
+        },
+        "remaining": {
+            "day": max(0, AI_COACH_DAILY_LIMIT - day_count),
+            "week": max(0, AI_COACH_WEEKLY_LIMIT - week_count),
+            "month": max(0, AI_COACH_MONTHLY_LIMIT - month_count),
+        },
+        "weekly_reset_at": _iso_utc(week_reset_at) if week_reset_at else None,
+        "monthly_reset_at": _iso_utc(month_reset_at) if month_reset_at else None,
+    }
+
+
+async def get_ai_coach_quota(user_id: int, now: datetime | None = None) -> dict:
+    now_utc = (now or datetime.now(UTC)).astimezone(UTC)
+    async with _pool.acquire() as db:
+        return await _fetch_ai_coach_quota_state(db, user_id, now_utc)
+
+
+async def consume_ai_coach_quota(user_id: int, mode: str, now: datetime | None = None) -> dict:
+    now_utc = (now or datetime.now(UTC)).astimezone(UTC)
+    async with _pool.acquire() as db:
+        await db.execute("BEGIN IMMEDIATE")
+        state = await _fetch_ai_coach_quota_state(db, user_id, now_utc)
+        usage = state.get("usage") or {}
+
+        blocked_scope: str | None = None
+        reset_at: str | None = None
+        if int(usage.get("month", 0)) >= AI_COACH_MONTHLY_LIMIT:
+            blocked_scope = "month"
+            reset_at = state.get("monthly_reset_at")
+        elif int(usage.get("week", 0)) >= AI_COACH_WEEKLY_LIMIT:
+            blocked_scope = "week"
+            reset_at = state.get("weekly_reset_at")
+        elif int(usage.get("day", 0)) >= AI_COACH_DAILY_LIMIT:
+            blocked_scope = "day"
+
+        if blocked_scope:
+            await db.rollback()
+            return {
+                "ok": False,
+                "blocked_scope": blocked_scope,
+                "reset_at": reset_at,
+                **state,
+            }
+
+        await db.execute(
+            "INSERT INTO ai_coach_requests(user_id, mode, created_at) VALUES(?,?,?)",
+            (user_id, str(mode or "unknown"), _iso_utc(now_utc)),
+        )
+        await db.commit()
+        updated_state = await _fetch_ai_coach_quota_state(db, user_id, now_utc)
+        return {
+            "ok": True,
+            **updated_state,
+        }
+
+
+async def reset_ai_coach_quota(user_id: int) -> int:
+    async with _pool.acquire() as db:
+        cur = await db.execute("DELETE FROM ai_coach_requests WHERE user_id=?", (user_id,))
+        await db.commit()
+        return int(cur.rowcount or 0)
+
 
 async def set_intro_video(file_id: str) -> None:
     await set_app_meta(INTRO_VIDEO_KEY, file_id)
@@ -897,6 +1037,16 @@ async def init_db():
             value TEXT
         );
 
+        CREATE TABLE IF NOT EXISTS ai_coach_requests(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            mode TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_ai_coach_requests_user_created
+            ON ai_coach_requests(user_id, created_at);
+
         CREATE TABLE IF NOT EXISTS training_systems(
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id INTEGER NOT NULL,
@@ -1054,6 +1204,12 @@ async def init_db():
             await db.execute("ALTER TABLE users ADD COLUMN active_system_id INTEGER")
         if not await _column_exists(db, "users", "systems_limit_prompted_at"):
             await db.execute("ALTER TABLE users ADD COLUMN systems_limit_prompted_at TEXT")
+        await db.execute(
+            "CREATE TABLE IF NOT EXISTS ai_coach_requests(id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, mode TEXT NOT NULL, created_at TEXT NOT NULL)"
+        )
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_ai_coach_requests_user_created ON ai_coach_requests(user_id, created_at)"
+        )
         if not await _column_exists(db, "sessions", "system_id"):
             await db.execute("ALTER TABLE sessions ADD COLUMN system_id INTEGER")
         await db.execute("UPDATE sessions SET system_id=0 WHERE system_id IS NULL")

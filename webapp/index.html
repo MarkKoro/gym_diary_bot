@@ -175,8 +175,11 @@
       border: 1px solid var(--border);
       border-radius: 14px;
       padding: 10px;
-      background: color-mix(in srgb, var(--bg) 88%, transparent);
+      background: color-mix(in srgb, var(--bg) 94%, transparent);
       min-height: 58px;
+      position: sticky;
+      bottom: 0;
+      z-index: 2;
     }
     .ai-coach-loading-overlay {
       position: fixed;
@@ -2348,8 +2351,7 @@
           <select id="aiCoachMode" class="settings-select">
             <option value="replace_exercises">Попросить новые упражнения</option>
             <option value="new_system">Попросить новую систему</option>
-            <option value="adjust_sets">Изменить количество подходов</option>
-            <option value="mistakes_analysis">Анализ ошибок</option>
+                        <option value="mistakes_analysis">Анализ ошибок</option>
           </select>
           <div id="aiCoachRetryCounter" class="ai-coach-counter hidden">Ещё запросов сегодня: 2 из 3</div>
           <button class="btn" id="aiCoachCloseBtn" type="button">Закрыть</button>
@@ -9238,13 +9240,6 @@
     function openAiCoachSheet() {
       const sheet = document.getElementById('aiCoachSheet');
       if (!sheet) return;
-      const currentDayKey = getAiCoachDayKey();
-      if (state.aiCoach.requestDayKey && state.aiCoach.requestDayKey !== currentDayKey) {
-        state.aiCoach.hasResponse = false;
-        state.aiCoach.retriesUsed = 0;
-        state.aiCoach.usedRequests = 0;
-        state.aiCoach.rejectedVariants = [];
-      }
       state.aiCoach.open = true;
       document.body.classList.add('drawer-open', 'ai-coach-open');
       sheet.classList.add('show');
@@ -9294,14 +9289,6 @@
           examples: [
             'Собери новую систему на 3 тренировки в неделю для набора мышечной массы.',
             'Хочу новую программу с упором на силовой прогресс и минимумом упражнений с осевой нагрузкой.'
-          ],
-        },
-        adjust_sets: {
-          placeholder: 'Опиши, как хочешь изменить объём/интенсивность',
-          title: 'Подходящие формулировки:',
-          examples: [
-            'Слишком устаю к концу недели — перераспредели подходы, чтобы восстановление было лучше.',
-            'Хочу аккуратно повысить нагрузку в базовых упражнениях на ближайшие 2 недели.'
           ],
         },
         mistakes_analysis: {
@@ -9360,12 +9347,12 @@
       const copySystemBtn = document.getElementById('aiCoachCopySystemBtn');
       const loadingOverlay = document.getElementById('aiCoachLoadingOverlay');
       const closeBtn = document.getElementById('aiCoachCloseBtn');
-      const currentDayKey = getAiCoachDayKey();
-      const used = state.aiCoach.requestDayKey === currentDayKey ? Math.max(0, Number(state.aiCoach.usedRequests || 0)) : 0;
-      const remaining = Math.max(0, Number(state.aiCoach.maxRetries || 3) - used);
+      const used = Math.max(0, Number(state.aiCoach.usedRequests || 0));
+      const limit = Math.max(1, Number(state.aiCoach.maxRetries || 3));
+      const remaining = Math.max(0, limit - used);
       if (counter) {
-        counter.textContent = `Ещё запросов сегодня: ${remaining} из ${state.aiCoach.maxRetries}`;
-        counter.classList.toggle('hidden', used <= 0);
+        counter.textContent = `Ещё запросов сегодня: ${remaining} из ${limit}`;
+        counter.classList.remove('hidden');
       }
       if (askBtn) {
         askBtn.disabled = state.aiCoach.loading;
@@ -9665,16 +9652,10 @@
       const mode = modeEl ? String(modeEl.value || 'replace_exercises') : 'replace_exercises';
       const message = inputEl ? String(inputEl.value || '').trim() : '';
       if (mode !== 'mistakes_analysis' && !message) { toast('Опиши запрос для ИИ'); return; }
-      if (retry && state.aiCoach.retriesUsed >= state.aiCoach.maxRetries - 1) { toast('Лимит попыток исчерпан на сегодня'); return; }
-
-      const currentDayKey = getAiCoachDayKey();
-      if (!retry || state.aiCoach.requestDayKey !== currentDayKey) {
-        state.aiCoach.retriesUsed = 0;
-        state.aiCoach.usedRequests = 0;
+      if (!retry) {
         state.aiCoach.rejectedVariants = [];
         state.aiCoach.hasResponse = false;
       }
-      state.aiCoach.requestDayKey = currentDayKey;
       state.aiCoach.mode = mode;
       state.aiCoach.decisions = {};
       state.aiCoach.done = {};
@@ -9690,7 +9671,7 @@
         const data = await apiFetch('/gymapi/ai/coach/query', {
           method: 'POST',
           timeoutMs: 130000,
-          body: JSON.stringify({ mode, message, rejected_variants: state.aiCoach.rejectedVariants, day_key: state.aiCoach.requestDayKey }),
+          body: JSON.stringify({ mode, message, rejected_variants: state.aiCoach.rejectedVariants }),
         });
         state.aiCoach.answerText = data.answer_text || '';
         state.aiCoach.summary = data.summary || '';
@@ -9700,8 +9681,13 @@
         state.aiCoach.parsed = rawPlan ? { ...rawPlan, actions: normalizedActions } : null;
         state.aiCoach.done = {};
         state.aiCoach.warnings = Array.isArray(data.action_plan_warnings) ? data.action_plan_warnings.filter(Boolean) : [];
-        if (retry) state.aiCoach.retriesUsed += 1;
-        state.aiCoach.usedRequests = retry ? Math.max(1, Number(state.aiCoach.usedRequests || 1)) + 1 : 1;
+        const quota = data?.quota || {};
+        const dailyLimit = Number(quota.daily_limit || state.aiCoach.maxRetries || 3);
+        const dailyRemaining = Number(quota.daily_remaining);
+        if (Number.isFinite(dailyLimit) && dailyLimit > 0) state.aiCoach.maxRetries = dailyLimit;
+        if (Number.isFinite(dailyRemaining)) {
+          state.aiCoach.usedRequests = Math.max(0, state.aiCoach.maxRetries - Math.max(0, dailyRemaining));
+        }
         state.aiCoach.hasResponse = true;
         if (state.aiCoach.summary) state.aiCoach.rejectedVariants.push(state.aiCoach.summary);
         else if (state.aiCoach.answerText) state.aiCoach.rejectedVariants.push(state.aiCoach.answerText.slice(0, 250));
@@ -10210,7 +10196,7 @@
       });
       document.getElementById('aiCoachCloseBtn')?.addEventListener('click', () => { if (!state.aiCoach.loading) closeAiCoachSheet(); });
       document.getElementById('aiCoachAskBtn').addEventListener('click', () => {
-        const retry = state.aiCoach.hasResponse && state.aiCoach.requestDayKey === getAiCoachDayKey();
+        const retry = state.aiCoach.hasResponse;
         askAiCoach({ retry }).catch(console.error);
       });
       document.getElementById('aiCoachApplyAllBtn').addEventListener('click', () => applyAiCoachPlan().catch(console.error));
