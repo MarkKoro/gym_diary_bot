@@ -579,6 +579,33 @@
     .error-overlay-title { font-weight: 750; margin-bottom: 2px; }
     .error-overlay-body { font-size: 12px; opacity: 0.95; }
     .error-overlay-hint { margin-top: 4px; font-size: 11px; opacity: 0.78; }
+    .global-action-overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 140;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+      background: color-mix(in srgb, var(--tg-theme-bg-color, #fff) 58%, rgba(0,0,0,0.56));
+      backdrop-filter: blur(7px);
+      -webkit-backdrop-filter: blur(7px);
+      pointer-events: auto;
+    }
+    .global-action-overlay-card {
+      min-width: min(88vw, 320px);
+      max-width: min(92vw, 420px);
+      border-radius: 16px;
+      border: 1px solid color-mix(in srgb, var(--border) 88%, transparent);
+      background: color-mix(in srgb, var(--card) 94%, rgba(255,255,255,0.06));
+      box-shadow: 0 16px 42px rgba(0,0,0,0.28);
+      padding: 16px;
+      display: grid;
+      gap: 10px;
+      text-align: center;
+    }
+    .global-action-overlay-title { font-size: 15px; font-weight: 800; }
+    .global-action-overlay-sub { font-size: 13px; color: var(--muted); }
     .modal-backdrop {
       position: fixed;
       inset: 0;
@@ -2237,6 +2264,14 @@
   <div id="toast" class="toast"></div>
   <div id="errorOverlay" class="error-overlay" role="status"></div>
 
+  <div id="globalActionOverlay" class="global-action-overlay hidden" aria-live="polite" aria-busy="true">
+    <div class="global-action-overlay-card">
+      <div class="loader-inline" aria-hidden="true"></div>
+      <div id="globalActionOverlayTitle" class="global-action-overlay-title">Применяем изменения…</div>
+      <div class="global-action-overlay-sub">Пожалуйста, подожди пару секунд.</div>
+    </div>
+  </div>
+
   <div id="confirmModal" class="modal-backdrop">
     <div class="modal">
       <div class="modal-title" id="confirmTitle">Завершить тренировочный день?</div>
@@ -2702,7 +2737,7 @@
       isTelegram: false,
       isAdmin: false,
       systemSheetOpen: false,
-      aiCoach: { open: false, loading: false, mode: 'replace_exercises', answerText: '', parsed: null, summary: '', rationale: [], retriesUsed: 0, maxRetries: 3, usedRequests: 0, rejectedVariants: [], hasResponse: false, requestDayKey: '', appliedByDay: {}, warnings: [], decisions: {}, done: {}, replaceDayCursor: 1 },
+      aiCoach: { open: false, loading: false, applying: false, mode: 'replace_exercises', answerText: '', parsed: null, summary: '', rationale: [], retriesUsed: 0, maxRetries: 3, usedRequests: 0, rejectedVariants: [], hasResponse: false, requestDayKey: '', appliedByDay: {}, warnings: [], decisions: {}, done: {}, replaceDayCursor: 1 },
       subscription: { loading: false, active: false, activePlan: null, activeExpiresAt: null, plans: [], features: [], payment: { checking: false, paymentId: null } },
       paywall: { open: false, reason: '' },
       productivitySheetOpen: false,
@@ -3211,6 +3246,14 @@
       clearTimeout(overlay._hideTimer);
       overlay.addEventListener('click', hide);
       overlay._hideTimer = setTimeout(hide, durationMs);
+    }
+
+    function setGlobalActionOverlay(visible, title = 'Применяем изменения…') {
+      const overlay = document.getElementById('globalActionOverlay');
+      const titleEl = document.getElementById('globalActionOverlayTitle');
+      if (!overlay) return;
+      if (titleEl && title) titleEl.textContent = String(title);
+      overlay.classList.toggle('hidden', !visible);
     }
 
 
@@ -9254,6 +9297,7 @@
     function closeAiCoachSheet() {
       const sheet = document.getElementById('aiCoachSheet');
       if (!sheet) return;
+      if (state.aiCoach.loading || state.aiCoach.applying) return;
       state.aiCoach.open = false;
       document.body.classList.remove('drawer-open', 'ai-coach-open');
       sheet.classList.remove('show');
@@ -9354,16 +9398,17 @@
         counter.textContent = `Ещё запросов сегодня: ${remaining} из ${limit}`;
         counter.classList.remove('hidden');
       }
+      const busy = state.aiCoach.loading || state.aiCoach.applying;
       if (askBtn) {
-        askBtn.disabled = state.aiCoach.loading;
+        askBtn.disabled = busy;
         askBtn.textContent = state.aiCoach.hasResponse ? 'Запросить снова' : 'Сделать запрос';
       }
-      if (modeEl) modeEl.disabled = state.aiCoach.loading;
-      if (inputEl) inputEl.disabled = state.aiCoach.loading;
-      if (applyAllBtn) applyAllBtn.disabled = state.aiCoach.loading;
-      if (copySystemBtn) copySystemBtn.disabled = state.aiCoach.loading;
+      if (modeEl) modeEl.disabled = busy;
+      if (inputEl) inputEl.disabled = busy;
+      if (applyAllBtn) applyAllBtn.disabled = busy;
+      if (copySystemBtn) copySystemBtn.disabled = busy;
       if (loadingOverlay) loadingOverlay.classList.toggle('hidden', !state.aiCoach.loading);
-      if (closeBtn) closeBtn.disabled = state.aiCoach.loading;
+      if (closeBtn) closeBtn.disabled = busy;
     }
 
     function buildAiCoachPreviewText() {
@@ -9718,14 +9763,18 @@
     }
 
     async function applyAiCoachPlan({ forceAll = false } = {}) {
+      if (state.aiCoach.applying) return;
+      const actions = getSelectedAiActions({ forceAll });
+      if (!actions.length) {
+        toast('Нет действий для применения');
+        return;
+      }
+      const createAction = actions.find((a) => a && String(a.type || '') === 'create_system');
+      const overlayTitle = createAction ? 'Добавляем новую систему…' : 'Применяем новую систему…';
+      state.aiCoach.applying = true;
+      setGlobalActionOverlay(true, overlayTitle);
+      updateAiCoachCounter();
       try {
-        const actions = getSelectedAiActions({ forceAll });
-        if (!actions.length) {
-          toast('Нет действий для применения');
-          return;
-        }
-
-        const createAction = actions.find((a) => a && String(a.type || '') === 'create_system');
         if (createAction) {
           const systemDays = Array.isArray(createAction.days) ? createAction.days : [];
           const daysCount = Math.max(1, Math.min(7, Number(systemDays.length || 3)));
@@ -9892,6 +9941,10 @@
       } catch (e) {
         toast(`Не удалось применить изменения: ${normalizeError(e).split('\n')[0].slice(0, 100)}`);
         throw e;
+      } finally {
+        state.aiCoach.applying = false;
+        setGlobalActionOverlay(false);
+        updateAiCoachCounter();
       }
     }
 
@@ -10137,8 +10190,18 @@
         openConfirmModal?.(() => completeDay(), 'Завершить день?', 'Ты больше не будешь добавлять подходы в этот день?');
       });
       fab.addEventListener('click', (e) => { e.stopPropagation(); toggleFinishPopover(); });
-      document.addEventListener('click', () => { closeFinishPopover(); closeSourceMetaPopover(); });
-      document.addEventListener('pointerdown', () => { closeFinishPopover(); closeSourceMetaPopover(); });
+      const shouldSkipSourceMetaAutoClose = (event) => {
+        const target = event?.target;
+        return Boolean(target && (target.closest?.('.source-meta-wrap') || target.closest?.('#sheetSourceMetaWrap')));
+      };
+      document.addEventListener('click', (event) => {
+        closeFinishPopover();
+        if (!shouldSkipSourceMetaAutoClose(event)) closeSourceMetaPopover();
+      });
+      document.addEventListener('pointerdown', (event) => {
+        closeFinishPopover();
+        if (!shouldSkipSourceMetaAutoClose(event)) closeSourceMetaPopover();
+      });
       pop.addEventListener('click', (e) => e.stopPropagation());
       document.getElementById('manageExerciseBtn').addEventListener('click', (e) => { e.stopPropagation(); toggleManageMenu(); });
       document.getElementById('manageMenu').addEventListener('click', (e) => {
@@ -10847,6 +10910,7 @@
       btn.textContent = getSourceMetaButtonLabel(exercise);
       pop.innerHTML = buildSourceMetaContent(exercise);
       btn.onclick = (ev) => {
+        ev.preventDefault();
         ev.stopPropagation();
         toggleSourceMetaPopover(exercise.user_exercise_id, btn, pop);
       };
