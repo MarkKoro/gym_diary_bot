@@ -9298,10 +9298,10 @@
       updateBackButton(state.currentRoute);
     }
 
-    function closeAiCoachSheet() {
+    function closeAiCoachSheet({ force = false } = {}) {
       const sheet = document.getElementById('aiCoachSheet');
       if (!sheet) return;
-      if (state.aiCoach.loading || state.aiCoach.applying) return;
+      if (!force && (state.aiCoach.loading || state.aiCoach.applying)) return;
       state.aiCoach.open = false;
       document.body.classList.remove('drawer-open', 'ai-coach-open');
       sheet.classList.remove('show');
@@ -9693,7 +9693,7 @@
       const applyFrame = document.getElementById('aiCoachApplyFrame');
       if (applyFrame) applyFrame.classList.toggle('hidden', !hasPlan || isMistakes);
       const applyAllBtn = document.getElementById('aiCoachApplyAllBtn');
-      if (applyAllBtn) applyAllBtn.classList.toggle('hidden', isMistakes);
+      if (applyAllBtn) applyAllBtn.classList.toggle('hidden', isMistakes || mode === 'new_system');
       renderAiCoachExamples();
       if (state.aiCoach.hasResponse || hasStructured) scrollAiCoachToAnswer();
       if (allDone) {
@@ -9851,7 +9851,7 @@
           if (currentRoute === 'today') await loadToday();
           else await setRoute('today');
           toast('Создана и заполнена новая система из предложения ИИ');
-          closeAiCoachSheet();
+          closeAiCoachSheet({ force: true });
           return;
         }
 
@@ -9952,7 +9952,7 @@
         }
         state.aiCoach.appliedByDay = applied;
         toast('Изменения применены');
-        closeAiCoachSheet();
+        closeAiCoachSheet({ force: true });
       } catch (e) {
         toast(`Не удалось применить изменения: ${normalizeError(e).split('\n')[0].slice(0, 100)}`);
         throw e;
