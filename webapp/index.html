@@ -7,20 +7,21 @@
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
   <style>
     :root {
-      color-scheme: light dark;
-      --bg: var(--tg-theme-bg-color, #0b1220);
-      --card: var(--tg-theme-secondary-bg-color, #121b2d);
-      --text: var(--tg-theme-text-color, #e7eefc);
-      --muted: var(--tg-theme-hint-color, #9cabd5);
-      --accent: var(--tg-theme-link-color, #2ea6ff);
+      color-scheme: light;
+      --bg: var(--tg-theme-bg-color, #f4f7fb);
+      --card: var(--tg-theme-secondary-bg-color, #ffffff);
+      --text: var(--tg-theme-text-color, #0f172a);
+      --muted: var(--tg-theme-hint-color, #64748b);
+      --accent: var(--tg-theme-link-color, #2563eb);
       --border: color-mix(in srgb, var(--text) 8%, transparent);
       --danger: #e53935;
       --radius: 14px;
-      --shadow: 0 10px 30px rgba(0,0,0,0.22);
-      --sheet-shadow: 0 -12px 30px rgba(0,0,0,0.28);
-      --glass-surface: color-mix(in srgb, var(--card) 74%, transparent);
+      --shadow: 0 10px 30px rgba(15, 23, 42, 0.12);
+      --sheet-shadow: 0 -12px 30px rgba(15, 23, 42, 0.16);
+      --glass-surface: color-mix(in srgb, var(--card) 86%, transparent);
     }
     [data-theme="dark"] {
+      color-scheme: dark;
       --bg: var(--tg-theme-bg-color, #0b1220);
       --card: var(--tg-theme-secondary-bg-color, #121b2d);
       --text: var(--tg-theme-text-color, #e7eefc);
@@ -119,23 +120,24 @@
     }
     .manage-robot-mini svg { width: 10px; height: 10px; stroke-width: 2.1; }
     .ai-coach-grid { display: grid; gap: 10px; }
-    .ai-coach-fullscreen .sheet { max-width: min(980px, 100vw); width: 100%; height: 100dvh; max-height: 100dvh; border-radius: 0; padding: 14px 16px calc(20px + env(safe-area-inset-bottom)); display: flex; flex-direction: column; overflow: auto; -webkit-overflow-scrolling: touch; }
+    .ai-coach-fullscreen { background: var(--bg); align-items: stretch; }
+    .ai-coach-fullscreen .sheet { max-width: min(980px, 100vw); width: 100%; height: 100dvh; max-height: 100dvh; border-radius: 0; padding: 14px 16px calc(20px + env(safe-area-inset-bottom)); display: flex; flex-direction: column; overflow: hidden; -webkit-overflow-scrolling: touch; background: linear-gradient(180deg, color-mix(in srgb, var(--card) 96%, var(--bg)) 0%, color-mix(in srgb, var(--bg) 88%, var(--card)) 100%); }
     .ai-coach-fullscreen .sheet-handle { display: none; }
     .ai-coach-fullscreen .sheet-title { font-size: 20px; margin-bottom: 4px; }
     .ai-coach-subtitle { font-size: 13px; color: var(--muted); margin-bottom: 4px; }
-    .ai-coach-main { display: flex; flex-direction: column; gap: 10px; min-height: 0; flex: 1; overflow: hidden; }
+    .ai-coach-main { display: flex; flex-direction: column; gap: 10px; min-height: 0; flex: 1; overflow: auto; -webkit-overflow-scrolling: touch; padding-bottom: 4px; }
     .ai-coach-toolbar { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
     .ai-coach-counter { font-size: 12px; color: var(--muted); padding: 6px 10px; border-radius: 999px; border: 1px solid var(--border); background: var(--bg); }
     .ai-coach-response-wrap {
       flex: 1;
-      min-height: clamp(320px, 56dvh, 760px);
+      min-height: 260px;
       display: grid;
       gap: 8px;
       grid-template-rows: minmax(0, 1fr);
       border: 1px solid var(--border);
       border-radius: 14px;
       padding: 10px;
-      background: color-mix(in srgb, var(--bg) 90%, transparent);
+      background: color-mix(in srgb, var(--card) 86%, var(--bg));
       position: relative;
       overflow: hidden;
     }
@@ -144,7 +146,7 @@
     }
     .ai-coach-title { font-size: 15px; font-weight: 700; user-select: text; -webkit-user-select: text; }
     .ai-coach-list { margin: 0; padding-left: 18px; color: var(--text); font-size: 14px; line-height: 1.45; display: grid; gap: 5px; user-select: text; -webkit-user-select: text; }
-    .ai-coach-result-scroll { min-height: 0; overflow: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; display: grid; gap: 8px; align-content: start; padding-bottom: 10px; }
+    .ai-coach-result-scroll { min-height: 0; overflow: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; display: grid; gap: 8px; align-content: start; padding: 2px 2px 10px; }
     .ai-coach-result-scroll:empty { overflow: hidden; }
     .ai-coach-structured { display: grid; gap: 10px; }
     .ai-day-card { border: 1px solid var(--border); border-radius: 12px; padding: 10px; display: grid; gap: 10px; background: color-mix(in srgb, var(--card) 82%, var(--bg)); }
@@ -175,11 +177,12 @@
       border: 1px solid var(--border);
       border-radius: 14px;
       padding: 10px;
-      background: color-mix(in srgb, var(--bg) 94%, transparent);
+      background: color-mix(in srgb, var(--card) 90%, var(--bg));
       min-height: 58px;
       position: sticky;
       bottom: 0;
       z-index: 2;
+      box-shadow: 0 -8px 24px color-mix(in srgb, var(--bg) 40%, transparent);
     }
     .ai-coach-loading-overlay {
       position: fixed;
@@ -2955,6 +2958,7 @@
         '--text': themeParams.text_color,
         '--muted': themeParams.hint_color,
         '--accent': themeParams.link_color || themeParams.button_color,
+        '--border': themeParams.section_separator_color ? colorWithAlpha(themeParams.section_separator_color, 0.85) : null,
       };
       Object.entries(map).forEach(([key, val]) => { if (val) root.style.setProperty(key, val); });
     }
@@ -9616,13 +9620,22 @@
           const type = String(action?.type || '');
           const apply = shouldApplyAiAction(action, idx);
           if (type === 'replace_exercise') {
-            return `<div class="ai-action-item remove"><div class="title">Удалить: ${escapeHtml(String(action.old_exercise_name || 'Упражнение'))}</div><div class="hint">День ${day}</div><div class="ai-choice-row"><button class="btn ${apply ? 'selected' : ''}" data-ai-decision="apply" data-ai-key="${key}" data-ai-idx="${idx}">✓ Удалить</button><button class="btn ${!apply ? 'selected' : ''}" data-ai-decision="skip" data-ai-key="${key}" data-ai-idx="${idx}">✕ Оставить</button></div></div><div class="ai-action-item add"><div class="title">Добавить: ${escapeHtml(String(action.new_exercise_name || 'Упражнение'))}</div><div class="hint">${Number(action.sets || 0)}×${Number(action.reps || 0)}</div></div>`;
+            const decisionRow = mode === 'replace_exercises'
+              ? `<div class="ai-choice-row"><button class="btn ${apply ? 'selected' : ''}" data-ai-decision="apply" data-ai-key="${key}" data-ai-idx="${idx}">✓ Удалить</button><button class="btn ${!apply ? 'selected' : ''}" data-ai-decision="skip" data-ai-key="${key}" data-ai-idx="${idx}">✕ Оставить</button></div>`
+              : '';
+            return `<div class="ai-action-item remove"><div class="title">Удалить: ${escapeHtml(String(action.old_exercise_name || 'Упражнение'))}</div><div class="hint">День ${day}</div>${decisionRow}</div><div class="ai-action-item add"><div class="title">Добавить: ${escapeHtml(String(action.new_exercise_name || 'Упражнение'))}</div><div class="hint">${Number(action.sets || 0)}×${Number(action.reps || 0)}</div></div>`;
           }
           if (type === 'remove_exercise') {
-            return `<div class="ai-action-item remove"><div class="title">Удалить: ${escapeHtml(String(action.old_exercise_name || 'Упражнение'))}</div><div class="hint">День ${day}</div><div class="ai-choice-row"><button class="btn ${apply ? 'selected' : ''}" data-ai-decision="apply" data-ai-key="${key}" data-ai-idx="${idx}">✓ Удалить</button><button class="btn ${!apply ? 'selected' : ''}" data-ai-decision="skip" data-ai-key="${key}" data-ai-idx="${idx}">✕ Оставить</button></div></div>`;
+            const decisionRow = mode === 'replace_exercises'
+              ? `<div class="ai-choice-row"><button class="btn ${apply ? 'selected' : ''}" data-ai-decision="apply" data-ai-key="${key}" data-ai-idx="${idx}">✓ Удалить</button><button class="btn ${!apply ? 'selected' : ''}" data-ai-decision="skip" data-ai-key="${key}" data-ai-idx="${idx}">✕ Оставить</button></div>`
+              : '';
+            return `<div class="ai-action-item remove"><div class="title">Удалить: ${escapeHtml(String(action.old_exercise_name || 'Упражнение'))}</div><div class="hint">День ${day}</div>${decisionRow}</div>`;
           }
           if (type === 'add_exercise') {
-            return `<div class="ai-action-item add"><div class="title">Добавить: ${escapeHtml(String(action.exercise_name || 'Упражнение'))}</div><div class="hint">${Number(action.sets || 0)}×${Number(action.reps || 0)}</div><div class="ai-choice-row"><button class="btn ${apply ? 'selected' : ''}" data-ai-decision="apply" data-ai-key="${key}" data-ai-idx="${idx}">✓ Добавить</button><button class="btn ${!apply ? 'selected' : ''}" data-ai-decision="skip" data-ai-key="${key}" data-ai-idx="${idx}">✕ Пропустить</button></div></div>`;
+            const decisionRow = mode === 'replace_exercises'
+              ? `<div class="ai-choice-row"><button class="btn ${apply ? 'selected' : ''}" data-ai-decision="apply" data-ai-key="${key}" data-ai-idx="${idx}">✓ Добавить</button><button class="btn ${!apply ? 'selected' : ''}" data-ai-decision="skip" data-ai-key="${key}" data-ai-idx="${idx}">✕ Пропустить</button></div>`
+              : '';
+            return `<div class="ai-action-item add"><div class="title">Добавить: ${escapeHtml(String(action.exercise_name || 'Упражнение'))}</div><div class="hint">${Number(action.sets || 0)}×${Number(action.reps || 0)}</div>${decisionRow}</div>`;
           }
           if (type === 'update_sets') {
             return `<div class="ai-action-item sets"><div class="title">${escapeHtml(String(action.exercise_name || 'Упражнение'))}</div><div class="hint">Рекомендация: ${Number(action.sets || 0)}×${Number(action.reps || 0)}${Number(action.weight_kg || 0) ? `, ${Number(action.weight_kg || 0)} кг` : ''}</div></div>`;
@@ -9779,6 +9792,7 @@
           const systemDays = Array.isArray(createAction.days) ? createAction.days : [];
           const daysCount = Math.max(1, Math.min(7, Number(systemDays.length || 3)));
           const systemName = String(createAction.system_name || 'Система от ИИ').trim() || 'Система от ИИ';
+          const currentRoute = state.currentRoute;
           const created = await apiFetch('/gymapi/systems', { method: 'POST', body: JSON.stringify({ name: systemName, workouts_per_week: daysCount }) });
           const newSystemId = Number(created?.system_id || 0);
           if (newSystemId > 0) await apiFetch(`/gymapi/systems/${newSystemId}/select`, { method: 'POST' });
@@ -9834,7 +9848,8 @@
           }
 
           await loadSystems();
-          await loadToday();
+          if (currentRoute === 'today') await loadToday();
+          else await setRoute('today');
           toast('Создана и заполнена новая система из предложения ИИ');
           closeAiCoachSheet();
           return;
