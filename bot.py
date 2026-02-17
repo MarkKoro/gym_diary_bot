@@ -128,6 +128,7 @@ from db import (
     get_or_create_user,
     get_or_create_today_session,
     get_session_for_day,
+    get_active_training_system_id,
     fetch_day_exercises,
     add_set,
     inc_last_set,
@@ -491,6 +492,14 @@ async def _get_primary_training_weekday(user_id: int) -> int | None:
     return first_configured
 
 
+async def _active_system_id(user_id: int) -> int:
+    try:
+        sid = await get_active_training_system_id(user_id)
+        return int(sid or 0)
+    except Exception:
+        return 0
+
+
 async def _should_clear_day_completions(
     user_id: int, latest: datetime | None
 ) -> bool:
@@ -519,25 +528,27 @@ async def _should_clear_day_completions(
 
 
 async def get_active_day_completions(user_id: int) -> set[int]:
-    rows = await list_day_completions(user_id)
+    system_id = await _active_system_id(user_id)
+    rows = await list_day_completions(user_id, system_id=system_id)
     parsed, latest = _parse_completion_rows(rows)
     if await _should_clear_day_completions(user_id, latest):
-        await clear_day_completions(user_id)
+        await clear_day_completions(user_id, system_id=system_id)
         return set()
     return {day for day, _ in parsed}
 
 
 async def record_day_completion(user_id: int, day_index: int) -> tuple[set[int], bool]:
-    rows = await list_day_completions(user_id)
+    system_id = await _active_system_id(user_id)
+    rows = await list_day_completions(user_id, system_id=system_id)
     parsed, latest = _parse_completion_rows(rows)
     now = datetime.now(UTC)
     if await _should_clear_day_completions(user_id, latest):
-        await clear_day_completions(user_id)
+        await clear_day_completions(user_id, system_id=system_id)
         parsed = []
         already_tracked = False
     else:
         already_tracked = any(day == day_index for day, _ in parsed)
-    await mark_day_completed(user_id, day_index, now.isoformat())
+    await mark_day_completed(user_id, day_index, now.isoformat(), system_id=system_id)
     current = {day for day, _ in parsed}
     current.add(day_index)
     return current, not already_tracked
@@ -902,7 +913,8 @@ async def compose_main_menu(
     tz_code = await get_user_timezone(user_id)
     zone = resolve_user_zone(tz_code)
     now_local = datetime.now(UTC).astimezone(zone)
-    last_completion = await get_last_completion_for_user(user_id)
+    system_id = await _active_system_id(user_id)
+    last_completion = await get_last_completion_for_user(user_id, system_id=system_id)
     if last_completion:
         day_idx, completed_at = last_completion
         if completed_at:
@@ -2650,8 +2662,14 @@ async def _render_trainer_overview(
     next_training_map: dict[int, datetime | None] = {}
     if trainees:
         trainee_ids = [int(entry[1]) for entry in trainees]
+        trainee_system_ids = await asyncio.gather(
+            *(_active_system_id(uid) for uid in trainee_ids)
+        )
         completion_rows = await asyncio.gather(
-            *(get_last_completion_for_user(uid) for uid in trainee_ids)
+            *(
+                get_last_completion_for_user(uid, system_id=int(sid or 0))
+                for uid, sid in zip(trainee_ids, trainee_system_ids)
+            )
         )
         last_completion_map = dict(zip(trainee_ids, completion_rows))
 
@@ -3923,7 +3941,8 @@ async def apply_fill_changes(
     prefs: UiPreferences,
 ):
     today_str = await get_user_local_date(user_id)
-    session_id = await get_or_create_today_session(user_id, today_str, state.day)
+    system_id = await _active_system_id(user_id)
+    session_id = await get_or_create_today_session(user_id, today_str, state.day, system_id=system_id)
     template: list[tuple[int, int | None, float | None]] = []
     for item in state.sets:
         reps_value = _coerce_fill_reps(item.get("reps"))
@@ -5578,8 +5597,9 @@ async def fetch_day_sheet_data(
     day_index: int,
     date_str: str,
 ) -> list[dict]:
-    ex_rows = await fetch_day_exercises(user_id, day_index, date_str)
-    session_id = await get_session_for_day(user_id, date_str, day_index)
+    system_id = await _active_system_id(user_id)
+    ex_rows = await fetch_day_exercises(user_id, day_index, date_str, system_id=system_id)
+    session_id = await get_session_for_day(user_id, date_str, day_index, system_id=system_id)
     last_done_map = build_last_done_dict(await list_last_done_dates(user_id))
     data: list[dict] = []
     for_time_loaded = False
@@ -6148,7 +6168,8 @@ async def send_day_cards_view(
     context.user_data.pop(DAY_DELETE_SCOPE_KEY, None)
     label = await get_day_label(user_id, day)
     today_str = await get_user_local_date(user_id)
-    ex_rows = await fetch_day_exercises(user_id, day, today_str)
+    system_id = await _active_system_id(user_id)
+    ex_rows = await fetch_day_exercises(user_id, day, today_str, system_id=system_id)
     custom = await get_custom_groups(user_id, context)
     summaries = await build_summary_map(user_id, day, ex_rows, today_str)
     last_done_rows = await list_last_done_dates(user_id)
@@ -6344,7 +6365,8 @@ async def build_summary_map(
     today: str,
 ) -> dict[int, str]:
     summary: dict[int, str] = {}
-    session_id = await get_session_for_day(user_id, today, day)
+    system_id = await _active_system_id(user_id)
+    session_id = await get_session_for_day(user_id, today, day, system_id=system_id)
     for ue_id, name, group, _, ex_id in ex_rows:
         resolved = resolve_group(name, group)
         with_weight, kind = get_display_flags(resolved, name)
@@ -6473,7 +6495,8 @@ async def show_day_group_view(
     prefs: UiPreferences | None = None,
 ):
     today_str = await get_user_local_date(user_id)
-    ex_rows = await fetch_day_exercises(user_id, day, today_str)
+    system_id = await _active_system_id(user_id)
+    ex_rows = await fetch_day_exercises(user_id, day, today_str, system_id=system_id)
     context.user_data.pop(DAY_DELETE_SCOPE_KEY, None)
     summaries = await build_summary_map(user_id, day, ex_rows, today_str)
     last_done_rows = await list_last_done_dates(user_id)
@@ -6538,7 +6561,8 @@ async def render_library_group_text(
     )
     lines.append("")
     first_entry = True
-    session_id = await get_session_for_day(user_id, today, 0)
+    system_id = await _active_system_id(user_id)
+    session_id = await get_session_for_day(user_id, today, 0, system_id=system_id)
     for ue_id, name in items:
         ex_id, _, ex_group = await get_exercise_info(ue_id)
         resolved_group = resolve_group(name, ex_group)
@@ -6646,7 +6670,8 @@ async def render_exercise_view(
     ex_id, name, raw_group = await get_exercise_info(ue_id)
     group = resolve_group(name, raw_group)
     today = datetime.now(UTC).strftime("%Y-%m-%d")
-    session_id = await get_or_create_today_session(user_id, today, day)
+    system_id = await _active_system_id(user_id)
+    session_id = await get_or_create_today_session(user_id, today, day, system_id=system_id)
     sets = await fetch_exercise_sets(session_id, ue_id)
     baseline = await get_baseline(user_id, day, ex_id)
     last_sets = await fetch_last_session_sets(user_id, day, ue_id, today)
@@ -9823,7 +9848,8 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await add_measurement_entry(user_id, FOR_TIME_METRIC, value, "")
             if not is_library:
                 today = await get_user_local_date(user_id)
-                session_id = await get_or_create_today_session(user_id, today, day)
+                system_id = await _active_system_id(user_id)
+                session_id = await get_or_create_today_session(user_id, today, day, system_id=system_id)
                 await mark_exercise_done(session_id, ue_id)
         chat_id = for_time_state.get("chat_id")
         msg_id = for_time_state.get("message_id")
@@ -9879,7 +9905,8 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         day = int(note_state.get("day", 0))
         ue_id = int(note_state.get("ue_id", 0))
         today = await get_user_local_date(user_id)
-        session_id = await get_or_create_today_session(user_id, today, day)
+        system_id = await _active_system_id(user_id)
+        session_id = await get_or_create_today_session(user_id, today, day, system_id=system_id)
         await set_exercise_note(session_id, ue_id, note_text)
         chat_id = note_state.get("chat_id")
         msg_id = note_state.get("message_id")
@@ -12538,7 +12565,8 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         return
                 return
             if action == "clear_completions":
-                await clear_day_completions(target_user_id)
+                target_system_id = await _active_system_id(target_user_id)
+                await clear_day_completions(target_user_id, system_id=target_system_id)
                 kb = await build_settings_keyboard_for_user(context, target_user_id)
                 await show_screen(
                     q,
@@ -12895,9 +12923,10 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if action == "sheetdone":
                 day = int(parts[2])
                 today_local = await get_user_local_date(target_user_id)
-                ex_rows = await fetch_day_exercises(target_user_id, day, today_local)
+                target_system_id = await _active_system_id(target_user_id)
+                ex_rows = await fetch_day_exercises(target_user_id, day, today_local, system_id=target_system_id)
                 if ex_rows:
-                    session_id = await get_or_create_today_session(target_user_id, today_local, day)
+                    session_id = await get_or_create_today_session(target_user_id, today_local, day, system_id=target_system_id)
                     for ue_id, *_ in ex_rows:
                         await mark_exercise_done(session_id, ue_id)
                 _, added_new = await record_day_completion(target_user_id, day)
@@ -12982,7 +13011,8 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 sub = parts[4] if len(parts) > 4 else None
                 clear_sheet_context(context, q.message.chat_id, q.message.message_id)
                 today_str = await get_user_local_date(target_user_id)
-                ex_rows = await fetch_day_exercises(target_user_id, day, today_str)
+                target_system_id = await _active_system_id(target_user_id)
+                ex_rows = await fetch_day_exercises(target_user_id, day, today_str, system_id=target_system_id)
                 custom = await get_custom_groups(target_user_id, context)
                 target_group = None if scope == "all" else scope
                 if sub is None:
@@ -13066,7 +13096,8 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 group = parts[3]
                 clear_sheet_context(context, q.message.chat_id, q.message.message_id)
                 today_str = await get_user_local_date(target_user_id)
-                ex_rows = await fetch_day_exercises(target_user_id, day, today_str)
+                target_system_id = await _active_system_id(target_user_id)
+                ex_rows = await fetch_day_exercises(target_user_id, day, today_str, system_id=target_system_id)
                 filtered = [row for row in ex_rows if row[2] == group]
                 if not filtered:
                     await q.answer("Эта группа уже отсутствует в дне.", show_alert=True)
@@ -13076,7 +13107,8 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     if context.user_data.get("add_group") == (day, group):
                         context.user_data.pop("add_group", None)
                     await q.answer("Группа удалена из дня.")
-                ex_rows = await fetch_day_exercises(target_user_id, day, today_str)
+                target_system_id = await _active_system_id(target_user_id)
+                ex_rows = await fetch_day_exercises(target_user_id, day, today_str, system_id=target_system_id)
                 order: list[str] = []
                 for _, _, raw_group, *_ in ex_rows:
                     if raw_group not in order:
@@ -13097,7 +13129,8 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 day = int(parts[2])
                 clear_sheet_context(context, q.message.chat_id, q.message.message_id)
                 today_str = await get_user_local_date(target_user_id)
-                ex_rows = await fetch_day_exercises(target_user_id, day, today_str)
+                target_system_id = await _active_system_id(target_user_id)
+                ex_rows = await fetch_day_exercises(target_user_id, day, today_str, system_id=target_system_id)
                 existing_groups = {g for _, _, g, _, _ in ex_rows}
                 custom = await get_custom_groups(target_user_id, context)
                 await show_screen(
@@ -13112,7 +13145,8 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 day = int(parts[2])
                 clear_sheet_context(context, q.message.chat_id, q.message.message_id)
                 today_str = await get_user_local_date(target_user_id)
-                ex_rows = await fetch_day_exercises(target_user_id, day, today_str)
+                target_system_id = await _active_system_id(target_user_id)
+                ex_rows = await fetch_day_exercises(target_user_id, day, today_str, system_id=target_system_id)
                 context.user_data[DAY_DELETE_SCOPE_KEY] = {"day": day, "group": None}
                 await show_screen(
                     q,
@@ -13154,7 +13188,8 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     if pending and pending[0] == day:
                         context.user_data.pop("awaiting_group_name", None)
                     today_str = await get_user_local_date(target_user_id)
-                    ex_rows = await fetch_day_exercises(target_user_id, day, today_str)
+                    target_system_id = await _active_system_id(target_user_id)
+                    ex_rows = await fetch_day_exercises(target_user_id, day, today_str, system_id=target_system_id)
                     existing_groups = {g for _, _, g, _, _ in ex_rows}
                     custom = await get_custom_groups(target_user_id, context)
                     kb = day_add_group_kb(
@@ -13234,7 +13269,8 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     await remove_user_exercise(target_user_id, day, ue_id)
                     suppress_completed_day_warning(context, target_user_id, day)
                     today_str = await get_user_local_date(target_user_id)
-                    ex_rows = await fetch_day_exercises(target_user_id, day, today_str)
+                    target_system_id = await _active_system_id(target_user_id)
+                    ex_rows = await fetch_day_exercises(target_user_id, day, today_str, system_id=target_system_id)
                     await q.answer("Упражнение удалено.")
                     scope = context.user_data.get(DAY_DELETE_SCOPE_KEY)
                     target_group = None
@@ -13454,7 +13490,8 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 return
             today_str = await get_user_local_date(target_user_id)
             async with user_locks[target_user_id]:
-                session_id = await get_or_create_today_session(target_user_id, today_str, day)
+                target_system_id = await _active_system_id(target_user_id)
+                session_id = await get_or_create_today_session(target_user_id, today_str, day, system_id=target_system_id)
                 if action == "fill":
                     await open_fill_editor(
                         q,
