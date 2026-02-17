@@ -6551,6 +6551,7 @@
       setVisible(document.getElementById('todayHeader'), normalized === 'today');
       updateAddButtonVisibility();
       if (normalized !== 'today') {
+        if (state.editor.open) closeEditor();
         closeManageAddSheet();
         setManageMenu(false);
         closeFinishPopover();
@@ -6591,6 +6592,7 @@
         renderSubscriptionScreen();
         loadSubscriptionOverview().catch(console.error);
       }
+      syncFinishFabVisibility();
     }
 
     function navigateTo(route, replace = false) {
