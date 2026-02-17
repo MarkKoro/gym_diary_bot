@@ -2442,7 +2442,7 @@ async def list_user_library_groups(user_id: int):
             SELECT DISTINCT e.id, e.muscle_group, e.name
             FROM user_exercises ue
             JOIN exercises e ON e.id=ue.exercise_id
-            WHERE ue.user_id=? AND ue.is_archived=0
+            WHERE ue.user_id=?
             """,
             (user_id,),
         )
@@ -2457,7 +2457,7 @@ async def list_user_library_groups(user_id: int):
 
 
 async def list_user_group_exercises(user_id: int, group_code: str, query: str | None = None):
-    conditions = ["ue.user_id=?", "ue.is_archived=0"]
+    conditions = ["ue.user_id=?"]
     params: list = [user_id]
     if group_code == "none":
         conditions.append("(e.muscle_group IS NULL OR TRIM(e.muscle_group)='')")

@@ -2825,14 +2825,15 @@ async def update_exercise_muscle_group(
     return {"ok": True, "id": exercise_id, "muscle_group": mg_value}
 
 
-async def _require_user_exercise(user_id: int, exercise_id: int) -> tuple[str, str | None]:
+async def _require_user_exercise(user_id: int, exercise_id: int, include_archived: bool = False) -> tuple[str, str | None]:
+    archived_clause = "" if include_archived else "AND ue.is_archived=0"
     async with db.connect_db() as conn:
         cur = await conn.execute(
-            """
+            f"""
             SELECT e.name, e.muscle_group
             FROM exercises e
             JOIN user_exercises ue ON ue.exercise_id = e.id
-            WHERE ue.user_id=? AND ue.exercise_id=? AND ue.is_archived=0
+            WHERE ue.user_id=? AND ue.exercise_id=? {archived_clause}
             LIMIT 1
             """,
             (user_id, exercise_id),
@@ -2906,7 +2907,7 @@ async def update_exercise_anatomy(
     ctx: AuthCtx = Depends(get_auth_ctx),
 ):
     user_id = ctx.user_id
-    name, muscle_group = await _require_user_exercise(user_id, exercise_id)
+    name, muscle_group = await _require_user_exercise(user_id, exercise_id, include_archived=True)
 
     items = []
     if isinstance(payload, dict):
@@ -2979,7 +2980,7 @@ async def exercise_history(
     ctx: AuthCtx = Depends(get_auth_ctx),
 ):
     user_id = ctx.user_id
-    name, muscle_group = await _require_user_exercise(user_id, exercise_id)
+    name, muscle_group = await _require_user_exercise(user_id, exercise_id, include_archived=True)
 
     end_date = _today_date()
     normalized_range, start_date = _resolve_range(range, end_date)
