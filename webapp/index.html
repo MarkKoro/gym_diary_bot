@@ -9282,6 +9282,11 @@
       } else closeFinishPopover();
     }
 
+    function shouldSkipFinishPopoverAutoClose(event) {
+      const target = event?.target;
+      return Boolean(target && target.closest?.('#finishFabWrap'));
+    }
+
 
     function resetAiCoachViewState() {
       state.aiCoach.hasResponse = false;
@@ -9303,6 +9308,7 @@
       state.aiCoach.open = true;
       document.body.classList.add('drawer-open', 'ai-coach-open');
       sheet.classList.add('show');
+      syncFinishFabVisibility();
       const modeEl = document.getElementById('aiCoachMode');
       if (modeEl) modeEl.value = state.aiCoach.mode || 'replace_exercises';
       renderAiCoachExamples();
@@ -9318,6 +9324,7 @@
       state.aiCoach.open = false;
       document.body.classList.remove('drawer-open', 'ai-coach-open');
       sheet.classList.remove('show');
+      syncFinishFabVisibility();
       resetAiCoachViewState();
       renderAiCoachExamples();
       renderAiCoachResult();
@@ -10223,13 +10230,14 @@
         return Boolean(target && (target.closest?.('.source-meta-wrap') || target.closest?.('#sheetSourceMetaWrap')));
       };
       document.addEventListener('click', (event) => {
-        closeFinishPopover();
+        if (!shouldSkipFinishPopoverAutoClose(event)) closeFinishPopover();
         if (!shouldSkipSourceMetaAutoClose(event)) closeSourceMetaPopover();
       });
       document.addEventListener('pointerdown', (event) => {
-        closeFinishPopover();
+        if (!shouldSkipFinishPopoverAutoClose(event)) closeFinishPopover();
         if (!shouldSkipSourceMetaAutoClose(event)) closeSourceMetaPopover();
       });
+      pop.addEventListener('pointerdown', (e) => e.stopPropagation());
       pop.addEventListener('click', (e) => e.stopPropagation());
       document.getElementById('manageExerciseBtn').addEventListener('click', (e) => { e.stopPropagation(); toggleManageMenu(); });
       document.getElementById('manageMenu').addEventListener('click', (e) => {
