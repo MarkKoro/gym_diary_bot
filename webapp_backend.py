@@ -3010,8 +3010,21 @@ async def exercise_history(
 
     rows = await db.fetch_exercise_history_points(user_id, exercise_id, start_iso, end_iso)
     timeline: dict[str, dict] = {}
-    sessions: dict[str, dict] = {}
-    for session_date, set_no, reps, seconds, weight in rows:
+    sessions_map: dict[int, dict] = {}
+    for row in rows:
+        (
+            session_id,
+            session_date,
+            system_id,
+            system_name,
+            system_color,
+            day_index,
+            day_label,
+            set_no,
+            reps,
+            seconds,
+            weight,
+        ) = row
         iso_date = session_date
         if iso_date not in timeline:
             timeline[iso_date] = {
@@ -3022,13 +3035,23 @@ async def exercise_history(
                 "volume": 0.0,
                 "set_count": 0,
             }
-        if iso_date not in sessions:
-            sessions[iso_date] = {"date": iso_date, "sets": []}
+        if session_id not in sessions_map:
+            sessions_map[session_id] = {
+                "session_id": int(session_id),
+                "date": iso_date,
+                "system_id": int(system_id or 0),
+                "system_name": system_name,
+                "system_color": system_color,
+                "day_index": int(day_index or 0),
+                "day_label": day_label,
+                "sets": [],
+            }
+
         item = timeline[iso_date]
         reps_val = int(reps or 0)
         sec_val = int(seconds or 0)
         weight_val = float(weight or 0.0)
-        sessions[iso_date]["sets"].append(
+        sessions_map[session_id]["sets"].append(
             {
                 "set_no": int(set_no or 0),
                 "reps": reps_val,
@@ -3046,11 +3069,28 @@ async def exercise_history(
         item["set_count"] += 1
 
     points = sorted(timeline.values(), key=lambda x: x["date"])
-    last_date, last_sets = await db.fetch_last_exercise_session(user_id, exercise_id)
+    sessions_list = sorted(sessions_map.values(), key=lambda x: (x["date"], x["session_id"]))
+
+    (
+        last_session_id,
+        last_date,
+        last_system_id,
+        last_system_name,
+        last_system_color,
+        last_day_index,
+        last_day_label,
+        last_sets,
+    ) = await db.fetch_last_exercise_session(user_id, exercise_id)
     last_session = None
-    if last_date and last_sets:
+    if last_session_id and last_date and last_sets:
         last_session = {
+            "session_id": int(last_session_id),
             "date": last_date,
+            "system_id": int(last_system_id or 0),
+            "system_name": last_system_name,
+            "system_color": last_system_color,
+            "day_index": int(last_day_index or 0),
+            "day_label": last_day_label,
             "sets": [
                 {
                     "set_no": int(row[0]),
@@ -3068,7 +3108,7 @@ async def exercise_history(
         "exercise_name": name,
         "range": normalized_range,
         "points": points,
-        "sessions": sorted(sessions.values(), key=lambda x: x["date"]),
+        "sessions": sessions_list,
         "last_session": last_session,
         "is_running": False,
     }

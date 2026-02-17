@@ -3106,6 +3106,16 @@
       return `${dateText} (${formatDaysAgo(diffDays)})`;
     }
 
+    function formatHistoryContext(session) {
+      if (!session) return '';
+      const sysName = session.system_name || '';
+      const sysPart = sysName ? `Система: ${sysName}` : '';
+      const dayLabel = session.day_label || (Number.isInteger(session.day_index) ? `День ${session.day_index}` : '');
+      const dayPart = dayLabel ? dayLabel : '';
+      if (sysPart && dayPart) return `${sysPart} · ${dayPart}`;
+      return sysPart || dayPart || '';
+    }
+
     function normalizePercents(raw) {
       const base = { chest: 0, back: 0, legs: 0, shoulders: 0, core: 0, biceps: 0, triceps: 0 };
       if (Array.isArray(raw)) {
@@ -4460,6 +4470,9 @@
         const dateLabel = document.createElement('div');
         dateLabel.className = 'group-count';
         dateLabel.textContent = sessions[idx]?.date || '—';
+        const ctxLabel = document.createElement('div');
+        ctxLabel.className = 'group-count';
+        ctxLabel.textContent = formatHistoryContext(sessions[idx]) || '';
         const table = document.createElement('table');
         table.className = 'history-table';
         table.innerHTML = '<tr><th>№</th><th>повт</th><th>сек</th><th>кг</th></tr>';
@@ -4472,7 +4485,7 @@
           setLibraryHistoryIndex(exId, nextIdx);
           renderLibrary();
         }, sessions[idx]?.date || '');
-        wrap.append(title, dateLabel, table, pager);
+        wrap.append(title, dateLabel, ctxLabel, table, pager);
         content.appendChild(wrap);
       }
       const points = state.library.history?.points || [];

@@ -1065,6 +1065,22 @@ async def init_db():
             UNIQUE(system_id, day_index)
         );
 
+        CREATE TABLE IF NOT EXISTS training_systems_archive(
+            system_id INTEGER PRIMARY KEY,
+            user_id INTEGER NOT NULL,
+            name TEXT NOT NULL,
+            color TEXT,
+            deleted_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS training_system_days_archive(
+            system_id INTEGER NOT NULL,
+            day_index INTEGER NOT NULL,
+            label TEXT,
+            deleted_at TEXT NOT NULL,
+            PRIMARY KEY(system_id, day_index)
+        );
+
         CREATE TABLE IF NOT EXISTS training_system_exercises(
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             system_id INTEGER NOT NULL,
@@ -1612,11 +1628,39 @@ async def set_training_system_color(user_id: int, system_id: int, color: str):
 
 async def delete_training_system(user_id: int, system_id: int):
     active_id = await get_active_training_system_id(user_id)
+    deleted_at = datetime.now(UTC).isoformat()
     async with connect_db() as db:
         cur = await db.execute("SELECT COUNT(*) FROM training_systems WHERE user_id=?", (user_id,))
         total = int((await cur.fetchone())[0] or 0)
         if total <= 1:
             return False
+        await db.execute(
+            """
+            INSERT INTO training_systems_archive(system_id, user_id, name, color, deleted_at)
+            SELECT id, user_id, name, color, ?
+            FROM training_systems
+            WHERE id=? AND user_id=?
+            ON CONFLICT(system_id) DO UPDATE SET
+                user_id=excluded.user_id,
+                name=excluded.name,
+                color=excluded.color,
+                deleted_at=excluded.deleted_at
+            """,
+            (deleted_at, system_id, user_id),
+        )
+        await db.execute(
+            """
+            INSERT INTO training_system_days_archive(system_id, day_index, label, deleted_at)
+            SELECT d.system_id, d.day_index, d.label, ?
+            FROM training_system_days d
+            JOIN training_systems s ON s.id=d.system_id
+            WHERE d.system_id=? AND s.user_id=?
+            ON CONFLICT(system_id, day_index) DO UPDATE SET
+                label=excluded.label,
+                deleted_at=excluded.deleted_at
+            """,
+            (deleted_at, system_id, user_id),
+        )
         await db.execute("DELETE FROM training_system_reminders WHERE system_id=?", (system_id,))
         await db.execute("DELETE FROM training_system_exercises WHERE system_id=?", (system_id,))
         await db.execute("DELETE FROM training_system_days WHERE system_id=?", (system_id,))
@@ -2022,18 +2066,10 @@ async def set_workouts_per_week(user_id: int, n: int) -> list[tuple[int, int, in
                 f"DELETE FROM exercise_baseline WHERE user_id=? AND day_index IN ({placeholders})",
                 (user_id, *day_params),
             )
-            # Историю выполненных тренировок и отметок не удаляем при смене количества
-            # тренировочных дней, чтобы пользователь не терял прогресс в статистике.
+            # Историю (sets/running_entries/sessions/day_completion_history) не удаляем,
+            # сохраняем статистику навсегда.
         if removed_ue_ids:
             ue_placeholders = ",".join("?" for _ in removed_ue_ids)
-            await db.execute(
-                f"DELETE FROM running_entries WHERE user_id=? AND user_exercise_id IN ({ue_placeholders})",
-                (user_id, *tuple(removed_ue_ids)),
-            )
-            await db.execute(
-                f"DELETE FROM sets WHERE user_exercise_id IN ({ue_placeholders})",
-                tuple(removed_ue_ids),
-            )
             await db.execute(
                 f"DELETE FROM session_exercises WHERE user_exercise_id IN ({ue_placeholders})",
                 tuple(removed_ue_ids),
@@ -2464,12 +2500,27 @@ async def fetch_exercise_history_points(user_id: int, exercise_id: int, start_da
     async with connect_db() as db:
         cur = await db.execute(
             f"""
-            SELECT s.date, st.set_no, st.reps, st.seconds, st.weight_kg
+            SELECT
+                s.id AS session_id,
+                s.date,
+                s.system_id,
+                COALESCE(ts.name, tsa.name) AS system_name,
+                COALESCE(ts.color, tsa.color) AS system_color,
+                s.day_index,
+                COALESCE(tsd.label, tsda.label) AS day_label,
+                st.set_no,
+                st.reps,
+                st.seconds,
+                st.weight_kg
             FROM sets st
             JOIN sessions s ON s.id = st.session_id
             JOIN user_exercises ue ON ue.id = st.user_exercise_id
+            LEFT JOIN training_systems ts ON ts.id = s.system_id AND ts.user_id = s.user_id
+            LEFT JOIN training_systems_archive tsa ON tsa.system_id = s.system_id AND tsa.user_id = s.user_id
+            LEFT JOIN training_system_days tsd ON tsd.system_id = s.system_id AND tsd.day_index = s.day_index
+            LEFT JOIN training_system_days_archive tsda ON tsda.system_id = s.system_id AND tsda.day_index = s.day_index
             WHERE s.user_id=? AND ue.exercise_id=? AND st.is_warmup=0 AND s.date<=? {date_clause}
-            ORDER BY s.date, st.set_no
+            ORDER BY s.date, session_id, st.set_no
             """,
             tuple(params),
         )
@@ -2480,20 +2531,44 @@ async def fetch_last_exercise_session(user_id: int, exercise_id: int):
     async with connect_db() as db:
         cur = await db.execute(
             """
-            SELECT s.id, s.date
+            SELECT s.id
             FROM sessions s
             JOIN sets st ON st.session_id=s.id AND st.is_warmup=0
             JOIN user_exercises ue ON ue.id=st.user_exercise_id
             WHERE s.user_id=? AND ue.exercise_id=?
-            ORDER BY s.date DESC, st.set_no DESC
+            ORDER BY s.date DESC, s.id DESC
             LIMIT 1
             """,
             (user_id, exercise_id),
         )
         row = await cur.fetchone()
         if not row:
-            return None, None
-        session_id, session_date = row
+            return None, None, None, None, None, None, None, []
+        session_id = int(row[0])
+        cur = await db.execute(
+            """
+            SELECT
+                s.date,
+                s.system_id,
+                COALESCE(ts.name, tsa.name) AS system_name,
+                COALESCE(ts.color, tsa.color) AS system_color,
+                s.day_index,
+                COALESCE(tsd.label, tsda.label) AS day_label
+            FROM sessions s
+            LEFT JOIN training_systems ts ON ts.id = s.system_id AND ts.user_id = s.user_id
+            LEFT JOIN training_systems_archive tsa ON tsa.system_id = s.system_id AND tsa.user_id = s.user_id
+            LEFT JOIN training_system_days tsd ON tsd.system_id = s.system_id AND tsd.day_index = s.day_index
+            LEFT JOIN training_system_days_archive tsda ON tsda.system_id = s.system_id AND tsda.day_index = s.day_index
+            WHERE s.id=? AND s.user_id=?
+            LIMIT 1
+            """,
+            (session_id, user_id),
+        )
+        context = await cur.fetchone()
+        if context:
+            session_date, system_id, system_name, system_color, day_index, day_label = context
+        else:
+            session_date, system_id, system_name, system_color, day_index, day_label = (None, None, None, None, None, None)
         cur = await db.execute(
             """
             SELECT set_no, reps, seconds, weight_kg
@@ -2506,7 +2581,7 @@ async def fetch_last_exercise_session(user_id: int, exercise_id: int):
             (session_id, user_id, exercise_id),
         )
         sets = await cur.fetchall()
-        return session_date, sets
+        return session_id, session_date, system_id, system_name, system_color, day_index, day_label, sets
 
 
 async def list_library_exercises(user_id: int, group: str):
