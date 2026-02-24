@@ -4990,8 +4990,18 @@ async def leaderboard_productivity_plan(
         selected = systems[0]
     plan_days = selected.get('days') if selected else await fetch_public_training_plan(int(leader_user_id))
     is_premium = await _has_active_subscription(int(leader_user_id))
-    unlocked = [code for code, _ in await list_user_achievements(int(leader_user_id))]
-    unlocked_icons = [achievements.ACHIEVEMENTS_BY_CODE[c].icon for c in unlocked if c in achievements.ACHIEVEMENTS_BY_CODE][:8]
+    unlocked_rows = await list_user_achievements(int(leader_user_id))
+    unlocked = [code for code, _ in unlocked_rows]
+    unlocked_icons = [
+        {
+            'code': code,
+            'icon': achievements.ACHIEVEMENTS_BY_CODE[code].icon,
+            'title': achievements.ACHIEVEMENTS_BY_CODE[code].title,
+            'unlocked_at': ts,
+        }
+        for code, ts in unlocked_rows
+        if code in achievements.ACHIEVEMENTS_BY_CODE
+    ][:8]
     cosmetics = await get_cosmetics(int(leader_user_id))
     selected_badge_icon = None
     if is_premium and cosmetics.get('badge_code') and not bool(cosmetics.get('badge_hidden')):
