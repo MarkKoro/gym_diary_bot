@@ -60,6 +60,8 @@ from db import (
     mark_exercise_done,
     mark_running_entry_done,
     add_custom_measurement,
+    delete_custom_measurement,
+    delete_measurement_category,
     add_measurement_category,
     add_measurement_entry,
     fetch_measurement_history,
@@ -3338,6 +3340,19 @@ async def measurements_add_custom(
     }
 
 
+@app.delete("/measurements/custom/{code}")
+async def measurements_delete_custom(
+    code: str,
+    ctx: AuthCtx = Depends(get_auth_ctx),
+):
+    user_id = ctx.user_id
+    measurement_code = (code or "").strip()
+    if not measurement_code:
+        raise HTTPException(status_code=400, detail="Code required")
+    removed = await delete_custom_measurement(user_id, measurement_code)
+    return {"ok": True, "removed": removed}
+
+
 @app.post("/measurements/category")
 async def measurements_add_category(
     payload: dict = Body(default={}),
@@ -3354,6 +3369,26 @@ async def measurements_add_category(
         raise HTTPException(status_code=400, detail="Letter required")
     code = await add_measurement_category(user_id, letter[:1], name)
     return {"ok": True, "code": code, "letter": letter[:1], "name": name}
+
+
+@app.delete("/measurements/category/{code}")
+async def measurements_delete_category(
+    code: str,
+    ctx: AuthCtx = Depends(get_auth_ctx),
+):
+    user_id = ctx.user_id
+    category_code = (code or "").strip()
+    if not category_code:
+        raise HTTPException(status_code=400, detail="Code required")
+    custom_items = await load_custom_measurements(user_id)
+    removed_items = 0
+    for item in custom_items:
+        if item.get("category") != category_code:
+            continue
+        if await delete_custom_measurement(user_id, item.get("code") or ""):
+            removed_items += 1
+    removed_category = await delete_measurement_category(user_id, category_code)
+    return {"ok": True, "removed": removed_category, "removed_items": removed_items}
 
 
 FEATURED_MEASUREMENTS_ORDER = ["body_weight", "body_fat", "chest", "hips"]

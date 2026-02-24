@@ -1312,6 +1312,8 @@
       transition: opacity 0.1s ease;
     }
     .chart-tooltip.show { opacity: 1; }
+    .chart-tooltip.edge-left { transform: translate(0, -110%); }
+    .chart-tooltip.edge-right { transform: translate(-100%, -110%); }
     .chart-description { color: var(--muted); font-size: 13px; margin-top: 8px; line-height: 1.4; }
     .chart-point { fill: var(--accent); stroke: var(--bg); stroke-width: 2; }
     .empty-day {
@@ -4644,9 +4646,12 @@
         if (field === 'top_seconds') label = `Секунды: ${val}`;
         tooltip.textContent = `${labelDate || 'Дата неизвестна'} — ${label}`;
         const leftPct = Math.min(96, Math.max(4, (x / 300) * 100));
-        const topPct = Math.min(94, Math.max(6, (y / 120) * 100));
+        const topPct = Math.min(94, Math.max(8, (y / 120) * 100));
         tooltip.style.left = `${leftPct}%`;
         tooltip.style.top = `${topPct}%`;
+        tooltip.classList.remove('edge-left', 'edge-right');
+        if (leftPct <= 12) tooltip.classList.add('edge-left');
+        if (leftPct >= 88) tooltip.classList.add('edge-right');
         tooltip.classList.add('show');
       };
 
@@ -5108,19 +5113,39 @@
         .join('');
       const formView = measurements.formView;
       const menuOpenClass = measurements.menuOpen ? 'open' : '';
-      const formTitle = formView === 'category' ? 'Добавить категорию' : 'Добавить свой замер';
+      const formTitle = formView === 'category' ? 'Добавить категорию' : (formView === 'delete' ? 'Удалить' : 'Добавить свой замер');
+      const customItems = categories.flatMap((category) => (category.items || []).map((item) => ({
+        ...item,
+        categoryName: category.name,
+      })));
+      const deleteCategoryOptions = categories
+        .filter((category) => !['body', 'composition', 'circumference', 'performance', 'custom'].includes(category.code))
+        .map((category) => `<option value="category:${category.code}">Категория: ${category.name}</option>`)
+        .join('');
+      const deleteMeasurementOptions = customItems
+        .map((item) => `<option value="measurement:${item.code}">Замер: ${item.name}${item.categoryName ? ` (${item.categoryName})` : ''}</option>`)
+        .join('');
+      const deleteOptions = `${deleteCategoryOptions}${deleteMeasurementOptions}`;
       const formBody = formView === 'category'
         ? `
-            <div class="settings-row">
-              <div class="label">Буква</div>
-              <input class="settings-input" id="measurementCategoryLetter" placeholder="A">
-            </div>
             <div class="settings-row">
               <div class="label">Название</div>
               <input class="settings-input" id="measurementCategoryName" placeholder="Например: Биомаркеры">
             </div>
             <div class="settings-actions">
               <button class="btn" data-action="measurement-create-category">Добавить категорию</button>
+            </div>
+          `
+        : formView === 'delete'
+        ? `
+            <div class="settings-row">
+              <div class="label">Что удалить</div>
+              <select class="settings-select" id="measurementDeleteTarget">
+                ${deleteOptions || '<option value="">Нет доступных элементов</option>'}
+              </select>
+            </div>
+            <div class="settings-actions">
+              <button class="btn danger" data-action="measurement-delete" ${deleteOptions ? '' : 'disabled'}>Удалить</button>
             </div>
           `
         : `
@@ -5163,6 +5188,7 @@
                 <div class="measurements-plus-menu ${menuOpenClass}">
                   <button type="button" data-action="measurement-open-form" data-form="custom">Добавить свой замер</button>
                   <button type="button" data-action="measurement-open-form" data-form="category">Добавить категорию</button>
+                  <button type="button" data-action="measurement-open-form" data-form="delete">Удалить…</button>
                 </div>
               </div>
               <button class="icon-btn" data-action="measurement-overview" aria-label="График всех замеров">
@@ -5466,9 +5492,6 @@
               <select class="settings-select" data-settings-timezone>${timezoneOptions}</select>
             </div>
             <div class="settings-list settings-panel">${remindersHtml}</div>
-            <div class="settings-actions">
-              <button class="btn primary" data-action="save-reminders">Сохранить уведомления</button>
-            </div>
           </div>
         `,
         trainer: `
@@ -5985,9 +6008,7 @@
         return true;
       }
       if (action === 'measurement-create-category') {
-        const letterInput = document.getElementById('measurementCategoryLetter');
         const nameInput = document.getElementById('measurementCategoryName');
-        const letter = (letterInput?.value || '').trim();
         const name = (nameInput?.value || '').trim();
         if (!name) {
           toast('Введите название категории');
@@ -5995,12 +6016,32 @@
         }
         await apiFetch('/gymapi/measurements/category', {
           method: 'POST',
-          body: JSON.stringify({ letter, name }),
+          body: JSON.stringify({ name }),
         });
-        if (letterInput) letterInput.value = '';
         if (nameInput) nameInput.value = '';
         measurements.formView = null;
         toast('Категория добавлена ✅');
+        await loadMeasurementsOverview({ force: true });
+        return true;
+      }
+
+      if (action === 'measurement-delete') {
+        const select = document.getElementById('measurementDeleteTarget');
+        const targetValue = (select?.value || '').trim();
+        if (!targetValue) {
+          toast('Нечего удалять');
+          return true;
+        }
+        const [kind, code] = targetValue.split(':');
+        if (!kind || !code) return true;
+        if (kind === 'category') {
+          await apiFetch(`/gymapi/measurements/category/${encodeURIComponent(code)}`, { method: 'DELETE' });
+          toast('Категория удалена ✅');
+        } else {
+          await apiFetch(`/gymapi/measurements/custom/${encodeURIComponent(code)}`, { method: 'DELETE' });
+          toast('Замер удалён ✅');
+        }
+        measurements.formView = null;
         await loadMeasurementsOverview({ force: true });
         return true;
       }
@@ -6124,7 +6165,7 @@
           }
           if (action === 'toggle-notifications') {
             state.settings.notificationsEnabled = !state.settings.notificationsEnabled;
-            renderSettings();
+            await saveRemindersFromUI();
             return;
           }
           if (action === 'toggle-timer-widget') {
@@ -6186,10 +6227,6 @@
             renderProductivityHub();
             renderSettings();
             toast(visible ? 'Участие в рейтинге включено' : 'Режим анонимности включён');
-            return;
-          }
-          if (action === 'save-reminders') {
-            await saveRemindersFromUI();
             return;
           }
           if (action === 'clear-completions') {
@@ -6306,12 +6343,23 @@
           toast('Ошибка связи. Попробуй ещё раз.');
         }
       });
-      container.addEventListener('change', (event) => {
-        const target = event.target.closest('[data-settings-timezone]');
-        if (!target) return;
-        state.settings.timezone = target.value;
-        renderSettings();
+      container.addEventListener('change', async (event) => {
+        const timezoneTarget = event.target.closest('[data-settings-timezone]');
+        if (timezoneTarget) {
+          state.settings.timezone = timezoneTarget.value;
+          await saveRemindersFromUI();
+          return;
+        }
+        const reminderTarget = event.target.closest('[data-reminder-dow], [data-reminder-time]');
+        if (reminderTarget) {
+          await saveRemindersFromUI();
+        }
       });
+      container.addEventListener('blur', async (event) => {
+        const reminderTarget = event.target.closest('[data-reminder-time]');
+        if (!reminderTarget) return;
+        await saveRemindersFromUI();
+      }, true);
     }
 
     function setupMeasurementsHandlers() {
