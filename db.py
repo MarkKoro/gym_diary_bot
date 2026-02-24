@@ -197,6 +197,62 @@ async def _ensure_muscle_map_schema(db):
     )
 
 
+async def _ensure_achievements_schema(db):
+    await db.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS user_achievements(
+            user_id INTEGER NOT NULL,
+            code TEXT NOT NULL,
+            unlocked_at TEXT NOT NULL,
+            PRIMARY KEY(user_id, code)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_user_achievements_user_unlocked
+            ON user_achievements(user_id, unlocked_at DESC);
+
+        CREATE TABLE IF NOT EXISTS training_system_copy_events(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            source_user_id INTEGER NOT NULL,
+            source_system_id INTEGER NOT NULL,
+            target_user_id INTEGER NOT NULL,
+            target_system_id INTEGER NOT NULL,
+            copied_at TEXT NOT NULL,
+            first_trained_at TEXT,
+            last_trained_at TEXT,
+            UNIQUE(source_user_id, source_system_id, target_user_id, target_system_id)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_copy_events_source_trained
+            ON training_system_copy_events(source_user_id, first_trained_at);
+
+        CREATE INDEX IF NOT EXISTS idx_copy_events_target_system
+            ON training_system_copy_events(target_user_id, target_system_id);
+
+        CREATE TABLE IF NOT EXISTS user_events(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            event_type TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_user_events_user_type_created
+            ON user_events(user_id, event_type, created_at DESC);
+        """
+    )
+
+    if not await _column_exists(db, "user_prefs", "title_frame_code"):
+        await db.execute("ALTER TABLE user_prefs ADD COLUMN title_frame_code TEXT DEFAULT NULL")
+    if not await _column_exists(db, "user_prefs", "badge_code"):
+        await db.execute("ALTER TABLE user_prefs ADD COLUMN badge_code TEXT DEFAULT NULL")
+    if not await _column_exists(db, "user_prefs", "badge_hidden"):
+        await db.execute(
+            "ALTER TABLE user_prefs ADD COLUMN badge_hidden INTEGER CHECK(badge_hidden IN (0,1)) DEFAULT 0"
+        )
+    await db.execute(
+        "UPDATE user_prefs SET badge_hidden = 0 WHERE badge_hidden IS NULL OR badge_hidden NOT IN (0,1)"
+    )
+
+
 async def search_catalog_exercises(query: str | None, limit: int = 50):
     pattern = f"%{(query or '').strip().lower()}%"
     async with connect_db() as db:
@@ -935,7 +991,10 @@ async def init_db():
             ui_mode TEXT CHECK(ui_mode IN ('compact','detailed')) DEFAULT 'detailed',
             ui_emoji_enabled INTEGER CHECK(ui_emoji_enabled IN (0,1)) DEFAULT 1,
             ui_verbose_level INTEGER CHECK(ui_verbose_level IN (0,1)) DEFAULT 0,
-            suppress_webapp_prompt INTEGER CHECK(suppress_webapp_prompt IN (0,1)) DEFAULT 0
+            suppress_webapp_prompt INTEGER CHECK(suppress_webapp_prompt IN (0,1)) DEFAULT 0,
+            title_frame_code TEXT DEFAULT NULL,
+            badge_code TEXT DEFAULT NULL,
+            badge_hidden INTEGER CHECK(badge_hidden IN (0,1)) DEFAULT 0
         );
 
         CREATE TABLE IF NOT EXISTS user_measurements(
@@ -1304,6 +1363,7 @@ async def init_db():
         await _ensure_sessions_unique_by_day_and_system(db)
         await _ensure_day_completions_system_scope(db)
         await _migrate_duration_metrics(db)
+        await _ensure_achievements_schema(db)
         await db.commit()
 
         await _seed_exercises(db, DEFAULT_EXERCISES)
@@ -4091,6 +4151,189 @@ async def set_day_view_mode(user_id: int, mode: str):
             (user_id, mode, mode),
         )
         await db.commit()
+
+
+async def ensure_achievements_schema() -> None:
+    async with connect_db() as db:
+        await _ensure_achievements_schema(db)
+        await db.commit()
+
+
+async def list_user_achievements(user_id: int) -> list[tuple[str, str]]:
+    async with connect_db() as db:
+        cur = await db.execute(
+            """
+            SELECT code, unlocked_at
+            FROM user_achievements
+            WHERE user_id=?
+            ORDER BY unlocked_at DESC
+            """,
+            (user_id,),
+        )
+        rows = await cur.fetchall()
+    return [(str(row[0]), str(row[1])) for row in rows]
+
+
+async def grant_achievement(user_id: int, code: str, unlocked_at: str | None = None) -> bool:
+    ts = unlocked_at or datetime.now(UTC).isoformat()
+    async with connect_db() as db:
+        cur = await db.execute(
+            """
+            INSERT OR IGNORE INTO user_achievements(user_id, code, unlocked_at)
+            VALUES(?,?,?)
+            """,
+            (user_id, code, ts),
+        )
+        await db.commit()
+        return bool(cur.rowcount)
+
+
+async def get_cosmetics(user_id: int) -> dict[str, int | str | None]:
+    async with connect_db() as db:
+        cur = await db.execute(
+            """
+            SELECT title_frame_code, badge_code, badge_hidden
+            FROM user_prefs
+            WHERE user_id=?
+            """,
+            (user_id,),
+        )
+        row = await cur.fetchone()
+    if not row:
+        return {"title_frame_code": None, "badge_code": None, "badge_hidden": 0}
+    title_frame_code, badge_code, badge_hidden = row
+    return {
+        "title_frame_code": title_frame_code or None,
+        "badge_code": badge_code or None,
+        "badge_hidden": 1 if badge_hidden == 1 else 0,
+    }
+
+
+async def set_title_frame(user_id: int, frame_code_or_null: str | None):
+    async with connect_db() as db:
+        await db.execute(
+            """
+            INSERT INTO user_prefs(user_id, title_frame_code) VALUES(?,?)
+            ON CONFLICT(user_id) DO UPDATE SET title_frame_code=excluded.title_frame_code
+            """,
+            (user_id, frame_code_or_null),
+        )
+        await db.commit()
+
+
+async def set_badge(user_id: int, badge_code_or_null: str | None):
+    async with connect_db() as db:
+        await db.execute(
+            """
+            INSERT INTO user_prefs(user_id, badge_code) VALUES(?,?)
+            ON CONFLICT(user_id) DO UPDATE SET badge_code=excluded.badge_code
+            """,
+            (user_id, badge_code_or_null),
+        )
+        await db.commit()
+
+
+async def set_badge_hidden(user_id: int, hidden: bool):
+    value = 1 if hidden else 0
+    async with connect_db() as db:
+        await db.execute(
+            """
+            INSERT INTO user_prefs(user_id, badge_hidden) VALUES(?,?)
+            ON CONFLICT(user_id) DO UPDATE SET badge_hidden=excluded.badge_hidden
+            """,
+            (user_id, value),
+        )
+        await db.commit()
+
+
+async def log_user_event(user_id: int, event_type: str, created_at: str | None = None):
+    ts = created_at or datetime.now(UTC).isoformat()
+    async with connect_db() as db:
+        await db.execute(
+            """
+            INSERT INTO user_events(user_id, event_type, created_at)
+            VALUES(?,?,?)
+            """,
+            (user_id, event_type, ts),
+        )
+        await db.commit()
+
+
+async def count_user_events(user_id: int, event_type: str) -> int:
+    async with connect_db() as db:
+        cur = await db.execute(
+            "SELECT COUNT(*) FROM user_events WHERE user_id=? AND event_type=?",
+            (user_id, event_type),
+        )
+        row = await cur.fetchone()
+    return int((row[0] if row and row[0] is not None else 0) or 0)
+
+
+async def record_system_copy(
+    source_user_id: int,
+    source_system_id: int,
+    target_user_id: int,
+    target_system_id: int,
+):
+    copied_at = datetime.now(UTC).isoformat()
+    async with connect_db() as db:
+        await db.execute(
+            """
+            INSERT OR IGNORE INTO training_system_copy_events(
+                source_user_id, source_system_id, target_user_id, target_system_id, copied_at
+            ) VALUES(?,?,?,?,?)
+            """,
+            (source_user_id, source_system_id, target_user_id, target_system_id, copied_at),
+        )
+        await db.commit()
+
+
+async def mark_copy_trained(
+    target_user_id: int,
+    target_system_id: int,
+    trained_at: str | None = None,
+) -> int:
+    ts = trained_at or datetime.now(UTC).isoformat()
+    async with connect_db() as db:
+        cur = await db.execute(
+            """
+            UPDATE training_system_copy_events
+            SET first_trained_at = COALESCE(first_trained_at, ?),
+                last_trained_at = ?
+            WHERE target_user_id=? AND target_system_id=?
+            """,
+            (ts, ts, target_user_id, target_system_id),
+        )
+        await db.commit()
+        return int(cur.rowcount or 0)
+
+
+async def count_trained_copies_for_source(source_user_id: int) -> int:
+    async with connect_db() as db:
+        cur = await db.execute(
+            """
+            SELECT COUNT(*)
+            FROM training_system_copy_events
+            WHERE source_user_id=? AND first_trained_at IS NOT NULL
+            """,
+            (source_user_id,),
+        )
+        row = await cur.fetchone()
+    return int((row[0] if row and row[0] is not None else 0) or 0)
+
+
+async def count_trained_copies_for_source_system(source_user_id: int, source_system_id: int) -> int:
+    async with connect_db() as db:
+        cur = await db.execute(
+            """
+            SELECT COUNT(*)
+            FROM training_system_copy_events
+            WHERE source_user_id=? AND source_system_id=? AND first_trained_at IS NOT NULL
+            """,
+            (source_user_id, source_system_id),
+        )
+        row = await cur.fetchone()
+    return int((row[0] if row and row[0] is not None else 0) or 0)
 
 
 async def add_measurement_entry(user_id: int, metric: str, value: float, extra: str | None = None):
