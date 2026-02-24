@@ -79,6 +79,31 @@
     .header-right { display: flex; align-items: center; gap: 7px; justify-content: flex-end; }
     .header-title { font-size: 18px; font-weight: 800; letter-spacing: -0.02em; }
     .header-title { justify-self: center; text-align: center; }
+    .header-title.title-frame { position: relative; padding: 6px 10px; border-radius: 14px; }
+    .header-title.title-frame::before { content:''; position:absolute; inset:-2px; border-radius: 16px; opacity:.9; pointer-events:none; z-index:-1; }
+    .header-title.title-frame::after { content:''; position:absolute; inset:0; border-radius: 14px; background: rgba(255,255,255,0.06); pointer-events:none; }
+    .header-title.title-frame.frame_first_set::before { background: linear-gradient(90deg, #f59e0b, #fbbf24); }
+    .header-title.title-frame.frame_check::before { background: linear-gradient(90deg, #10b981, #34d399); }
+    .header-title.title-frame.frame_fire::before { background: linear-gradient(90deg, #fb7185, #f97316); }
+    .header-title.title-frame.frame_fuse::before { background: linear-gradient(90deg, #f43f5e, #f59e0b, #ef4444); }
+    .header-title.title-frame.frame_toolbox::before { background: linear-gradient(90deg, #14b8a6, #06b6d4); }
+    .header-title.title-frame.frame_lab::before { background: linear-gradient(90deg, #22d3ee, #6366f1); }
+    .header-title.title-frame.frame_brick::before { background: repeating-linear-gradient(90deg, #b45309 0 10px, #92400e 10px 20px); }
+    .header-title.title-frame.frame_crane::before { background: linear-gradient(90deg, #f59e0b, #fcd34d, #64748b); }
+    .header-title.title-frame.frame_gear::before { background: repeating-linear-gradient(135deg, #64748b 0 6px, #94a3b8 6px 12px); }
+    .header-title.title-frame.frame_runner::before { background: linear-gradient(90deg, #06b6d4, #0ea5e9, #3b82f6); }
+    .header-title.title-frame.frame_finish::before { background: repeating-linear-gradient(90deg, #111827 0 8px, #f8fafc 8px 16px); }
+    .header-title.title-frame.frame_puzzle::before { background: linear-gradient(90deg, #8b5cf6, #a78bfa); }
+    .header-title.title-frame.frame_paint::before { background: linear-gradient(90deg, #ec4899, #8b5cf6, #06b6d4); }
+    .header-title.title-frame.frame_star::before { background: radial-gradient(circle at 20% 20%, #fde68a, #f59e0b 70%); }
+    .header-title.title-frame.frame_spy::before { background: linear-gradient(90deg, #334155, #0f172a); }
+    .header-title.title-frame.frame_graph::before { background: linear-gradient(90deg, #22c55e, #16a34a, #0ea5e9); }
+    .header-title.title-frame.frame_gym::before { background: linear-gradient(90deg, #991b1b, #dc2626, #b91c1c); }
+    .header-title.title-frame.frame_coach::before { background: linear-gradient(90deg, #1d4ed8, #2563eb); }
+    .header-title.title-frame.frame_chick::before { background: linear-gradient(90deg, #facc15, #fde047); }
+    .header-title.title-frame.frame_boomerang::before { background: linear-gradient(90deg, #f97316, #ef4444, #f59e0b); }
+    .header-title.title-frame.frame_wall::before { background: repeating-linear-gradient(90deg, #78716c 0 12px, #a8a29e 12px 24px); }
+    .header-title.title-frame.frame_moon::before { background: radial-gradient(circle at 70% 30%, #c4b5fd, #312e81); }
     .status { display: inline-flex; align-items: center; gap: 6px; padding: 8px 12px; border-radius: 12px; background: var(--glass-surface); border: 1px solid var(--border); color: var(--muted); font-size: 13px; box-shadow: var(--shadow); white-space: nowrap; backdrop-filter: blur(12px); }
     .status .dot { width: 10px; height: 10px; border-radius: 50%; background: #9ca3af; box-shadow: 0 0 0 2px color-mix(in srgb, var(--bg) 70%, transparent); }
     .status.ready .dot { background: #34c759; }
@@ -394,6 +419,17 @@
     .screen { display: none; flex-direction: column; gap: 16px; }
     .screen.active { display: flex; }
     .card-list { display: flex; flex-direction: column; gap: 12px; }
+    .ach-grid { display: grid; gap: 8px; }
+    .ach-card {
+      background: color-mix(in srgb, var(--card) 92%, var(--bg));
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 10px 12px;
+      color: var(--text);
+    }
+    .ach-locked { opacity: 0.45; filter: grayscale(1); }
+    .ach-row { display: flex; align-items: center; gap: 10px; }
+    .ach-icon { width: 24px; min-width: 24px; text-align: center; font-size: 20px; line-height: 1; }
       .card {
         background: var(--card);
         border-radius: var(--radius);
@@ -1663,6 +1699,9 @@
     .leader-profile { margin-top: 12px; border: 1px solid var(--border); border-radius: 12px; padding: 10px; }
     .leader-profile-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 8px; }
     .leader-profile-days { display: grid; gap: 8px; max-height: 300px; overflow: auto; }
+    .leader-badges { margin-top: 8px; display: flex; flex-wrap: wrap; gap: 6px; }
+    .mini-badge { display:inline-flex; align-items:center; justify-content:center; width:22px; height:22px; border-radius:8px; background: rgba(0,0,0,0.06); margin-right:6px; }
+    [data-theme="dark"] .mini-badge { background: rgba(255,255,255,0.08); }
     .leader-day-card { border: 1px solid var(--border); border-radius: 10px; padding: 8px; background: var(--bg); }
     .leader-day-title { font-weight: 800; margin-bottom: 6px; }
     .leader-ex-item { display: flex; justify-content: space-between; gap: 8px; padding: 4px 0; border-bottom: 1px dashed color-mix(in srgb, var(--border) 80%, transparent); }
@@ -2078,6 +2117,7 @@
         <button class="menu-item active" data-route="today">Сегодня</button>
         <button class="menu-item" data-route="measurements">Мои замеры</button>
         <button class="menu-item" data-route="library">Статистика упражнений</button>
+        <button class="menu-item" data-route="achievements">Достижения</button>
         <button class="menu-item" data-route="subscription" id="drawerSubscriptionBtn">Подписка · неактивно</button>
         <button class="menu-item" data-route="settings">Настройки</button>
       </nav>
@@ -2235,6 +2275,10 @@
           <div class="card-title">Статистика упражнений</div>
           <div id="libraryContent"></div>
         </div>
+      </section>
+
+      <section id="screen-achievements" class="screen" data-route="achievements">
+        <div class="card-list" id="achievementsContent"></div>
       </section>
 
       <section id="screen-settings" class="screen" data-route="settings">
@@ -2713,6 +2757,7 @@
       settings: 'Настройки',
       subscription: 'Подписка',
       measurements: 'Мои замеры',
+      achievements: 'Достижения',
     };
 
     const state = {
@@ -2761,6 +2806,13 @@
           pendingIds: new Set(),
           loading: false,
         },
+      },
+      achievements: {
+        loading: false,
+        loaded: false,
+        overview: null,
+        savingFrame: false,
+        savingBadge: false,
       },
       library: {
         view: 'groups',
@@ -3559,12 +3611,16 @@
         const active = sid === selectedSystemId;
         return `<button class="btn small-btn ${active ? 'primary' : ''}" data-action="leader-system-select" data-user-id="${lb.profile.leader_user_id}" data-system-id="${sid}">${sys.name || ('Система ' + sid)}</button>`;
       }).join('');
+      const mark = lb.profile.display_mark || lb.profile.selected_badge_icon || (lb.profile.is_premium ? '⭐' : '');
+      const icons = Array.isArray(lb.profile.unlocked_icons) ? lb.profile.unlocked_icons : [];
+      const iconsHtml = icons.slice(0, 8).map((i) => `<span class="mini-badge">${escapeHtml(i)}</span>`).join('');
       return `
         <div class="leader-profile" id="leaderProfileInline">
           <div class="leader-profile-head">
             <div>
-              <div class="card-title">План лидера @${lb.profile.username || 'athlete'}</div>
+              <div class="card-title">План лидера @${lb.profile.username || 'athlete'}${mark ? ` ${mark}` : ''}</div>
               <div class="timer-hint">Можно переключать системы и копировать выбранную себе.</div>
+              ${iconsHtml ? `<div class="leader-badges">${iconsHtml}</div>` : ''}
             </div>
             <div style="display:flex; gap:8px;">
               <button class="btn" data-action="leader-profile-close">Закрыть</button>
@@ -3602,12 +3658,13 @@
       listEl.innerHTML = lb.items.map((item) => {
         const medalClass = item.rank === 1 ? 'medal-gold' : (item.rank === 2 ? 'medal-silver' : (item.rank === 3 ? 'medal-bronze' : ''));
         const isActive = Number(lb.selectedUserId) === Number(item.user_id);
+        const mark = item.display_mark || item.badge_icon || (item.is_premium ? '⭐' : '');
         return `
           <div class="leader-item" id="leaderItem-${item.user_id}">
             <button class="leader-row ${isActive ? 'active' : ''}" data-action="leader-open" data-user-id="${item.user_id}">
               <div class="leader-rank ${medalClass}">#${item.rank}</div>
               <div>
-                <div class="leader-name">@${item.username}</div>
+                <div class="leader-name">@${item.username}${mark ? ' ' + mark : ''}</div>
                 <div class="leader-score">Топ ${item.top_percent}% · score ${item.score}/100</div>
               </div>
               <div class="timer-hint">Открыть</div>
@@ -3656,6 +3713,10 @@
           system_id: data.system_id,
           systems: data.systems || [],
           days: data.days || [],
+          display_mark: data.display_mark || row?.display_mark || null,
+          selected_badge_icon: data.selected_badge_icon || null,
+          is_premium: !!data.is_premium,
+          unlocked_icons: Array.isArray(data.unlocked_icons) ? data.unlocked_icons : [],
         };
       } catch (e) {
         toast('Не удалось открыть профиль лидера');
@@ -3704,6 +3765,7 @@
         renderSystemsHub();
         applyTrainingTint();
         syncHeaderTitle();
+        applyTitleFrame();
       }
     }
 
@@ -5207,6 +5269,241 @@
       `;
     }
 
+    function renderAchievementsScreen() {
+      const root = document.getElementById('achievementsContent');
+      if (!root) return;
+      root.innerHTML = '';
+      const card = document.createElement('div');
+      card.className = 'card';
+      const title = document.createElement('div');
+      title.className = 'card-title';
+      title.textContent = 'Достижения';
+
+      if (state.achievements.loading && !state.achievements.loaded) {
+        const loading = document.createElement('div');
+        loading.className = 'muted-inline';
+        loading.textContent = 'Загрузка…';
+        card.append(title, loading);
+        root.appendChild(card);
+        return;
+      }
+
+      const ov = state.achievements.overview;
+      const list = Array.isArray(ov?.achievements) ? ov.achievements : [];
+      if (!list.length) {
+        const empty = document.createElement('div');
+        empty.className = 'muted-inline';
+        empty.textContent = 'Пока нет достижений.';
+        card.append(title, empty);
+        root.appendChild(card);
+        return;
+      }
+
+      const unlocked = list.filter((x) => !!x.unlocked);
+      const locked = list.filter((x) => !x.unlocked);
+      const hasSub = !!ov?.has_subscription;
+      const currentFrame = ov?.cosmetics?.title_frame_code || null;
+      const currentBadge = ov?.cosmetics?.badge_code || null;
+      const frameItems = Array.from(
+        new Map(
+          unlocked
+            .filter((x) => !!x.frame_code)
+            .map((x) => [String(x.frame_code), x])
+        ).values()
+      );
+
+      const frameTitle = document.createElement('div');
+      frameTitle.className = 'card-title';
+      frameTitle.style.marginTop = '6px';
+      frameTitle.textContent = 'Оформление названия системы';
+
+      const frameHint = document.createElement('div');
+      frameHint.className = 'timer-hint';
+      frameHint.textContent = 'Выбери рамку из открытых достижений';
+
+      const framePreview = document.createElement('div');
+      framePreview.className = 'header-title';
+      framePreview.style.width = 'fit-content';
+      framePreview.style.margin = '4px 0 8px';
+      framePreview.textContent = 'Название системы';
+      if (currentFrame) {
+        framePreview.classList.add('title-frame', currentFrame);
+      }
+
+      const frameGrid = document.createElement('div');
+      frameGrid.className = 'ach-grid';
+
+      const createFrameBtn = (label, frameCode, active) => {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'ach-card';
+        if (active) btn.style.borderColor = 'var(--accent)';
+        if (active) btn.style.boxShadow = '0 0 0 1px color-mix(in srgb, var(--accent) 55%, transparent)';
+        btn.style.cursor = state.achievements.savingFrame ? 'wait' : 'pointer';
+        btn.disabled = !!state.achievements.savingFrame;
+        const preview = document.createElement('div');
+        preview.className = 'header-title';
+        preview.style.width = 'fit-content';
+        preview.style.fontSize = '15px';
+        preview.textContent = 'Название системы';
+        if (frameCode) preview.classList.add('title-frame', frameCode);
+        const name = document.createElement('div');
+        name.className = 'timer-hint';
+        name.style.marginTop = '6px';
+        name.textContent = active ? `${label} · выбрано` : label;
+        btn.append(preview, name);
+        btn.addEventListener('click', async () => {
+          if (state.achievements.savingFrame) return;
+          state.achievements.savingFrame = true;
+          renderAchievementsScreen();
+          try {
+            await apiFetch('/gymapi/achievements/select_frame', {
+              method: 'POST',
+              body: JSON.stringify({ frame_code: frameCode }),
+            });
+            if (!state.achievements.overview) state.achievements.overview = {};
+            if (!state.achievements.overview.cosmetics) state.achievements.overview.cosmetics = {};
+            state.achievements.overview.cosmetics.title_frame_code = frameCode;
+            applyTitleFrame();
+            toast('Оформление применено');
+          } catch (e) {
+            console.error(e);
+            toast('Не удалось сохранить оформление');
+          } finally {
+            state.achievements.savingFrame = false;
+            renderAchievementsScreen();
+          }
+        });
+        return btn;
+      };
+
+      frameGrid.appendChild(createFrameBtn('Сбросить', null, !currentFrame));
+      for (const item of frameItems) {
+        frameGrid.appendChild(
+          createFrameBtn(String(item.title || item.code || 'Рамка'), String(item.frame_code), currentFrame === item.frame_code)
+        );
+      }
+
+      const statusTitle = document.createElement('div');
+      statusTitle.className = 'card-title';
+      statusTitle.style.marginTop = '12px';
+      statusTitle.textContent = 'Статус';
+
+      const statusGrid = document.createElement('div');
+      statusGrid.className = 'ach-grid';
+
+      const createBadgeBtn = (label, icon, badgeCode, active) => {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'ach-card';
+        btn.style.cursor = state.achievements.savingBadge ? 'wait' : 'pointer';
+        btn.disabled = !!state.achievements.savingBadge;
+        if (active) {
+          btn.style.borderColor = 'var(--accent)';
+          btn.style.boxShadow = '0 0 0 1px color-mix(in srgb, var(--accent) 55%, transparent)';
+        }
+        const row = document.createElement('div');
+        row.className = 'ach-row';
+        row.innerHTML = `
+          <div class="ach-icon">${escapeHtml(icon || '⭐')}</div>
+          <div>
+            <div style="font-weight:700">${escapeHtml(active ? `${label} · выбрано` : label)}</div>
+            <div class="timer-hint">Статус в лидерборде</div>
+          </div>
+        `;
+        btn.appendChild(row);
+        btn.addEventListener('click', async () => {
+          if (state.achievements.savingBadge) return;
+          state.achievements.savingBadge = true;
+          renderAchievementsScreen();
+          try {
+            await apiFetch('/gymapi/achievements/select_badge', {
+              method: 'POST',
+              body: JSON.stringify({ badge_code: badgeCode }),
+            });
+            if (!state.achievements.overview) state.achievements.overview = {};
+            if (!state.achievements.overview.cosmetics) state.achievements.overview.cosmetics = {};
+            state.achievements.overview.cosmetics.badge_code = badgeCode;
+            toast('Статус обновлён');
+          } catch (e) {
+            console.error(e);
+            toast('Не удалось обновить статус');
+          } finally {
+            state.achievements.savingBadge = false;
+            renderAchievementsScreen();
+          }
+        });
+        return btn;
+      };
+
+      if (!hasSub) {
+        const lock = document.createElement('div');
+        lock.className = 'muted-inline';
+        lock.textContent = 'Статус доступен в Premium';
+        statusGrid.appendChild(lock);
+      } else {
+        statusGrid.appendChild(createBadgeBtn('⭐ по умолчанию', '⭐', null, !currentBadge));
+        for (const item of unlocked) {
+          const code = String(item.code || '').trim();
+          if (!code) continue;
+          statusGrid.appendChild(
+            createBadgeBtn(String(item.title || code), String(item.icon || '🏅'), code, currentBadge === code)
+          );
+        }
+      }
+
+      const mkGrid = (items, lockedMode) => {
+        const grid = document.createElement('div');
+        grid.className = 'ach-grid';
+        for (const a of items) {
+          const it = document.createElement('div');
+          it.className = 'ach-card' + (lockedMode ? ' ach-locked' : '');
+          const row = document.createElement('div');
+          row.className = 'ach-row';
+          row.innerHTML = `
+            <div class="ach-icon">${escapeHtml(a.icon || '🏅')}</div>
+            <div>
+              <div style="font-weight:700">${escapeHtml(a.title || a.code || 'Достижение')}</div>
+              <div class="timer-hint">${lockedMode ? 'Закрыто' : ('Открыто' + (a.unlocked_at ? ' · ' + String(a.unlocked_at).slice(0, 10) : ''))}</div>
+            </div>
+          `;
+          it.appendChild(row);
+          grid.appendChild(it);
+        }
+        return grid;
+      };
+
+      const sec1 = document.createElement('div');
+      sec1.className = 'group-count';
+      sec1.textContent = `Открыто: ${unlocked.length} / ${list.length}`;
+
+      const unlockedTitle = document.createElement('div');
+      unlockedTitle.className = 'card-title';
+      unlockedTitle.style.marginTop = '10px';
+      unlockedTitle.textContent = 'Открытые';
+
+      const lockedTitle = document.createElement('div');
+      lockedTitle.className = 'card-title';
+      lockedTitle.style.marginTop = '10px';
+      lockedTitle.textContent = 'Закрытые';
+
+      card.append(
+        title,
+        frameTitle,
+        frameHint,
+        framePreview,
+        frameGrid,
+        statusTitle,
+        statusGrid,
+        sec1,
+        unlockedTitle,
+        mkGrid(unlocked, false),
+        lockedTitle,
+        mkGrid(locked, true),
+      );
+      root.appendChild(card);
+    }
+
     function renderMeasurementsScreen() {
       const container = document.getElementById('measurementsContent');
       if (!container) return;
@@ -5521,6 +5818,23 @@
       };
 
       container.innerHTML = `${backButton}${sections[view] || sections.plan}`;
+    }
+
+    async function loadAchievementsOverview() {
+      if (state.achievements.loading) return;
+      state.achievements.loading = true;
+      try {
+        const data = await apiFetch('/gymapi/achievements/overview');
+        state.achievements.overview = data;
+        state.achievements.loaded = true;
+        applyTitleFrame();
+      } catch (e) {
+        console.error(e);
+        toast('Не удалось загрузить достижения');
+      } finally {
+        state.achievements.loading = false;
+        if (state.currentRoute === 'achievements') renderAchievementsScreen();
+      }
     }
 
     async function loadSettingsOverview() {
@@ -6579,6 +6893,18 @@
         : (ROUTE_TITLES[state.currentRoute] || ROUTE_TITLES.today);
     }
 
+    function applyTitleFrame() {
+      const el = document.getElementById('headerTitle');
+      if (!el) return;
+      el.classList.remove('title-frame');
+      Array.from(el.classList).forEach((c) => { if (c.startsWith('frame_')) el.classList.remove(c); });
+      if (state.currentRoute !== 'today') return;
+      const fc = state.achievements?.overview?.cosmetics?.title_frame_code;
+      if (!fc) return;
+      el.classList.add('title-frame');
+      el.classList.add(fc);
+    }
+
     function applyRoute(route) {
       const normalized = ROUTE_TITLES[route] ? route : 'today';
       if (normalized === 'settings' && state.acting.userId) {
@@ -6596,6 +6922,7 @@
       });
       document.body.classList.toggle('route-today', normalized === 'today');
       syncHeaderTitle();
+      applyTitleFrame();
       setVisible(document.getElementById('todayHeader'), normalized === 'today');
       updateAddButtonVisibility();
       if (normalized !== 'today') {
@@ -6619,6 +6946,10 @@
       if (normalized === 'library') {
         renderLibrary();
         loadLibraryGroups().catch(console.error);
+      }
+      if (normalized === 'achievements') {
+        renderAchievementsScreen();
+        if (!state.achievements.loaded && !state.achievements.loading) loadAchievementsOverview();
       }
       if (normalized === 'settings') {
         const pendingView = state.settings.pendingView || 'menu';
@@ -8703,6 +9034,7 @@
         if (state.manage.add.open) renderManageDayOptions();
         state.date = info.date || '';
         await loadSheet(targetDay);
+        applyTitleFrame();
         setStatus('ready');
       } catch (e) {
         const status = e?.status ? ` (HTTP ${e.status})` : '';
@@ -8729,6 +9061,7 @@
           if (state.manage.add.open) renderManageDayOptions();
           state.date = info.date || '';
           await loadSheet(targetDay);
+          applyTitleFrame();
         }
         setStatus('ready');
       } catch (e) {

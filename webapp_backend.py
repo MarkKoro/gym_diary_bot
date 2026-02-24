@@ -31,6 +31,7 @@ from telegram_webapp_auth import (
 )
 
 import db
+import achievements_engine as achievements
 from keyboards import MG_NAMES
 from db import (
     clear_day_completions,
@@ -102,6 +103,14 @@ from db import (
     sync_reminders_to_system,
     apply_system_to_current_plan,
     consume_ai_coach_quota,
+    get_cosmetics,
+    set_title_frame,
+    set_badge,
+    set_badge_hidden,
+    log_user_event,
+    record_system_copy,
+    mark_copy_trained,
+    list_user_achievements,
 )
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -2270,6 +2279,8 @@ async def complete_day(
     completed_at = datetime.combine(target_date, time.min, tzinfo=UTC).isoformat()
     active_system_id = await get_active_training_system_id(user_id)
     await mark_day_completed(user_id, day_index, completed_at, active_system_id)
+    await mark_copy_trained(user_id, active_system_id, completed_at)
+    await _evaluate_achievements(user_id)
     completed = await get_active_day_completions(user_id)
     last_completed_at = await db.get_day_completion(user_id, day_index, active_system_id)
     last_completed_volume_kg = await db.get_day_completion_volume_kg(
@@ -2513,7 +2524,10 @@ async def complete_running_state(
     completed_days = await get_active_day_completions(user_id)
     day_completed = False
     if all_done and day_index not in completed_days:
-        await mark_day_completed(user_id, day_index, datetime.now(UTC).isoformat(), active_system_id)
+        completed_at = datetime.now(UTC).isoformat()
+        await mark_day_completed(user_id, day_index, completed_at, active_system_id)
+        await mark_copy_trained(user_id, active_system_id, completed_at)
+        await _evaluate_achievements(user_id)
         completed_days = await get_active_day_completions(user_id)
         day_completed = True
     last_completed_at = await db.get_day_completion(user_id, day_index, active_system_id)
@@ -2580,7 +2594,10 @@ async def mark_exercise_done_fast(
     completed_days = await get_active_day_completions(user_id)
     day_completed = False
     if all_done and day_index not in completed_days:
-        await mark_day_completed(user_id, day_index, datetime.now(UTC).isoformat(), active_system_id)
+        completed_at = datetime.now(UTC).isoformat()
+        await mark_day_completed(user_id, day_index, completed_at, active_system_id)
+        await mark_copy_trained(user_id, active_system_id, completed_at)
+        await _evaluate_achievements(user_id)
         completed_days = await get_active_day_completions(user_id)
         day_completed = True
 
@@ -4389,6 +4406,8 @@ async def settings_rename_day(
     if not label:
         label = f"День {day_index}"
     await rename_day(user_id, day_index, label)
+    await log_user_event(user_id, "rename")
+    await _evaluate_achievements(user_id)
     await sync_current_plan_to_system(user_id, await get_active_training_system_id(user_id))
     wpw, active_days = await _load_user_settings(user_id)
     return {
@@ -4473,6 +4492,7 @@ async def settings_leaderboard_visibility(
     user_id = ctx.user_id
     visible = payload.get("visible", True)
     await set_user_leaderboard_visible(user_id, bool(visible))
+    await _evaluate_achievements(user_id)
     return {"ok": True, "leaderboard_visible": bool(visible)}
 
 
@@ -4607,6 +4627,8 @@ async def settings_trainer_request_decision(
         raise HTTPException(status_code=400, detail="Request already processed")
     if decision == "accept":
         await update_trainer_link_status(int(link[0]), "accepted")
+        await _evaluate_achievements(int(link[1]))
+        await _evaluate_achievements(int(link[2]))
     elif decision == "decline":
         await update_trainer_link_status(int(link[0]), "declined")
     else:
@@ -4707,6 +4729,10 @@ async def settings_trainer_trainee_detach(
 
 async def _has_active_subscription(user_id: int) -> bool:
     return bool(await db.get_active_subscription(user_id))
+
+
+async def _evaluate_achievements(user_id: int) -> dict:
+    return await achievements.evaluate(user_id)
 
 
 async def _enforce_system_limit_if_needed(user_id: int) -> dict:
@@ -4832,6 +4858,8 @@ async def systems_select(system_id: int, ctx: AuthCtx = Depends(get_auth_ctx)):
 @app.post('/systems/{system_id}/rename')
 async def systems_rename(system_id: int, payload: dict = Body(default={}), ctx: AuthCtx = Depends(get_auth_ctx)):
     await rename_training_system(ctx.user_id, int(system_id), (payload.get('name') or '').strip())
+    await log_user_event(ctx.user_id, "rename")
+    await _evaluate_achievements(ctx.user_id)
     return {'ok': True}
 
 
@@ -4850,6 +4878,52 @@ async def systems_delete(system_id: int, ctx: AuthCtx = Depends(get_auth_ctx)):
     return {'ok': True}
 
 
+@app.get('/achievements/overview')
+async def achievements_overview(ctx: AuthCtx = Depends(get_auth_ctx)):
+    user_id = int(ctx.user_id)
+    has_sub = await _has_active_subscription(user_id)
+    payload = await achievements.achievements_overview_payload(user_id, has_sub)
+    return payload
+
+
+@app.post('/achievements/select_frame')
+async def achievements_select_frame(payload: dict = Body(default_factory=dict), ctx: AuthCtx = Depends(get_auth_ctx)):
+    user_id = int(ctx.user_id)
+    frame_code = payload.get('frame_code')
+    if frame_code is None:
+        await set_title_frame(user_id, None)
+        return {'ok': True, 'title_frame_code': None}
+    frame_code = str(frame_code).strip()
+    ach_code = achievements.FRAME_TO_CODE.get(frame_code)
+    if not ach_code:
+        raise HTTPException(status_code=400, detail='Unknown frame code')
+    unlocked_codes = {code for code, _ in await list_user_achievements(user_id)}
+    if ach_code not in unlocked_codes:
+        raise HTTPException(status_code=403, detail='Frame is locked')
+    await set_title_frame(user_id, frame_code)
+    return {'ok': True, 'title_frame_code': frame_code}
+
+
+@app.post('/achievements/select_badge')
+async def achievements_select_badge(payload: dict = Body(default_factory=dict), ctx: AuthCtx = Depends(get_auth_ctx)):
+    user_id = int(ctx.user_id)
+    if not await _has_active_subscription(user_id):
+        raise HTTPException(status_code=403, detail='Subscription required')
+    badge_code = payload.get('badge_code')
+    hidden = payload.get('hidden')
+    unlocked_codes = {code for code, _ in await list_user_achievements(user_id)}
+    if badge_code is not None:
+        badge_code = str(badge_code).strip()
+        if badge_code and badge_code not in unlocked_codes:
+            raise HTTPException(status_code=403, detail='Badge is locked')
+    await set_badge(user_id, badge_code if badge_code else None)
+    if hidden is not None:
+        await set_badge_hidden(user_id, bool(hidden))
+    cosmetics = await get_cosmetics(user_id)
+    return {'ok': True, 'cosmetics': cosmetics}
+
+
+
 @app.get('/leaderboard/productivity')
 async def leaderboard_productivity(
     limit: int = 10,
@@ -4861,17 +4935,31 @@ async def leaderboard_productivity(
     safe_offset = max(0, int(offset or 0))
     page, total, full = await fetch_productivity_leaderboard(limit=safe_limit, offset=safe_offset)
     my_item = next((item for item in full if int(item['user_id']) == int(ctx.user_id)), None)
-    return {
-        'items': [
+    items = []
+    for item in page:
+        uid = int(item['user_id'])
+        is_premium = await _has_active_subscription(uid)
+        cosmetics = await get_cosmetics(uid)
+        selected_badge_icon = None
+        badge_code = cosmetics.get('badge_code')
+        badge_hidden = bool(cosmetics.get('badge_hidden'))
+        if is_premium and badge_code and not badge_hidden:
+            ach = achievements.ACHIEVEMENTS_BY_CODE.get(str(badge_code))
+            selected_badge_icon = ach.icon if ach else None
+        items.append(
             {
                 'rank': int(item['rank']),
-                'user_id': int(item['user_id']),
+                'user_id': uid,
                 'username': item['username'],
                 'score': int(item['score']),
                 'top_percent': int(item['top_percent']),
+                'is_premium': bool(is_premium),
+                'badge_icon': selected_badge_icon,
+                'display_mark': selected_badge_icon if selected_badge_icon else ('⭐' if is_premium else None),
             }
-            for item in page
-        ],
+        )
+    return {
+        'items': items,
         'total': int(total),
         'limit': safe_limit,
         'offset': safe_offset,
@@ -4901,11 +4989,23 @@ async def leaderboard_productivity_plan(
     if selected is None and systems:
         selected = systems[0]
     plan_days = selected.get('days') if selected else await fetch_public_training_plan(int(leader_user_id))
+    is_premium = await _has_active_subscription(int(leader_user_id))
+    unlocked = [code for code, _ in await list_user_achievements(int(leader_user_id))]
+    unlocked_icons = [achievements.ACHIEVEMENTS_BY_CODE[c].icon for c in unlocked if c in achievements.ACHIEVEMENTS_BY_CODE][:8]
+    cosmetics = await get_cosmetics(int(leader_user_id))
+    selected_badge_icon = None
+    if is_premium and cosmetics.get('badge_code') and not bool(cosmetics.get('badge_hidden')):
+        ach = achievements.ACHIEVEMENTS_BY_CODE.get(str(cosmetics.get('badge_code')))
+        selected_badge_icon = ach.icon if ach else None
     return {
         'leader_user_id': int(leader_user_id),
         'system_id': int(selected.get('system_id')) if selected else None,
         'days': plan_days,
         'systems': systems,
+        'is_premium': bool(is_premium),
+        'selected_badge_icon': selected_badge_icon,
+        'unlocked_icons': unlocked_icons,
+        'unlocked_codes': unlocked,
     }
 
 
@@ -4942,6 +5042,9 @@ async def leaderboard_productivity_copy(
     )
     if not result.get('system_id'):
         raise HTTPException(status_code=400, detail='У лидера нет системы для копирования')
+    await record_system_copy(int(leader_user_id), int(result.get('source_system_id') or source_system_id or 0), int(user_id), int(result.get('system_id')) )
+    await _evaluate_achievements(int(leader_user_id))
+    await _evaluate_achievements(int(user_id))
     if not had_sub:
         await db.prune_user_training_systems(int(user_id), int(result.get('system_id')))
         result['overwritten'] = True
