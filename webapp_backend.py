@@ -4882,7 +4882,8 @@ async def systems_delete(system_id: int, ctx: AuthCtx = Depends(get_auth_ctx)):
 async def achievements_overview(ctx: AuthCtx = Depends(get_auth_ctx)):
     user_id = int(ctx.user_id)
     has_sub = await _has_active_subscription(user_id)
-    payload = await achievements.achievements_overview_payload(user_id, has_sub)
+    is_admin = int(ctx.tg_id) in ADMIN_IDS
+    payload = await achievements.achievements_overview_payload(user_id, has_sub, is_admin=is_admin)
     return payload
 
 
@@ -4897,8 +4898,9 @@ async def achievements_select_frame(payload: dict = Body(default_factory=dict), 
     ach_code = achievements.FRAME_TO_CODE.get(frame_code)
     if not ach_code:
         raise HTTPException(status_code=400, detail='Unknown frame code')
+    is_admin = int(ctx.tg_id) in ADMIN_IDS
     unlocked_codes = {code for code, _ in await list_user_achievements(user_id)}
-    if ach_code not in unlocked_codes:
+    if ach_code not in unlocked_codes and not is_admin:
         raise HTTPException(status_code=403, detail='Frame is locked')
     await set_title_frame(user_id, frame_code)
     return {'ok': True, 'title_frame_code': frame_code}

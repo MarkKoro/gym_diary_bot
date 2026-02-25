@@ -446,8 +446,17 @@
       display: grid;
       place-content: center;
       background: color-mix(in srgb, var(--bg) 80%, var(--card));
+      overflow: hidden;
     }
-    .ach-tab-preview.frame-preview .header-title { font-size: 13px; }
+    .ach-tab-preview.frame-preview .header-title {
+      font-size: 12px;
+      width: 100% !important;
+      max-width: 100%;
+      text-align: center;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
     .ach-tab-preview.status-preview { display: flex; align-items: center; justify-content: center; gap: 5px; flex-wrap: wrap; }
     .ach-mini-badge { width: 22px; height: 22px; border-radius: 8px; display: inline-flex; align-items: center; justify-content: center; background: color-mix(in srgb, var(--card) 55%, var(--border)); }
     .ach-tab-preview.ach-preview { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 5px; align-content: center; }
@@ -584,6 +593,7 @@
       }
 
       .finish-fab{
+        position: relative;
         width: 54px;
         height: 54px;
         border-radius: 18px;
@@ -595,7 +605,40 @@
         align-items:center;
         justify-content:center;
         box-shadow: 0 10px 30px rgba(0,0,0,0.35);
+        overflow: hidden;
       }
+
+      .finish-fab.frame-fab::before {
+        content: '';
+        position: absolute;
+        inset: 15%;
+        border-radius: 10px;
+        pointer-events: none;
+        opacity: 0.9;
+      }
+
+      .finish-fab.frame-fab.frame_first_set::before { background: linear-gradient(90deg, #f59e0b, #fbbf24); }
+      .finish-fab.frame-fab.frame_check::before { background: linear-gradient(90deg, #10b981, #34d399); }
+      .finish-fab.frame-fab.frame_fire::before { background: linear-gradient(90deg, #fb7185, #f97316); }
+      .finish-fab.frame-fab.frame_fuse::before { background: linear-gradient(90deg, #f43f5e, #f59e0b, #ef4444); }
+      .finish-fab.frame-fab.frame_toolbox::before { background: linear-gradient(90deg, #14b8a6, #06b6d4); }
+      .finish-fab.frame-fab.frame_lab::before { background: linear-gradient(90deg, #22d3ee, #6366f1); }
+      .finish-fab.frame-fab.frame_brick::before { background: repeating-linear-gradient(90deg, #b45309 0 10px, #92400e 10px 20px); }
+      .finish-fab.frame-fab.frame_crane::before { background: linear-gradient(90deg, #f59e0b, #fcd34d, #64748b); }
+      .finish-fab.frame-fab.frame_gear::before { background: repeating-linear-gradient(135deg, #64748b 0 6px, #94a3b8 6px 12px); }
+      .finish-fab.frame-fab.frame_runner::before { background: linear-gradient(90deg, #06b6d4, #0ea5e9, #3b82f6); }
+      .finish-fab.frame-fab.frame_finish::before { background: repeating-linear-gradient(90deg, #111827 0 8px, #f8fafc 8px 16px); }
+      .finish-fab.frame-fab.frame_puzzle::before { background: linear-gradient(90deg, #8b5cf6, #a78bfa); }
+      .finish-fab.frame-fab.frame_paint::before { background: linear-gradient(90deg, #ec4899, #8b5cf6, #06b6d4); }
+      .finish-fab.frame-fab.frame_star::before { background: radial-gradient(circle at 20% 20%, #fde68a, #f59e0b 70%); }
+      .finish-fab.frame-fab.frame_spy::before { background: linear-gradient(90deg, #334155, #0f172a); }
+      .finish-fab.frame-fab.frame_graph::before { background: linear-gradient(90deg, #22c55e, #16a34a, #0ea5e9); }
+      .finish-fab.frame-fab.frame_gym::before { background: linear-gradient(90deg, #991b1b, #dc2626, #b91c1c); }
+      .finish-fab.frame-fab.frame_coach::before { background: linear-gradient(90deg, #1d4ed8, #2563eb); }
+      .finish-fab.frame-fab.frame_chick::before { background: linear-gradient(90deg, #facc15, #fde047); }
+      .finish-fab.frame-fab.frame_boomerang::before { background: linear-gradient(90deg, #f97316, #ef4444, #f59e0b); }
+      .finish-fab.frame-fab.frame_wall::before { background: repeating-linear-gradient(90deg, #78716c 0 12px, #a8a29e 12px 24px); }
+      .finish-fab.frame-fab.frame_moon::before { background: radial-gradient(circle at 70% 30%, #c4b5fd, #312e81); }
 
       .finish-fab[disabled]{
         opacity: 0.45;
@@ -5403,7 +5446,6 @@
           const sampleFrameCode = currentFrame || frameItems[0]?.frame_code || null;
           const frameSample = document.createElement('div');
           frameSample.className = 'header-title';
-          frameSample.style.width = 'fit-content';
           frameSample.textContent = 'Система';
           if (sampleFrameCode) frameSample.classList.add('title-frame', sampleFrameCode);
           preview.appendChild(frameSample);
@@ -5946,6 +5988,7 @@
         state.achievements.overview = data;
         state.achievements.loaded = true;
         applyTitleFrame();
+        applyFinishFabFrame();
       } catch (e) {
         console.error(e);
         toast('Не удалось загрузить достижения');
@@ -7011,16 +7054,34 @@
         : (ROUTE_TITLES[state.currentRoute] || ROUTE_TITLES.today);
     }
 
+    function applyFinishFabFrame() {
+      const btn = document.getElementById('finishFab');
+      if (!btn) return;
+      btn.classList.remove('frame-fab');
+      Array.from(btn.classList).forEach((c) => { if (c.startsWith('frame_')) btn.classList.remove(c); });
+      const fc = state.achievements?.overview?.cosmetics?.title_frame_code;
+      if (!fc) return;
+      btn.classList.add('frame-fab');
+      btn.classList.add(fc);
+    }
+
     function applyTitleFrame() {
       const el = document.getElementById('headerTitle');
       if (!el) return;
       el.classList.remove('title-frame');
       Array.from(el.classList).forEach((c) => { if (c.startsWith('frame_')) el.classList.remove(c); });
-      if (state.currentRoute !== 'today') return;
+      if (state.currentRoute !== 'today') {
+        applyFinishFabFrame();
+        return;
+      }
       const fc = state.achievements?.overview?.cosmetics?.title_frame_code;
-      if (!fc) return;
+      if (!fc) {
+        applyFinishFabFrame();
+        return;
+      }
       el.classList.add('title-frame');
       el.classList.add(fc);
+      applyFinishFabFrame();
     }
 
     function applyRoute(route) {
@@ -11568,6 +11629,7 @@
       openConfirmModal = setupModal();
       bindEvents();
       syncFinishFabVisibility();
+      loadAchievementsOverview().catch(console.error);
       loadTimerPillPosition();
       bindTimer();
       setupVisibilityRefresh();
