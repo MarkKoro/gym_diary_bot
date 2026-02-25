@@ -214,7 +214,7 @@ async def evaluate(user_id: int) -> dict:
     return {"earned_codes": sorted(earned), "newly_unlocked_codes": newly}
 
 
-async def achievements_overview_payload(user_id: int, has_subscription: bool) -> dict:
+async def achievements_overview_payload(user_id: int, has_subscription: bool, is_admin: bool = False) -> dict:
     eval_result = await evaluate(user_id)
     unlocked_map = {code: ts for code, ts in await db.list_user_achievements(user_id)}
     cosmetics = await db.get_cosmetics(user_id)
@@ -228,7 +228,7 @@ async def achievements_overview_payload(user_id: int, has_subscription: bool) ->
                 "icon": item.icon,
                 "rarity": item.rarity,
                 "frame_code": item.frame_code,
-                "unlocked": item.code in unlocked_map,
+                "unlocked": bool(is_admin) or item.code in unlocked_map,
                 "unlocked_at": unlocked_map.get(item.code),
                 "secret": bool(item.secret),
             }
