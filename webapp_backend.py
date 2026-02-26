@@ -32,6 +32,12 @@ from telegram_webapp_auth import (
 
 import db
 import achievements_engine as achievements
+from achievements_engine import (
+    TEAM_ACHIEVEMENTS,
+    evaluate_team,
+    is_team_style_allowed,
+    team_style_options_for_codes,
+)
 from keyboards import MG_NAMES
 from db import (
     clear_day_completions,
@@ -111,6 +117,20 @@ from db import (
     record_system_copy,
     mark_copy_trained,
     list_user_achievements,
+    create_team,
+    get_user_team,
+    get_team_by_code,
+    join_team_direct,
+    create_or_get_join_request,
+    list_team_requests,
+    accept_team_request,
+    reject_team_request,
+    leave_team,
+    set_team_style,
+    fetch_team_leaderboard,
+    fetch_team_profile,
+    upsert_team_daily_scores,
+    list_team_achievements,
 )
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -4968,6 +4988,331 @@ async def leaderboard_productivity(
         'my_rank': int(my_item['rank']) if my_item else None,
         'my_score': int(my_item['score']) if my_item else None,
         'my_top_percent': int(my_item['top_percent']) if my_item else None,
+    }
+
+
+@app.get('/teams/me')
+async def teams_me(ctx: AuthCtx = Depends(get_auth_ctx)):
+    team = await get_user_team(int(ctx.user_id))
+    if not team:
+        return {"team": None}
+    return {
+        "team": {
+            "team_id": int(team["team_id"]),
+            "name": team["team_name"],
+            "join_code": team["join_code"],
+            "is_open": bool(team["is_open"]),
+            "frame_code": team.get("frame_code"),
+            "bg_code": team.get("bg_code"),
+            "emblem_code": team.get("emblem_code"),
+            "role": team["role"],
+        }
+    }
+
+
+@app.post('/teams/create')
+async def teams_create(payload: dict = Body(default_factory=dict), ctx: AuthCtx = Depends(get_auth_ctx)):
+    user_id = int(ctx.user_id)
+    if not await _has_active_subscription(user_id):
+        raise HTTPException(status_code=403, detail='Premium required')
+    current_team = await get_user_team(user_id)
+    if current_team:
+        raise HTTPException(status_code=400, detail='already_in_team')
+    raw_name = str(payload.get('name') or '').strip()
+    if len(raw_name) < 2 or len(raw_name) > 32:
+        raise HTTPException(status_code=400, detail='name_length_2_32')
+    is_open = bool(payload.get('is_open', False))
+    team = await create_team(user_id, raw_name, is_open=is_open)
+    return {'ok': True, 'team': team}
+
+
+@app.post('/teams/join_by_code')
+async def teams_join_by_code(payload: dict = Body(default_factory=dict), ctx: AuthCtx = Depends(get_auth_ctx)):
+    user_id = int(ctx.user_id)
+    if await get_user_team(user_id):
+        raise HTTPException(status_code=400, detail='already_in_team')
+    if not await get_user_leaderboard_visible(user_id):
+        raise HTTPException(status_code=400, detail='Включи публичность, чтобы участвовать в командах')
+
+    code = str(payload.get('code') or '').strip().upper()
+    if not code:
+        raise HTTPException(status_code=400, detail='code_required')
+
+    team = await get_team_by_code(code)
+    if not team:
+        raise HTTPException(status_code=404, detail='team_not_found')
+
+    if bool(team.get('is_open')):
+        try:
+            await join_team_direct(int(team['team_id']), user_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {'ok': True, 'status': 'joined'}
+
+    try:
+        await create_or_get_join_request(int(team['team_id']), user_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {'ok': True, 'status': 'requested'}
+
+
+@app.post('/teams/leave')
+async def teams_leave(ctx: AuthCtx = Depends(get_auth_ctx)):
+    await leave_team(int(ctx.user_id))
+    return {'ok': True}
+
+
+@app.get('/teams/requests')
+async def teams_requests(
+    q: str | None = None,
+    limit: int = 50,
+    offset: int = 0,
+    ctx: AuthCtx = Depends(get_auth_ctx),
+):
+    me_team = await get_user_team(int(ctx.user_id))
+    if not me_team or me_team.get('role') != 'captain':
+        raise HTTPException(status_code=403, detail='captain_only')
+    safe_limit = max(1, min(int(limit or 50), 100))
+    safe_offset = max(0, int(offset or 0))
+    items, total = await list_team_requests(
+        int(me_team['team_id']),
+        status='pending',
+        q=q,
+        limit=safe_limit,
+        offset=safe_offset,
+    )
+    return {'items': items, 'total': int(total), 'limit': safe_limit, 'offset': safe_offset}
+
+
+@app.post('/teams/requests/{request_id}/accept')
+async def teams_requests_accept(request_id: int, ctx: AuthCtx = Depends(get_auth_ctx)):
+    me_team = await get_user_team(int(ctx.user_id))
+    if not me_team or me_team.get('role') != 'captain':
+        raise HTTPException(status_code=403, detail='captain_only')
+    try:
+        await accept_team_request(int(request_id), int(ctx.user_id))
+    except ValueError as exc:
+        detail = str(exc)
+        if detail == 'not_team_captain':
+            raise HTTPException(status_code=403, detail=detail) from exc
+        raise HTTPException(status_code=400, detail=detail) from exc
+    return {'ok': True}
+
+
+@app.post('/teams/requests/{request_id}/reject')
+async def teams_requests_reject(request_id: int, ctx: AuthCtx = Depends(get_auth_ctx)):
+    me_team = await get_user_team(int(ctx.user_id))
+    if not me_team or me_team.get('role') != 'captain':
+        raise HTTPException(status_code=403, detail='captain_only')
+    try:
+        await reject_team_request(int(request_id), int(ctx.user_id))
+    except ValueError as exc:
+        detail = str(exc)
+        if detail == 'not_team_captain':
+            raise HTTPException(status_code=403, detail=detail) from exc
+        raise HTTPException(status_code=400, detail=detail) from exc
+    return {'ok': True}
+
+
+@app.get('/teams/leaderboard')
+async def teams_leaderboard(
+    limit: int = 10,
+    offset: int = 0,
+    ctx: AuthCtx = Depends(get_auth_ctx),
+):
+    safe_limit = max(1, min(int(limit or 10), 50))
+    safe_offset = max(0, int(offset or 0))
+    page, total, full = await fetch_team_leaderboard(limit=safe_limit, offset=safe_offset)
+
+    day_utc = datetime.now(UTC).date().isoformat()
+    top_for_snapshot = full[:50]
+    await upsert_team_daily_scores(day_utc, top_for_snapshot)
+
+    newly_unlocked_map: dict[int, list[str]] = {}
+    for team_item in top_for_snapshot:
+        team_id = int(team_item['team_id'])
+        eval_payload = await evaluate_team(team_id)
+        newly = [str(c) for c in eval_payload.get('newly_unlocked_team_codes', [])]
+        if newly:
+            newly_unlocked_map[team_id] = newly
+
+    me_team = await get_user_team(int(ctx.user_id))
+    my_team_id = int(me_team['team_id']) if me_team else None
+    my_item = next((item for item in full if my_team_id and int(item['team_id']) == my_team_id), None)
+
+    my_allowed = None
+    if my_team_id:
+        earned = set(await list_team_achievements(my_team_id))
+        my_allowed = team_style_options_for_codes(earned)
+
+    items = []
+    for item in page:
+        team_id = int(item['team_id'])
+        frame_code = item.get('frame_code')
+        bg_code = item.get('bg_code')
+        emblem_code = item.get('emblem_code')
+        if my_team_id and team_id == my_team_id and my_allowed is not None:
+            if frame_code not in my_allowed['allowed_frames']:
+                frame_code = None
+            if bg_code not in my_allowed['allowed_bgs']:
+                bg_code = None
+            if emblem_code not in my_allowed['allowed_emblems']:
+                emblem_code = None
+
+        items.append(
+            {
+                'rank': int(item['rank']),
+                'team_id': team_id,
+                'name': item['name'],
+                'score': int(item['score']),
+                'members_count': int(item['members_count']),
+                'active_members_7d': int(item['active_members_7d']),
+                'sessions_7': int(item['sessions_7']),
+                'sessions_28': int(item['sessions_28']),
+                'avg_member_score': int(item['avg_member_score']),
+                'consistency_score': int(item['consistency_score']),
+                'engagement_score': int(item['engagement_score']),
+                'completion_score': int(item['completion_score']),
+                'variety_score': int(item['variety_score']),
+                'progression_score': int(item['progression_score']),
+                'frame_code': frame_code,
+                'bg_code': bg_code,
+                'emblem_code': emblem_code,
+            }
+        )
+
+    response = {
+        'items': items,
+        'total': int(total),
+        'limit': safe_limit,
+        'offset': safe_offset,
+        'my_team_rank': int(my_item['rank']) if my_item else None,
+        'my_team_score': int(my_item['score']) if my_item else None,
+        'my_team_id': my_team_id,
+    }
+    if newly_unlocked_map:
+        response['teams_newly_unlocked'] = {
+            int(item['team_id']): newly_unlocked_map[int(item['team_id'])]
+            for item in page
+            if int(item['team_id']) in newly_unlocked_map
+        }
+    return response
+
+
+@app.get('/teams/style/options')
+async def teams_style_options(ctx: AuthCtx = Depends(get_auth_ctx)):
+    me_team = await get_user_team(int(ctx.user_id))
+    if not me_team or me_team.get('role') != 'captain':
+        raise HTTPException(status_code=403, detail='captain_only')
+
+    team_id = int(me_team['team_id'])
+    earned = set(await list_team_achievements(team_id))
+    allowed_raw = team_style_options_for_codes(earned)
+    allowed = {
+        'frames': allowed_raw['allowed_frames'],
+        'bgs': allowed_raw['allowed_bgs'],
+        'emblems': allowed_raw['allowed_emblems'],
+    }
+
+    frame_code = me_team.get('frame_code') if me_team.get('frame_code') in allowed['frames'] else None
+    bg_code = me_team.get('bg_code') if me_team.get('bg_code') in allowed['bgs'] else None
+    emblem_code = me_team.get('emblem_code') if me_team.get('emblem_code') in allowed['emblems'] else None
+
+    return {
+        'team_id': team_id,
+        'current': {
+            'frame_code': frame_code,
+            'bg_code': bg_code,
+            'emblem_code': emblem_code,
+        },
+        'allowed': allowed,
+        'team_achievements': [
+            {
+                'code': item.code,
+                'title': item.title,
+                'icon': item.icon,
+                'rarity': item.rarity,
+                'unlocked': item.code in earned,
+                'unlocked_at': None,
+                'secret': bool(item.secret),
+                'team_frame_code': item.team_frame_code,
+                'team_bg_code': item.team_bg_code,
+                'team_emblem_code': item.team_emblem_code,
+            }
+            for item in TEAM_ACHIEVEMENTS
+        ],
+    }
+
+
+@app.post('/teams/style')
+async def teams_style(payload: dict = Body(default_factory=dict), ctx: AuthCtx = Depends(get_auth_ctx)):
+    me_team = await get_user_team(int(ctx.user_id))
+    if not me_team or me_team.get('role') != 'captain':
+        raise HTTPException(status_code=403, detail='captain_only')
+
+    def _normalize_style(v):
+        if v is None:
+            return None
+        sv = str(v).strip()
+        return sv if sv else None
+
+    team_id = int(me_team['team_id'])
+    frame_code = _normalize_style(payload.get('frame_code'))
+    bg_code = _normalize_style(payload.get('bg_code'))
+    emblem_code = _normalize_style(payload.get('emblem_code'))
+
+    earned = set(await list_team_achievements(team_id))
+    if not is_team_style_allowed(earned, frame_code, bg_code, emblem_code):
+        raise HTTPException(status_code=403, detail='style_not_unlocked')
+
+    await set_team_style(
+        team_id,
+        int(ctx.user_id),
+        frame_code,
+        bg_code,
+        emblem_code,
+    )
+    return {
+        'ok': True,
+        'current': {
+            'frame_code': frame_code,
+            'bg_code': bg_code,
+            'emblem_code': emblem_code,
+        },
+    }
+
+
+@app.get('/teams/{team_id}')
+async def teams_profile(team_id: int, ctx: AuthCtx = Depends(get_auth_ctx)):
+    profile = await fetch_team_profile(int(team_id), int(ctx.user_id))
+    if not profile:
+        raise HTTPException(status_code=404, detail='team_not_found')
+
+    team = profile['team']
+    members = profile.get('members')
+
+    earned = set(await list_team_achievements(int(team['team_id'])))
+    allowed = team_style_options_for_codes(earned)
+    frame_code = team.get('frame_code') if team.get('frame_code') in allowed['allowed_frames'] else None
+    bg_code = team.get('bg_code') if team.get('bg_code') in allowed['allowed_bgs'] else None
+    emblem_code = team.get('emblem_code') if team.get('emblem_code') in allowed['allowed_emblems'] else None
+
+    return {
+        'team': {
+            'rank': int(team['rank']),
+            'team_id': int(team['team_id']),
+            'name': team['name'],
+            'score': int(team['score']),
+            'members_count': int(team['members_count']),
+            'active_members_7d': int(team['active_members_7d']),
+            'sessions_7': int(team['sessions_7']),
+            'sessions_28': int(team['sessions_28']),
+            'avg_member_score': int(team['avg_member_score']),
+            'frame_code': frame_code,
+            'bg_code': bg_code,
+            'emblem_code': emblem_code,
+        },
+        'members': members,
     }
 
 

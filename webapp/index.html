@@ -104,6 +104,18 @@
     .header-title.title-frame.frame_boomerang::before { background: linear-gradient(90deg, #f97316, #ef4444, #f59e0b); }
     .header-title.title-frame.frame_wall::before { background: repeating-linear-gradient(90deg, #78716c 0 12px, #a8a29e 12px 24px); }
     .header-title.title-frame.frame_moon::before { background: radial-gradient(circle at 70% 30%, #c4b5fd, #312e81); }
+    .header-title.title-frame.frame_pack::before { background: linear-gradient(120deg, rgba(56,189,248,.55), rgba(34,211,238,.35), rgba(59,130,246,.5)), repeating-linear-gradient(135deg, rgba(255,255,255,.18) 0 2px, transparent 2px 7px); }
+    .header-title.title-frame.frame_banner::before { background: repeating-linear-gradient(135deg, rgba(30,64,175,.75) 0 10px, rgba(59,130,246,.65) 10px 20px, rgba(147,197,253,.55) 20px 30px); }
+    .header-title.title-frame.frame_honeycomb::before { background: repeating-linear-gradient(60deg, rgba(251,191,36,.45) 0 8px, transparent 8px 16px), repeating-linear-gradient(-60deg, rgba(245,158,11,.4) 0 8px, transparent 8px 16px), linear-gradient(90deg, rgba(120,53,15,.35), rgba(202,138,4,.25)); }
+    .header-title.title-frame.frame_ringed::before { background: radial-gradient(circle at 50% 50%, rgba(56,189,248,.35) 0 18%, rgba(125,211,252,.15) 18% 30%, rgba(59,130,246,.28) 30% 48%, rgba(147,197,253,.18) 48% 62%, rgba(30,41,59,.22) 62% 100%); }
+    .header-title.title-frame.frame_laurel::before { background: linear-gradient(90deg, rgba(34,197,94,.45), rgba(250,204,21,.35), rgba(22,163,74,.45)); }
+    .header-title.title-frame.frame_crownline::before { background: linear-gradient(180deg, rgba(15,23,42,.92), rgba(30,41,59,.92)); box-shadow: inset 0 1px 0 rgba(250,204,21,.45), inset 0 -1px 0 rgba(234,179,8,.35); }
+    .header-title.title-frame.frame_throneveil::before { background: radial-gradient(circle at 20% 30%, rgba(167,139,250,.32), transparent 48%), radial-gradient(circle at 80% 80%, rgba(139,92,246,.28), transparent 42%), linear-gradient(120deg, rgba(17,24,39,.9), rgba(30,41,59,.94)); }
+    .header-title.title-frame.frame_pulse::before { background: linear-gradient(110deg, rgba(20,184,166,.45), rgba(59,130,246,.38)), repeating-linear-gradient(90deg, rgba(255,255,255,.18) 0 2px, transparent 2px 8px); }
+    .header-title.title-frame.frame_eclipse::before { background: radial-gradient(circle at 72% 28%, rgba(226,232,240,.35) 0 12%, transparent 14%), linear-gradient(120deg, rgba(15,23,42,.92), rgba(49,46,129,.68), rgba(30,41,59,.9)); }
+    .header-title.title-frame.frame_magnet::before { background: linear-gradient(110deg, rgba(59,130,246,.46), rgba(30,64,175,.34), rgba(239,68,68,.34), rgba(220,38,38,.44)); }
+    .header-title.title-frame.frame_webweave::before { background: linear-gradient(120deg, rgba(76,29,149,.52), rgba(147,51,234,.34)), repeating-linear-gradient(45deg, rgba(255,255,255,.16) 0 1px, transparent 1px 8px), repeating-linear-gradient(-45deg, rgba(255,255,255,.12) 0 1px, transparent 1px 8px); }
+    .header-title.title-frame.frame_compassrose::before { background: conic-gradient(from 0deg, rgba(14,116,144,.45), rgba(14,165,233,.38), rgba(15,118,110,.4), rgba(14,116,144,.45)); }
     .status { display: inline-flex; align-items: center; gap: 6px; padding: 8px 12px; border-radius: 12px; background: var(--glass-surface); border: 1px solid var(--border); color: var(--muted); font-size: 13px; box-shadow: var(--shadow); white-space: nowrap; backdrop-filter: blur(12px); }
     .status .dot { width: 10px; height: 10px; border-radius: 50%; background: #9ca3af; box-shadow: 0 0 0 2px color-mix(in srgb, var(--bg) 70%, transparent); }
     .status.ready .dot { background: #34c759; }
@@ -801,6 +813,7 @@
     .sheet-header-source { position: relative; margin-left: auto; }
 
     .segmented { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 6px; margin: 12px 0 4px; }
+    #productivityTabs { grid-template-columns: repeat(2, minmax(0,1fr)); margin-top: 10px; }
     .seg-btn { padding: 10px 12px; border-radius: 12px; border: 1px solid var(--border); background: var(--bg); color: var(--text); font-weight: 600; font-size: 14px; cursor: pointer; }
     .seg-btn.active { background: var(--accent); color: #fff; border-color: var(--accent); box-shadow: 0 8px 16px rgba(0,122,255,0.18); }
       .text-btn { border: none; background: transparent; color: var(--accent); font-weight: 700; padding: 6px 8px; border-radius: 10px; cursor: pointer; font-size: 13px; }
@@ -1773,6 +1786,36 @@
     .leader-item { display: grid; gap: 6px; }
     .leader-row { border: 1px solid var(--border); border-radius: 12px; padding: 10px; display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 10px; background: var(--bg); cursor: pointer; }
     .leader-row.active { border-color: color-mix(in srgb, var(--accent) 50%, var(--border)); }
+    .team-card { position: relative; border: 1px solid var(--border); border-radius: 14px; padding: 12px; background: color-mix(in srgb, var(--bg) 92%, transparent); display: grid; grid-template-columns: auto 1fr auto; gap: 10px; align-items: center; overflow: hidden; width: 100%; text-align: left; }
+    .team-card::before { content: ''; position: absolute; inset: -2px; border-radius: 16px; pointer-events: none; opacity: .95; z-index: 0; }
+    .team-card > * { position: relative; z-index: 1; }
+    .team-badge { width: 34px; height: 34px; border-radius: 10px; border: 1px solid var(--border); display: inline-flex; align-items: center; justify-content: center; font-size: 18px; background: rgba(255,255,255,.06); }
+    .team-meta { font-size: 12px; color: var(--muted); margin-top: 2px; }
+    .team-style-preview { min-height: 64px; border: 1px solid var(--border); border-radius: 12px; padding: 10px; display: flex; align-items: center; justify-content: space-between; gap: 10px; position: relative; overflow: hidden; }
+    .btn-disabled { opacity: .6; pointer-events:none; }
+    .fade-in { animation: fadeIn .18s ease-out; }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(2px); } to { opacity: 1; transform: none; } }
+    .team-style-preview::before { content: ''; position: absolute; }
+    .team_frame_stitch::before { background: repeating-linear-gradient(135deg, rgba(148,163,184,.65) 0 6px, rgba(100,116,139,.55) 6px 12px); }
+    .team_frame_honey::before { background: repeating-linear-gradient(60deg, rgba(251,191,36,.5) 0 8px, transparent 8px 16px), repeating-linear-gradient(-60deg, rgba(245,158,11,.45) 0 8px, transparent 8px 16px); }
+    .team_frame_ember::before { background: linear-gradient(120deg, rgba(248,113,113,.75), rgba(251,146,60,.6)); }
+    .team_frame_ring::before { background: radial-gradient(circle, rgba(56,189,248,.36) 0 25%, rgba(59,130,246,.25) 26% 40%, rgba(125,211,252,.2) 41% 60%, transparent 61%); }
+    .team_frame_laurel::before { background: linear-gradient(90deg, rgba(34,197,94,.55), rgba(234,179,8,.45), rgba(21,128,61,.55)); }
+    .team_frame_crown::before { background: linear-gradient(90deg, rgba(180,83,9,.62), rgba(250,204,21,.52), rgba(146,64,14,.62)); }
+    .team_frame_throne::before { background: linear-gradient(120deg, rgba(15,23,42,.96), rgba(76,29,149,.62)); }
+    .team_frame_pulse::before { background: repeating-linear-gradient(90deg, rgba(45,212,191,.5) 0 2px, transparent 2px 8px), linear-gradient(90deg, rgba(20,184,166,.5), rgba(59,130,246,.45)); }
+    .team_frame_eclipse::before { background: radial-gradient(circle at 70% 25%, rgba(226,232,240,.34) 0 10%, transparent 11%), linear-gradient(120deg, rgba(15,23,42,.92), rgba(49,46,129,.64)); }
+    .team_frame_web::before { background: repeating-linear-gradient(45deg, rgba(216,180,254,.2) 0 1px, transparent 1px 8px), repeating-linear-gradient(-45deg, rgba(216,180,254,.15) 0 1px, transparent 1px 8px), linear-gradient(120deg, rgba(88,28,135,.64), rgba(30,41,59,.86)); }
+    .team_bg_slate { background: linear-gradient(120deg, rgba(51,65,85,.38), rgba(100,116,139,.22)); }
+    .team_bg_honeycomb { background: repeating-linear-gradient(60deg, rgba(245,158,11,.16) 0 8px, transparent 8px 16px), repeating-linear-gradient(-60deg, rgba(234,179,8,.14) 0 8px, transparent 8px 16px), rgba(120,53,15,.18); }
+    .team_bg_ember { background: linear-gradient(120deg, rgba(220,38,38,.18), rgba(251,146,60,.18)); }
+    .team_bg_neon_grid { background: linear-gradient(transparent 95%, rgba(56,189,248,.22) 95%), linear-gradient(90deg, transparent 95%, rgba(125,211,252,.18) 95%), rgba(2,6,23,.2); background-size: 18px 18px; }
+    .team_bg_aurora { background: linear-gradient(120deg, rgba(16,185,129,.16), rgba(14,165,233,.16), rgba(139,92,246,.18)); }
+    .team_bg_obsidian { background: linear-gradient(120deg, rgba(15,23,42,.56), rgba(17,24,39,.74)); }
+    .team_bg_blackhole { background: radial-gradient(circle at 50% 50%, rgba(30,41,59,.14), rgba(2,6,23,.82)); }
+    .team_bg_ocean { background: linear-gradient(120deg, rgba(8,145,178,.2), rgba(14,116,144,.26)); }
+    .team_bg_midnight { background: linear-gradient(120deg, rgba(30,41,59,.7), rgba(49,46,129,.44)); }
+    .team_bg_violet_smoke { background: radial-gradient(circle at 20% 20%, rgba(196,181,253,.2), transparent 45%), radial-gradient(circle at 85% 80%, rgba(167,139,250,.14), transparent 50%), rgba(49,46,129,.28); }
     .leader-rank { font-weight: 900; width: 34px; text-align: center; }
     .leader-rank.medal-gold { color: #f59e0b; }
     .leader-rank.medal-silver { color: #94a3b8; }
@@ -2224,6 +2267,7 @@
         <button class="menu-item" data-route="measurements">Мои замеры</button>
         <button class="menu-item" data-route="library">Статистика упражнений</button>
         <button class="menu-item" data-route="achievements">Достижения</button>
+        <button class="menu-item" data-route="today" data-action="open-teams">Команды</button>
         <button class="menu-item" data-route="subscription" id="drawerSubscriptionBtn">Подписка · неактивно</button>
         <button class="menu-item" data-route="settings">Настройки</button>
       </nav>
@@ -2519,14 +2563,33 @@
           </svg>
         </div>
         <div id="productivityMetrics" class="productivity-cards"></div>
-        <div class="leaderboard-head">
-          <div class="card-title">Лидеры продуктивности</div>
-          <div id="leaderboardPageLabel" class="timer-hint"></div>
+        <div class="segmented" id="productivityTabs">
+          <button class="seg-btn active" data-action="productivity-tab" data-tab="people">Люди</button>
+          <button class="seg-btn" data-action="productivity-tab" data-tab="teams">Команды</button>
         </div>
-        <div id="leaderboardList" class="leaderboard-list"></div>
-        <div class="leader-pagination">
-          <button id="leaderboardPrevBtn" class="btn">← Назад</button>
-          <button id="leaderboardNextBtn" class="btn">Вперёд →</button>
+        <div id="peopleLeaderboardBlock">
+          <div class="leaderboard-head">
+            <div class="card-title">Лидеры продуктивности</div>
+            <div id="leaderboardPageLabel" class="timer-hint"></div>
+          </div>
+          <div id="leaderboardList" class="leaderboard-list"></div>
+          <div class="leader-pagination">
+            <button id="leaderboardPrevBtn" class="btn">← Назад</button>
+            <button id="leaderboardNextBtn" class="btn">Вперёд →</button>
+          </div>
+        </div>
+        <div id="teamsLeaderboardBlock" class="hidden">
+          <div class="leaderboard-head">
+            <div class="card-title">Командный рейтинг</div>
+            <div id="teamboardPageLabel" class="timer-hint"></div>
+          </div>
+          <div id="teamsMyArea" class="card" style="padding:14px; margin-bottom:10px;"></div>
+          <div id="teamProfileArea" class="hidden"></div>
+          <div id="teamboardList" class="leaderboard-list"></div>
+          <div class="leader-pagination">
+            <button id="teamboardPrevBtn" class="btn">← Назад</button>
+            <button id="teamboardNextBtn" class="btn">Вперёд →</button>
+          </div>
         </div>
       </div>
     </div>
@@ -2961,6 +3024,7 @@
           topPercent: 100,
           metrics: [],
           helpOpen: false,
+          activeTab: 'people',
           leaderboard: {
             loading: false,
             items: [],
@@ -2971,6 +3035,26 @@
             profileLoading: false,
             profile: null,
             badgePopup: null,
+          },
+          teams: {
+            loading: false,
+            items: [],
+            total: 0,
+            offset: 0,
+            limit: 10,
+            my: null,
+            myLoading: false,
+            view: 'list',
+            selectedTeamId: null,
+            profileLoading: false,
+            profile: null,
+            join: { code: '' },
+            create: { name: '', isOpen: true },
+            error: null,
+            profileError: null,
+            requests: { q: '', items: [], total: 0, offset: 0, limit: 20, loading: false, open: false, error: null },
+            style: { loading: false, options: null, saving: false, open: false, error: null, selected: { frame_code: null, bg_code: null, emblem_code: null } },
+            busy: { join: false, create: false, leave: false, accept: false, reject: false, styleSave: false },
           },
         },
         systems: {
@@ -3667,7 +3751,9 @@
       }
       renderProductivityButton();
       applyHeaderWidgetVisibility();
-      renderLeaderboardSection();
+      renderProductivityTabs();
+      if ((state.settings.productivity.activeTab || "people") === "people") renderLeaderboardSection();
+      else renderTeamsSection();
     }
 
     function openProductivitySheet() {
@@ -3680,7 +3766,8 @@
       document.body.classList.add('productivity-open');
       document.getElementById('productivitySheet')?.classList.add('show');
       syncFinishFabVisibility();
-      loadProductivityLeaderboard().catch(console.error);
+      if ((state.settings.productivity.activeTab || "people") === "people") loadProductivityLeaderboard().catch(console.error);
+      else ensureTeamsHubLoaded().catch(console.error);
     }
 
     function closeProductivitySheet() {
@@ -3792,7 +3879,540 @@
       }).join('') + popupHtml;
     }
 
+    function debounce(fn, ms) {
+      let t = null;
+      return (...args) => {
+        if (t) clearTimeout(t);
+        t = setTimeout(() => fn(...args), ms);
+      };
+    }
+
+    const TEAM_EMBLEM_MAP = {
+      team_emblem_mark: '◆',
+      team_emblem_wolf: '🐺',
+      team_emblem_torch: '🔥',
+      team_emblem_badge: '🏷️',
+      team_emblem_wreath: '🌿',
+      team_emblem_crown: '👑',
+      team_emblem_throne: '🏆',
+      team_emblem_wave: '🌊',
+      team_emblem_moon: '🌙',
+      team_emblem_spider: '🕸️',
+    };
+
+    function renderProductivityTabs() {
+      const tab = state.settings.productivity.activeTab || 'people';
+      document.querySelectorAll('#productivityTabs .seg-btn').forEach((btn) => {
+        btn.classList.toggle('active', btn.dataset.tab === tab);
+      });
+      const people = document.getElementById('peopleLeaderboardBlock');
+      const teams = document.getElementById('teamsLeaderboardBlock');
+      people?.classList.toggle('hidden', tab !== 'people');
+      teams?.classList.toggle('hidden', tab !== 'teams');
+      const shown = tab === 'people' ? people : teams;
+      if (shown) {
+        shown.classList.add('fade-in');
+        setTimeout(() => shown.classList.remove('fade-in'), 220);
+      }
+    }
+
+    function renderTeamsMyArea() {
+      const teams = state.settings.productivity.teams;
+      const el = document.getElementById('teamsMyArea');
+      if (!el) return;
+      if (teams.myLoading) {
+        el.innerHTML = '<div class="muted-inline">Загрузка команды…</div>';
+        return;
+      }
+      if (teams.error) {
+        el.innerHTML = `<div class="muted-inline">${escapeHtml(teams.error)}</div><div style="margin-top:8px;"><button class="btn" data-action="team-retry-my">Повторить</button></div>`;
+        return;
+      }
+      if (!teams.my) {
+        const premium = !!state.subscription.active;
+        el.innerHTML = `
+          <div class="card-title" style="margin-bottom:8px;">Моя команда</div>
+          <div class="timer-hint" style="margin-bottom:10px;">Код нужен для вступления. Если команда закрытая — попадёшь в заявки.</div>
+          <div class="settings-row inline" style="margin-bottom:10px;">
+            <input id="teamJoinCode" class="settings-input" placeholder="Код команды" value="${escapeHtml(teams.join.code || '')}">
+            <button class="btn primary ${teams.busy.join ? 'btn-disabled' : ''}" ${teams.busy.join ? 'disabled' : ''} data-action="team-join">Вступить</button>
+          </div>
+          <div class="timer-hint" style="margin-bottom:8px;">Пока нет команд в рейтинге? Создай свою или вступи по коду.</div>
+          <div class="card" style="padding:10px;">
+            <div class="card-title" style="margin-bottom:8px;">Создать команду</div>
+            ${premium ? `
+            <div class="settings-row inline" style="margin-bottom:8px;">
+              <input id="teamCreateName" class="settings-input" placeholder="Название команды" value="${escapeHtml(teams.create.name || '')}">
+            </div>
+            <label class="timer-hint" style="display:flex; gap:8px; align-items:center; margin-bottom:8px;">
+              <input id="teamCreateOpen" type="checkbox" ${teams.create.isOpen ? 'checked' : ''}> Открытая команда (без заявок)
+            </label>
+            <button class="btn primary ${teams.busy.create ? 'btn-disabled' : ''}" ${teams.busy.create ? 'disabled' : ''} data-action="team-create">Создать</button>
+            ` : `
+            <div class="timer-hint" style="margin-bottom:8px;">🔒 Создание команды доступно в Premium.</div>
+            <button class="btn" data-action="open-subscription">Открыть подписку</button>
+            `}
+          </div>
+        `;
+        return;
+      }
+      const my = teams.my;
+      const emblem = TEAM_EMBLEM_MAP[my.emblem_code] || '🏳️';
+      const profileTeam = teams.profile?.team || {};
+      const active7 = Number(profileTeam.active_members_7d || 0);
+      const members = Number(profileTeam.members_count || 0);
+      const sessions28 = Number(profileTeam.sessions_28 || 0);
+      const pace = members > 0 ? (sessions28 / members).toFixed(1) : '0.0';
+      el.innerHTML = `
+        <div class="team-card ${my.frame_code || ''} ${my.bg_code || ''}">
+          <div class="team-badge">${emblem}</div>
+          <div>
+            <div class="leader-name">${escapeHtml(my.name || 'Команда')}</div>
+            <div class="team-meta">Код: ${escapeHtml(my.join_code || '—')} · Роль: ${escapeHtml(my.role || 'member')}</div>
+          </div>
+          <div class="timer-hint">Моя команда</div>
+        </div>
+        <div class="team-meta" style="margin-top:8px;">Актив 7д: ${active7}/${members || '—'} · Темп 28д: ${pace}/участника · Цель недели: 12 сессий/участника</div>
+        <div class="timer-hint" style="margin-top:4px;">Чтобы команда росла — держите актив 7д и ровный темп.</div>
+        <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:10px;">
+          <button class="btn" data-action="team-open" data-team-id="${my.team_id}">Профиль</button>
+          <button class="btn ${teams.busy.leave ? 'btn-disabled' : ''}" ${teams.busy.leave ? 'disabled' : ''} data-action="team-leave">Покинуть</button>
+          ${my.role === 'captain' ? '<button class="btn" data-action="team-style-open">Настройка стиля</button><button class="btn" data-action="team-requests-open">Заявки</button>' : ''}
+        </div>
+      `;
+    }
+
+
+    function renderTeamboardList() {
+      const teams = state.settings.productivity.teams;
+      const listEl = document.getElementById('teamboardList');
+      const pageEl = document.getElementById('teamboardPageLabel');
+      const prevBtn = document.getElementById('teamboardPrevBtn');
+      const nextBtn = document.getElementById('teamboardNextBtn');
+      if (!listEl || !pageEl || !prevBtn || !nextBtn) return;
+      const start = teams.offset + 1;
+      const end = Math.min(teams.total || 0, teams.offset + teams.limit);
+      pageEl.textContent = teams.total ? `${start}-${end} из ${teams.total}` : '—';
+      prevBtn.disabled = teams.loading || teams.offset <= 0;
+      nextBtn.disabled = teams.loading || (teams.offset + teams.limit >= teams.total);
+      if (teams.loading) {
+        listEl.innerHTML = '<div class="muted-inline">Загружаем команды…</div>';
+        return;
+      }
+      if (teams.error) {
+        listEl.innerHTML = `<div class="card" style="padding:12px;"><div class="muted-inline">${escapeHtml(teams.error)}</div><button class="btn" style="margin-top:8px;" data-action="team-retry-board">Повторить</button></div>`;
+        return;
+      }
+      if (!teams.items.length) {
+        listEl.innerHTML = '<div class="card" style="padding:12px;"><div class="muted-inline">Пока нет команд в рейтинге.</div><div class="timer-hint" style="margin-top:6px;">Создай свою команду или вступи по коду.</div></div>';
+        return;
+      }
+      listEl.innerHTML = teams.items.map((item) => {
+        const medalClass = item.rank === 1 ? 'medal-gold' : (item.rank === 2 ? 'medal-silver' : (item.rank === 3 ? 'medal-bronze' : ''));
+        const emblem = TEAM_EMBLEM_MAP[item.emblem_code] || '🏳️';
+        return `
+          <button class="team-card ${item.frame_code || ''} ${item.bg_code || ''}" data-action="team-open" data-team-id="${item.team_id}">
+            <div class="leader-rank ${medalClass}">#${item.rank}</div>
+            <div>
+              <div class="leader-name">${escapeHtml(item.name || 'Команда')}</div>
+              <div class="team-meta">score ${Number(item.score || 0)}/100 · 28д: ${Number(item.sessions_28 || 0)} трен · актив 7д: ${Number(item.active_members_7d || 0)}/${Number(item.members_count || 0)}</div>
+            </div>
+            <div class="team-badge">${emblem}</div>
+          </button>
+        `;
+      }).join('');
+    }
+
+
+    function renderTeamProfileArea() {
+      const teams = state.settings.productivity.teams;
+      const el = document.getElementById('teamProfileArea');
+      if (!el) return;
+      if (teams.view !== 'profile') {
+        el.classList.add('hidden');
+        el.innerHTML = '';
+        return;
+      }
+      el.classList.remove('hidden');
+      el.classList.add('fade-in');
+      setTimeout(() => el.classList.remove('fade-in'), 220);
+      if (teams.profileLoading) {
+        el.innerHTML = '<div class="card" style="padding:12px;"><div class="muted-inline">Загружаем профиль команды…</div></div>';
+        return;
+      }
+      if (teams.profileError) {
+        el.innerHTML = `<div class="card" style="padding:12px;"><div class="muted-inline">${escapeHtml(teams.profileError)}</div><button class="btn" style="margin-top:8px;" data-action="team-retry-profile">Повторить</button></div>`;
+        return;
+      }
+      const profile = teams.profile;
+      if (!profile || !profile.team) {
+        el.innerHTML = '<div class="card" style="padding:12px;"><div class="muted-inline">Профиль команды недоступен.</div></div>';
+        return;
+      }
+      const t = profile.team;
+      const members = Array.isArray(profile.members) ? profile.members : null;
+      const emblem = TEAM_EMBLEM_MAP[t.emblem_code] || '🏳️';
+      const membersHtml = members ? members.map((m) => `
+        <div class="leader-row" style="margin-top:6px;" data-action="leader-open" data-user-id="${m.user_id}">
+          <div class="leader-rank">${m.score}</div>
+          <div>
+            <div class="leader-name">@${escapeHtml(m.username || ('athlete_'+m.user_id))}</div>
+            <div class="team-meta">sessions_28: ${Number(m.sessions_28 || 0)} · training_days_28: ${Number(m.training_days_28 || 0)}</div>
+          </div>
+          <div class="timer-hint">Открыть</div>
+        </div>
+      `).join('') : '<div class="timer-hint">Список участников скрыт для внешних пользователей.</div>';
+
+      let reqHtml = '';
+      if (teams.my && teams.my.role === 'captain' && teams.requests.open) {
+        const rq = teams.requests;
+        reqHtml = `
+          <div class="card" style="padding:10px; margin-top:10px;">
+            <div class="card-title">Заявки в команду</div>
+            ${rq.error ? `<div class="muted-inline" style="margin-top:6px;">${escapeHtml(rq.error)}</div><button class="btn" style="margin-top:8px;" data-action="team-retry-requests">Повторить</button>` : ''}
+            <div class="settings-row inline" style="margin-top:8px;">
+              <input id="teamReqSearch" class="settings-input" placeholder="Поиск @username" value="${escapeHtml(rq.q || '')}">
+              <button class="btn" data-action="team-requests-refresh">Обновить</button>
+            </div>
+            ${(rq.items || []).map((it) => `
+              <div class="leader-row" style="margin-top:6px; cursor:default;">
+                <div class="leader-rank">#</div>
+                <div>
+                  <div class="leader-name">@${escapeHtml(it.username || ('athlete_'+it.user_id))}</div>
+                  <div class="team-meta">${escapeHtml((it.created_at || '').slice(0, 19))}</div>
+                </div>
+                <div style="display:flex; gap:6px;">
+                  <button class="btn small-btn ${(teams.busy.accept || teams.busy.reject) ? 'btn-disabled' : ''}" ${(teams.busy.accept || teams.busy.reject) ? 'disabled' : ''} data-action="team-req-accept" data-request-id="${it.request_id}">Принять</button>
+                  <button class="btn small-btn ${(teams.busy.accept || teams.busy.reject) ? 'btn-disabled' : ''}" ${(teams.busy.accept || teams.busy.reject) ? 'disabled' : ''} data-action="team-req-reject" data-request-id="${it.request_id}">Отклонить</button>
+                </div>
+              </div>
+            `).join('') || '<div class="timer-hint" style="margin-top:8px;">Нет заявок.</div>'}
+          </div>
+        `;
+      }
+
+      let styleHtml = '';
+      if (teams.my && teams.my.role === 'captain' && teams.style.open) {
+        const opts = teams.style.options;
+        if (!opts) {
+          styleHtml = `<div class="card" style="padding:10px; margin-top:10px;"><div class="muted-inline">${escapeHtml(teams.style.error || 'Загружаем стили…')}</div>${teams.style.error ? '<button class="btn" style="margin-top:8px;" data-action="team-retry-style">Повторить</button>' : ''}</div>`;
+        } else {
+          const s = teams.style.selected || { frame_code: null, bg_code: null, emblem_code: null };
+          const mkOpt = (arr, val) => ['<option value="">—</option>', ...arr.map((x) => `<option value="${x}" ${x===val?'selected':''}>${x}</option>`)].join('');
+          styleHtml = `
+            <div class="card" style="padding:10px; margin-top:10px;">
+              <div class="card-title">Стиль команды</div>
+              <div class="timer-hint" style="margin-top:4px;">Стили открываются за командные достижения. Чем стабильнее темп и выше место — тем красивее.</div>
+              <div style="display:grid; gap:8px; margin-top:8px;">
+                <label class="timer-hint">Рамка</label>
+                <select id="teamStyleFrame" class="settings-select">${mkOpt(opts.allowed?.frames || [], s.frame_code || '')}</select>
+                <label class="timer-hint">Фон</label>
+                <select id="teamStyleBg" class="settings-select">${mkOpt(opts.allowed?.bgs || [], s.bg_code || '')}</select>
+                <label class="timer-hint">Эмблема</label>
+                <select id="teamStyleEmblem" class="settings-select">${mkOpt(opts.allowed?.emblems || [], s.emblem_code || '')}</select>
+                <div class="team-style-preview team-card ${s.frame_code || ''} ${s.bg_code || ''}">
+                  <div>Предпросмотр карточки</div>
+                  <div class="team-badge">${TEAM_EMBLEM_MAP[s.emblem_code] || '🏳️'}</div>
+                </div>
+                <button class="btn primary ${teams.busy.styleSave ? 'btn-disabled' : ''}" ${teams.busy.styleSave ? 'disabled' : ''} data-action="team-style-save">Сохранить стиль</button>
+              </div>
+            </div>
+          `;
+        }
+      }
+
+      el.innerHTML = `
+        <div class="card" style="padding:12px; margin-bottom:10px;">
+          <button class="btn" data-action="team-back">← Назад</button>
+          <div class="team-card ${t.frame_code || ''} ${t.bg_code || ''}" style="margin-top:8px;">
+            <div class="team-badge">${emblem}</div>
+            <div>
+              <div class="leader-name">${escapeHtml(t.name || 'Команда')}</div>
+              <div class="team-meta">score ${Number(t.score || 0)}/100 · rank #${Number(t.rank || 0)} · участники: ${Number(t.members_count || 0)}</div>
+            </div>
+            <div class="timer-hint">Команда</div>
+          </div>
+          <div style="margin-top:10px;" class="card-title">Участники</div>
+          ${membersHtml}
+        </div>
+        ${reqHtml}
+        ${styleHtml}
+      `;
+    }
+
+
+    function renderTeamsSection() {
+      renderTeamsMyArea();
+      renderTeamProfileArea();
+      renderTeamboardList();
+    }
+
+    function setProductivityTab(tab) {
+      const next = tab === 'teams' ? 'teams' : 'people';
+      state.settings.productivity.activeTab = next;
+      renderProductivityHub();
+      if (next === 'people') loadProductivityLeaderboard().catch(console.error);
+      else ensureTeamsHubLoaded().catch(console.error);
+    }
+
+    const debouncedLoadTeamRequests = debounce(() => {
+      const teams = state.settings.productivity.teams;
+      teams.requests.offset = 0;
+      loadTeamRequests().catch(console.error);
+    }, 300);
+
+    async function loadTeamsMe() {
+      const teams = state.settings.productivity.teams;
+      teams.myLoading = true;
+      teams.error = null;
+      renderTeamsSection();
+      try {
+        const data = await apiFetch('/gymapi/teams/me');
+        teams.my = data?.team || null;
+      } catch (e) {
+        teams.my = null;
+        teams.error = 'Не удалось загрузить данные команды';
+        toast('Не удалось загрузить команду');
+        console.error(e);
+      } finally {
+        teams.myLoading = false;
+        renderTeamsSection();
+      }
+    }
+
+    async function loadTeamLeaderboard() {
+      const teams = state.settings.productivity.teams;
+      teams.loading = true;
+      teams.error = null;
+      renderTeamsSection();
+      try {
+        const data = await apiFetch(`/gymapi/teams/leaderboard?limit=${teams.limit}&offset=${teams.offset}`);
+        teams.items = Array.isArray(data?.items) ? data.items : [];
+        teams.total = Number(data?.total || 0);
+        const myId = Number(data?.my_team_id || teams.my?.team_id || 0);
+        if (myId > 0 && teams.my && teams.my.role === 'captain' && data?.teams_newly_unlocked && typeof data.teams_newly_unlocked === 'object') {
+          const codes = Array.isArray(data.teams_newly_unlocked[String(myId)] || data.teams_newly_unlocked[myId])
+            ? (data.teams_newly_unlocked[String(myId)] || data.teams_newly_unlocked[myId]) : [];
+          if (codes.length) {
+            const achMap = new Map((teams.style.options?.team_achievements || []).map((a) => [a.code, a]));
+            const first = achMap.get(String(codes[0]));
+            toast(first ? `Открыто достижение команды: ${first.icon || '✨'} ${first.title || 'Новое достижение'}` : 'Команда открыла новое достижение ✨');
+          }
+        }
+      } catch (e) {
+        teams.items = [];
+        teams.total = 0;
+        teams.error = 'Не удалось загрузить рейтинг команд';
+        toast('Не удалось загрузить рейтинг команд');
+        console.error(e);
+      } finally {
+        teams.loading = false;
+        renderTeamsSection();
+      }
+    }
+
+    async function loadTeamProfile(teamId) {
+      const teams = state.settings.productivity.teams;
+      teams.profileLoading = true;
+      teams.profileError = null;
+      teams.view = 'profile';
+      teams.selectedTeamId = Number(teamId) || null;
+      renderTeamsSection();
+      try {
+        const data = await apiFetch(`/gymapi/teams/${Number(teamId)}`);
+        teams.profile = data || null;
+      } catch (e) {
+        teams.profile = null;
+        teams.profileError = 'Не удалось загрузить профиль команды';
+        toast('Не удалось загрузить профиль команды');
+        console.error(e);
+      } finally {
+        teams.profileLoading = false;
+        renderTeamsSection();
+      }
+    }
+
+    async function loadTeamRequests() {
+      const teams = state.settings.productivity.teams;
+      teams.requests.loading = true;
+      teams.requests.error = null;
+      renderTeamsSection();
+      try {
+        const q = encodeURIComponent(teams.requests.q || '');
+        const url = `/gymapi/teams/requests?q=${q}&limit=${teams.requests.limit}&offset=${teams.requests.offset}`;
+        const data = await apiFetch(url);
+        teams.requests.items = Array.isArray(data?.items) ? data.items : [];
+        teams.requests.total = Number(data?.total || 0);
+      } catch (e) {
+        teams.requests.items = [];
+        teams.requests.total = 0;
+        teams.requests.error = 'Не удалось загрузить заявки';
+        toast('Не удалось загрузить заявки');
+        console.error(e);
+      } finally {
+        teams.requests.loading = false;
+        renderTeamsSection();
+      }
+    }
+
+    async function ensureTeamsHubLoaded() {
+      await loadTeamsMe();
+      await loadTeamLeaderboard();
+    }
+
+    async function actionTeamJoinByCode(code) {
+      const teams = state.settings.productivity.teams;
+      if (teams.busy.join) return;
+      const value = String(code || '').trim();
+      if (!value) { toast('Введите код команды'); return; }
+      teams.busy.join = true;
+      renderTeamsSection();
+      try {
+        const data = await apiFetch('/gymapi/teams/join_by_code', { method: 'POST', body: JSON.stringify({ code: value }) });
+        toast(data?.status === 'joined' ? 'Вы вступили в команду ✅' : 'Заявка отправлена ✅');
+        await loadTeamsMe();
+        await loadTeamLeaderboard();
+      } catch (e) {
+        toast('Не удалось вступить в команду');
+        console.error(e);
+      } finally {
+        teams.busy.join = false;
+        renderTeamsSection();
+      }
+    }
+
+    async function actionTeamCreate(name, isOpen) {
+      const teams = state.settings.productivity.teams;
+      if (teams.busy.create) return;
+      const teamName = String(name || '').trim();
+      if (!teamName) { toast('Введите название команды'); return; }
+      teams.busy.create = true;
+      renderTeamsSection();
+      try {
+        await apiFetch('/gymapi/teams/create', { method: 'POST', body: JSON.stringify({ name: teamName, is_open: !!isOpen }) });
+        toast('Команда создана ✅');
+        await loadTeamsMe();
+        await loadTeamLeaderboard();
+      } catch (e) {
+        toast('Не удалось создать команду');
+        console.error(e);
+      } finally {
+        teams.busy.create = false;
+        renderTeamsSection();
+      }
+    }
+
+    async function actionTeamLeave() {
+      const teams = state.settings.productivity.teams;
+      if (teams.busy.leave) return;
+      teams.busy.leave = true;
+      renderTeamsSection();
+      try {
+        await apiFetch('/gymapi/teams/leave', { method: 'POST' });
+        toast('Вы покинули команду');
+        teams.view = 'list';
+        teams.profile = null;
+        teams.selectedTeamId = null;
+        await loadTeamsMe();
+        await loadTeamLeaderboard();
+      } catch (e) {
+        toast('Не удалось покинуть команду');
+        console.error(e);
+      } finally {
+        teams.busy.leave = false;
+        renderTeamsSection();
+      }
+    }
+
+    async function actionRequestAccept(id) {
+      const teams = state.settings.productivity.teams;
+      if (teams.busy.accept) return;
+      teams.busy.accept = true;
+      renderTeamsSection();
+      try {
+        await apiFetch(`/gymapi/teams/requests/${Number(id)}/accept`, { method: 'POST' });
+        toast('Заявка принята ✅');
+        await loadTeamRequests();
+        if (teams.selectedTeamId) await loadTeamProfile(teams.selectedTeamId);
+      } catch (e) {
+        toast('Не удалось принять заявку');
+        console.error(e);
+      } finally {
+        teams.busy.accept = false;
+        renderTeamsSection();
+      }
+    }
+
+    async function actionRequestReject(id) {
+      const teams = state.settings.productivity.teams;
+      if (teams.busy.reject) return;
+      teams.busy.reject = true;
+      renderTeamsSection();
+      try {
+        await apiFetch(`/gymapi/teams/requests/${Number(id)}/reject`, { method: 'POST' });
+        toast('Заявка отклонена');
+        await loadTeamRequests();
+      } catch (e) {
+        toast('Не удалось отклонить заявку');
+        console.error(e);
+      } finally {
+        teams.busy.reject = false;
+        renderTeamsSection();
+      }
+    }
+
+    async function loadTeamStyleOptions() {
+      const teams = state.settings.productivity.teams;
+      teams.style.loading = true;
+      teams.style.error = null;
+      teams.style.open = true;
+      renderTeamsSection();
+      try {
+        const data = await apiFetch('/gymapi/teams/style/options');
+        teams.style.options = data || null;
+        teams.style.selected = { ...(data?.current || { frame_code: null, bg_code: null, emblem_code: null }) };
+      } catch (e) {
+        teams.style.options = null;
+        teams.style.error = 'Не удалось загрузить стили команды';
+        toast('Не удалось загрузить стили команды');
+        console.error(e);
+      } finally {
+        teams.style.loading = false;
+        renderTeamsSection();
+      }
+    }
+
+    async function saveTeamStyleSelected() {
+      const teams = state.settings.productivity.teams;
+      if (teams.busy.styleSave) return;
+      const selected = teams.style.selected || {};
+      teams.busy.styleSave = true;
+      renderTeamsSection();
+      try {
+        await apiFetch('/gymapi/teams/style', {
+          method: 'POST',
+          body: JSON.stringify({
+            frame_code: selected.frame_code || null,
+            bg_code: selected.bg_code || null,
+            emblem_code: selected.emblem_code || null,
+          }),
+        });
+        toast('Стиль команды обновлён');
+        await loadTeamsMe();
+        await loadTeamLeaderboard();
+        if (teams.selectedTeamId) await loadTeamProfile(teams.selectedTeamId);
+        await loadTeamStyleOptions();
+      } catch (e) {
+        toast('Не удалось сохранить стиль');
+        console.error(e);
+      } finally {
+        teams.busy.styleSave = false;
+        renderTeamsSection();
+      }
+    }
+
     async function loadProductivityLeaderboard() {
+
       const lb = state.settings.productivity.leaderboard;
       lb.loading = true;
       renderLeaderboardSection();
@@ -7237,6 +7857,12 @@
       document.getElementById('closeDrawer').addEventListener('click', closeDrawer);
       document.getElementById('drawerOverlay').addEventListener('click', (e) => { if (e.target.id === 'drawerOverlay') closeDrawer(); });
       document.querySelectorAll('.menu-item').forEach((btn) => btn.addEventListener('click', () => {
+        if (btn.dataset.action === 'open-teams') {
+          closeDrawer();
+          openProductivitySheet();
+          setProductivityTab('teams');
+          return;
+        }
         const route = btn.dataset.route;
         const section = btn.dataset.section;
         if (route === 'settings' && section) {
@@ -10929,6 +11555,106 @@
         const target = e.target.closest('[data-action]');
         if (!target) return;
         const action = target.dataset.action;
+        if (action === 'productivity-tab') {
+          setProductivityTab(String(target.dataset.tab || 'people'));
+          return;
+        }
+        if (action === 'team-open') {
+          const teamId = Number(target.dataset.teamId || 0);
+          if (teamId > 0) loadTeamProfile(teamId).catch(console.error);
+          return;
+        }
+        if (action === 'team-back') {
+          const teams = state.settings.productivity.teams;
+          teams.view = 'list';
+          teams.profile = null;
+          teams.selectedTeamId = null;
+          renderTeamsSection();
+          return;
+        }
+        if (action === 'team-join') {
+          const code = document.getElementById('teamJoinCode')?.value || '';
+          state.settings.productivity.teams.join.code = code;
+          actionTeamJoinByCode(code).catch(console.error);
+          return;
+        }
+        if (action === 'team-create') {
+          const name = document.getElementById('teamCreateName')?.value || '';
+          const isOpen = !!document.getElementById('teamCreateOpen')?.checked;
+          state.settings.productivity.teams.create.name = name;
+          state.settings.productivity.teams.create.isOpen = isOpen;
+          actionTeamCreate(name, isOpen).catch(console.error);
+          return;
+        }
+        if (action === 'team-leave') {
+          if (!confirm('Покинуть команду?')) return;
+          actionTeamLeave().catch(console.error);
+          return;
+        }
+        if (action === 'team-requests-open') {
+          const teams = state.settings.productivity.teams;
+          teams.requests.open = true;
+          teams.requests.offset = 0;
+          loadTeamRequests().catch(console.error);
+          return;
+        }
+        if (action === 'team-requests-refresh') {
+          const teams = state.settings.productivity.teams;
+          teams.requests.q = document.getElementById('teamReqSearch')?.value || '';
+          teams.requests.offset = 0;
+          loadTeamRequests().catch(console.error);
+          return;
+        }
+        if (action === 'team-retry-my') {
+          loadTeamsMe().catch(console.error);
+          return;
+        }
+        if (action === 'team-retry-board') {
+          loadTeamLeaderboard().catch(console.error);
+          return;
+        }
+        if (action === 'team-retry-profile') {
+          const teamId = Number(state.settings.productivity.teams.selectedTeamId || state.settings.productivity.teams.my?.team_id || 0);
+          if (teamId > 0) loadTeamProfile(teamId).catch(console.error);
+          return;
+        }
+        if (action === 'team-retry-requests') {
+          loadTeamRequests().catch(console.error);
+          return;
+        }
+        if (action === 'team-retry-style') {
+          loadTeamStyleOptions().catch(console.error);
+          return;
+        }
+        if (action === 'team-req-accept') {
+          const requestId = Number(target.dataset.requestId || 0);
+          if (requestId > 0) actionRequestAccept(requestId).catch(console.error);
+          return;
+        }
+        if (action === 'team-req-reject') {
+          const requestId = Number(target.dataset.requestId || 0);
+          if (requestId > 0) actionRequestReject(requestId).catch(console.error);
+          return;
+        }
+        if (action === 'team-style-open') {
+          loadTeamStyleOptions().catch(console.error);
+          return;
+        }
+        if (action === 'team-style-save') {
+          const teams = state.settings.productivity.teams;
+          teams.style.selected = {
+            frame_code: document.getElementById('teamStyleFrame')?.value || null,
+            bg_code: document.getElementById('teamStyleBg')?.value || null,
+            emblem_code: document.getElementById('teamStyleEmblem')?.value || null,
+          };
+          saveTeamStyleSelected().catch(console.error);
+          return;
+        }
+        if (action === 'open-subscription') {
+          closeProductivitySheet();
+          navigateTo('subscription');
+          return;
+        }
         if (action === 'leader-badge-open') {
           const lb = state.settings.productivity.leaderboard;
           lb.badgePopup = {
@@ -10974,6 +11700,26 @@
           return;
         }
       });
+      document.getElementById('productivitySheet').addEventListener('change', (e) => {
+        const target = e.target;
+        if (target && (target.id === 'teamStyleFrame' || target.id === 'teamStyleBg' || target.id === 'teamStyleEmblem')) {
+          const teams = state.settings.productivity.teams;
+          teams.style.selected = {
+            frame_code: document.getElementById('teamStyleFrame')?.value || null,
+            bg_code: document.getElementById('teamStyleBg')?.value || null,
+            emblem_code: document.getElementById('teamStyleEmblem')?.value || null,
+          };
+          renderTeamsSection();
+        }
+      });
+      document.getElementById('productivitySheet').addEventListener('input', (e) => {
+        const target = e.target;
+        if (target && target.id === 'teamReqSearch') {
+          const teams = state.settings.productivity.teams;
+          teams.requests.q = String(target.value || '').trim();
+          debouncedLoadTeamRequests();
+        }
+      });
       document.getElementById('leaderboardPrevBtn')?.addEventListener('click', () => {
         const lb = state.settings.productivity.leaderboard;
         lb.offset = Math.max(0, lb.offset - lb.limit);
@@ -10984,6 +11730,17 @@
         if (lb.offset + lb.limit >= lb.total) return;
         lb.offset = lb.offset + lb.limit;
         loadProductivityLeaderboard().catch(console.error);
+      });
+      document.getElementById('teamboardPrevBtn')?.addEventListener('click', () => {
+        const teams = state.settings.productivity.teams;
+        teams.offset = Math.max(0, teams.offset - teams.limit);
+        loadTeamLeaderboard().catch(console.error);
+      });
+      document.getElementById('teamboardNextBtn')?.addEventListener('click', () => {
+        const teams = state.settings.productivity.teams;
+        if (teams.offset + teams.limit >= teams.total) return;
+        teams.offset = teams.offset + teams.limit;
+        loadTeamLeaderboard().catch(console.error);
       });
       document.getElementById('editorClose').addEventListener('click', closeEditor);
       document.getElementById('editorAddSet').addEventListener('click', () => queueExerciseAction(state.editor.ueId, () => addSet(state.editor.ueId, { toastOnSave: true })));

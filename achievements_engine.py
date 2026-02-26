@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import db
@@ -14,6 +14,18 @@ class AchievementDef:
     icon: str
     rarity: str
     frame_code: str
+    secret: bool = False
+
+
+@dataclass(frozen=True)
+class TeamAchievementDef:
+    code: str
+    title: str
+    icon: str
+    rarity: str
+    team_frame_code: str
+    team_bg_code: str
+    team_emblem_code: str
     secret: bool = False
 
 
@@ -40,10 +52,135 @@ ACHIEVEMENTS: tuple[AchievementDef, ...] = (
     AchievementDef("comeback_14", "Возвращение", "🪃", "rare", "frame_boomerang"),
     AchievementDef("day_done_50", "Пятьдесят закрытых", "🧱", "epic", "frame_wall"),
     AchievementDef("night_shift", "Ночь — мой зал", "🌙", "epic", "frame_moon", secret=True),
+    AchievementDef("team_joined", "В стае", "🐺", "common", "frame_pack"),
+    AchievementDef("team_founder", "Основатель", "🏴", "rare", "frame_banner"),
+    AchievementDef("team_full_roster", "Полный состав", "🧱", "epic", "frame_honeycomb"),
+    AchievementDef("team_top10_week", "В десятке", "🔟", "rare", "frame_ringed"),
+    AchievementDef("team_top3_week", "На пьедестале", "🥉", "epic", "frame_laurel"),
+    AchievementDef("team_top1_week", "Корона недели", "👑", "legendary", "frame_crownline", secret=True),
+    AchievementDef("team_month_top1", "Трон месяца", "🏆", "legendary", "frame_throneveil", secret=True),
+    AchievementDef("team_consistency", "Ровный темп", "🫀", "rare", "frame_pulse"),
+    AchievementDef("team_night_ops", "Ночной отряд", "🌘", "epic", "frame_eclipse", secret=True),
+    AchievementDef("team_recruit_3", "Вербовщик", "🧲", "rare", "frame_magnet"),
+    AchievementDef("team_recruit_8", "Сборщик стаи", "🕸️", "epic", "frame_webweave", secret=True),
+    AchievementDef("team_loyal_30", "Верность", "🧭", "epic", "frame_compassrose", secret=True),
+)
+
+TEAM_ACHIEVEMENTS: tuple[TeamAchievementDef, ...] = (
+    TeamAchievementDef("t_foundation", "Фундамент", "🧱", "common", "team_frame_stitch", "team_bg_slate", "team_emblem_mark"),
+    TeamAchievementDef("t_full_roster", "Полный состав", "🧩", "rare", "team_frame_honey", "team_bg_honeycomb", "team_emblem_wolf"),
+    TeamAchievementDef("t_active_core", "Живое ядро", "🔥", "rare", "team_frame_ember", "team_bg_ember", "team_emblem_torch"),
+    TeamAchievementDef("t_top10_week", "В десятке недели", "🔟", "rare", "team_frame_ring", "team_bg_neon_grid", "team_emblem_badge"),
+    TeamAchievementDef("t_top3_week", "Пьедестал недели", "🥉", "epic", "team_frame_laurel", "team_bg_aurora", "team_emblem_wreath"),
+    TeamAchievementDef("t_top1_week", "Корона недели", "👑", "legendary", "team_frame_crown", "team_bg_obsidian", "team_emblem_crown"),
+    TeamAchievementDef("t_top1_month", "Трон месяца", "🏆", "legendary", "team_frame_throne", "team_bg_blackhole", "team_emblem_throne", secret=True),
+    TeamAchievementDef("t_consistency_28", "28 дней темпа", "🫀", "epic", "team_frame_pulse", "team_bg_ocean", "team_emblem_wave"),
+    TeamAchievementDef("t_night_ops", "Ночной состав", "🌘", "epic", "team_frame_eclipse", "team_bg_midnight", "team_emblem_moon", secret=True),
+    TeamAchievementDef("t_web_of_power", "Паутина влияния", "🕸️", "legendary", "team_frame_web", "team_bg_violet_smoke", "team_emblem_spider", secret=True),
 )
 
 ACHIEVEMENTS_BY_CODE = {item.code: item for item in ACHIEVEMENTS}
 FRAME_TO_CODE = {item.frame_code: item.code for item in ACHIEVEMENTS}
+TEAM_ACHIEVEMENTS_BY_CODE = {item.code: item for item in TEAM_ACHIEVEMENTS}
+TEAM_STYLE_CATALOG = {
+    "frames": {item.team_frame_code: item.code for item in TEAM_ACHIEVEMENTS},
+    "bgs": {item.team_bg_code: item.code for item in TEAM_ACHIEVEMENTS},
+    "emblems": {item.team_emblem_code: item.code for item in TEAM_ACHIEVEMENTS},
+}
+
+if len(ACHIEVEMENTS_BY_CODE) != len(ACHIEVEMENTS):
+    raise ValueError("Duplicate achievement code")
+if len(FRAME_TO_CODE) != len(ACHIEVEMENTS):
+    raise ValueError("Duplicate frame_code")
+if len(TEAM_ACHIEVEMENTS_BY_CODE) != len(TEAM_ACHIEVEMENTS):
+    raise ValueError("Duplicate team achievement code")
+if len(TEAM_STYLE_CATALOG["frames"]) != len(TEAM_ACHIEVEMENTS):
+    raise ValueError("Duplicate team_frame_code")
+if len(TEAM_STYLE_CATALOG["bgs"]) != len(TEAM_ACHIEVEMENTS):
+    raise ValueError("Duplicate team_bg_code")
+if len(TEAM_STYLE_CATALOG["emblems"]) != len(TEAM_ACHIEVEMENTS):
+    raise ValueError("Duplicate team_emblem_code")
+
+
+async def _fetch_team_metrics(team_id: int) -> dict:
+    async with db.connect_db() as conn:
+        members_q = "SELECT COUNT(*) FROM team_members WHERE team_id=? AND left_at IS NULL"
+        members_count = int((await (await conn.execute(members_q, (team_id,))).fetchone())[0] or 0)
+
+        active_members_q = """
+        SELECT COUNT(DISTINCT tm.user_id)
+        FROM team_members tm
+        JOIN sessions s ON s.user_id = tm.user_id
+        WHERE tm.team_id=? AND tm.left_at IS NULL
+          AND s.date >= date('now', '-7 day')
+        """
+        active_members_7d = int((await (await conn.execute(active_members_q, (team_id,))).fetchone())[0] or 0)
+
+        sessions_q = """
+        SELECT
+            SUM(CASE WHEN s.date >= date('now', '-7 day') THEN 1 ELSE 0 END),
+            SUM(CASE WHEN s.date >= date('now', '-28 day') THEN 1 ELSE 0 END)
+        FROM team_members tm
+        LEFT JOIN sessions s ON s.user_id = tm.user_id
+        WHERE tm.team_id=? AND tm.left_at IS NULL
+        """
+        sessions_row = await (await conn.execute(sessions_q, (team_id,))).fetchone()
+        sessions_7 = int((sessions_row[0] if sessions_row else 0) or 0)
+        sessions_28 = int((sessions_row[1] if sessions_row else 0) or 0)
+
+        rank_q = """
+        SELECT
+            MIN(CASE WHEN day_utc >= date('now', '-7 day') THEN rank END),
+            MIN(CASE WHEN day_utc >= date('now', '-28 day') THEN rank END),
+            SUM(CASE WHEN day_utc >= date('now', '-28 day') AND rank <= 3 THEN 1 ELSE 0 END),
+            SUM(CASE WHEN day_utc >= date('now', '-28 day') AND rank <= 10 THEN 1 ELSE 0 END)
+        FROM team_daily_scores
+        WHERE team_id=?
+        """
+        rank_row = await (await conn.execute(rank_q, (team_id,))).fetchone()
+        best_rank_7 = int(rank_row[0]) if rank_row and rank_row[0] is not None else None
+        best_rank_28 = int(rank_row[1]) if rank_row and rank_row[1] is not None else None
+        top3_days_28 = int((rank_row[2] if rank_row else 0) or 0)
+        top10_days_28 = int((rank_row[3] if rank_row else 0) or 0)
+
+        streak_rows = await (
+            await conn.execute(
+                """
+                SELECT day_utc, rank
+                FROM team_daily_scores
+                WHERE team_id=?
+                ORDER BY day_utc DESC
+                LIMIT 35
+                """,
+                (team_id,),
+            )
+        ).fetchall()
+
+    top1_streak_days = 0
+    expected_day = datetime.now(UTC).date()
+    for day_iso, rank in streak_rows:
+        try:
+            row_day = date.fromisoformat(str(day_iso))
+        except Exception:
+            break
+        if row_day != expected_day:
+            break
+        if int(rank or 0) != 1:
+            break
+        top1_streak_days += 1
+        expected_day = expected_day - timedelta(days=1)
+
+    return {
+        "members_count": members_count,
+        "active_members_7d": active_members_7d,
+        "sessions_7": sessions_7,
+        "sessions_28": sessions_28,
+        "best_rank_7": best_rank_7,
+        "best_rank_28": best_rank_28,
+        "top1_streak_days": top1_streak_days,
+        "top3_days_28": top3_days_28,
+        "top10_days_28": top10_days_28,
+    }
 
 
 async def _fetch_metrics(user_id: int) -> dict:
@@ -100,8 +237,6 @@ async def _fetch_metrics(user_id: int) -> dict:
         """
         copied_plan_3days = int((await (await conn.execute(q, (user_id, user_id))).fetchone())[0] or 0)
 
-        inspired = await db.count_trained_copies_for_source(user_id)
-
         q = "SELECT COUNT(*) FROM trainer_links WHERE trainer_user_id=? AND status='accepted'"
         accepted_trainees = int((await (await conn.execute(q, (user_id,))).fetchone())[0] or 0)
 
@@ -117,6 +252,36 @@ async def _fetch_metrics(user_id: int) -> dict:
 
         q = "SELECT COUNT(*) FROM trainer_links WHERE trainee_user_id=? AND status='accepted'"
         accepted_trainer_links = int((await (await conn.execute(q, (user_id,))).fetchone())[0] or 0)
+
+        q = """
+        SELECT tm.team_id, tm.role, tm.joined_at
+        FROM team_members tm
+        WHERE tm.user_id=? AND tm.left_at IS NULL
+        LIMIT 1
+        """
+        team_row = await (await conn.execute(q, (user_id,))).fetchone()
+
+    inspired = await db.count_trained_copies_for_source(user_id)
+
+    team_id = int(team_row[0]) if team_row else None
+    team_role = str(team_row[1]) if team_row and team_row[1] else None
+    team_joined_at_raw = str(team_row[2]) if team_row and team_row[2] else None
+
+    team_members_count = 0
+    team_best_rank_7 = None
+    team_top1_streak_days = 0
+    team_sessions_per_member_28 = 0.0
+    captain_recruits_count = 0
+    if team_id is not None:
+        t = await _fetch_team_metrics(team_id)
+        team_members_count = int(t["members_count"])
+        team_best_rank_7 = t["best_rank_7"]
+        team_top1_streak_days = int(t["top1_streak_days"])
+        team_sessions_per_member_28 = float(t["sessions_28"]) / max(1, team_members_count)
+        if team_role == "captain":
+            async with db.connect_db() as conn:
+                q = "SELECT COUNT(*) FROM team_members WHERE team_id=? AND left_at IS NULL AND role='member'"
+                captain_recruits_count = int((await (await conn.execute(q, (team_id,))).fetchone())[0] or 0)
 
     local_dates: list[datetime] = []
     for (iso_ts,) in completed_rows:
@@ -144,6 +309,14 @@ async def _fetch_metrics(user_id: int) -> dict:
         "accepted_trainees": accepted_trainees,
         "coach_ok": coach_ok,
         "accepted_trainer_links": accepted_trainer_links,
+        "team_id": team_id,
+        "team_role": team_role,
+        "team_members_count": team_members_count,
+        "team_best_rank_7": team_best_rank_7,
+        "team_top1_streak_days": team_top1_streak_days,
+        "team_sessions_per_member_28": team_sessions_per_member_28,
+        "captain_recruits_count": captain_recruits_count,
+        "team_joined_at": team_joined_at_raw,
     }
 
 
@@ -170,10 +343,51 @@ def _has_comeback_14(local_completions: list[datetime]) -> bool:
     return False
 
 
+async def evaluate_team(team_id: int) -> dict:
+    existing_team = set(await db.list_team_achievements(team_id))
+    m = await _fetch_team_metrics(team_id)
+
+    checks = {
+        "t_foundation": m["members_count"] >= 1,
+        "t_full_roster": m["members_count"] >= 8,
+        "t_active_core": m["members_count"] >= 6 and m["active_members_7d"] >= 5,
+        "t_top10_week": m["best_rank_7"] is not None and m["best_rank_7"] <= 10,
+        "t_top3_week": m["best_rank_7"] is not None and m["best_rank_7"] <= 3,
+        "t_top1_week": m["best_rank_7"] is not None and m["best_rank_7"] == 1,
+        "t_top1_month": m["top1_streak_days"] >= 30,
+        "t_consistency_28": (m["sessions_28"] / max(1, m["members_count"])) >= 12,
+        "t_night_ops": False,
+        "t_web_of_power": m["top3_days_28"] >= 21 and m["members_count"] >= 8,
+    }
+
+    earned = set(existing_team)
+    newly: list[str] = []
+    now_iso = datetime.now(UTC).isoformat()
+    for code, ok in checks.items():
+        if not ok:
+            continue
+        earned.add(code)
+        if code not in existing_team:
+            inserted = await db.grant_team_achievement(team_id, code, now_iso)
+            if inserted:
+                newly.append(code)
+    return {"earned_team_codes": sorted(earned), "newly_unlocked_team_codes": newly}
+
+
 async def evaluate(user_id: int) -> dict:
     existing = {code: ts for code, ts in await db.list_user_achievements(user_id)}
     m = await _fetch_metrics(user_id)
     streak = _max_streak(m["local_completions"])
+
+    team_loyal_30 = False
+    if m["team_joined_at"]:
+        try:
+            joined_at = datetime.fromisoformat(str(m["team_joined_at"]))
+            if joined_at.tzinfo is None:
+                joined_at = joined_at.replace(tzinfo=UTC)
+            team_loyal_30 = joined_at <= datetime.now(UTC) - timedelta(days=30)
+        except Exception:
+            team_loyal_30 = False
 
     earned: set[str] = set(existing.keys())
     checks = {
@@ -199,7 +413,22 @@ async def evaluate(user_id: int) -> dict:
         "comeback_14": _has_comeback_14(m["local_completions"]),
         "day_done_50": m["day_done_total"] >= 50,
         "night_shift": any(d.hour >= 23 or d.hour <= 4 for d in m["local_completions"]),
+        "team_joined": m["team_id"] is not None,
+        "team_founder": m["team_role"] == "captain",
+        "team_full_roster": m["team_id"] is not None and m["team_members_count"] >= 8,
+        "team_top10_week": m["team_best_rank_7"] is not None and m["team_best_rank_7"] <= 10,
+        "team_top3_week": m["team_best_rank_7"] is not None and m["team_best_rank_7"] <= 3,
+        "team_top1_week": m["team_best_rank_7"] is not None and m["team_best_rank_7"] == 1,
+        "team_month_top1": m["team_top1_streak_days"] >= 30,
+        "team_consistency": m["team_sessions_per_member_28"] >= 12,
+        "team_night_ops": False,
+        "team_recruit_3": m["team_role"] == "captain" and m["captain_recruits_count"] >= 3,
+        "team_recruit_8": m["team_role"] == "captain" and m["captain_recruits_count"] >= 8,
+        "team_loyal_30": m["team_id"] is not None and team_loyal_30,
     }
+
+    if m["team_id"] is not None:
+        await evaluate_team(int(m["team_id"]))
 
     newly: list[str] = []
     now_iso = datetime.now(UTC).isoformat()
@@ -212,6 +441,33 @@ async def evaluate(user_id: int) -> dict:
             if inserted:
                 newly.append(code)
     return {"earned_codes": sorted(earned), "newly_unlocked_codes": newly}
+
+
+def team_style_options_for_codes(earned_team_codes: set[str]) -> dict:
+    frame_codes = sorted([code for code, req in TEAM_STYLE_CATALOG["frames"].items() if req in earned_team_codes])
+    bg_codes = sorted([code for code, req in TEAM_STYLE_CATALOG["bgs"].items() if req in earned_team_codes])
+    emblem_codes = sorted([code for code, req in TEAM_STYLE_CATALOG["emblems"].items() if req in earned_team_codes])
+    return {
+        "allowed_frames": frame_codes,
+        "allowed_bgs": bg_codes,
+        "allowed_emblems": emblem_codes,
+    }
+
+
+def is_team_style_allowed(
+    earned_team_codes: set[str],
+    frame_code: str | None,
+    bg_code: str | None,
+    emblem_code: str | None,
+) -> bool:
+    options = team_style_options_for_codes(earned_team_codes)
+    if frame_code is not None and frame_code not in options["allowed_frames"]:
+        return False
+    if bg_code is not None and bg_code not in options["allowed_bgs"]:
+        return False
+    if emblem_code is not None and emblem_code not in options["allowed_emblems"]:
+        return False
+    return True
 
 
 async def achievements_overview_payload(user_id: int, has_subscription: bool, is_admin: bool = False) -> dict:
