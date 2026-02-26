@@ -401,6 +401,16 @@ def _iso_utc(dt: datetime) -> str:
     return dt.astimezone(UTC).isoformat()
 
 
+def _now_utc_iso() -> str:
+    return datetime.now(UTC).replace(microsecond=0).isoformat()
+
+
+def _generate_team_join_code() -> str:
+    alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+    length = secrets.choice((6, 7, 8))
+    return "".join(secrets.choice(alphabet) for _ in range(length))
+
+
 async def _fetch_ai_coach_quota_state(db, user_id: int, now_utc: datetime) -> dict:
     day_cutoff = now_utc - timedelta(days=1)
     week_cutoff = now_utc - timedelta(days=7)
@@ -1166,6 +1176,74 @@ async def init_db():
             source_payload TEXT NOT NULL,
             UNIQUE(system_id, day_index, exercise_id)
         );
+
+        CREATE TABLE IF NOT EXISTS teams(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            owner_user_id INTEGER NOT NULL,
+            name TEXT NOT NULL,
+            join_code TEXT NOT NULL UNIQUE,
+            is_open INTEGER NOT NULL DEFAULT 0,
+            frame_code TEXT,
+            bg_code TEXT,
+            emblem_code TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS team_members(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            team_id INTEGER NOT NULL,
+            user_id INTEGER NOT NULL,
+            role TEXT NOT NULL,
+            joined_at TEXT NOT NULL,
+            left_at TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS team_join_requests(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            team_id INTEGER NOT NULL,
+            user_id INTEGER NOT NULL,
+            status TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS team_achievements(
+            team_id INTEGER NOT NULL,
+            code TEXT NOT NULL,
+            unlocked_at TEXT NOT NULL,
+            PRIMARY KEY(team_id, code)
+        );
+
+        CREATE TABLE IF NOT EXISTS team_daily_scores(
+            team_id INTEGER NOT NULL,
+            day_utc TEXT NOT NULL,
+            score INTEGER NOT NULL,
+            rank INTEGER NOT NULL,
+            members INTEGER NOT NULL,
+            sessions_7 INTEGER NOT NULL,
+            sessions_28 INTEGER NOT NULL,
+            created_at TEXT NOT NULL,
+            UNIQUE(team_id, day_utc)
+        );
+
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_team_members_active_user
+            ON team_members(user_id)
+            WHERE left_at IS NULL;
+
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_team_members_captain
+            ON team_members(team_id)
+            WHERE role='captain' AND left_at IS NULL;
+
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_team_requests_pending
+            ON team_join_requests(team_id, user_id)
+            WHERE status='pending';
+
+        CREATE INDEX IF NOT EXISTS idx_team_members_team_active
+            ON team_members(team_id, left_at);
+
+        CREATE INDEX IF NOT EXISTS idx_team_requests_team_status
+            ON team_join_requests(team_id, status, created_at);
         """)
         try:
             await db.execute("ALTER TABLE users ADD COLUMN system TEXT")
@@ -4186,6 +4264,788 @@ async def grant_achievement(user_id: int, code: str, unlocked_at: str | None = N
         )
         await db.commit()
         return bool(cur.rowcount)
+
+
+async def create_team(owner_user_id: int, name: str, is_open: bool = False) -> dict:
+    team_name = (name or "").strip()
+    if not team_name:
+        raise ValueError("team_name_required")
+
+    async with connect_db() as db:
+        now = _now_utc_iso()
+        for _ in range(10):
+            join_code = _generate_team_join_code()
+            try:
+                cur = await db.execute(
+                    """
+                    INSERT INTO teams(owner_user_id, name, join_code, is_open, created_at, updated_at)
+                    VALUES(?,?,?,?,?,?)
+                    """,
+                    (owner_user_id, team_name, join_code, 1 if is_open else 0, now, now),
+                )
+                team_id = int(cur.lastrowid)
+                await db.execute(
+                    """
+                    INSERT INTO team_members(team_id, user_id, role, joined_at, left_at)
+                    VALUES(?,?,?,?,NULL)
+                    """,
+                    (team_id, owner_user_id, "captain", now),
+                )
+                await db.commit()
+                return {
+                    "team_id": team_id,
+                    "name": team_name,
+                    "join_code": join_code,
+                    "is_open": 1 if is_open else 0,
+                    "frame_code": None,
+                    "bg_code": None,
+                    "emblem_code": None,
+                }
+            except aiosqlite.IntegrityError:
+                await db.rollback()
+                continue
+    raise RuntimeError("team_join_code_generation_failed")
+
+
+async def get_team_by_id(team_id: int) -> dict | None:
+    async with connect_db() as db:
+        cur = await db.execute(
+            """
+            SELECT id, owner_user_id, name, join_code, is_open, frame_code, bg_code, emblem_code, created_at, updated_at
+            FROM teams
+            WHERE id=?
+            """,
+            (team_id,),
+        )
+        row = await cur.fetchone()
+    if not row:
+        return None
+    return {
+        "team_id": int(row[0]),
+        "owner_user_id": int(row[1]),
+        "name": row[2],
+        "join_code": row[3],
+        "is_open": int(row[4] or 0),
+        "frame_code": row[5],
+        "bg_code": row[6],
+        "emblem_code": row[7],
+        "created_at": row[8],
+        "updated_at": row[9],
+    }
+
+
+async def get_team_by_code(join_code: str) -> dict | None:
+    async with connect_db() as db:
+        cur = await db.execute(
+            """
+            SELECT id, owner_user_id, name, join_code, is_open, frame_code, bg_code, emblem_code, created_at, updated_at
+            FROM teams
+            WHERE join_code=?
+            """,
+            ((join_code or "").strip().upper(),),
+        )
+        row = await cur.fetchone()
+    if not row:
+        return None
+    return {
+        "team_id": int(row[0]),
+        "owner_user_id": int(row[1]),
+        "name": row[2],
+        "join_code": row[3],
+        "is_open": int(row[4] or 0),
+        "frame_code": row[5],
+        "bg_code": row[6],
+        "emblem_code": row[7],
+        "created_at": row[8],
+        "updated_at": row[9],
+    }
+
+
+async def get_user_team(user_id: int) -> dict | None:
+    async with connect_db() as db:
+        cur = await db.execute(
+            """
+            SELECT t.id, t.name, t.join_code, t.is_open, tm.role, t.frame_code, t.bg_code, t.emblem_code, t.owner_user_id
+            FROM team_members tm
+            JOIN teams t ON t.id = tm.team_id
+            WHERE tm.user_id=? AND tm.left_at IS NULL
+            LIMIT 1
+            """,
+            (user_id,),
+        )
+        row = await cur.fetchone()
+    if not row:
+        return None
+    return {
+        "team_id": int(row[0]),
+        "team_name": row[1],
+        "join_code": row[2],
+        "is_open": int(row[3] or 0),
+        "role": row[4],
+        "frame_code": row[5],
+        "bg_code": row[6],
+        "emblem_code": row[7],
+        "owner_user_id": int(row[8]),
+    }
+
+
+async def leave_team(user_id: int) -> None:
+    now = _now_utc_iso()
+    async with connect_db() as db:
+        await db.execute(
+            """
+            UPDATE team_members
+            SET left_at=?
+            WHERE user_id=? AND left_at IS NULL
+            """,
+            (now, user_id),
+        )
+        await db.commit()
+
+
+async def create_or_get_join_request(team_id: int, user_id: int) -> dict:
+    now = _now_utc_iso()
+    async with connect_db() as db:
+        cur = await db.execute(
+            "SELECT 1 FROM team_members WHERE user_id=? AND left_at IS NULL LIMIT 1",
+            (user_id,),
+        )
+        if await cur.fetchone():
+            raise ValueError("already_in_team")
+
+        cur = await db.execute(
+            """
+            SELECT id, status, created_at, updated_at
+            FROM team_join_requests
+            WHERE team_id=? AND user_id=? AND status='pending'
+            LIMIT 1
+            """,
+            (team_id, user_id),
+        )
+        row = await cur.fetchone()
+        if row:
+            return {
+                "request_id": int(row[0]),
+                "team_id": int(team_id),
+                "user_id": int(user_id),
+                "status": row[1],
+                "created_at": row[2],
+                "updated_at": row[3],
+            }
+
+        cur = await db.execute(
+            """
+            INSERT INTO team_join_requests(team_id, user_id, status, created_at, updated_at)
+            VALUES(?,?,?,?,?)
+            """,
+            (team_id, user_id, "pending", now, now),
+        )
+        request_id = int(cur.lastrowid)
+        await db.commit()
+        return {
+            "request_id": request_id,
+            "team_id": int(team_id),
+            "user_id": int(user_id),
+            "status": "pending",
+            "created_at": now,
+            "updated_at": now,
+        }
+
+
+async def cancel_join_request(team_id: int, user_id: int) -> None:
+    now = _now_utc_iso()
+    async with connect_db() as db:
+        await db.execute(
+            """
+            UPDATE team_join_requests
+            SET status='cancelled', updated_at=?
+            WHERE team_id=? AND user_id=? AND status='pending'
+            """,
+            (now, team_id, user_id),
+        )
+        await db.commit()
+
+
+async def list_team_requests(
+    team_id: int,
+    status: str = "pending",
+    q: str | None = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> tuple[list[dict], int]:
+    safe_limit = max(1, min(200, int(limit)))
+    safe_offset = max(0, int(offset))
+    query = (q or "").strip()
+
+    where = ["r.team_id=?", "r.status=?"]
+    params: list[object] = [team_id, status]
+
+    if query:
+        where.append("LOWER(COALESCE(u.username, '')) LIKE ?")
+        params.append(f"{query.lower()}%")
+
+    where_sql = " AND ".join(where)
+
+    async with connect_db() as db:
+        cur = await db.execute(
+            f"""
+            SELECT r.id, r.user_id, COALESCE(u.username, ''), r.created_at
+            FROM team_join_requests r
+            JOIN users u ON u.id = r.user_id
+            WHERE {where_sql}
+            ORDER BY r.created_at DESC
+            LIMIT ? OFFSET ?
+            """,
+            (*params, safe_limit, safe_offset),
+        )
+        rows = await cur.fetchall()
+
+        cur = await db.execute(
+            f"""
+            SELECT COUNT(*)
+            FROM team_join_requests r
+            JOIN users u ON u.id = r.user_id
+            WHERE {where_sql}
+            """,
+            tuple(params),
+        )
+        total_row = await cur.fetchone()
+
+    items = [
+        {
+            "request_id": int(row[0]),
+            "user_id": int(row[1]),
+            "username": row[2],
+            "created_at": row[3],
+        }
+        for row in rows
+    ]
+    return items, int(total_row[0] if total_row else 0)
+
+
+async def _get_captain_team_for_request(db, request_id: int, captain_user_id: int):
+    cur = await db.execute(
+        """
+        SELECT r.id, r.team_id, r.user_id, r.status
+        FROM team_join_requests r
+        JOIN team_members tm ON tm.team_id = r.team_id
+        WHERE r.id=?
+          AND tm.user_id=?
+          AND tm.role='captain'
+          AND tm.left_at IS NULL
+        LIMIT 1
+        """,
+        (request_id, captain_user_id),
+    )
+    return await cur.fetchone()
+
+
+async def accept_team_request(request_id: int, captain_user_id: int) -> dict:
+    now = _now_utc_iso()
+    async with connect_db() as db:
+        row = await _get_captain_team_for_request(db, request_id, captain_user_id)
+        if not row:
+            raise ValueError("not_team_captain")
+
+        _, team_id, user_id, status = row
+        if status != "pending":
+            raise ValueError("request_not_pending")
+
+        cur = await db.execute(
+            "SELECT 1 FROM team_members WHERE user_id=? AND left_at IS NULL LIMIT 1",
+            (user_id,),
+        )
+        if await cur.fetchone():
+            raise ValueError("already_in_team")
+
+        await db.execute(
+            "UPDATE team_join_requests SET status='accepted', updated_at=? WHERE id=?",
+            (now, request_id),
+        )
+        await db.execute(
+            """
+            INSERT INTO team_members(team_id, user_id, role, joined_at, left_at)
+            VALUES(?,?,?,?,NULL)
+            """,
+            (team_id, user_id, "member", now),
+        )
+        await db.execute(
+            """
+            UPDATE team_join_requests
+            SET status='cancelled', updated_at=?
+            WHERE user_id=? AND status='pending' AND id<>?
+            """,
+            (now, user_id, request_id),
+        )
+        await db.commit()
+
+    return {
+        "request_id": int(request_id),
+        "team_id": int(team_id),
+        "user_id": int(user_id),
+        "status": "accepted",
+    }
+
+
+async def reject_team_request(request_id: int, captain_user_id: int) -> None:
+    now = _now_utc_iso()
+    async with connect_db() as db:
+        row = await _get_captain_team_for_request(db, request_id, captain_user_id)
+        if not row:
+            raise ValueError("not_team_captain")
+        if row[3] != "pending":
+            raise ValueError("request_not_pending")
+        await db.execute(
+            "UPDATE team_join_requests SET status='rejected', updated_at=? WHERE id=?",
+            (now, request_id),
+        )
+        await db.commit()
+
+
+async def set_team_style(
+    team_id: int,
+    captain_user_id: int,
+    frame_code: str | None,
+    bg_code: str | None,
+    emblem_code: str | None,
+) -> None:
+    now = _now_utc_iso()
+    async with connect_db() as db:
+        cur = await db.execute(
+            """
+            SELECT 1
+            FROM team_members
+            WHERE team_id=? AND user_id=? AND role='captain' AND left_at IS NULL
+            LIMIT 1
+            """,
+            (team_id, captain_user_id),
+        )
+        if not await cur.fetchone():
+            raise ValueError("not_team_captain")
+
+        await db.execute(
+            """
+            UPDATE teams
+            SET frame_code=?, bg_code=?, emblem_code=?, updated_at=?
+            WHERE id=?
+            """,
+            (frame_code, bg_code, emblem_code, now, team_id),
+        )
+        await db.commit()
+
+
+async def grant_team_achievement(team_id: int, code: str, unlocked_at: str | None = None) -> bool:
+    ts = unlocked_at or _now_utc_iso()
+    async with connect_db() as db:
+        cur = await db.execute(
+            """
+            INSERT OR IGNORE INTO team_achievements(team_id, code, unlocked_at)
+            VALUES(?,?,?)
+            """,
+            (team_id, code, ts),
+        )
+        await db.commit()
+        return bool(cur.rowcount)
+
+
+async def list_team_achievements(team_id: int) -> set[str]:
+    async with connect_db() as db:
+        cur = await db.execute(
+            "SELECT code FROM team_achievements WHERE team_id=?",
+            (team_id,),
+        )
+        rows = await cur.fetchall()
+    return {str(row[0]) for row in rows}
+
+
+def _clamp_0_100(value: float) -> int:
+    return int(max(0, min(100, round(float(value)))))
+
+
+async def join_team_direct(team_id: int, user_id: int) -> None:
+    now = _now_utc_iso()
+    async with connect_db() as db:
+        cur = await db.execute(
+            "SELECT 1 FROM team_members WHERE user_id=? AND left_at IS NULL LIMIT 1",
+            (user_id,),
+        )
+        if await cur.fetchone():
+            raise ValueError("already_in_team")
+        try:
+            await db.execute(
+                """
+                INSERT INTO team_members(team_id, user_id, role, joined_at, left_at)
+                VALUES(?,?,?,?,NULL)
+                """,
+                (team_id, user_id, "member", now),
+            )
+        except aiosqlite.IntegrityError as exc:
+            await db.rollback()
+            raise ValueError("already_in_team") from exc
+        await db.commit()
+
+
+async def fetch_team_leaderboard(limit: int = 10, offset: int = 0):
+    safe_limit = max(1, int(limit or 10))
+    safe_offset = max(0, int(offset or 0))
+    async with connect_db() as db:
+        cur = await db.execute(
+            """
+            WITH team_users AS (
+                SELECT tm.team_id, tm.user_id, COALESCE(u.username, '') AS username
+                FROM team_members tm
+                JOIN users u ON u.id = tm.user_id
+                WHERE tm.left_at IS NULL
+            ),
+            recent_sessions AS (
+                SELECT s.user_id,
+                       SUM(CASE WHEN s.date >= date('now', '-7 day') THEN 1 ELSE 0 END) AS sessions_7,
+                       SUM(CASE WHEN s.date >= date('now', '-28 day') THEN 1 ELSE 0 END) AS sessions_28,
+                       COUNT(DISTINCT CASE WHEN s.date >= date('now', '-28 day') THEN s.date END) AS training_days_28,
+                       COUNT(DISTINCT CASE WHEN s.date >= date('now', '-56 day') THEN substr(s.date, 1, 8) || CAST(((CAST(substr(s.date, 9, 2) AS INTEGER)-1)/7) AS INTEGER) END) AS training_weeks_8
+                FROM sessions s
+                GROUP BY s.user_id
+            ),
+            set_stats AS (
+                SELECT s.user_id,
+                       SUM(CASE WHEN s.date >= date('now', '-28 day') THEN 1 ELSE 0 END) AS sets_28,
+                       COALESCE(SUM(CASE WHEN s.date >= date('now', '-28 day') THEN MAX(st.reps, 0) * MAX(st.weight_kg, 0) ELSE 0 END), 0) AS volume_28,
+                       AVG(CASE WHEN s.date >= date('now', '-28 day') THEN MAX(st.reps, 0) * MAX(st.weight_kg, 0) END) AS avg_weighted_reps
+                FROM sets st
+                JOIN sessions s ON s.id = st.session_id
+                GROUP BY s.user_id
+            ),
+            exercise_variety AS (
+                SELECT ue.user_id, COUNT(DISTINCT ue.exercise_id) AS active_exercise_count
+                FROM user_exercises ue
+                WHERE COALESCE(ue.is_archived, 0) = 0
+                GROUP BY ue.user_id
+            ),
+            completion AS (
+                SELECT s.user_id,
+                       AVG(CASE WHEN se.is_done = 1 THEN 1.0 ELSE 0.0 END) AS completion_ratio
+                FROM session_exercises se
+                JOIN sessions s ON s.id = se.session_id
+                WHERE s.date >= date('now', '-28 day')
+                GROUP BY s.user_id
+            ),
+            recent_best AS (
+                SELECT s.user_id, ue.exercise_id, MAX(st.weight_kg) AS max_w
+                FROM sets st
+                JOIN sessions s ON s.id = st.session_id
+                JOIN user_exercises ue ON ue.id = st.user_exercise_id
+                WHERE s.date >= date('now', '-14 day')
+                GROUP BY s.user_id, ue.exercise_id
+            ),
+            prev_best AS (
+                SELECT s.user_id, ue.exercise_id, MAX(st.weight_kg) AS max_w
+                FROM sets st
+                JOIN sessions s ON s.id = st.session_id
+                JOIN user_exercises ue ON ue.id = st.user_exercise_id
+                WHERE s.date >= date('now', '-28 day') AND s.date < date('now', '-14 day')
+                GROUP BY s.user_id, ue.exercise_id
+            ),
+            progression AS (
+                SELECT rb.user_id,
+                       AVG(CASE WHEN pb.max_w > 0 THEN (rb.max_w - pb.max_w) / pb.max_w ELSE 0 END) AS progression_index
+                FROM recent_best rb
+                LEFT JOIN prev_best pb ON pb.user_id = rb.user_id AND pb.exercise_id = rb.exercise_id
+                GROUP BY rb.user_id
+            )
+            SELECT tu.team_id,
+                   tu.user_id,
+                   tu.username,
+                   COALESCE(rs.sessions_7, 0) AS sessions_7,
+                   COALESCE(rs.sessions_28, 0) AS sessions_28,
+                   COALESCE(rs.training_days_28, 0) AS training_days_28,
+                   COALESCE(rs.training_weeks_8, 0) AS training_weeks_8,
+                   COALESCE(ss.sets_28, 0) AS sets_28,
+                   COALESCE(ss.volume_28, 0) AS volume_28,
+                   COALESCE(ss.avg_weighted_reps, 0) AS avg_weighted_reps,
+                   COALESCE(ev.active_exercise_count, 0) AS active_exercise_count,
+                   COALESCE(c.completion_ratio, 0) AS completion_ratio,
+                   COALESCE(p.progression_index, 0) AS progression_index,
+                   t.name,
+                   COALESCE(t.frame_code, NULL),
+                   COALESCE(t.bg_code, NULL),
+                   COALESCE(t.emblem_code, NULL)
+            FROM team_users tu
+            JOIN teams t ON t.id = tu.team_id
+            LEFT JOIN recent_sessions rs ON rs.user_id = tu.user_id
+            LEFT JOIN set_stats ss ON ss.user_id = tu.user_id
+            LEFT JOIN exercise_variety ev ON ev.user_id = tu.user_id
+            LEFT JOIN completion c ON c.user_id = tu.user_id
+            LEFT JOIN progression p ON p.user_id = tu.user_id
+            """
+        )
+        rows = await cur.fetchall()
+
+    teams: dict[int, dict] = {}
+    for row in rows:
+        team_id = int(row[0])
+        if team_id not in teams:
+            teams[team_id] = {
+                "team_id": team_id,
+                "name": row[13] or f"team_{team_id}",
+                "frame_code": row[14],
+                "bg_code": row[15],
+                "emblem_code": row[16],
+                "members_count": 0,
+                "active_members_7d": 0,
+                "sessions_7": 0,
+                "sessions_28": 0,
+                "member_scores": [],
+                "completion_values": [],
+                "variety_values": [],
+                "progression_values": [],
+            }
+        item = teams[team_id]
+        member = {
+            "training_days_28": int(row[5] or 0),
+            "sessions_28": int(row[4] or 0),
+            "training_weeks_8": int(row[6] or 0),
+            "sets_28": int(row[7] or 0),
+            "volume_28": float(row[8] or 0),
+            "avg_weighted_reps": float(row[9] or 0),
+            "active_exercise_count": int(row[10] or 0),
+            "completion_ratio": float(row[11] or 0),
+            "progression_index": float(row[12] or 0),
+        }
+        user_score = int(round(_leaderboard_score(member) * 100))
+
+        item["members_count"] += 1
+        item["sessions_7"] += int(row[3] or 0)
+        item["sessions_28"] += int(row[4] or 0)
+        if int(row[3] or 0) > 0:
+            item["active_members_7d"] += 1
+        item["member_scores"].append(user_score)
+        item["completion_values"].append(float(row[11] or 0.0))
+        item["variety_values"].append(int(row[10] or 0))
+        item["progression_values"].append(float(row[12] or 0.0))
+
+    ranked: list[dict] = []
+    for team in teams.values():
+        members_count = int(team["members_count"])
+        avg_member_score_raw = (sum(team["member_scores"]) / members_count) if members_count else 0.0
+        avg_completion_ratio_28 = (sum(team["completion_values"]) / members_count) if members_count else 0.0
+        avg_variety = (sum(team["variety_values"]) / members_count) if members_count else 0.0
+        avg_progression_index = (sum(team["progression_values"]) / members_count) if members_count else 0.0
+
+        consistency_score = _clamp_0_100((team["sessions_28"] / max(1, members_count)) / 12 * 100)
+        engagement_score = _clamp_0_100(team["active_members_7d"] / max(1, members_count) * 100)
+        completion_score = _clamp_0_100(avg_completion_ratio_28 * 100)
+        variety_score = _clamp_0_100(avg_variety / 25 * 100)
+        progression_score = _clamp_0_100(avg_progression_index * 400)
+        avg_member_score = _clamp_0_100(avg_member_score_raw)
+        team_score = _clamp_0_100(
+            0.40 * avg_member_score
+            + 0.20 * consistency_score
+            + 0.15 * engagement_score
+            + 0.10 * completion_score
+            + 0.10 * variety_score
+            + 0.05 * progression_score
+        )
+
+        ranked.append(
+            {
+                "team_id": int(team["team_id"]),
+                "name": team["name"],
+                "score": team_score,
+                "members_count": members_count,
+                "active_members_7d": int(team["active_members_7d"]),
+                "sessions_7": int(team["sessions_7"]),
+                "sessions_28": int(team["sessions_28"]),
+                "avg_member_score": avg_member_score,
+                "avg_completion_ratio_28": float(avg_completion_ratio_28),
+                "avg_variety": float(avg_variety),
+                "avg_progression_index": float(avg_progression_index),
+                "consistency_score": consistency_score,
+                "engagement_score": engagement_score,
+                "completion_score": completion_score,
+                "variety_score": variety_score,
+                "progression_score": progression_score,
+                "frame_code": team["frame_code"],
+                "bg_code": team["bg_code"],
+                "emblem_code": team["emblem_code"],
+            }
+        )
+
+    ranked.sort(
+        key=lambda item: (
+            -int(item["score"]),
+            -int(item["sessions_28"]),
+            -int(item["active_members_7d"]),
+            -int(item["members_count"]),
+            int(item["team_id"]),
+        )
+    )
+    for idx, item in enumerate(ranked, start=1):
+        item["rank"] = idx
+
+    total = len(ranked)
+    paged = ranked[safe_offset:safe_offset + safe_limit]
+    return paged, total, ranked
+
+
+async def fetch_team_profile(team_id: int, viewer_user_id: int):
+    _, _, full = await fetch_team_leaderboard(limit=10000, offset=0)
+    summary = next((item for item in full if int(item["team_id"]) == int(team_id)), None)
+    if not summary:
+        return None
+
+    async with connect_db() as db:
+        cur = await db.execute(
+            """
+            SELECT role
+            FROM team_members
+            WHERE team_id=? AND user_id=? AND left_at IS NULL
+            LIMIT 1
+            """,
+            (team_id, viewer_user_id),
+        )
+        role_row = await cur.fetchone()
+
+        members = None
+        if role_row:
+            cur = await db.execute(
+                """
+                WITH recent_sessions AS (
+                    SELECT s.user_id,
+                           SUM(CASE WHEN s.date >= date('now', '-28 day') THEN 1 ELSE 0 END) AS sessions_28,
+                           COUNT(DISTINCT CASE WHEN s.date >= date('now', '-28 day') THEN s.date END) AS training_days_28,
+                           COUNT(DISTINCT CASE WHEN s.date >= date('now', '-56 day') THEN substr(s.date, 1, 8) || CAST(((CAST(substr(s.date, 9, 2) AS INTEGER)-1)/7) AS INTEGER) END) AS training_weeks_8
+                    FROM sessions s
+                    GROUP BY s.user_id
+                ),
+                set_stats AS (
+                    SELECT s.user_id,
+                           SUM(CASE WHEN s.date >= date('now', '-28 day') THEN 1 ELSE 0 END) AS sets_28,
+                           COALESCE(SUM(CASE WHEN s.date >= date('now', '-28 day') THEN MAX(st.reps, 0) * MAX(st.weight_kg, 0) ELSE 0 END), 0) AS volume_28,
+                           AVG(CASE WHEN s.date >= date('now', '-28 day') THEN MAX(st.reps, 0) * MAX(st.weight_kg, 0) END) AS avg_weighted_reps
+                    FROM sets st
+                    JOIN sessions s ON s.id = st.session_id
+                    GROUP BY s.user_id
+                ),
+                exercise_variety AS (
+                    SELECT ue.user_id, COUNT(DISTINCT ue.exercise_id) AS active_exercise_count
+                    FROM user_exercises ue
+                    WHERE COALESCE(ue.is_archived, 0) = 0
+                    GROUP BY ue.user_id
+                ),
+                completion AS (
+                    SELECT s.user_id,
+                           AVG(CASE WHEN se.is_done = 1 THEN 1.0 ELSE 0.0 END) AS completion_ratio
+                    FROM session_exercises se
+                    JOIN sessions s ON s.id = se.session_id
+                    WHERE s.date >= date('now', '-28 day')
+                    GROUP BY s.user_id
+                ),
+                recent_best AS (
+                    SELECT s.user_id, ue.exercise_id, MAX(st.weight_kg) AS max_w
+                    FROM sets st
+                    JOIN sessions s ON s.id = st.session_id
+                    JOIN user_exercises ue ON ue.id = st.user_exercise_id
+                    WHERE s.date >= date('now', '-14 day')
+                    GROUP BY s.user_id, ue.exercise_id
+                ),
+                prev_best AS (
+                    SELECT s.user_id, ue.exercise_id, MAX(st.weight_kg) AS max_w
+                    FROM sets st
+                    JOIN sessions s ON s.id = st.session_id
+                    JOIN user_exercises ue ON ue.id = st.user_exercise_id
+                    WHERE s.date >= date('now', '-28 day') AND s.date < date('now', '-14 day')
+                    GROUP BY s.user_id, ue.exercise_id
+                ),
+                progression AS (
+                    SELECT rb.user_id,
+                           AVG(CASE WHEN pb.max_w > 0 THEN (rb.max_w - pb.max_w) / pb.max_w ELSE 0 END) AS progression_index
+                    FROM recent_best rb
+                    LEFT JOIN prev_best pb ON pb.user_id = rb.user_id AND pb.exercise_id = rb.exercise_id
+                    GROUP BY rb.user_id
+                )
+                SELECT tm.user_id,
+                       COALESCE(u.username, ''),
+                       COALESCE(rs.sessions_28, 0),
+                       COALESCE(rs.training_days_28, 0),
+                       COALESCE(rs.training_weeks_8, 0),
+                       COALESCE(ss.sets_28, 0),
+                       COALESCE(ss.volume_28, 0),
+                       COALESCE(ss.avg_weighted_reps, 0),
+                       COALESCE(ev.active_exercise_count, 0),
+                       COALESCE(c.completion_ratio, 0),
+                       COALESCE(p.progression_index, 0)
+                FROM team_members tm
+                JOIN users u ON u.id = tm.user_id
+                LEFT JOIN recent_sessions rs ON rs.user_id = tm.user_id
+                LEFT JOIN set_stats ss ON ss.user_id = tm.user_id
+                LEFT JOIN exercise_variety ev ON ev.user_id = tm.user_id
+                LEFT JOIN completion c ON c.user_id = tm.user_id
+                LEFT JOIN progression p ON p.user_id = tm.user_id
+                WHERE tm.team_id=? AND tm.left_at IS NULL
+                """,
+                (team_id,),
+            )
+            rows = await cur.fetchall()
+            members = []
+            for row in rows:
+                m = {
+                    "training_days_28": int(row[3] or 0),
+                    "sessions_28": int(row[2] or 0),
+                    "training_weeks_8": int(row[4] or 0),
+                    "sets_28": int(row[5] or 0),
+                    "volume_28": float(row[6] or 0),
+                    "avg_weighted_reps": float(row[7] or 0),
+                    "active_exercise_count": int(row[8] or 0),
+                    "completion_ratio": float(row[9] or 0),
+                    "progression_index": float(row[10] or 0),
+                }
+                members.append(
+                    {
+                        "user_id": int(row[0]),
+                        "username": (row[1] or "").strip() or f"athlete_{int(row[0])}",
+                        "score": int(round(_leaderboard_score(m) * 100)),
+                        "sessions_28": int(row[2] or 0),
+                        "training_days_28": int(row[3] or 0),
+                    }
+                )
+            members.sort(key=lambda item: (-int(item["score"]), -int(item["sessions_28"]), int(item["user_id"])))
+
+    return {"team": summary, "members": members}
+
+
+async def upsert_team_daily_scores(day_utc: str, items: list[dict]) -> None:
+    if not items:
+        return
+    now = _now_utc_iso()
+    rows = [
+        (
+            int(item["team_id"]),
+            day_utc,
+            int(item.get("score") or 0),
+            int(item.get("rank") or 0),
+            int(item.get("members_count") or 0),
+            int(item.get("sessions_7") or 0),
+            int(item.get("sessions_28") or 0),
+            now,
+        )
+        for item in items
+    ]
+    async with connect_db() as db:
+        await db.executemany(
+            """
+            INSERT INTO team_daily_scores(team_id, day_utc, score, rank, members, sessions_7, sessions_28, created_at)
+            VALUES(?,?,?,?,?,?,?,?)
+            ON CONFLICT(team_id, day_utc) DO UPDATE SET
+                score=excluded.score,
+                rank=excluded.rank,
+                members=excluded.members,
+                sessions_7=excluded.sessions_7,
+                sessions_28=excluded.sessions_28,
+                created_at=excluded.created_at
+            """,
+            rows,
+        )
+        await db.commit()
 
 
 async def get_cosmetics(user_id: int) -> dict[str, int | str | None]:
