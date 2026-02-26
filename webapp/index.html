@@ -1786,9 +1786,13 @@
     .leader-item { display: grid; gap: 6px; }
     .leader-row { border: 1px solid var(--border); border-radius: 12px; padding: 10px; display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 10px; background: var(--bg); cursor: pointer; }
     .leader-row.active { border-color: color-mix(in srgb, var(--accent) 50%, var(--border)); }
-    .team-card { position: relative; border: 1px solid var(--border); border-radius: 14px; padding: 12px; background: color-mix(in srgb, var(--bg) 92%, transparent); display: grid; grid-template-columns: auto 1fr auto; gap: 10px; align-items: center; overflow: hidden; width: 100%; text-align: left; }
-    .team-card::before { content: ''; position: absolute; inset: -2px; border-radius: 16px; pointer-events: none; opacity: .95; z-index: 0; }
+    .team-card { position: relative; border: 1px solid var(--border); border-radius: 14px; padding: 12px; background: color-mix(in srgb, var(--bg) 92%, transparent); display: grid; grid-template-columns: auto 1fr auto; gap: 10px; align-items: center; overflow: hidden; width: 100%; text-align: left; color: #f8fafc; text-shadow: 0 1px 2px rgba(2,6,23,.65); }
+    .team-card::before { content: ''; position: absolute; inset: 0; border-radius: 14px; pointer-events: none; opacity: .95; z-index: 0; }
+    .team-card::after { content:''; position:absolute; inset:0; border-radius:14px; background: linear-gradient(180deg, rgba(2,6,23,.18), rgba(2,6,23,.45)); pointer-events:none; z-index:0;}
     .team-card > * { position: relative; z-index: 1; }
+    .team-card .team-meta, .team-card .timer-hint { color: rgba(241,245,249,.9); }
+    .team-card.team_bg_honeycomb, .team-card.team_bg_ember { color:#111827; text-shadow:none; }
+    .team-card.team_bg_honeycomb .team-meta, .team-card.team_bg_honeycomb .timer-hint, .team-card.team_bg_ember .team-meta, .team-card.team_bg_ember .timer-hint { color:#1f2937; }
     .team-badge { width: 34px; height: 34px; border-radius: 10px; border: 1px solid var(--border); display: inline-flex; align-items: center; justify-content: center; font-size: 18px; background: rgba(255,255,255,.06); }
     .team-meta { font-size: 12px; color: var(--muted); margin-top: 2px; }
     .team-style-preview { min-height: 64px; border: 1px solid var(--border); border-radius: 12px; padding: 10px; display: flex; align-items: center; justify-content: space-between; gap: 10px; position: relative; overflow: hidden; }
@@ -1796,9 +1800,9 @@
     .fade-in { animation: fadeIn .18s ease-out; }
     @keyframes fadeIn { from { opacity: 0; transform: translateY(2px); } to { opacity: 1; transform: none; } }
     .team-style-preview::before { content: ''; position: absolute; }
-    .team_frame_stitch::before { background: repeating-linear-gradient(135deg, rgba(148,163,184,.65) 0 6px, rgba(100,116,139,.55) 6px 12px); }
-    .team_frame_honey::before { background: repeating-linear-gradient(60deg, rgba(251,191,36,.5) 0 8px, transparent 8px 16px), repeating-linear-gradient(-60deg, rgba(245,158,11,.45) 0 8px, transparent 8px 16px); }
-    .team_frame_ember::before { background: linear-gradient(120deg, rgba(248,113,113,.75), rgba(251,146,60,.6)); }
+    .team_frame_stitch::before { box-shadow: inset 0 0 0 3px rgba(148,163,184,.95), inset 0 0 0 6px rgba(100,116,139,.65); }
+    .team_frame_honey::before { box-shadow: inset 0 0 0 3px rgba(251,191,36,.95), inset 0 0 0 7px rgba(245,158,11,.55); }
+    .team_frame_ember::before { box-shadow: inset 0 0 0 3px rgba(248,113,113,.95), inset 0 0 0 7px rgba(251,146,60,.6); }
     .team_frame_ring::before { background: radial-gradient(circle, rgba(56,189,248,.36) 0 25%, rgba(59,130,246,.25) 26% 40%, rgba(125,211,252,.2) 41% 60%, transparent 61%); }
     .team_frame_laurel::before { background: linear-gradient(90deg, rgba(34,197,94,.55), rgba(234,179,8,.45), rgba(21,128,61,.55)); }
     .team_frame_crown::before { background: linear-gradient(90deg, rgba(180,83,9,.62), rgba(250,204,21,.52), rgba(146,64,14,.62)); }
@@ -2267,7 +2271,7 @@
         <button class="menu-item" data-route="measurements">Мои замеры</button>
         <button class="menu-item" data-route="library">Статистика упражнений</button>
         <button class="menu-item" data-route="achievements">Достижения</button>
-        <button class="menu-item" data-route="today" data-action="open-teams">Команды</button>
+        <button class="menu-item" data-route="teams">Команды</button>
         <button class="menu-item" data-route="subscription" id="drawerSubscriptionBtn">Подписка · неактивно</button>
         <button class="menu-item" data-route="settings">Настройки</button>
       </nav>
@@ -2442,6 +2446,7 @@
         <div class="card-list" id="subscriptionContent"></div>
       </section>
 
+<section id="screen-teams" class="screen" data-route="teams"><div id="teamsHubScreen" class="card" style="padding:14px;"></div></section>
 <section id="screen-measurements" class="screen" data-route="measurements">
         <div id="measurementsContent" class="settings-section"></div>
       </section>
@@ -2583,7 +2588,7 @@
             <div class="card-title">Командный рейтинг</div>
             <div id="teamboardPageLabel" class="timer-hint"></div>
           </div>
-          <div id="teamsMyArea" class="card" style="padding:14px; margin-bottom:10px;"></div>
+          
           <div id="teamProfileArea" class="hidden"></div>
           <div id="teamboardList" class="leaderboard-list"></div>
           <div class="leader-pagination">
@@ -2927,6 +2932,7 @@
       subscription: 'Подписка',
       measurements: 'Мои замеры',
       achievements: 'Достижения',
+      teams: 'Команды',
     };
 
     const state = {
@@ -3887,6 +3893,35 @@
       };
     }
 
+
+    const TEAM_STYLE_LABELS = {
+      team_frame_stitch: 'Стальной шов',
+      team_frame_honey: 'Медовые соты',
+      team_frame_ember: 'Искра',
+      team_frame_ring: 'Энергокольцо',
+      team_frame_laurel: 'Лавровый венок',
+      team_frame_crown: 'Корона',
+      team_frame_throne: 'Трон',
+      team_frame_pulse: 'Пульс',
+      team_frame_eclipse: 'Затмение',
+      team_frame_web: 'Паутина',
+      team_bg_slate: 'Графит',
+      team_bg_honeycomb: 'Соты',
+      team_bg_ember: 'Угли',
+      team_bg_neon_grid: 'Неон-сетка',
+      team_bg_aurora: 'Полярное сияние',
+      team_bg_obsidian: 'Обсидиан',
+      team_bg_blackhole: 'Чёрная дыра',
+      team_bg_ocean: 'Океан',
+      team_bg_midnight: 'Полночь',
+      team_bg_violet_smoke: 'Фиолетовый дым',
+    };
+
+    function teamStyleLabel(code) {
+      if (!code) return '—';
+      return TEAM_STYLE_LABELS[code] || code;
+    }
+
     const TEAM_EMBLEM_MAP = {
       team_emblem_mark: '◆',
       team_emblem_wolf: '🐺',
@@ -4053,11 +4088,11 @@
       const members = Array.isArray(profile.members) ? profile.members : null;
       const emblem = TEAM_EMBLEM_MAP[t.emblem_code] || '🏳️';
       const membersHtml = members ? members.map((m) => `
-        <div class="leader-row" style="margin-top:6px;" data-action="leader-open" data-user-id="${m.user_id}">
+        <div class="leader-row ${m.title_frame_code || ''}" style="margin-top:6px;" data-action="leader-open" data-user-id="${m.user_id}">
           <div class="leader-rank">${m.score}</div>
           <div>
             <div class="leader-name">@${escapeHtml(m.username || ('athlete_'+m.user_id))}</div>
-            <div class="team-meta">sessions_28: ${Number(m.sessions_28 || 0)} · training_days_28: ${Number(m.training_days_28 || 0)}</div>
+            <div class="team-meta">Продуктивность: ${Math.max(0, Math.min(100, Number(m.score || 0)))}% · завершено дней за 28д: ${Number(m.training_days_28 || 0)}</div>
           </div>
           <div class="timer-hint">Открыть</div>
         </div>
@@ -4098,7 +4133,7 @@
           styleHtml = `<div class="card" style="padding:10px; margin-top:10px;"><div class="muted-inline">${escapeHtml(teams.style.error || 'Загружаем стили…')}</div>${teams.style.error ? '<button class="btn" style="margin-top:8px;" data-action="team-retry-style">Повторить</button>' : ''}</div>`;
         } else {
           const s = teams.style.selected || { frame_code: null, bg_code: null, emblem_code: null };
-          const mkOpt = (arr, val) => ['<option value="">—</option>', ...arr.map((x) => `<option value="${x}" ${x===val?'selected':''}>${x}</option>`)].join('');
+          const mkOpt = (arr, val) => ['<option value="">—</option>', ...arr.map((x) => `<option value="${x}" ${x===val?'selected':''}>${teamStyleLabel(x)}</option>`)].join('');
           styleHtml = `
             <div class="card" style="padding:10px; margin-top:10px;">
               <div class="card-title">Стиль команды</div>
@@ -4151,7 +4186,7 @@
       const next = tab === 'teams' ? 'teams' : 'people';
       state.settings.productivity.activeTab = next;
       renderProductivityHub();
-      if (next === 'people') loadProductivityLeaderboard().catch(console.error);
+      if ((state.settings.productivity.activeTab || "people") === "people") loadProductivityLeaderboard().catch(console.error);
       else ensureTeamsHubLoaded().catch(console.error);
     }
 
@@ -7712,6 +7747,14 @@
       applyFinishFabFrame();
     }
 
+
+    function renderTeamsRouteCard() {
+      const el = document.getElementById('teamsHubScreen');
+      if (!el) return;
+      el.innerHTML = `<div class="card-title">Хаб команд</div><div class="timer-hint" style="margin:8px 0 12px;">Управление командой, заявки и стиль доступны в отдельном хабе.</div><button class="btn primary" id="openTeamsHubBtn">Открыть хаб команд</button>`;
+      document.getElementById('openTeamsHubBtn')?.addEventListener('click', () => { openProductivitySheet(); setProductivityTab('teams'); });
+    }
+
     function applyRoute(route) {
       const normalized = ROUTE_TITLES[route] ? route : 'today';
       if (normalized === 'settings' && state.acting.userId) {
@@ -7773,6 +7816,10 @@
       if (normalized === 'measurements') {
         renderMeasurementsScreen();
         loadMeasurementsOverview().catch(console.error);
+      }
+      if (normalized === 'teams') {
+        renderTeamsRouteCard();
+        ensureTeamsHubLoaded().catch(console.error);
       }
       if (normalized === 'subscription') {
         renderSubscriptionScreen();
