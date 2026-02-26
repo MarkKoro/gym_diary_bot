@@ -12261,6 +12261,31 @@
       return !!(meta && (meta.source_system_id || meta.source_user_id || meta.source_system_name || meta.source_user_name));
     }
 
+    function hasUsefulSourceMetaContent(exercise, ctx = null) {
+      if (!hasExerciseSourceMeta(exercise)) return false;
+      const meta = (exercise && exercise.source_meta) ? exercise.source_meta : {};
+      const sourceKind = String(meta.source_kind || '').toLowerCase();
+      const isAi = sourceKind === 'ai';
+      const isImported = _isImportedMeta(meta);
+      const completedCount = Number(ctx && ctx.completed_count) || 0;
+      const showPrevious = (!isImported) || (isAi && completedCount >= 2);
+
+      if (showPrevious) return true;
+
+      const hasImportedDetails = String(meta.source_system_name || '').trim().length > 0
+        || String(meta.source_user_name || '').trim().length > 0;
+      if (hasImportedDetails) return true;
+
+      const hasAiDetails = String(meta.how_to || '').trim().length > 0
+        || Number(meta.suggested_sets_count || 0) > 0
+        || Number(meta.reps || 0) > 0
+        || Number(meta.seconds || 0) > 0
+        || Number(meta.weight_kg || 0) > 0;
+      if (isAi && hasAiDetails) return true;
+
+      return false;
+    }
+
     function getSourceMetaButtonLabel(exercise, ctx = null) {
       const meta = (exercise && exercise.source_meta) ? exercise.source_meta : {};
       const sourceKind = String(meta.source_kind || '').toLowerCase();
@@ -12329,7 +12354,7 @@
       const btn = document.getElementById('sheetSourceMetaBtn');
       const pop = document.getElementById('sheetSourceMetaPop');
       if (!wrap || !btn || !pop) return;
-      const hasSourceMeta = hasExerciseSourceMeta(exercise);
+      const hasSourceMeta = hasUsefulSourceMetaContent(exercise);
       if (!hasSourceMeta) {
         wrap.style.display = 'none';
         btn.classList.remove('active');
