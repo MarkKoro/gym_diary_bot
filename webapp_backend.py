@@ -131,6 +131,7 @@ from db import (
     fetch_team_profile,
     upsert_team_daily_scores,
     list_team_achievements,
+    count_team_pending_requests,
 )
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -5082,6 +5083,15 @@ async def teams_requests(
         offset=safe_offset,
     )
     return {'items': items, 'total': int(total), 'limit': safe_limit, 'offset': safe_offset}
+
+
+@app.get('/teams/requests/count')
+async def teams_requests_count(ctx: AuthCtx = Depends(get_auth_ctx)):
+    me_team = await get_user_team(int(ctx.user_id))
+    if not me_team or me_team.get('role') != 'captain':
+        return {'count': 0}
+    count = await count_team_pending_requests(int(me_team['team_id']))
+    return {'count': int(count)}
 
 
 @app.post('/teams/requests/{request_id}/accept')

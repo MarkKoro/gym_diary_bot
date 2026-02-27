@@ -405,6 +405,8 @@
       font-weight: 700;
       cursor: pointer;
     }
+    .menu-item.with-badge { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+    .menu-item-badge { min-width: 20px; height: 20px; border-radius: 999px; padding: 0 6px; display: inline-flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 800; color: #fff; background: #ef4444; }
     .menu-item.active { border-color: var(--accent); color: var(--accent); box-shadow: 0 8px 18px rgba(0,122,255,0.12); }
     .menu-item.subscription-active { border-color: color-mix(in srgb, #22c55e 42%, var(--border)); }
     .menu-item.subscription-active .sub-status { color: #16a34a; }
@@ -2271,7 +2273,7 @@
         <button class="menu-item" data-route="measurements">Мои замеры</button>
         <button class="menu-item" data-route="library">Статистика упражнений</button>
         <button class="menu-item" data-route="achievements">Достижения</button>
-        <button class="menu-item" data-route="teams">Команды</button>
+        <button class="menu-item with-badge" data-action="open-teams" id="drawerTeamsBtn">Команды <span id="drawerTeamsBadge" class="menu-item-badge hidden">0</span></button>
         <button class="menu-item" data-route="subscription" id="drawerSubscriptionBtn">Подписка · неактивно</button>
         <button class="menu-item" data-route="settings">Настройки</button>
       </nav>
@@ -2584,6 +2586,7 @@
           </div>
         </div>
         <div id="teamsLeaderboardBlock" class="hidden">
+          <div id="teamsMyArea" class="card" style="padding:12px; margin-bottom:10px;"></div>
           <div class="leaderboard-head">
             <div class="card-title">Командный рейтинг</div>
             <div id="teamboardPageLabel" class="timer-hint"></div>
@@ -3058,7 +3061,7 @@
             create: { name: '', isOpen: true },
             error: null,
             profileError: null,
-            requests: { q: '', items: [], total: 0, offset: 0, limit: 20, loading: false, open: false, error: null },
+            requests: { q: '', items: [], total: 0, offset: 0, limit: 20, loading: false, open: false, error: null, pendingCount: 0 },
             style: { loading: false, options: null, saving: false, open: false, error: null, selected: { frame_code: null, bg_code: null, emblem_code: null } },
             busy: { join: false, create: false, leave: false, accept: false, reject: false, styleSave: false },
           },
@@ -4012,7 +4015,7 @@
         <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:10px;">
           <button class="btn" data-action="team-open" data-team-id="${my.team_id}">Профиль</button>
           <button class="btn ${teams.busy.leave ? 'btn-disabled' : ''}" ${teams.busy.leave ? 'disabled' : ''} data-action="team-leave">Покинуть</button>
-          ${my.role === 'captain' ? '<button class="btn" data-action="team-style-open">Настройка стиля</button><button class="btn" data-action="team-requests-open">Заявки</button>' : ''}
+          ${my.role === 'captain' ? `<button class="btn" data-action="team-style-open">Настройка стиля</button><button class="btn" data-action="team-requests-open">Запросы${Number(teams.requests.pendingCount || 0) > 0 ? ' (' + Number(teams.requests.pendingCount) + ')' : ''}</button>` : ''}
         </div>
       `;
     }
@@ -4114,7 +4117,8 @@
                 <div class="leader-rank">#</div>
                 <div>
                   <div class="leader-name">@${escapeHtml(it.username || ('athlete_'+it.user_id))}</div>
-                  <div class="team-meta">${escapeHtml((it.created_at || '').slice(0, 19))}</div>
+                  <div class="team-meta">${escapeHtml((it.created_at || '').slice(0, 19))} · Система: ${escapeHtml(it.latest_system_name || 'не указана')}</div>
+                  <div class="team-meta">Сессий всего: ${Number(it.sessions_total || 0)} · за 28д: ${Number(it.sessions_28 || 0)}</div>
                 </div>
                 <div style="display:flex; gap:6px;">
                   <button class="btn small-btn ${(teams.busy.accept || teams.busy.reject) ? 'btn-disabled' : ''}" ${(teams.busy.accept || teams.busy.reject) ? 'disabled' : ''} data-action="team-req-accept" data-request-id="${it.request_id}">Принять</button>
@@ -4176,10 +4180,22 @@
     }
 
 
+    function updateTeamsRequestBadge() {
+      const count = Number(state.settings.productivity.teams.requests.pendingCount || 0);
+      const badge = document.getElementById('drawerTeamsBadge');
+      if (badge) {
+        badge.textContent = String(count);
+        badge.classList.toggle('hidden', count <= 0);
+      }
+      const btn = document.getElementById('drawerTeamsBtn');
+      if (btn) btn.classList.toggle('active-notify', count > 0);
+    }
+
     function renderTeamsSection() {
       renderTeamsMyArea();
       renderTeamProfileArea();
       renderTeamboardList();
+      updateTeamsRequestBadge();
     }
 
     function setProductivityTab(tab) {
@@ -4286,13 +4302,26 @@
         console.error(e);
       } finally {
         teams.requests.loading = false;
+        updateTeamsRequestBadge();
         renderTeamsSection();
       }
+    }
+
+    async function loadTeamPendingRequestsCount() {
+      const teams = state.settings.productivity.teams;
+      try {
+        const data = await apiFetch('/gymapi/teams/requests/count');
+        teams.requests.pendingCount = Number(data?.count || 0);
+      } catch (e) {
+        teams.requests.pendingCount = 0;
+      }
+      updateTeamsRequestBadge();
     }
 
     async function ensureTeamsHubLoaded() {
       await loadTeamsMe();
       await loadTeamLeaderboard();
+      await loadTeamPendingRequestsCount();
     }
 
     async function actionTeamJoinByCode(code) {
@@ -4368,6 +4397,7 @@
         await apiFetch(`/gymapi/teams/requests/${Number(id)}/accept`, { method: 'POST' });
         toast('Заявка принята ✅');
         await loadTeamRequests();
+        await loadTeamPendingRequestsCount();
         if (teams.selectedTeamId) await loadTeamProfile(teams.selectedTeamId);
       } catch (e) {
         toast('Не удалось принять заявку');
@@ -4387,6 +4417,7 @@
         await apiFetch(`/gymapi/teams/requests/${Number(id)}/reject`, { method: 'POST' });
         toast('Заявка отклонена');
         await loadTeamRequests();
+        await loadTeamPendingRequestsCount();
       } catch (e) {
         toast('Не удалось отклонить заявку');
         console.error(e);
@@ -7749,10 +7780,8 @@
 
 
     function renderTeamsRouteCard() {
-      const el = document.getElementById('teamsHubScreen');
-      if (!el) return;
-      el.innerHTML = `<div class="card-title">Хаб команд</div><div class="timer-hint" style="margin:8px 0 12px;">Управление командой, заявки и стиль доступны в отдельном хабе.</div><button class="btn primary" id="openTeamsHubBtn">Открыть хаб команд</button>`;
-      document.getElementById('openTeamsHubBtn')?.addEventListener('click', () => { openProductivitySheet(); setProductivityTab('teams'); });
+      openProductivitySheet();
+      setProductivityTab('teams');
     }
 
     function applyRoute(route) {
@@ -7819,7 +7848,8 @@
       }
       if (normalized === 'teams') {
         renderTeamsRouteCard();
-        ensureTeamsHubLoaded().catch(console.error);
+        navigateTo('today', true);
+        return;
       }
       if (normalized === 'subscription') {
         renderSubscriptionScreen();
