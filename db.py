@@ -4414,6 +4414,14 @@ async def create_or_get_join_request(team_id: int, user_id: int) -> dict:
             raise ValueError("already_in_team")
 
         cur = await db.execute(
+            "SELECT COUNT(*) FROM team_members WHERE team_id=? AND left_at IS NULL",
+            (team_id,),
+        )
+        members_total = int((await cur.fetchone() or [0])[0] or 0)
+        if members_total >= 25:
+            raise ValueError("team_full")
+
+        cur = await db.execute(
             """
             SELECT id, status, created_at, updated_at
             FROM team_join_requests
@@ -4489,7 +4497,30 @@ async def list_team_requests(
     async with connect_db() as db:
         cur = await db.execute(
             f"""
-            SELECT r.id, r.user_id, COALESCE(u.username, ''), r.created_at
+            SELECT
+                r.id,
+                r.user_id,
+                COALESCE(u.username, ''),
+                r.created_at,
+                COALESCE((
+                    SELECT ts.name
+                    FROM training_systems ts
+                    WHERE ts.user_id = r.user_id
+                    ORDER BY ts.id DESC
+                    LIMIT 1
+                ), '') AS latest_system_name,
+                COALESCE((
+                    SELECT COUNT(*)
+                    FROM day_completions dc
+                    WHERE dc.user_id = r.user_id
+                ), 0) AS sessions_total,
+                COALESCE((
+                    SELECT COUNT(*)
+                    FROM day_completions dc
+                    WHERE dc.user_id = r.user_id
+                      AND dc.completed_at >= datetime('now', '-28 days')
+                ), 0) AS sessions_28,
+                COALESCE(u.created_at, '') AS user_created_at
             FROM team_join_requests r
             JOIN users u ON u.id = r.user_id
             WHERE {where_sql}
@@ -4517,6 +4548,10 @@ async def list_team_requests(
             "user_id": int(row[1]),
             "username": row[2],
             "created_at": row[3],
+            "latest_system_name": row[4],
+            "sessions_total": int(row[5] or 0),
+            "sessions_28": int(row[6] or 0),
+            "user_created_at": row[7],
         }
         for row in rows
     ]
@@ -4557,6 +4592,14 @@ async def accept_team_request(request_id: int, captain_user_id: int) -> dict:
         )
         if await cur.fetchone():
             raise ValueError("already_in_team")
+
+        cur = await db.execute(
+            "SELECT COUNT(*) FROM team_members WHERE team_id=? AND left_at IS NULL",
+            (team_id,),
+        )
+        members_total = int((await cur.fetchone() or [0])[0] or 0)
+        if members_total >= 25:
+            raise ValueError("team_full")
 
         await db.execute(
             "UPDATE team_join_requests SET status='accepted', updated_at=? WHERE id=?",
@@ -4671,6 +4714,13 @@ async def join_team_direct(team_id: int, user_id: int) -> None:
         )
         if await cur.fetchone():
             raise ValueError("already_in_team")
+        cur = await db.execute(
+            "SELECT COUNT(*) FROM team_members WHERE team_id=? AND left_at IS NULL",
+            (team_id,),
+        )
+        members_total = int((await cur.fetchone() or [0])[0] or 0)
+        if members_total >= 25:
+            raise ValueError("team_full")
         try:
             await db.execute(
                 """
@@ -4683,6 +4733,16 @@ async def join_team_direct(team_id: int, user_id: int) -> None:
             await db.rollback()
             raise ValueError("already_in_team") from exc
         await db.commit()
+
+
+async def count_team_pending_requests(team_id: int) -> int:
+    async with connect_db() as db:
+        cur = await db.execute(
+            "SELECT COUNT(*) FROM team_join_requests WHERE team_id=? AND status='pending'",
+            (team_id,),
+        )
+        row = await cur.fetchone()
+    return int(row[0] if row else 0)
 
 
 async def fetch_team_leaderboard(limit: int = 10, offset: int = 0):
