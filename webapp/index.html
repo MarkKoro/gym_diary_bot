@@ -189,10 +189,12 @@
     .ai-day-card { border: 1px solid var(--border); border-radius: 12px; padding: 10px; display: grid; gap: 10px; background: color-mix(in srgb, var(--card) 82%, var(--bg)); }
     .ai-day-title { font-size: 14px; font-weight: 800; }
     .ai-action-list { display: grid; gap: 8px; }
-    .ai-action-item { border: 1px solid var(--border); border-radius: 10px; padding: 8px; display: grid; gap: 7px; }
-    .ai-action-item.remove { border-color: color-mix(in srgb, var(--danger) 58%, var(--border)); background: color-mix(in srgb, var(--danger) 10%, transparent); }
-    .ai-action-item.add { border-color: color-mix(in srgb, #22c55e 58%, var(--border)); background: color-mix(in srgb, #22c55e 10%, transparent); }
+    .ai-action-item { border: 1px solid var(--border); border-radius: 10px; padding: 8px; display: grid; gap: 7px; background: color-mix(in srgb, var(--card) 88%, var(--bg)); transition: border-color .18s ease, background .18s ease; }
+    .ai-action-item.remove { border-color: color-mix(in srgb, var(--danger) 38%, var(--border)); }
+    .ai-action-item.add { border-color: color-mix(in srgb, #22c55e 40%, var(--border)); }
     .ai-action-item.sets { border-color: color-mix(in srgb, var(--accent) 52%, var(--border)); }
+    .ai-action-item.decision-apply { border-color: color-mix(in srgb, #22c55e 68%, var(--border)); background: color-mix(in srgb, #22c55e 16%, var(--card)); }
+    .ai-action-item.decision-skip { border-color: color-mix(in srgb, var(--muted) 68%, var(--border)); background: color-mix(in srgb, var(--muted) 16%, var(--card)); }
     .ai-action-item .title { font-size: 14px; font-weight: 700; }
     .ai-action-item .hint { font-size: 12px; color: var(--muted); }
     .ai-choice-row { display: flex; gap: 8px; }
@@ -203,6 +205,7 @@
     .ai-coach-examples-title { font-size: 12px; color: var(--muted); }
     .ai-coach-example-item { font-size: 13px; line-height: 1.35; color: var(--text); user-select: text; -webkit-user-select: text; }
     .ai-coach-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+    #aiCoachApplyAllBtn { border: 1px solid color-mix(in srgb, var(--accent) 46%, var(--border)); box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 20%, transparent); }
     #aiCoachAskBtn { flex: 0 0 auto; width: auto; min-width: 156px; padding: 10px 16px; font-size: 14px; }
     #aiCoachInput { min-height: 112px; max-height: 220px; resize: vertical; flex-shrink: 0; }
     body.ai-coach-open #finishFabWrap,
@@ -320,6 +323,15 @@
     .manage-menu button:hover { background: rgba(0,0,0,0.04); }
     [data-theme="dark"] .manage-menu button:hover { background: rgba(255,255,255,0.06); }
     .header-done-btn { height: 42px; padding: 0 16px; border-radius: 14px; font-weight: 800; }
+    body:not(.route-today) #traineeBtn,
+    body:not(.route-today) #systemOpenBtn,
+    body:not(.route-today) #productivityBtn,
+    body:not(.route-today) #manageMenuWrap,
+    body:not(.route-today) #deleteModeDone,
+    body:not(.route-today) #addModeHeaderText,
+    body:not(.route-today) #deleteModeHeaderText {
+      display: none !important;
+    }
     @media (max-width: 420px) {
       .status { padding: 8px; }
       .status .status-text { display: none; }
@@ -1494,10 +1506,10 @@
     .productivity-help { margin-top: 8px; padding: 10px; border: 1px solid var(--border); border-radius: 12px; font-size: 13px; color: var(--muted); background: color-mix(in srgb, var(--bg) 78%, transparent); }
     .productivity-gauge-large { width: 140px; height: 140px; }
     .productivity-gauge-large .gauge-arrow { transform-origin: 50px 50px; transition: transform 0.35s ease; }
-    .productivity-cards { margin-top: 12px; display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px; }
-    .productivity-mini-card { border: 1px solid var(--border); border-radius: 12px; padding: 10px; background: color-mix(in srgb, var(--bg) 80%, transparent); display: grid; gap: 4px; }
-    .productivity-mini-label { color: var(--muted); font-size: 12px; }
-    .productivity-mini-rank { font-weight: 800; }
+    .productivity-cards { margin-top: 10px; display: grid; grid-template-columns: repeat(auto-fit, minmax(145px, 1fr)); gap: 8px; }
+    .productivity-mini-card { border: 1px solid var(--border); border-radius: 10px; padding: 8px; background: color-mix(in srgb, var(--bg) 80%, transparent); display: grid; gap: 3px; }
+    .productivity-mini-label { color: var(--muted); font-size: 11px; }
+    .productivity-mini-rank { font-weight: 800; font-size: 13px; }
     .productivity-space { min-height: 120px; border-radius: 12px; border: 1px dashed var(--border); margin-top: 12px; padding: 10px; color: var(--muted); font-size: 13px; }
 
     .system-btn { color: var(--muted); }
@@ -2545,7 +2557,6 @@
         <div class="productivity-head">
           <div>
             <div class="sheet-title">Хаб продуктивности</div>
-            <div class="timer-hint">Твоя позиция относительно других пользователей Progressor.</div>
           </div>
           <button id="productivityCloseBtn" class="icon-btn" aria-label="Закрыть хаб продуктивности">
             <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
@@ -3691,9 +3702,9 @@
       );
       const score = Math.max(0, Math.min(100, Math.round(weighted * 100)));
       const metrics = [
-        { key: 'attendance', label: 'Топ по посещаемости', topPercent: toTopPercent(Math.round((facts.attendance * 0.7 + facts.weeklyFrequency * 0.3) * 100)), detail: `${state.completedDays?.size || 0} завершённых тренировок` },
-        { key: 'progress', label: 'Топ по прогрессу в весах', topPercent: toTopPercent(Math.round((facts.progress * 0.65 + facts.strengthLoad * 0.35) * 100)), detail: `${Math.round(facts.volume)} кг тренировочного объёма` },
-        { key: 'creativity', label: 'Топ по креативности', topPercent: toTopPercent(Math.round((facts.creativity * 0.75 + facts.bodyControl * 0.25) * 100)), detail: `${facts.exerciseCount} разных упражнений` },
+        { key: 'attendance', label: 'Посещаемость', topPercent: toTopPercent(Math.round((facts.attendance * 0.7 + facts.weeklyFrequency * 0.3) * 100)), detail: `${state.completedDays?.size || 0} завершённых тренировок` },
+        { key: 'progress', label: 'Прогресс в весах', topPercent: toTopPercent(Math.round((facts.progress * 0.65 + facts.strengthLoad * 0.35) * 100)), detail: `${Math.round(facts.volume)} кг тренировочного объёма` },
+        { key: 'creativity', label: 'Креативность', topPercent: toTopPercent(Math.round((facts.creativity * 0.75 + facts.bodyControl * 0.25) * 100)), detail: `${facts.exerciseCount} разных упражнений` },
       ];
       state.settings.productivity.score = score;
       state.settings.productivity.topPercent = toTopPercent(score);
@@ -3743,7 +3754,7 @@
       if (scoreText) scoreText.textContent = `${score}/100`;
       if (topText) topText.textContent = `Топ ${topPercent}%`;
       if (help) {
-        help.textContent = 'Индекс собирается из частоты тренировок, прогрессии рабочих весов и разнообразия упражнений. Мы нормализуем твои показатели и сравниваем их с глобальной выборкой пользователей.';
+        help.textContent = 'Индекс собирается из частоты тренировок, прогрессии рабочих весов и разнообразия упражнений.';
         help.classList.toggle('hidden', !state.settings.productivity.helpOpen);
       }
       if (helpBtn) helpBtn.setAttribute('aria-expanded', state.settings.productivity.helpOpen ? 'true' : 'false');
@@ -3879,7 +3890,7 @@
               <div class="leader-rank ${medalClass}">#${item.rank}</div>
               <div>
                 <div class="leader-name">@${item.username}${mark ? ' ' + mark : ''}</div>
-                <div class="leader-score">Топ ${item.top_percent}% · score ${item.score}/100</div>
+                <div class="leader-score">Топ ${item.top_percent}% · ${item.score}/100</div>
               </div>
               <div class="timer-hint">Открыть</div>
             </button>
@@ -3899,6 +3910,16 @@
 
 
     const TEAM_STYLE_LABELS = {
+      team_emblem_mark: 'Знак',
+      team_emblem_wolf: 'Волк',
+      team_emblem_torch: 'Факел',
+      team_emblem_badge: 'Жетон',
+      team_emblem_wreath: 'Венок',
+      team_emblem_crown: 'Корона',
+      team_emblem_throne: 'Трофей',
+      team_emblem_wave: 'Волна',
+      team_emblem_moon: 'Луна',
+      team_emblem_spider: 'Паук',
       team_frame_stitch: 'Стальной шов',
       team_frame_honey: 'Медовые соты',
       team_frame_ember: 'Искра',
@@ -3988,7 +4009,7 @@
             </label>
             <button class="btn primary ${teams.busy.create ? 'btn-disabled' : ''}" ${teams.busy.create ? 'disabled' : ''} data-action="team-create">Создать</button>
             ` : `
-            <div class="timer-hint" style="margin-bottom:8px;">🔒 Создание команды доступно в Premium.</div>
+            <div class="timer-hint" style="margin-bottom:8px;">🔒 Создание команды доступно в премиум-подписке.</div>
             <button class="btn" data-action="open-subscription">Открыть подписку</button>
             `}
           </div>
@@ -4007,7 +4028,7 @@
           <div class="team-badge">${emblem}</div>
           <div>
             <div class="leader-name">${escapeHtml(my.name || 'Команда')}</div>
-            <div class="team-meta">Код: ${escapeHtml(my.join_code || '—')} · Роль: ${escapeHtml(my.role || 'member')}</div>
+            <div class="team-meta">Код: ${escapeHtml(my.join_code || '—')} · Роль: ${escapeHtml(my.role === 'captain' ? 'капитан' : 'участник')}</div>
           </div>
           <div class="timer-hint">Моя команда</div>
         </div>
@@ -4078,7 +4099,7 @@
               <div class="leader-rank ${medalClass}">#${item.rank}</div>
               <div>
                 <div class="leader-name">${escapeHtml(item.name || 'Команда')}</div>
-                <div class="team-meta">score ${Number(item.score || 0)}/100 · 28д: ${Number(item.sessions_28 || 0)} трен · актив 7д: ${Number(item.active_members_7d || 0)}/${Number(item.members_count || 0)}</div>
+                <div class="team-meta">${Number(item.score || 0)}/100 · 28д: ${Number(item.sessions_28 || 0)} трен. · актив 7д: ${Number(item.active_members_7d || 0)}/${Number(item.members_count || 0)}</div>
               </div>
               <div class="team-badge">${emblem}</div>
             </button>
@@ -4137,7 +4158,7 @@
                 <div class="settings-row inline" style="margin-bottom:8px;"><input id="teamCreateNameManage" class="settings-input" placeholder="Название команды" value="${escapeHtml(teams.create.name || '')}"></div>
                 <label class="timer-hint" style="display:flex; gap:8px; align-items:center; margin-bottom:8px;"><input id="teamCreateOpenManage" type="checkbox" ${teams.create.isOpen ? 'checked' : ''}> Открытая команда</label>
                 <button class="btn primary ${teams.busy.create ? 'btn-disabled' : ''}" ${teams.busy.create ? 'disabled' : ''} data-action="team-create-manage">Создать команду</button>
-              ` : '<button class="btn" data-action="open-subscription">Создать команду (Premium)</button>'}
+              ` : '<button class="btn" data-action="open-subscription">Создать команду (Премиум)</button>'}
             </div>`;
         }
         const emblem = TEAM_EMBLEM_MAP[my.emblem_code] || '🏳️';
@@ -4145,7 +4166,7 @@
           <div class="card" style="padding:12px; display:grid; gap:10px;">
             <div class="team-card ${my.frame_code || ''} ${my.bg_code || ''}">
               <div class="team-badge">${emblem}</div>
-              <div><div class="leader-name">${escapeHtml(my.name || 'Команда')}</div><div class="team-meta">Код: ${escapeHtml(my.join_code || '—')} · Роль: ${escapeHtml(my.role || 'member')}</div></div>
+              <div><div class="leader-name">${escapeHtml(my.name || 'Команда')}</div><div class="team-meta">Код: ${escapeHtml(my.join_code || '—')} · Роль: ${escapeHtml(my.role === 'captain' ? 'капитан' : 'участник')}</div></div>
               <div class="timer-hint">Моя команда</div>
             </div>
             <div style="display:flex; gap:8px; flex-wrap:wrap;">
@@ -4157,7 +4178,7 @@
       })();
       const list = teams.loading
         ? '<div class="muted-inline">Загружаем команды…</div>'
-        : (!teams.items.length ? '<div class="muted-inline">Пока нет команд в рейтинге.</div>' : teams.items.map((item) => `          <button class="team-card ${item.frame_code || ''} ${item.bg_code || ''}" data-action="team-open" data-team-id="${item.team_id}">            <div class="leader-rank">#${item.rank}</div>            <div><div class="leader-name">${escapeHtml(item.name || 'Команда')}</div><div class="team-meta">score ${Number(item.score || 0)}/100 · 28д: ${Number(item.sessions_28 || 0)}</div></div>            <div class="team-badge">${TEAM_EMBLEM_MAP[item.emblem_code] || '🏳️'}</div>          </button>`).join(''));
+        : (!teams.items.length ? '<div class="muted-inline">Пока нет команд в рейтинге.</div>' : teams.items.map((item) => `          <button class="team-card ${item.frame_code || ''} ${item.bg_code || ''}" data-action="team-open" data-team-id="${item.team_id}">            <div class="leader-rank">#${item.rank}</div>            <div><div class="leader-name">${escapeHtml(item.name || 'Команда')}</div><div class="team-meta">${Number(item.score || 0)}/100 · 28д: ${Number(item.sessions_28 || 0)}</div></div>            <div class="team-badge">${TEAM_EMBLEM_MAP[item.emblem_code] || '🏳️'}</div>          </button>`).join(''));
       const prof = teams.profile && teams.view === 'profile' ? (() => {
         const t = teams.profile.team || {};
         const members = Array.isArray(teams.profile.members) ? teams.profile.members : [];
@@ -4561,6 +4582,7 @@
         });
         toast('Система лидера скопирована ✅');
         await loadSystems();
+        await loadAchievementsOverview();
         await refreshTodayData({ keepDay: true });
       }, 'Скопировать систему тренировок?', warn, 'Скопировать');
     }
@@ -4741,6 +4763,7 @@
       if (action === 'system-select' && id > 0) {
         await apiFetch(`/gymapi/systems/${id}/select`, { method: 'POST', body: JSON.stringify({}) });
         await loadSystems();
+        await loadAchievementsOverview();
         if (state.currentRoute === 'settings' && ['notifications', 'plan'].includes(state.settings.view)) {
           await loadSettingsOverview();
           renderSettings();
@@ -4753,6 +4776,7 @@
         if (name === null) return;
         await apiFetch(`/gymapi/systems/${id}/rename`, { method: 'POST', body: JSON.stringify({ name }) });
         await loadSystems();
+        await loadAchievementsOverview();
         return;
       }
       if (action === 'system-delete' && id > 0) {
@@ -4766,6 +4790,7 @@
       if (action === 'system-notifications' && id > 0) {
         await apiFetch(`/gymapi/systems/${id}/select`, { method: 'POST', body: JSON.stringify({}) });
         await loadSystems();
+        await loadAchievementsOverview();
         await loadSettingsOverview();
         state.settings.view = 'notifications';
         closeSystemSheet();
@@ -4778,6 +4803,7 @@
       if (action === 'system-days-settings' && id > 0) {
         await apiFetch(`/gymapi/systems/${id}/select`, { method: 'POST', body: JSON.stringify({}) });
         await loadSystems();
+        await loadAchievementsOverview();
         await loadSettingsOverview();
         state.settings.view = 'plan';
         closeSystemSheet();
@@ -6235,7 +6261,7 @@
           try {
             await apiFetch('/gymapi/achievements/select_frame', {
               method: 'POST',
-              body: JSON.stringify({ frame_code: frameCode }),
+              body: JSON.stringify({ frame_code: frameCode, system_id: state.settings?.systems?.activeSystemId || null }),
             });
             if (!state.achievements.overview) state.achievements.overview = {};
             if (!state.achievements.overview.cosmetics) state.achievements.overview.cosmetics = {};
@@ -6295,7 +6321,7 @@
           try {
             await apiFetch('/gymapi/achievements/select_badge', {
               method: 'POST',
-              body: JSON.stringify({ badge_code: badgeCode }),
+              body: JSON.stringify({ badge_code: badgeCode, system_id: state.settings?.systems?.activeSystemId || null }),
             });
             if (!state.achievements.overview) state.achievements.overview = {};
             if (!state.achievements.overview.cosmetics) state.achievements.overview.cosmetics = {};
@@ -6315,7 +6341,7 @@
       if (!hasSub) {
         const lock = document.createElement('div');
         lock.className = 'muted-inline';
-        lock.textContent = 'Статус доступен в Premium';
+        lock.textContent = 'Статус доступен в премиум-подписке';
         statusGrid.appendChild(lock);
       } else {
         statusGrid.appendChild(createBadgeBtn('⭐ по умолчанию', '⭐', null, !currentBadge));
@@ -9482,20 +9508,8 @@
       info.append(titleWrap, meta);
       header.appendChild(info);
 
-      if (!isDeleteMode) {
-        const dayKey = getAiCoachDayKey();
-        const proposalKey = `${dayKey}:${String(exercise.name || '').trim().toLowerCase()}`;
-        const proposal = state.aiCoach.appliedByDay?.[proposalKey] || null;
-        if (proposal) {
-          const proposedPill = document.createElement('span');
-          proposedPill.className = 'ai-proposed-pill';
-          proposedPill.textContent = 'Предложено ИИ';
-          header.appendChild(proposedPill);
-        }
-      }
-
-      // source/meta (История / Источник / AI)
-      if (!isDeleteMode) {
+      // source/meta (только предложено ИИ)
+      if (!isDeleteMode && hasUsefulSourceMetaContent(exercise)) {
         const sourceWrap = document.createElement('div');
         sourceWrap.className = 'source-meta-wrap';
 
@@ -9506,28 +9520,12 @@
 
         const sourcePop = document.createElement('div');
         sourcePop.className = 'source-meta-pop';
-        sourcePop.innerHTML = '<div class="muted">Нажмите, чтобы загрузить…</div>';
+        sourcePop.innerHTML = buildSourceMetaContent(exercise, null);
 
         sourceBtn.addEventListener('click', async (ev) => {
           ev.preventDefault();
           ev.stopPropagation();
-
-          const opening = String(state.sourceMetaOpenFor || '').trim() !== String(exercise.user_exercise_id || '').trim();
-          if (!opening) {
-            toggleSourceMetaPopover(exercise.user_exercise_id, sourceBtn, sourcePop);
-            return;
-          }
-
-          sourcePop.innerHTML = '<div class="muted">Загрузка…</div>';
           toggleSourceMetaPopover(exercise.user_exercise_id, sourceBtn, sourcePop);
-
-          try {
-            const ctx = await ensureExerciseContext(exercise.user_exercise_id);
-            sourceBtn.textContent = getSourceMetaButtonLabel(exercise, ctx);
-            sourcePop.innerHTML = buildSourceMetaContent(exercise, ctx);
-          } catch (e) {
-            sourcePop.innerHTML = '<div class="muted">Не удалось загрузить историю.</div>';
-          }
         });
 
         sourceWrap.appendChild(sourceBtn);
@@ -10829,10 +10827,20 @@
       return `${day}:${type}:${ex}:${idx}`;
     }
 
-    function shouldApplyAiAction(action, idx) {
+    function getAiActionExplicitDecision(action, idx) {
       const key = getAiActionDecisionKey(action, idx);
-      const val = state.aiCoach.decisions[key];
-      return val !== false;
+      if (!Object.prototype.hasOwnProperty.call(state.aiCoach.decisions || {}, key)) return null;
+      return state.aiCoach.decisions[key] === false ? 'skip' : 'apply';
+    }
+
+    function shouldApplyAiAction(action, idx) {
+      const explicit = getAiActionExplicitDecision(action, idx);
+      if (explicit === 'skip') return false;
+      return true;
+    }
+
+    function hasAiManualDecisions() {
+      return Object.keys(state.aiCoach.decisions || {}).length > 0;
     }
 
     function getAiCoachPendingDays(actions) {
@@ -10842,7 +10850,6 @@
         const type = String(action.type || '');
         if (!['replace_exercise', 'remove_exercise', 'add_exercise'].includes(type)) return;
         const key = getAiActionDecisionKey(action, idx);
-        if (state.aiCoach.done?.[key] === true) return;
         const day = Number(action.day_index || 1);
         if (!byDay.has(day)) byDay.set(day, []);
         byDay.get(day).push({ action, idx, key });
@@ -10875,7 +10882,6 @@
       actions.forEach((action, idx) => {
         if (!action || String(action.type || '') === 'create_system') return;
         const key = getAiActionDecisionKey(action, idx);
-        if (state.aiCoach.done?.[key] === true) return;
         const day = Number(action.day_index || 1);
         if (!byDay.has(day)) byDay.set(day, []);
         byDay.get(day).push({ action, idx, key });
@@ -10890,8 +10896,7 @@
             const action = { type: 'add_exercise', day_index: dayIndex, ...ex };
             const syntheticIdx = 1000 + idx + dayIndex * 100;
             const key = getAiActionDecisionKey(action, syntheticIdx);
-            if (state.aiCoach.done?.[key] === true) return;
-            byDay.get(dayIndex).push({ action, idx: syntheticIdx, key });
+                byDay.get(dayIndex).push({ action, idx: syntheticIdx, key });
           });
         });
       }
@@ -10905,7 +10910,7 @@
           return items.some(({ action, idx }) => {
             const type = String(action?.type || '');
             if (!['replace_exercise', 'remove_exercise', 'add_exercise'].includes(type)) return false;
-            return state.aiCoach.done?.[getAiActionDecisionKey(action, idx)] !== true;
+            return true;
           });
         });
         if (pendingDays.length) {
@@ -10925,23 +10930,25 @@
         const rows = items.map(({ action, idx, key }) => {
           const type = String(action?.type || '');
           const apply = shouldApplyAiAction(action, idx);
+          const explicitDecision = getAiActionExplicitDecision(action, idx);
+          const decisionClass = explicitDecision === 'apply' ? ' decision-apply' : (explicitDecision === 'skip' ? ' decision-skip' : '');
           if (type === 'replace_exercise') {
             const decisionRow = mode === 'replace_exercises'
-              ? `<div class="ai-choice-row"><button class="btn ${apply ? 'selected' : ''}" data-ai-decision="apply" data-ai-key="${key}" data-ai-idx="${idx}">✓ Удалить</button><button class="btn ${!apply ? 'selected' : ''}" data-ai-decision="skip" data-ai-key="${key}" data-ai-idx="${idx}">✕ Оставить</button></div>`
+              ? `<div class="ai-choice-row"><button class="btn ${explicitDecision === 'apply' ? 'selected' : ''}" data-ai-decision="apply" data-ai-key="${key}" data-ai-idx="${idx}">✓ Удалить</button><button class="btn ${explicitDecision === 'skip' ? 'selected' : ''}" data-ai-decision="skip" data-ai-key="${key}" data-ai-idx="${idx}">✕ Оставить</button></div>`
               : '';
-            return `<div class="ai-action-item remove"><div class="title">Удалить: ${escapeHtml(String(action.old_exercise_name || 'Упражнение'))}</div><div class="hint">День ${day}</div>${decisionRow}</div><div class="ai-action-item add"><div class="title">Добавить: ${escapeHtml(String(action.new_exercise_name || 'Упражнение'))}</div><div class="hint">${Number(action.sets || 0)}×${Number(action.reps || 0)}</div></div>`;
+            return `<div class="ai-action-item remove${decisionClass}"><div class="title">Удалить: ${escapeHtml(String(action.old_exercise_name || 'Упражнение'))}</div><div class="hint">День ${day}</div>${decisionRow}</div><div class="ai-action-item add${decisionClass}"><div class="title">Добавить: ${escapeHtml(String(action.new_exercise_name || 'Упражнение'))}</div><div class="hint">${Number(action.sets || 0)}×${Number(action.reps || 0)}</div></div>`;
           }
           if (type === 'remove_exercise') {
             const decisionRow = mode === 'replace_exercises'
-              ? `<div class="ai-choice-row"><button class="btn ${apply ? 'selected' : ''}" data-ai-decision="apply" data-ai-key="${key}" data-ai-idx="${idx}">✓ Удалить</button><button class="btn ${!apply ? 'selected' : ''}" data-ai-decision="skip" data-ai-key="${key}" data-ai-idx="${idx}">✕ Оставить</button></div>`
+              ? `<div class="ai-choice-row"><button class="btn ${explicitDecision === 'apply' ? 'selected' : ''}" data-ai-decision="apply" data-ai-key="${key}" data-ai-idx="${idx}">✓ Удалить</button><button class="btn ${explicitDecision === 'skip' ? 'selected' : ''}" data-ai-decision="skip" data-ai-key="${key}" data-ai-idx="${idx}">✕ Оставить</button></div>`
               : '';
-            return `<div class="ai-action-item remove"><div class="title">Удалить: ${escapeHtml(String(action.old_exercise_name || 'Упражнение'))}</div><div class="hint">День ${day}</div>${decisionRow}</div>`;
+            return `<div class="ai-action-item remove${decisionClass}"><div class="title">Удалить: ${escapeHtml(String(action.old_exercise_name || 'Упражнение'))}</div><div class="hint">День ${day}</div>${decisionRow}</div>`;
           }
           if (type === 'add_exercise') {
             const decisionRow = mode === 'replace_exercises'
-              ? `<div class="ai-choice-row"><button class="btn ${apply ? 'selected' : ''}" data-ai-decision="apply" data-ai-key="${key}" data-ai-idx="${idx}">✓ Добавить</button><button class="btn ${!apply ? 'selected' : ''}" data-ai-decision="skip" data-ai-key="${key}" data-ai-idx="${idx}">✕ Пропустить</button></div>`
+              ? `<div class="ai-choice-row"><button class="btn ${explicitDecision === 'apply' ? 'selected' : ''}" data-ai-decision="apply" data-ai-key="${key}" data-ai-idx="${idx}">✓ Добавить</button><button class="btn ${explicitDecision === 'skip' ? 'selected' : ''}" data-ai-decision="skip" data-ai-key="${key}" data-ai-idx="${idx}">✕ Пропустить</button></div>`
               : '';
-            return `<div class="ai-action-item add"><div class="title">Добавить: ${escapeHtml(String(action.exercise_name || 'Упражнение'))}</div><div class="hint">${Number(action.sets || 0)}×${Number(action.reps || 0)}</div>${decisionRow}</div>`;
+            return `<div class="ai-action-item add${decisionClass}"><div class="title">Добавить: ${escapeHtml(String(action.exercise_name || 'Упражнение'))}</div><div class="hint">${Number(action.sets || 0)}×${Number(action.reps || 0)}</div>${decisionRow}</div>`;
           }
           if (type === 'update_sets') {
             return `<div class="ai-action-item sets"><div class="title">${escapeHtml(String(action.exercise_name || 'Упражнение'))}</div><div class="hint">Рекомендация: ${Number(action.sets || 0)}×${Number(action.reps || 0)}${Number(action.weight_kg || 0) ? `, ${Number(action.weight_kg || 0)} кг` : ''}</div></div>`;
@@ -10999,7 +11006,10 @@
       const applyFrame = document.getElementById('aiCoachApplyFrame');
       if (applyFrame) applyFrame.classList.toggle('hidden', !hasPlan || isMistakes);
       const applyAllBtn = document.getElementById('aiCoachApplyAllBtn');
-      if (applyAllBtn) applyAllBtn.classList.toggle('hidden', isMistakes || mode === 'new_system');
+      if (applyAllBtn) {
+        applyAllBtn.classList.toggle('hidden', isMistakes || mode === 'new_system');
+        applyAllBtn.textContent = hasAiManualDecisions() ? 'Применить изменения' : 'Применить все изменения';
+      }
       renderAiCoachExamples();
       if (state.aiCoach.hasResponse || hasStructured) scrollAiCoachToAnswer();
       if (allDone) {
@@ -11592,7 +11602,6 @@
           const key = String(btn.dataset.aiKey || '').trim();
           if (!key) return;
           state.aiCoach.decisions[key] = btn.dataset.aiDecision === 'apply';
-          state.aiCoach.done[key] = true;
           const actions = Array.isArray(state.aiCoach.parsed?.actions) ? state.aiCoach.parsed.actions : [];
           const cursorChanged = syncAiCoachDayCursor(actions);
           renderAiCoachResult();
@@ -12395,89 +12404,35 @@
     }
 
     function hasUsefulSourceMetaContent(exercise, ctx = null) {
-      if (!hasExerciseSourceMeta(exercise)) return false;
       const meta = (exercise && exercise.source_meta) ? exercise.source_meta : {};
       const sourceKind = String(meta.source_kind || '').toLowerCase();
-      const isAi = sourceKind === 'ai';
-      const isImported = _isImportedMeta(meta);
-      const completedCount = Number(ctx && ctx.completed_count) || 0;
-      const showPrevious = (!isImported) || (isAi && completedCount >= 2);
-
-      if (showPrevious) return true;
-
-      const hasImportedDetails = String(meta.source_system_name || '').trim().length > 0
-        || String(meta.source_user_name || '').trim().length > 0;
-      if (hasImportedDetails) return true;
-
+      if (sourceKind !== 'ai') return false;
       const hasAiDetails = String(meta.how_to || '').trim().length > 0
         || Number(meta.suggested_sets_count || 0) > 0
         || Number(meta.reps || 0) > 0
         || Number(meta.seconds || 0) > 0
         || Number(meta.weight_kg || 0) > 0;
-      if (isAi && hasAiDetails) return true;
-
-      return false;
+      return hasAiDetails;
     }
 
     function getSourceMetaButtonLabel(exercise, ctx = null) {
-      const meta = (exercise && exercise.source_meta) ? exercise.source_meta : {};
-      const sourceKind = String(meta.source_kind || '').toLowerCase();
-      const isAi = sourceKind === 'ai';
-      const isImported = _isImportedMeta(meta);
-      const completedCount = Number(ctx && ctx.completed_count) || 0;
-
-      if (isImported) return 'Источник (?)';
-      if (isAi && completedCount < 2) return 'Предложено ИИ (?)';
-      return 'Предыдущий (?)';
+      return 'Предложено ИИ (?)';
     }
 
     function buildSourceMetaContent(exercise, ctx = null) {
       const meta = (exercise && exercise.source_meta) ? exercise.source_meta : {};
       const sourceKind = String(meta.source_kind || '').toLowerCase();
-      const isAi = sourceKind === 'ai';
-      const isImported = _isImportedMeta(meta);
-      const completedCount = Number(ctx && ctx.completed_count) || 0;
+      if (sourceKind !== 'ai') return `<div class="muted">Нет данных</div>`;
 
       const parts = [];
-
-      const showPrevious = (!isImported) || (isAi && completedCount >= 2);
-
-      if (showPrevious) {
-        parts.push(`<div class="source-meta-title">Предыдущий раз</div>`);
-        const hasPrev = ctx && (ctx.previous_summary || (Array.isArray(ctx.previous_sets) && ctx.previous_sets.length));
-        if (hasPrev) {
-          if (ctx.previous_date) parts.push(`<div class="source-meta-date">${escapeHtml(ctx.previous_date)}</div>`);
-          if (ctx.previous_summary) parts.push(`<div class="source-meta-line">${escapeHtml(ctx.previous_summary)}</div>`);
-          if (Array.isArray(ctx.previous_sets) && ctx.previous_sets.length) {
-            const setsHtml = ctx.previous_sets
-              .map((setRow) => `<div class="source-meta-set">${escapeHtml(formatSetDetail(setRow))}</div>`)
-              .join('');
-            parts.push(`<div class="source-meta-sets">${setsHtml}</div>`);
-          }
-        } else {
-          parts.push(`<div class="source-meta-line muted">Истории пока нет.</div>`);
-        }
-      }
-
-      if (isImported) {
-        parts.push(`<div class="source-meta-title">Источник</div>`);
-        if (meta.source_system_name) parts.push(`<div class="source-meta-line">Система: ${escapeHtml(meta.source_system_name)}</div>`);
-        if (meta.source_user_name) parts.push(`<div class="source-meta-line">Автор: @${escapeHtml(meta.source_user_name)}</div>`);
-        if (meta.source_system_id) {
-          parts.push(`<div class="source-meta-link"><a href="#" data-action="open_system" data-system-id="${meta.source_system_id}">Открыть систему</a></div>`);
-        }
-      }
-
-      if (isAi) {
-        parts.push(`<div class="source-meta-title">Рекомендации ИИ</div>`);
-        if (meta.how_to) parts.push(`<div class="source-meta-howto">${escapeHtml(meta.how_to)}</div>`);
-        const rows = [];
-        if (meta.suggested_sets_count) rows.push(`Подходы: ${escapeHtml(String(meta.suggested_sets_count))}`);
-        if (meta.reps) rows.push(`Повторы: ${escapeHtml(String(meta.reps))}`);
-        if (meta.seconds) rows.push(`Сек: ${escapeHtml(String(meta.seconds))}`);
-        if (meta.weight_kg) rows.push(`Вес: ${escapeHtml(String(meta.weight_kg))} кг`);
-        if (rows.length) parts.push(`<div class="source-meta-line">${rows.join(' • ')}</div>`);
-      }
+      parts.push(`<div class="source-meta-title">Рекомендации ИИ</div>`);
+      if (meta.how_to) parts.push(`<div class="source-meta-howto">${escapeHtml(meta.how_to)}</div>`);
+      const rows = [];
+      if (meta.suggested_sets_count) rows.push(`Подходы: ${escapeHtml(String(meta.suggested_sets_count))}`);
+      if (meta.reps) rows.push(`Повторы: ${escapeHtml(String(meta.reps))}`);
+      if (meta.seconds) rows.push(`Сек: ${escapeHtml(String(meta.seconds))}`);
+      if (meta.weight_kg) rows.push(`Вес: ${escapeHtml(String(meta.weight_kg))} кг`);
+      if (rows.length) parts.push(`<div class="source-meta-line">${rows.join(' • ')}</div>`);
 
       return parts.join('') || `<div class="muted">Нет данных</div>`;
     }

@@ -1007,6 +1007,16 @@ async def init_db():
             badge_hidden INTEGER CHECK(badge_hidden IN (0,1)) DEFAULT 0
         );
 
+        CREATE TABLE IF NOT EXISTS training_system_cosmetics(
+            user_id INTEGER NOT NULL,
+            system_id INTEGER NOT NULL,
+            title_frame_code TEXT DEFAULT NULL,
+            badge_code TEXT DEFAULT NULL,
+            badge_hidden INTEGER CHECK(badge_hidden IN (0,1)) DEFAULT 0,
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY(user_id, system_id)
+        );
+
         CREATE TABLE IF NOT EXISTS user_measurements(
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id INTEGER,
@@ -5131,8 +5141,43 @@ async def upsert_team_daily_scores(day_utc: str, items: list[dict]) -> None:
         await db.commit()
 
 
-async def get_cosmetics(user_id: int) -> dict[str, int | str | None]:
+async def _resolve_user_system_id(db, user_id: int, system_id: int | None = None) -> int:
+    if system_id is not None and int(system_id) > 0:
+        return int(system_id)
+    cur = await db.execute("SELECT active_system_id FROM users WHERE id=?", (user_id,))
+    row = await cur.fetchone()
+    active_id = int((row[0] if row and row[0] is not None else 0) or 0)
+    if active_id > 0:
+        return active_id
+    cur = await db.execute(
+        "SELECT id FROM training_systems WHERE user_id=? ORDER BY id LIMIT 1",
+        (user_id,),
+    )
+    row = await cur.fetchone()
+    return int((row[0] if row else 0) or 0)
+
+
+async def get_cosmetics(user_id: int, system_id: int | None = None) -> dict[str, int | str | None]:
     async with connect_db() as db:
+        resolved_system_id = await _resolve_user_system_id(db, user_id, system_id)
+        if resolved_system_id > 0:
+            cur = await db.execute(
+                """
+                SELECT title_frame_code, badge_code, badge_hidden
+                FROM training_system_cosmetics
+                WHERE user_id=? AND system_id=?
+                """,
+                (user_id, resolved_system_id),
+            )
+            row = await cur.fetchone()
+            if row:
+                title_frame_code, badge_code, badge_hidden = row
+                return {
+                    "title_frame_code": title_frame_code or None,
+                    "badge_code": badge_code or None,
+                    "badge_hidden": 1 if badge_hidden == 1 else 0,
+                }
+
         cur = await db.execute(
             """
             SELECT title_frame_code, badge_code, badge_hidden
@@ -5152,8 +5197,101 @@ async def get_cosmetics(user_id: int) -> dict[str, int | str | None]:
     }
 
 
-async def set_title_frame(user_id: int, frame_code_or_null: str | None):
+async def clone_system_cosmetics(user_id: int, source_system_id: int, target_system_id: int):
+    now = datetime.now(UTC).isoformat()
     async with connect_db() as db:
+        cur = await db.execute(
+            """
+            SELECT title_frame_code, badge_code, badge_hidden
+            FROM training_system_cosmetics
+            WHERE user_id=? AND system_id=?
+            """,
+            (user_id, int(source_system_id)),
+        )
+        row = await cur.fetchone()
+        if row is None:
+            cur = await db.execute(
+                """
+                SELECT title_frame_code, badge_code, badge_hidden
+                FROM user_prefs
+                WHERE user_id=?
+                """,
+                (user_id,),
+            )
+            row = await cur.fetchone()
+        if row is None:
+            await db.execute(
+                "DELETE FROM training_system_cosmetics WHERE user_id=? AND system_id=?",
+                (user_id, int(target_system_id)),
+            )
+            await db.commit()
+            return
+        title_frame_code, badge_code, badge_hidden = row
+        await db.execute(
+            """
+            INSERT INTO training_system_cosmetics(user_id, system_id, title_frame_code, badge_code, badge_hidden, updated_at)
+            VALUES(?,?,?,?,?,?)
+            ON CONFLICT(user_id, system_id)
+            DO UPDATE SET
+                title_frame_code=excluded.title_frame_code,
+                badge_code=excluded.badge_code,
+                badge_hidden=excluded.badge_hidden,
+                updated_at=excluded.updated_at
+            """,
+            (
+                user_id,
+                int(target_system_id),
+                title_frame_code,
+                badge_code,
+                1 if badge_hidden == 1 else 0,
+                now,
+            ),
+        )
+        await db.commit()
+
+
+async def set_title_frame(user_id: int, frame_code_or_null: str | None, system_id: int | None = None):
+    now = datetime.now(UTC).isoformat()
+    async with connect_db() as db:
+        resolved_system_id = await _resolve_user_system_id(db, user_id, system_id)
+        if resolved_system_id > 0:
+            cur = await db.execute(
+                """
+                SELECT badge_code, badge_hidden
+                FROM training_system_cosmetics
+                WHERE user_id=? AND system_id=?
+                """,
+                (user_id, resolved_system_id),
+            )
+            row = await cur.fetchone()
+            if row is None:
+                cur = await db.execute(
+                    """
+                    SELECT badge_code, badge_hidden
+                    FROM user_prefs
+                    WHERE user_id=?
+                    """,
+                    (user_id,),
+                )
+                row = await cur.fetchone()
+            badge_code = (row[0] if row else None)
+            badge_hidden = (1 if row and row[1] == 1 else 0)
+            await db.execute(
+                """
+                INSERT INTO training_system_cosmetics(user_id, system_id, title_frame_code, badge_code, badge_hidden, updated_at)
+                VALUES(?,?,?,?,?,?)
+                ON CONFLICT(user_id, system_id)
+                DO UPDATE SET
+                    title_frame_code=excluded.title_frame_code,
+                    badge_code=excluded.badge_code,
+                    badge_hidden=excluded.badge_hidden,
+                    updated_at=excluded.updated_at
+                """,
+                (user_id, resolved_system_id, frame_code_or_null, badge_code, badge_hidden, now),
+            )
+            await db.commit()
+            return
+
         await db.execute(
             """
             INSERT INTO user_prefs(user_id, title_frame_code) VALUES(?,?)
@@ -5164,8 +5302,48 @@ async def set_title_frame(user_id: int, frame_code_or_null: str | None):
         await db.commit()
 
 
-async def set_badge(user_id: int, badge_code_or_null: str | None):
+async def set_badge(user_id: int, badge_code_or_null: str | None, system_id: int | None = None):
+    now = datetime.now(UTC).isoformat()
     async with connect_db() as db:
+        resolved_system_id = await _resolve_user_system_id(db, user_id, system_id)
+        if resolved_system_id > 0:
+            cur = await db.execute(
+                """
+                SELECT title_frame_code, badge_hidden
+                FROM training_system_cosmetics
+                WHERE user_id=? AND system_id=?
+                """,
+                (user_id, resolved_system_id),
+            )
+            row = await cur.fetchone()
+            if row is None:
+                cur = await db.execute(
+                    """
+                    SELECT title_frame_code, badge_hidden
+                    FROM user_prefs
+                    WHERE user_id=?
+                    """,
+                    (user_id,),
+                )
+                row = await cur.fetchone()
+            title_frame_code = (row[0] if row else None)
+            badge_hidden = (1 if row and row[1] == 1 else 0)
+            await db.execute(
+                """
+                INSERT INTO training_system_cosmetics(user_id, system_id, title_frame_code, badge_code, badge_hidden, updated_at)
+                VALUES(?,?,?,?,?,?)
+                ON CONFLICT(user_id, system_id)
+                DO UPDATE SET
+                    title_frame_code=excluded.title_frame_code,
+                    badge_code=excluded.badge_code,
+                    badge_hidden=excluded.badge_hidden,
+                    updated_at=excluded.updated_at
+                """,
+                (user_id, resolved_system_id, title_frame_code, badge_code_or_null, badge_hidden, now),
+            )
+            await db.commit()
+            return
+
         await db.execute(
             """
             INSERT INTO user_prefs(user_id, badge_code) VALUES(?,?)
@@ -5176,9 +5354,49 @@ async def set_badge(user_id: int, badge_code_or_null: str | None):
         await db.commit()
 
 
-async def set_badge_hidden(user_id: int, hidden: bool):
+async def set_badge_hidden(user_id: int, hidden: bool, system_id: int | None = None):
     value = 1 if hidden else 0
+    now = datetime.now(UTC).isoformat()
     async with connect_db() as db:
+        resolved_system_id = await _resolve_user_system_id(db, user_id, system_id)
+        if resolved_system_id > 0:
+            cur = await db.execute(
+                """
+                SELECT title_frame_code, badge_code
+                FROM training_system_cosmetics
+                WHERE user_id=? AND system_id=?
+                """,
+                (user_id, resolved_system_id),
+            )
+            row = await cur.fetchone()
+            if row is None:
+                cur = await db.execute(
+                    """
+                    SELECT title_frame_code, badge_code
+                    FROM user_prefs
+                    WHERE user_id=?
+                    """,
+                    (user_id,),
+                )
+                row = await cur.fetchone()
+            title_frame_code = (row[0] if row else None)
+            badge_code = (row[1] if row else None)
+            await db.execute(
+                """
+                INSERT INTO training_system_cosmetics(user_id, system_id, title_frame_code, badge_code, badge_hidden, updated_at)
+                VALUES(?,?,?,?,?,?)
+                ON CONFLICT(user_id, system_id)
+                DO UPDATE SET
+                    title_frame_code=excluded.title_frame_code,
+                    badge_code=excluded.badge_code,
+                    badge_hidden=excluded.badge_hidden,
+                    updated_at=excluded.updated_at
+                """,
+                (user_id, resolved_system_id, title_frame_code, badge_code, value, now),
+            )
+            await db.commit()
+            return
+
         await db.execute(
             """
             INSERT INTO user_prefs(user_id, badge_hidden) VALUES(?,?)
