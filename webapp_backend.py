@@ -113,6 +113,7 @@ from db import (
     set_title_frame,
     set_badge,
     set_badge_hidden,
+    clone_system_cosmetics,
     log_user_event,
     record_system_copy,
     mark_copy_trained,
@@ -4855,7 +4856,9 @@ async def systems_create(payload: dict = Body(default={}), ctx: AuthCtx = Depend
     if not has_sub and systems_count >= 1 and not replace_existing:
         raise HTTPException(status_code=402, detail='Без подписки доступна только одна система. Новая система может только перезаписать текущую.')
 
+    previous_system_id = await get_active_training_system_id(user_id)
     system_id = await create_training_system(user_id, name, color, workouts_per_week=workouts_per_week)
+    await clone_system_cosmetics(user_id, previous_system_id, int(system_id))
     if workouts_per_week:
         await apply_system_to_current_plan(user_id, int(system_id))
         await set_workouts_per_week(user_id, workouts_per_week)
@@ -4912,8 +4915,9 @@ async def achievements_overview(ctx: AuthCtx = Depends(get_auth_ctx)):
 async def achievements_select_frame(payload: dict = Body(default_factory=dict), ctx: AuthCtx = Depends(get_auth_ctx)):
     user_id = int(ctx.user_id)
     frame_code = payload.get('frame_code')
+    system_id = payload.get('system_id')
     if frame_code is None:
-        await set_title_frame(user_id, None)
+        await set_title_frame(user_id, None, int(system_id) if system_id is not None else None)
         return {'ok': True, 'title_frame_code': None}
     frame_code = str(frame_code).strip()
     ach_code = achievements.FRAME_TO_CODE.get(frame_code)
@@ -4923,7 +4927,7 @@ async def achievements_select_frame(payload: dict = Body(default_factory=dict), 
     unlocked_codes = {code for code, _ in await list_user_achievements(user_id)}
     if ach_code not in unlocked_codes and not is_admin:
         raise HTTPException(status_code=403, detail='Frame is locked')
-    await set_title_frame(user_id, frame_code)
+    await set_title_frame(user_id, frame_code, int(system_id) if system_id is not None else None)
     return {'ok': True, 'title_frame_code': frame_code}
 
 
@@ -4933,16 +4937,17 @@ async def achievements_select_badge(payload: dict = Body(default_factory=dict), 
     if not await _has_active_subscription(user_id):
         raise HTTPException(status_code=403, detail='Subscription required')
     badge_code = payload.get('badge_code')
+    system_id = payload.get('system_id')
     hidden = payload.get('hidden')
     unlocked_codes = {code for code, _ in await list_user_achievements(user_id)}
     if badge_code is not None:
         badge_code = str(badge_code).strip()
         if badge_code and badge_code not in unlocked_codes:
             raise HTTPException(status_code=403, detail='Badge is locked')
-    await set_badge(user_id, badge_code if badge_code else None)
+    await set_badge(user_id, badge_code if badge_code else None, int(system_id) if system_id is not None else None)
     if hidden is not None:
-        await set_badge_hidden(user_id, bool(hidden))
-    cosmetics = await get_cosmetics(user_id)
+        await set_badge_hidden(user_id, bool(hidden), int(system_id) if system_id is not None else None)
+    cosmetics = await get_cosmetics(user_id, int(system_id) if system_id is not None else None)
     return {'ok': True, 'cosmetics': cosmetics}
 
 
@@ -5401,6 +5406,7 @@ async def leaderboard_productivity_copy(
     if leader_row:
         fallback_name = ((leader_row[2] or '').strip() if len(leader_row) > 2 else '') or f'athlete_{int(leader_user_id)}'
     had_sub = await _has_active_subscription(int(user_id))
+    previous_system_id = await get_active_training_system_id(int(user_id))
     result = await copy_training_system_from_user(
         int(leader_user_id),
         int(user_id),
@@ -5409,6 +5415,7 @@ async def leaderboard_productivity_copy(
     )
     if not result.get('system_id'):
         raise HTTPException(status_code=400, detail='У лидера нет системы для копирования')
+    await clone_system_cosmetics(int(user_id), previous_system_id, int(result.get('system_id')))
     await record_system_copy(int(leader_user_id), int(result.get('source_system_id') or source_system_id or 0), int(user_id), int(result.get('system_id')) )
     await _evaluate_achievements(int(leader_user_id))
     await _evaluate_achievements(int(user_id))
