@@ -3073,6 +3073,7 @@
             profileError: null,
             requests: { q: '', items: [], total: 0, offset: 0, limit: 20, loading: false, open: false, error: null, pendingCount: 0 },
             style: { loading: false, options: null, saving: false, open: false, error: null, selected: { frame_code: null, bg_code: null, emblem_code: null } },
+            members: { open: false },
             busy: { join: false, create: false, leave: false, accept: false, reject: false, styleSave: false },
           },
         },
@@ -4178,6 +4179,83 @@
       const lb = state.settings.productivity.leaderboard;
       const my = teams.my;
       const profileMarkup = renderLeaderProfileMarkup(lb);
+      const isCaptain = my && my.role === 'captain';
+      const isMyProfileOpen = Boolean(my && teams.view === 'profile' && Number(teams.selectedTeamId || 0) === Number(my.team_id || 0));
+      const selectedProfile = teams.profile || {};
+      const selectedTeam = selectedProfile.team || {};
+      const selectedMembers = Array.isArray(selectedProfile.members) ? selectedProfile.members : [];
+
+      const buildMembersList = (members) => {
+        const safe = Array.isArray(members) ? members : [];
+        return safe.map((m) => {
+          const isActive = Number(lb.selectedUserId || 0) === Number(m.user_id || 0);
+          return `
+            <div class="leader-item" id="teamLeaderItem-${m.user_id}">
+              <button class="leader-row ${isActive ? 'active' : ''}" style="margin-top:6px;" data-action="leader-open" data-user-id="${m.user_id}">
+                <div class="leader-rank">${Math.max(0, Math.min(100, Number(m.score || 0)))}</div>
+                <div>
+                  <div class="leader-name">@${escapeHtml(m.username || ('athlete_'+m.user_id))}</div>
+                  <div class="team-meta">Тренировок за 28д: ${Number(m.training_days_28 || 0)}</div>
+                </div>
+                <div class="timer-hint">${isActive ? 'Скрыть' : 'Открыть'}</div>
+              </button>
+              ${isActive ? profileMarkup : ''}
+            </div>`;
+        }).join('') || '<div class="timer-hint" style="margin-top:8px;">Пока нет участников.</div>';
+      };
+
+      const activeTopPanel = (() => {
+        if (!my || !isMyProfileOpen) return '';
+        if (isCaptain && teams.requests.open) {
+          return `
+            <div class="card" style="padding:12px; margin-top:10px;" id="teamRequestsPanel">
+              <div class="card-title">Заявки в команду</div>
+              <div class="settings-row inline" style="margin-top:8px;">
+                <input id="teamReqSearchManage" class="settings-input" placeholder="Поиск @username" value="${escapeHtml(teams.requests.q || '')}">
+                <button class="btn" data-action="team-requests-refresh-manage">Обновить</button>
+              </div>
+              ${(teams.requests.items || []).map((it) => `
+                <div class="leader-row" style="margin-top:6px; cursor:default;">
+                  <div class="leader-rank">#</div>
+                  <div>
+                    <div class="leader-name">@${escapeHtml(it.username || ('athlete_'+it.user_id))}</div>
+                    <div class="team-meta">${escapeHtml((it.created_at || '').slice(0, 19))}</div>
+                  </div>
+                  <div style="display:flex; gap:6px;">
+                    <button class="btn small-btn" data-action="team-req-accept" data-request-id="${it.request_id}">Принять</button>
+                    <button class="btn small-btn" data-action="team-req-reject" data-request-id="${it.request_id}">Отклонить</button>
+                  </div>
+                </div>`).join('') || '<div class="timer-hint" style="margin-top:8px;">Нет заявок.</div>'}
+            </div>`;
+        }
+        if (isCaptain && teams.style.open) {
+          return `
+            <div class="card" style="padding:12px; margin-top:10px;" id="teamStylePanel">
+              <div class="card-title">Стиль команды</div>
+              ${teams.style.options ? `
+                <div style="display:grid; gap:8px; margin-top:8px;">
+                  <select id="teamStyleFrameManage" class="settings-select">${['<option value="">— Рамка</option>', ...(teams.style.options.allowed?.frames || []).map((x) => `<option value="${x}" ${x===(teams.style.selected?.frame_code||'')?'selected':''}>${teamStyleLabel(x)}</option>`)].join('')}</select>
+                  <select id="teamStyleBgManage" class="settings-select">${['<option value="">— Фон</option>', ...(teams.style.options.allowed?.bgs || []).map((x) => `<option value="${x}" ${x===(teams.style.selected?.bg_code||'')?'selected':''}>${teamStyleLabel(x)}</option>`)].join('')}</select>
+                  <select id="teamStyleEmblemManage" class="settings-select">${['<option value="">— Эмблема</option>', ...(teams.style.options.allowed?.emblems || []).map((x) => `<option value="${x}" ${x===(teams.style.selected?.emblem_code||'')?'selected':''}>${teamStyleLabel(x)}</option>`)].join('')}</select>
+                  <button class="btn primary" data-action="team-style-save">Сохранить стиль</button>
+                </div>
+              ` : `<div class="timer-hint" style="margin-top:8px;">${escapeHtml(teams.style.error || 'Загружаем стили…')}</div>`}
+            </div>`;
+        }
+        if (teams.profileLoading) {
+          return '<div class="card" style="padding:12px; margin-top:10px;"><div class="muted-inline">Загружаем участников команды…</div></div>';
+        }
+        if (teams.profileError) {
+          return `<div class="card" style="padding:12px; margin-top:10px;"><div class="muted-inline">${escapeHtml(teams.profileError)}</div><button class="btn" style="margin-top:8px;" data-action="team-retry-profile">Повторить</button></div>`;
+        }
+        return `
+          <div class="card" style="padding:12px; margin-top:10px;" id="teamMembersPanel">
+            <div class="card-title">Участники команды</div>
+            <div class="team-meta" style="margin-top:8px;">Участники: ${Number(selectedTeam.members_count || selectedMembers.length || 0)}</div>
+            ${buildMembersList(selectedMembers)}
+          </div>`;
+      })();
+
       const myCard = (() => {
         if (teams.myLoading) return '<div class="card" style="padding:12px;"><div class="muted-inline">Загрузка команды…</div></div>';
         if (teams.error) return `<div class="card" style="padding:12px;"><div class="muted-inline">${escapeHtml(teams.error)}</div><button class="btn" style="margin-top:8px;" data-action="team-retry-my">Повторить</button></div>`;
@@ -4199,83 +4277,51 @@
             </div>`;
         }
         const emblem = TEAM_EMBLEM_MAP[my.emblem_code] || '🏳️';
-        const expanded = teams.view === 'profile' && Number(teams.selectedTeamId || 0) === Number(my.team_id || 0);
+        const openLabel = isMyProfileOpen ? 'Свернуть' : 'Открыть';
         return `
           <div class="card" style="padding:12px; display:grid; gap:10px;">
             <button class="team-card ${my.frame_code || ''} ${my.bg_code || ''}" data-action="team-open" data-team-id="${my.team_id}">
               <div class="team-badge">${emblem}</div>
               <div><div class="leader-name">${escapeHtml(my.name || 'Команда')}</div><div class="team-meta">Код: ${escapeHtml(my.join_code || '—')} · Роль: ${escapeHtml(my.role === 'captain' ? 'капитан' : 'участник')}</div></div>
-              <div class="timer-hint">${expanded ? 'Свернуть' : 'Открыть'}</div>
+              <div class="timer-hint">${openLabel}</div>
             </button>
             <div style="display:flex; gap:8px; flex-wrap:wrap;" id="teamManageActions">
               <button class="btn" data-action="team-copy-code" data-code="${escapeHtml(my.join_code || '')}">Скопировать код</button>
               <button class="btn ${teams.busy.leave ? 'btn-disabled' : ''}" ${teams.busy.leave ? 'disabled' : ''} data-action="team-leave">Покинуть</button>
-              ${my.role === 'captain' ? `<button class="btn" data-action="team-requests-open">Заявки${Number(teams.requests.pendingCount || 0) > 0 ? ' (' + Number(teams.requests.pendingCount) + ')' : ''}</button><button class="btn" data-action="team-style-open">Стиль</button>` : ''}
+              ${isCaptain ? `<button class="btn" data-action="team-requests-open">Заявки${Number(teams.requests.pendingCount || 0) > 0 ? ' (' + Number(teams.requests.pendingCount) + ')' : ''}</button><button class="btn" data-action="team-style-open">Стиль</button>` : ''}
             </div>
           </div>`;
       })();
+
       const list = teams.loading
         ? '<div class="muted-inline">Загружаем команды…</div>'
-        : (!teams.items.length ? '<div class="muted-inline">Пока нет команд в рейтинге.</div>' : teams.items.map((item) => `
-          <button class="team-card ${item.frame_code || ''} ${item.bg_code || ''}" data-action="team-open" data-team-id="${item.team_id}">
-            <div class="leader-rank">#${item.rank}</div>
-            <div><div class="leader-name">${escapeHtml(item.name || 'Команда')}</div><div class="team-meta">${Number(item.score || 0)}/100 · 28д: ${Number(item.sessions_28 || 0)}</div></div>
-            <div class="team-badge">${TEAM_EMBLEM_MAP[item.emblem_code] || '🏳️'}</div>
-          </button>`).join(''));
-      const prof = teams.profile && teams.view === 'profile' ? (() => {
-        const t = teams.profile.team || {};
-        const members = Array.isArray(teams.profile.members) ? teams.profile.members : [];
-        const isCaptain = teams.my && teams.my.role === 'captain';
-        const requests = isCaptain && teams.requests.open ? `
-          <div class="card" style="padding:12px; margin-top:10px;" id="teamRequestsPanel">
-            <div class="card-title">Заявки в команду</div>
-            <div class="settings-row inline" style="margin-top:8px;">
-              <input id="teamReqSearchManage" class="settings-input" placeholder="Поиск @username" value="${escapeHtml(teams.requests.q || '')}">
-              <button class="btn" data-action="team-requests-refresh-manage">Обновить</button>
-            </div>
-            ${(teams.requests.items || []).map((it) => `
-              <div class="leader-row" style="margin-top:6px; cursor:default;">
-                <div class="leader-rank">#</div>
-                <div>
-                  <div class="leader-name">@${escapeHtml(it.username || ('athlete_'+it.user_id))}</div>
-                  <div class="team-meta">${escapeHtml((it.created_at || '').slice(0, 19))}</div>
-                </div>
-                <div style="display:flex; gap:6px;">
-                  <button class="btn small-btn" data-action="team-req-accept" data-request-id="${it.request_id}">Принять</button>
-                  <button class="btn small-btn" data-action="team-req-reject" data-request-id="${it.request_id}">Отклонить</button>
-                </div>
-              </div>`).join('') || '<div class="timer-hint" style="margin-top:8px;">Нет заявок.</div>'}
-          </div>` : '';
-        const styleBox = isCaptain && teams.style.open ? `
-          <div class="card" style="padding:12px; margin-top:10px;" id="teamStylePanel">
-            <div class="card-title">Стиль команды</div>
-            ${teams.style.options ? `
-              <div style="display:grid; gap:8px; margin-top:8px;">
-                <select id="teamStyleFrameManage" class="settings-select">${['<option value="">— Рамка</option>', ...(teams.style.options.allowed?.frames || []).map((x) => `<option value="${x}" ${x===(teams.style.selected?.frame_code||'')?'selected':''}>${teamStyleLabel(x)}</option>`)].join('')}</select>
-                <select id="teamStyleBgManage" class="settings-select">${['<option value="">— Фон</option>', ...(teams.style.options.allowed?.bgs || []).map((x) => `<option value="${x}" ${x===(teams.style.selected?.bg_code||'')?'selected':''}>${teamStyleLabel(x)}</option>`)].join('')}</select>
-                <select id="teamStyleEmblemManage" class="settings-select">${['<option value="">— Эмблема</option>', ...(teams.style.options.allowed?.emblems || []).map((x) => `<option value="${x}" ${x===(teams.style.selected?.emblem_code||'')?'selected':''}>${teamStyleLabel(x)}</option>`)].join('')}</select>
-                <button class="btn primary" data-action="team-style-save">Сохранить стиль</button>
-              </div>
-            ` : `<div class="timer-hint" style="margin-top:8px;">${escapeHtml(teams.style.error || 'Загружаем стили…')}</div>`}
-          </div>` : '';
-        const membersHtml = members.map((m) => {
-          const isActive = Number(lb.selectedUserId || 0) === Number(m.user_id || 0);
-          return `
-            <div class="leader-item" id="teamLeaderItem-${m.user_id}">
-              <button class="leader-row ${isActive ? 'active' : ''}" style="margin-top:6px;" data-action="leader-open" data-user-id="${m.user_id}">
-                <div class="leader-rank">${Math.max(0, Math.min(100, Number(m.score || 0)))}</div>
-                <div>
-                  <div class="leader-name">@${escapeHtml(m.username || ('athlete_'+m.user_id))}</div>
-                  <div class="team-meta">Тренировок за 28д: ${Number(m.training_days_28 || 0)}</div>
-                </div>
-                <div class="timer-hint">${isActive ? 'Скрыть' : 'Открыть'}</div>
-              </button>
-              ${isActive ? profileMarkup : ''}
-            </div>`;
-        }).join('') || '<div class="timer-hint" style="margin-top:8px;">Список участников скрыт.</div>';
-        return `<div class="card" style="padding:12px; margin-top:10px;" id="teamManageProfileCard"><div style="display:flex;justify-content:space-between;gap:8px;align-items:center;"><div class="card-title">${escapeHtml(t.name || 'Команда')}</div><button class="btn" data-action="team-back">Назад</button></div><div class="team-meta" style="margin-top:8px;">Участники: ${Number(t.members_count || members.length || 0)} · Нажми на участника, чтобы открыть его системы.</div>${membersHtml}${requests}${styleBox}</div>`;
-      })() : '';
-      host.innerHTML = `<div class="trainer-hub">${myCard}<div class="card" style="padding:12px;"><div class="leaderboard-head"><div class="card-title">Лидерборд команд</div><div class="timer-hint">${teams.total || 0}</div></div><div class="leaderboard-list" style="margin-top:12px;">${list}</div></div>${prof}</div>`;
+        : (!teams.items.length ? '<div class="muted-inline">Пока нет команд в рейтинге.</div>' : teams.items.map((item) => {
+          const teamId = Number(item.team_id || 0);
+          const isSelected = teams.view === 'profile' && Number(teams.selectedTeamId || 0) === teamId;
+          const teamCard = `
+            <button class="team-card ${item.frame_code || ''} ${item.bg_code || ''}" data-action="team-open" data-team-id="${teamId}">
+              <div class="leader-rank">#${item.rank}</div>
+              <div><div class="leader-name">${escapeHtml(item.name || 'Команда')}</div><div class="team-meta">${Number(item.score || 0)}/100 · 28д: ${Number(item.sessions_28 || 0)}</div></div>
+              <div class="team-badge">${TEAM_EMBLEM_MAP[item.emblem_code] || '🏳️'}</div>
+            </button>`;
+          if (!isSelected || (my && Number(my.team_id || 0) === teamId)) return teamCard;
+          let inlinePanel = '<div class="card" style="padding:12px; margin-top:8px;"><div class="muted-inline">Загружаем команду…</div></div>';
+          if (!teams.profileLoading && teams.profileError) {
+            inlinePanel = `<div class="card" style="padding:12px; margin-top:8px;"><div class="muted-inline">${escapeHtml(teams.profileError)}</div><button class="btn" style="margin-top:8px;" data-action="team-retry-profile">Повторить</button></div>`;
+          } else if (!teams.profileLoading) {
+            const profileTeam = selectedProfile.team || {};
+            const members = Array.isArray(selectedProfile.members) ? selectedProfile.members : [];
+            inlinePanel = `
+              <div class="card" style="padding:12px; margin-top:8px;" id="leaderboardTeamPanel-${teamId}">
+                <div class="card-title">${escapeHtml(profileTeam.name || item.name || 'Команда')}</div>
+                <div class="team-meta" style="margin-top:8px;">Участники: ${Number(profileTeam.members_count || members.length || 0)}</div>
+                ${buildMembersList(members)}
+              </div>`;
+          }
+          return `${teamCard}${inlinePanel}`;
+        }).join(''));
+
+      host.innerHTML = `<div class="trainer-hub">${myCard}${activeTopPanel}<div class="card" style="padding:12px;"><div class="leaderboard-head"><div class="card-title">Лидерборд команд</div><div class="timer-hint">${teams.total || 0}</div></div><div class="leaderboard-list" style="margin-top:12px;">${list}</div></div></div>`;
     }
 
 
@@ -11734,17 +11780,28 @@
         if (action === 'team-open') {
           const teamId = Number(target.dataset.teamId || 0);
           const teams = state.settings.productivity.teams;
-          if (teamId > 0 && teams.view === 'profile' && Number(teams.selectedTeamId || 0) === teamId) {
+          const myTeamId = Number(teams.my?.team_id || 0);
+          if (teamId <= 0) return;
+          if (teams.view === 'profile' && Number(teams.selectedTeamId || 0) === teamId) {
             teams.view = 'list';
             teams.profile = null;
             teams.selectedTeamId = null;
+            teams.members.open = false;
+            teams.requests.open = false;
+            teams.style.open = false;
             state.settings.productivity.leaderboard.selectedUserId = null;
             state.settings.productivity.leaderboard.profile = null;
             state.settings.productivity.leaderboard.profileLoading = false;
             renderTeamsSection();
             return;
           }
-          if (teamId > 0) loadTeamProfile(teamId).catch(console.error);
+          teams.members.open = (myTeamId > 0 && teamId === myTeamId);
+          teams.requests.open = false;
+          teams.style.open = false;
+          loadTeamProfile(teamId).then(() => {
+            if (teamId === myTeamId) scrollToTeamPanel('teamMembersPanel');
+            else scrollToTeamPanel(`leaderboardTeamPanel-${teamId}`);
+          }).catch(console.error);
           return;
         }
         if (action === 'team-back') {
@@ -11752,6 +11809,7 @@
           teams.view = 'list';
           teams.profile = null;
           teams.selectedTeamId = null;
+          teams.members.open = false;
           renderTeamsSection();
           return;
         }
@@ -11780,14 +11838,24 @@
         }
         if (action === 'team-requests-open') {
           const teams = state.settings.productivity.teams;
-          teams.requests.open = !teams.requests.open;
+          const myTeamId = Number(teams.my?.team_id || 0);
+          if (myTeamId <= 0) return;
+          const willOpen = !teams.requests.open;
+          teams.requests.open = willOpen;
           teams.style.open = false;
+          teams.members.open = false;
           teams.requests.offset = 0;
-          if (teams.requests.open) {
-            loadTeamRequests().catch(console.error);
-            scrollToTeamPanel('teamRequestsPanel');
+          const openRequests = () => {
+            if (!willOpen) {
+              renderTeamsSection();
+              return;
+            }
+            loadTeamRequests().then(() => scrollToTeamPanel('teamRequestsPanel')).catch(console.error);
+          };
+          if (!(teams.view === 'profile' && Number(teams.selectedTeamId || 0) === myTeamId)) {
+            loadTeamProfile(myTeamId).then(openRequests).catch(console.error);
           } else {
-            renderTeamsSection();
+            openRequests();
           }
           return;
         }
@@ -11807,8 +11875,12 @@
           return;
         }
         if (action === 'team-retry-profile') {
-          const teamId = Number(state.settings.productivity.teams.selectedTeamId || state.settings.productivity.teams.my?.team_id || 0);
-          if (teamId > 0) loadTeamProfile(teamId).catch(console.error);
+          const teams = state.settings.productivity.teams;
+          const teamId = Number(teams.selectedTeamId || teams.my?.team_id || 0);
+          if (teamId > 0) {
+            teams.members.open = false;
+            loadTeamProfile(teamId).catch(console.error);
+          }
           return;
         }
         if (action === 'team-retry-requests') {
@@ -11831,12 +11903,23 @@
         }
         if (action === 'team-style-open') {
           const teams = state.settings.productivity.teams;
-          if (teams.style.open) {
-            teams.style.open = false;
-            renderTeamsSection();
-          } else {
-            teams.requests.open = false;
+          const myTeamId = Number(teams.my?.team_id || 0);
+          if (myTeamId <= 0) return;
+          const willOpen = !teams.style.open;
+          teams.style.open = willOpen;
+          teams.requests.open = false;
+          teams.members.open = false;
+          const openStyle = () => {
+            if (!willOpen) {
+              renderTeamsSection();
+              return;
+            }
             loadTeamStyleOptions().then(() => scrollToTeamPanel('teamStylePanel')).catch(console.error);
+          };
+          if (!(teams.view === 'profile' && Number(teams.selectedTeamId || 0) === myTeamId)) {
+            loadTeamProfile(myTeamId).then(openStyle).catch(console.error);
+          } else {
+            openStyle();
           }
           return;
         }
@@ -11931,17 +12014,28 @@
         if (action === 'team-open') {
           const teamId = Number(target.dataset.teamId || 0);
           const teams = state.settings.productivity.teams;
-          if (teamId > 0 && teams.view === 'profile' && Number(teams.selectedTeamId || 0) === teamId) {
+          const myTeamId = Number(teams.my?.team_id || 0);
+          if (teamId <= 0) return;
+          if (teams.view === 'profile' && Number(teams.selectedTeamId || 0) === teamId) {
             teams.view = 'list';
             teams.profile = null;
             teams.selectedTeamId = null;
+            teams.members.open = false;
+            teams.requests.open = false;
+            teams.style.open = false;
             state.settings.productivity.leaderboard.selectedUserId = null;
             state.settings.productivity.leaderboard.profile = null;
             state.settings.productivity.leaderboard.profileLoading = false;
             renderTeamsSection();
             return;
           }
-          if (teamId > 0) loadTeamProfile(teamId).catch(console.error);
+          teams.members.open = (myTeamId > 0 && teamId === myTeamId);
+          teams.requests.open = false;
+          teams.style.open = false;
+          loadTeamProfile(teamId).then(() => {
+            if (teamId === myTeamId) scrollToTeamPanel('teamMembersPanel');
+            else scrollToTeamPanel(`leaderboardTeamPanel-${teamId}`);
+          }).catch(console.error);
           return;
         }
         if (action === 'team-join-manage') {
@@ -11972,6 +12066,7 @@
           teams.view = 'list';
           teams.profile = null;
           teams.selectedTeamId = null;
+          teams.members.open = false;
           renderTeamsManageRoute();
           return;
         }
@@ -11980,24 +12075,46 @@
         if (action === 'team-req-reject') { const requestId = Number(target.dataset.requestId || 0); if (requestId > 0) actionRequestReject(requestId).catch(console.error); return; }
         if (action === 'team-requests-open') {
           const teams = state.settings.productivity.teams;
-          teams.requests.open = !teams.requests.open;
+          const myTeamId = Number(teams.my?.team_id || 0);
+          if (myTeamId <= 0) return;
+          const willOpen = !teams.requests.open;
+          teams.requests.open = willOpen;
           teams.style.open = false;
+          teams.members.open = false;
           teams.requests.offset = 0;
-          if (teams.requests.open) {
+          const openRequests = () => {
+            if (!willOpen) {
+              renderTeamsManageRoute();
+              return;
+            }
             loadTeamRequests().then(() => scrollToTeamPanel('teamRequestsPanel')).catch(console.error);
+          };
+          if (!(teams.view === 'profile' && Number(teams.selectedTeamId || 0) === myTeamId)) {
+            loadTeamProfile(myTeamId).then(openRequests).catch(console.error);
           } else {
-            renderTeamsManageRoute();
+            openRequests();
           }
           return;
         }
         if (action === 'team-style-open') {
           const teams = state.settings.productivity.teams;
-          if (teams.style.open) {
-            teams.style.open = false;
-            renderTeamsManageRoute();
-          } else {
-            teams.requests.open = false;
+          const myTeamId = Number(teams.my?.team_id || 0);
+          if (myTeamId <= 0) return;
+          const willOpen = !teams.style.open;
+          teams.style.open = willOpen;
+          teams.requests.open = false;
+          teams.members.open = false;
+          const openStyle = () => {
+            if (!willOpen) {
+              renderTeamsManageRoute();
+              return;
+            }
             loadTeamStyleOptions().then(() => scrollToTeamPanel('teamStylePanel')).catch(console.error);
+          };
+          if (!(teams.view === 'profile' && Number(teams.selectedTeamId || 0) === myTeamId)) {
+            loadTeamProfile(myTeamId).then(openStyle).catch(console.error);
+          } else {
+            openStyle();
           }
           return;
         }

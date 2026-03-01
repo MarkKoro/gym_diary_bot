@@ -3238,8 +3238,6 @@ async def measurements_overview(ctx: AuthCtx = Depends(get_auth_ctx)):
         base_items = [item for item in MEASUREMENT_ITEMS if item["category"] == code]
         items = list(base_items)
         items.extend(custom_by_category.get(code, []))
-        if not items:
-            continue
         category_items: list[dict] = []
         for item in items:
             history = await get_measurement_history(user_id, item["code"], cache, items_map, limit=2)
