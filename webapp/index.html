@@ -635,7 +635,7 @@
         isolation: isolate;
       }
 
-      .finish-fab.frame-fab::before {
+      .frame-fab::before {
         content: '';
         position: absolute;
         inset: 0;
@@ -651,28 +651,37 @@
         mask-composite: exclude;
       }
 
-      .finish-fab.frame-fab.frame_first_set::before { background: linear-gradient(90deg, #f59e0b, #fbbf24); }
-      .finish-fab.frame-fab.frame_check::before { background: linear-gradient(90deg, #10b981, #34d399); }
-      .finish-fab.frame-fab.frame_fire::before { background: linear-gradient(90deg, #fb7185, #f97316); }
-      .finish-fab.frame-fab.frame_fuse::before { background: linear-gradient(90deg, #f43f5e, #f59e0b, #ef4444); }
-      .finish-fab.frame-fab.frame_toolbox::before { background: linear-gradient(90deg, #14b8a6, #06b6d4); }
-      .finish-fab.frame-fab.frame_lab::before { background: linear-gradient(90deg, #22d3ee, #6366f1); }
-      .finish-fab.frame-fab.frame_brick::before { background: repeating-linear-gradient(90deg, #b45309 0 10px, #92400e 10px 20px); }
-      .finish-fab.frame-fab.frame_crane::before { background: linear-gradient(90deg, #f59e0b, #fcd34d, #64748b); }
-      .finish-fab.frame-fab.frame_gear::before { background: repeating-linear-gradient(135deg, #64748b 0 6px, #94a3b8 6px 12px); }
-      .finish-fab.frame-fab.frame_runner::before { background: linear-gradient(90deg, #06b6d4, #0ea5e9, #3b82f6); }
-      .finish-fab.frame-fab.frame_finish::before { background: repeating-linear-gradient(90deg, #111827 0 8px, #f8fafc 8px 16px); }
-      .finish-fab.frame-fab.frame_puzzle::before { background: linear-gradient(90deg, #8b5cf6, #a78bfa); }
-      .finish-fab.frame-fab.frame_paint::before { background: linear-gradient(90deg, #ec4899, #8b5cf6, #06b6d4); }
-      .finish-fab.frame-fab.frame_star::before { background: radial-gradient(circle at 20% 20%, #fde68a, #f59e0b 70%); }
-      .finish-fab.frame-fab.frame_spy::before { background: linear-gradient(90deg, #334155, #0f172a); }
-      .finish-fab.frame-fab.frame_graph::before { background: linear-gradient(90deg, #22c55e, #16a34a, #0ea5e9); }
-      .finish-fab.frame-fab.frame_gym::before { background: linear-gradient(90deg, #991b1b, #dc2626, #b91c1c); }
-      .finish-fab.frame-fab.frame_coach::before { background: linear-gradient(90deg, #1d4ed8, #2563eb); }
-      .finish-fab.frame-fab.frame_chick::before { background: linear-gradient(90deg, #facc15, #fde047); }
-      .finish-fab.frame-fab.frame_boomerang::before { background: linear-gradient(90deg, #f97316, #ef4444, #f59e0b); }
-      .finish-fab.frame-fab.frame_wall::before { background: repeating-linear-gradient(90deg, #78716c 0 12px, #a8a29e 12px 24px); }
-      .finish-fab.frame-fab.frame_moon::before { background: radial-gradient(circle at 70% 30%, #c4b5fd, #312e81); }
+      .frame-fab.frame_first_set::before { background: linear-gradient(90deg, #f59e0b, #fbbf24); }
+      .frame-fab.frame_check::before { background: linear-gradient(90deg, #10b981, #34d399); }
+      .frame-fab.frame_fire::before { background: linear-gradient(90deg, #fb7185, #f97316); }
+      .frame-fab.frame_fuse::before { background: linear-gradient(90deg, #f43f5e, #f59e0b, #ef4444); }
+      .frame-fab.frame_toolbox::before { background: linear-gradient(90deg, #14b8a6, #06b6d4); }
+      .frame-fab.frame_lab::before { background: linear-gradient(90deg, #22d3ee, #6366f1); }
+      .frame-fab.frame_brick::before { background: repeating-linear-gradient(90deg, #b45309 0 10px, #92400e 10px 20px); }
+      .frame-fab.frame_crane::before { background: linear-gradient(90deg, #f59e0b, #fcd34d, #64748b); }
+      .frame-fab.frame_gear::before { background: repeating-linear-gradient(135deg, #64748b 0 6px, #94a3b8 6px 12px); }
+      .frame-fab.frame_runner::before { background: linear-gradient(90deg, #06b6d4, #0ea5e9, #3b82f6); }
+      .frame-fab.frame_finish::before { background: repeating-linear-gradient(90deg, #111827 0 8px, #f8fafc 8px 16px); }
+      .frame-fab.frame_puzzle::before { background: linear-gradient(90deg, #8b5cf6, #a78bfa); }
+      .frame-fab.frame_paint::before { background: linear-gradient(90deg, #ec4899, #8b5cf6, #06b6d4); }
+      .frame-fab.frame_star::before { background: radial-gradient(circle at 20% 20%, #fde68a, #f59e0b 70%); }
+      .frame-fab.frame_spy::before { background: linear-gradient(90deg, #334155, #0f172a); }
+      .frame-fab.frame_graph::before { background: linear-gradient(90deg, #22c55e, #16a34a, #0ea5e9); }
+      .frame-fab.frame_gym::before { background: linear-gradient(90deg, #991b1b, #dc2626, #b91c1c); }
+      .frame-fab.frame_coach::before { background: linear-gradient(90deg, #1d4ed8, #2563eb); }
+      .frame-fab.frame_chick::before { background: linear-gradient(90deg, #facc15, #fde047); }
+      .frame-fab.frame_boomerang::before { background: linear-gradient(90deg, #f97316, #ef4444, #f59e0b); }
+      .frame-fab.frame_wall::before { background: repeating-linear-gradient(90deg, #78716c 0 12px, #a8a29e 12px 24px); }
+      .frame-fab.frame_moon::before { background: radial-gradient(circle at 70% 30%, #c4b5fd, #312e81); }
+
+      .timer-pill.frame-fab,
+      #timerSheet .sheet.frame-fab,
+      #manageMenu.frame-fab,
+      #systemOpenBtn.frame-fab {
+        position: relative;
+        isolation: isolate;
+        overflow: hidden;
+      }
 
       .finish-fab[disabled]{
         opacity: 0.45;
@@ -3770,6 +3779,7 @@
         `).join('');
       }
       renderProductivityButton();
+      applyHeaderFrames();
       applyHeaderWidgetVisibility();
       renderProductivityTabs();
       if ((state.settings.productivity.activeTab || "people") === "people") renderLeaderboardSection();
@@ -6086,6 +6096,7 @@
       }
       const categories = measurements.categories || [];
       const categoryOptions = categories
+        .filter((category) => category.code !== 'custom')
         .map((category) => `<option value="${category.code}">${category.name}</option>`)
         .join('');
       const categoryBlocks = categories
@@ -6843,7 +6854,7 @@
         state.achievements.overview = data;
         state.achievements.loaded = true;
         applyTitleFrame();
-        applyFinishFabFrame();
+        applyHeaderFrames();
       } catch (e) {
         console.error(e);
         toast('Не удалось загрузить достижения');
@@ -7909,15 +7920,22 @@
         : (ROUTE_TITLES[state.currentRoute] || ROUTE_TITLES.today);
     }
 
-    function applyFinishFabFrame() {
-      const btn = document.getElementById('finishFab');
-      if (!btn) return;
-      btn.classList.remove('frame-fab');
-      Array.from(btn.classList).forEach((c) => { if (c.startsWith('frame_')) btn.classList.remove(c); });
+    function applyFrameToElement(el) {
+      if (!el) return;
+      el.classList.remove('frame-fab');
+      Array.from(el.classList).forEach((c) => { if (c.startsWith('frame_')) el.classList.remove(c); });
       const fc = state.achievements?.overview?.cosmetics?.title_frame_code;
       if (!fc) return;
-      btn.classList.add('frame-fab');
-      btn.classList.add(fc);
+      el.classList.add('frame-fab');
+      el.classList.add(fc);
+    }
+
+    function applyHeaderFrames() {
+      applyFrameToElement(document.getElementById('finishFab'));
+      applyFrameToElement(document.getElementById('timerPill'));
+      applyFrameToElement(document.querySelector('#timerSheet .sheet'));
+      applyFrameToElement(document.getElementById('manageMenu'));
+      applyFrameToElement(document.getElementById('systemOpenBtn'));
     }
 
     function applyTitleFrame() {
@@ -7926,17 +7944,17 @@
       el.classList.remove('title-frame');
       Array.from(el.classList).forEach((c) => { if (c.startsWith('frame_')) el.classList.remove(c); });
       if (state.currentRoute !== 'today') {
-        applyFinishFabFrame();
+        applyHeaderFrames();
         return;
       }
       const fc = state.achievements?.overview?.cosmetics?.title_frame_code;
       if (!fc) {
-        applyFinishFabFrame();
+        applyHeaderFrames();
         return;
       }
       el.classList.add('title-frame');
       el.classList.add(fc);
-      applyFinishFabFrame();
+      applyHeaderFrames();
     }
 
 
