@@ -677,9 +677,14 @@
 
       .timer-pill.frame-fab,
       #timerSheet .sheet.frame-fab,
-      #manageMenu.frame-fab,
       #systemOpenBtn.frame-fab {
         position: relative;
+        isolation: isolate;
+        overflow: hidden;
+      }
+
+      .manage-menu.frame-fab {
+        position: fixed;
         isolation: isolate;
         overflow: hidden;
       }
