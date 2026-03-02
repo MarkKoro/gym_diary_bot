@@ -296,9 +296,9 @@
     .loader-inline { width: 18px; height: 18px; border: 2px solid color-mix(in srgb, var(--text) 26%, transparent); border-top-color: var(--accent); border-radius: 999px; animation: spin 0.9s linear infinite; display: inline-block; vertical-align: middle; margin-right: 6px; }
     @keyframes spin { to { transform: rotate(360deg); } }
     .manage-menu {
-      position: absolute;
-      top: 52px;
-      right: 0;
+      position: fixed;
+      top: 0;
+      left: 0;
       background: var(--card);
       border: 1px solid var(--border);
       border-radius: 14px;
@@ -306,6 +306,7 @@
       padding: 8px;
       display: none;
       min-width: 200px;
+      max-width: min(260px, calc(100vw - 16px));
       z-index: 24;
     }
     .manage-menu.open { display: grid; gap: 6px; }
@@ -10130,6 +10131,8 @@
         if (!document.hidden) refreshAppData('visibility');
       });
       window.addEventListener('focus', () => refreshAppData('focus'));
+      window.addEventListener('resize', positionManageMenu);
+      window.addEventListener('scroll', positionManageMenu, true);
     }
 
     function setManageMenu(open) {
@@ -10138,6 +10141,33 @@
       state.manage.menuOpen = open;
       menu.classList.toggle('open', open);
       menu.setAttribute('aria-hidden', open ? 'false' : 'true');
+      if (open) positionManageMenu();
+    }
+
+    function positionManageMenu() {
+      const menu = document.getElementById('manageMenu');
+      const trigger = document.getElementById('manageExerciseBtn');
+      if (!menu || !trigger || !menu.classList.contains('open')) return;
+
+      menu.style.left = '0px';
+      menu.style.top = '0px';
+      const triggerRect = trigger.getBoundingClientRect();
+      const menuRect = menu.getBoundingClientRect();
+      const viewportWidth = window.innerWidth || document.documentElement.clientWidth || 0;
+      const viewportHeight = window.innerHeight || document.documentElement.clientHeight || 0;
+      const gap = 8;
+
+      const maxLeft = Math.max(gap, viewportWidth - menuRect.width - gap);
+      let left = triggerRect.right - menuRect.width;
+      left = Math.max(gap, Math.min(left, maxLeft));
+
+      let top = triggerRect.bottom + gap;
+      if (top + menuRect.height > viewportHeight - gap) {
+        top = Math.max(gap, triggerRect.top - menuRect.height - gap);
+      }
+
+      menu.style.left = `${Math.round(left)}px`;
+      menu.style.top = `${Math.round(top)}px`;
     }
 
     function toggleManageMenu() {

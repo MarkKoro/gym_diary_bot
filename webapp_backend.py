@@ -2016,11 +2016,35 @@ async def day_today(ctx: AuthCtx = Depends(get_auth_ctx)):
     wpw, active_days = await _load_user_settings(user_id)
     completed = await get_active_day_completions(user_id)
     today = _today_date()
-    suggested = 1
-    for d, _ in active_days:
-        if d not in completed:
-            suggested = int(d)
-            break
+    active_day_indexes = [int(d) for d, _ in active_days]
+
+    suggested = active_day_indexes[0] if active_day_indexes else 1
+
+    # 1) Приоритет у расписания: если на сегодня назначен конкретный день, открываем его.
+    reminders = await list_user_reminders(user_id)
+    if reminders and active_day_indexes:
+        tz_name = await get_user_timezone(user_id)
+        zone = resolve_user_zone(tz_name)
+        today_dow = datetime.now(zone).weekday()
+        dow_to_day_no: dict[int, int] = {}
+        for day_no, dow, _, _ in reminders:
+            try:
+                day_no_val = int(day_no)
+                dow_val = int(dow)
+            except (TypeError, ValueError):
+                continue
+            if day_no_val in active_day_indexes and 0 <= dow_val <= 6 and dow_val not in dow_to_day_no:
+                dow_to_day_no[dow_val] = day_no_val
+        mapped_day = dow_to_day_no.get(today_dow)
+        if mapped_day in active_day_indexes:
+            suggested = int(mapped_day)
+
+    # 2) Без расписания — первый незавершённый активный день.
+    elif active_day_indexes:
+        for day_index in active_day_indexes:
+            if day_index not in completed:
+                suggested = int(day_index)
+                break
 
     return {
         "date": _human_date(today),
