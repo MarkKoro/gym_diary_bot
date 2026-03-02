@@ -3828,7 +3828,11 @@ def measurement_categories_list(
     categories.extend(MEASUREMENT_CATEGORIES)
     categories.extend(user_categories)
     custom_codes = {category.get("code") for category in user_categories}
-    if include_custom_fallback and custom_items and MEASUREMENT_CUSTOM_CATEGORY["code"] not in custom_codes:
+    has_uncategorized_custom_items = any(
+        (item.get("category") or "").strip() == MEASUREMENT_CUSTOM_CATEGORY["code"]
+        for item in custom_items
+    )
+    if include_custom_fallback and has_uncategorized_custom_items and MEASUREMENT_CUSTOM_CATEGORY["code"] not in custom_codes:
         categories.append(MEASUREMENT_CUSTOM_CATEGORY)
     return categories
 
