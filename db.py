@@ -5152,20 +5152,8 @@ async def fetch_team_profile(team_id: int, viewer_user_id: int, *, include_membe
         return None
 
     async with connect_db() as db:
-        cur = await db.execute(
-            """
-            SELECT role
-            FROM team_members
-            WHERE team_id=? AND user_id=? AND left_at IS NULL
-            LIMIT 1
-            """,
-            (team_id, viewer_user_id),
-        )
-        role_row = await cur.fetchone()
-
         members = None
-        if role_row or include_members_for_admin:
-            cur = await db.execute(
+        cur = await db.execute(
                 """
                 WITH completed_sessions AS (
                     SELECT s.id, s.user_id, s.date, s.day_index, s.system_id
@@ -5256,32 +5244,32 @@ async def fetch_team_profile(team_id: int, viewer_user_id: int, *, include_membe
                 """,
                 (team_id,),
             )
-            rows = await cur.fetchall()
-            members = []
-            for row in rows:
-                m = {
+        rows = await cur.fetchall()
+        members = []
+        for row in rows:
+            m = {
+                "sessions_28": int(row[3] or 0),
+                "training_days_28": int(row[4] or 0),
+                "training_weeks_8": int(row[5] or 0),
+                "sets_28": int(row[6] or 0),
+                "volume_28": float(row[7] or 0),
+                "avg_weighted_reps": float(row[8] or 0),
+                "active_exercise_count": int(row[9] or 0),
+                "completion_ratio": float(row[10] or 0),
+                "progression_index": float(row[11] or 0),
+            }
+            members.append(
+                {
+                    "user_id": int(row[0]),
+                    "username": (row[1] or "").strip() or f"athlete_{int(row[0])}",
+                    "role": (row[2] or "private"),
+                    "score": int(round(_leaderboard_score(m) * 100)),
                     "sessions_28": int(row[3] or 0),
                     "training_days_28": int(row[4] or 0),
-                    "training_weeks_8": int(row[5] or 0),
-                    "sets_28": int(row[6] or 0),
-                    "volume_28": float(row[7] or 0),
-                    "avg_weighted_reps": float(row[8] or 0),
-                    "active_exercise_count": int(row[9] or 0),
-                    "completion_ratio": float(row[10] or 0),
-                    "progression_index": float(row[11] or 0),
+                    "title_frame_code": (row[12] or None),
                 }
-                members.append(
-                    {
-                        "user_id": int(row[0]),
-                        "username": (row[1] or "").strip() or f"athlete_{int(row[0])}",
-                        "role": (row[2] or "private"),
-                        "score": int(round(_leaderboard_score(m) * 100)),
-                        "sessions_28": int(row[3] or 0),
-                        "training_days_28": int(row[4] or 0),
-                        "title_frame_code": (row[12] or None),
-                    }
-                )
-            members.sort(key=lambda item: (-int(item["score"]), -int(item["sessions_28"]), int(item["user_id"])))
+            )
+        members.sort(key=lambda item: (-int(item["score"]), -int(item["sessions_28"]), int(item["user_id"])))
 
     return {"team": summary, "members": members}
 
