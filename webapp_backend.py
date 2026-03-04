@@ -136,6 +136,7 @@ from db import (
     upsert_team_daily_scores,
     list_team_achievements,
     count_team_pending_requests,
+    has_pending_join_request,
 )
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -5099,6 +5100,45 @@ async def teams_join_by_code(payload: dict = Body(default_factory=dict), ctx: Au
     return {'ok': True, 'status': 'requested'}
 
 
+@app.post('/teams/{team_id}/join')
+async def teams_join_open(team_id: int, ctx: AuthCtx = Depends(get_auth_ctx)):
+    user_id = int(ctx.user_id)
+    if await get_user_team(user_id):
+        raise HTTPException(status_code=400, detail='already_in_team')
+    if not await get_user_leaderboard_visible(user_id):
+        raise HTTPException(status_code=400, detail='Включи публичность, чтобы участвовать в командах')
+    profile = await fetch_team_profile(int(team_id), user_id)
+    if not profile:
+        raise HTTPException(status_code=404, detail='team_not_found')
+    if not bool(profile.get('team', {}).get('is_open')):
+        raise HTTPException(status_code=400, detail='team_closed')
+    try:
+        await join_team_direct(int(team_id), user_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {'ok': True, 'status': 'joined'}
+
+
+@app.post('/teams/{team_id}/request')
+async def teams_request_join(team_id: int, ctx: AuthCtx = Depends(get_auth_ctx)):
+    user_id = int(ctx.user_id)
+    if await get_user_team(user_id):
+        raise HTTPException(status_code=400, detail='already_in_team')
+    if not await get_user_leaderboard_visible(user_id):
+        raise HTTPException(status_code=400, detail='Включи публичность, чтобы участвовать в командах')
+    profile = await fetch_team_profile(int(team_id), user_id)
+    if not profile:
+        raise HTTPException(status_code=404, detail='team_not_found')
+    if bool(profile.get('team', {}).get('is_open')):
+        raise HTTPException(status_code=400, detail='team_open_use_direct_join')
+    try:
+        await create_or_get_join_request(int(team_id), user_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {'ok': True, 'status': 'requested'}
+
+
+
 @app.post('/teams/leave')
 async def teams_leave(ctx: AuthCtx = Depends(get_auth_ctx)):
     await leave_team(int(ctx.user_id))
@@ -5246,6 +5286,13 @@ async def teams_leaderboard(
         earned = set(await list_team_achievements(my_team_id))
         my_allowed = team_style_options_for_codes(earned)
 
+    pending_request_team_ids: set[int] = set()
+    if not my_team_id:
+        for item in page:
+            team_id = int(item['team_id'])
+            if await has_pending_join_request(team_id, int(ctx.user_id)):
+                pending_request_team_ids.add(team_id)
+
     items = []
     for item in page:
         team_id = int(item['team_id'])
@@ -5279,6 +5326,8 @@ async def teams_leaderboard(
                 'frame_code': frame_code,
                 'bg_code': bg_code,
                 'emblem_code': emblem_code,
+                'is_open': bool(item.get('is_open')),
+                'has_pending_request': team_id in pending_request_team_ids,
             }
         )
 
@@ -5399,6 +5448,11 @@ async def teams_profile(team_id: int, ctx: AuthCtx = Depends(get_auth_ctx)):
     bg_code = team.get('bg_code') if team.get('bg_code') in allowed['allowed_bgs'] else None
     emblem_code = team.get('emblem_code') if team.get('emblem_code') in allowed['allowed_emblems'] else None
 
+    has_pending_request = False
+    me_team = await get_user_team(int(ctx.user_id))
+    if not me_team:
+        has_pending_request = await has_pending_join_request(int(team['team_id']), int(ctx.user_id))
+
     return {
         'team': {
             'rank': int(team['rank']),
@@ -5413,6 +5467,8 @@ async def teams_profile(team_id: int, ctx: AuthCtx = Depends(get_auth_ctx)):
             'frame_code': frame_code,
             'bg_code': bg_code,
             'emblem_code': emblem_code,
+            'is_open': bool(team.get('is_open')),
+            'has_pending_request': bool(has_pending_request),
         },
         'members': members,
     }
