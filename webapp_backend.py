@@ -5122,8 +5122,9 @@ async def teams_delete(team_id: int, ctx: AuthCtx = Depends(get_auth_ctx)):
 
 @app.post('/teams/{team_id}/members/{member_user_id}/remove')
 async def teams_remove_member(team_id: int, member_user_id: int, ctx: AuthCtx = Depends(get_auth_ctx)):
+    is_admin = int(ctx.tg_id) in ADMIN_IDS
     try:
-        await remove_team_member(int(team_id), int(ctx.user_id), int(member_user_id))
+        await remove_team_member(int(team_id), int(ctx.user_id), int(member_user_id), actor_is_admin=is_admin)
     except ValueError as exc:
         detail = str(exc)
         if detail == 'not_team_captain':
@@ -5141,9 +5142,10 @@ async def teams_set_member_role(
     payload: dict = Body(default_factory=dict),
     ctx: AuthCtx = Depends(get_auth_ctx),
 ):
+    is_admin = int(ctx.tg_id) in ADMIN_IDS
     role = str(payload.get('role') or '').strip().lower()
     try:
-        await set_team_member_role(int(team_id), int(ctx.user_id), int(member_user_id), role)
+        await set_team_member_role(int(team_id), int(ctx.user_id), int(member_user_id), role, actor_is_admin=is_admin)
     except ValueError as exc:
         detail = str(exc)
         if detail == 'not_team_captain':
@@ -5385,7 +5387,8 @@ async def teams_style(payload: dict = Body(default_factory=dict), ctx: AuthCtx =
 
 @app.get('/teams/{team_id}')
 async def teams_profile(team_id: int, ctx: AuthCtx = Depends(get_auth_ctx)):
-    profile = await fetch_team_profile(int(team_id), int(ctx.user_id))
+    is_admin = int(ctx.tg_id) in ADMIN_IDS
+    profile = await fetch_team_profile(int(team_id), int(ctx.user_id), include_members_for_admin=is_admin)
     if not profile:
         raise HTTPException(status_code=404, detail='team_not_found')
 

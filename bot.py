@@ -255,6 +255,8 @@ from db import (
     set_onboarding_completed,
     count_active_subscriptions,
     reset_ai_coach_quota,
+    list_all_teams,
+    delete_team,
 )
 from text_utils import normalize_whitespace
 from ui_texts import t, e, ONBOARDING_TIPS
@@ -8029,6 +8031,70 @@ async def degrant_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
+async def teams_admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    message = update.effective_message
+    if not user or user.id not in ADMIN_IDS:
+        if message:
+            await message.reply_text("Команда доступна только администратору.")
+        return
+    if not message:
+        return
+    text = (message.text or "").strip()
+    parts = text.split(maxsplit=2)
+    sub = parts[1].lower() if len(parts) > 1 else ""
+
+    if sub in {"", "help"}:
+        await message.reply_text(
+            "Управление командами:\n"
+            "/teams_admin list [limit] [offset] — список команд\n"
+            "/teams_admin delete <team_id> — удалить команду"
+        )
+        return
+
+    if sub == "list":
+        extra = (parts[2] if len(parts) > 2 else "").split()
+        limit = 20
+        offset = 0
+        try:
+            if len(extra) >= 1:
+                limit = max(1, min(int(extra[0]), 100))
+            if len(extra) >= 2:
+                offset = max(0, int(extra[1]))
+        except ValueError:
+            await message.reply_text("Формат: /teams_admin list [limit] [offset]")
+            return
+        items, total = await list_all_teams(limit=limit, offset=offset)
+        if not items:
+            await message.reply_text("Команды не найдены.")
+            return
+        lines = [f"Всего команд: {total}. Показаны {offset + 1}-{offset + len(items)}:"]
+        for item in items:
+            lines.append(
+                f"#{item['team_id']} · {item['name']} · участников: {item['members_count']} · код: {item['join_code']}"
+            )
+        await message.reply_text("\n".join(lines[:80]))
+        return
+
+    if sub == "delete":
+        if len(parts) < 3:
+            await message.reply_text("Формат: /teams_admin delete <team_id>")
+            return
+        try:
+            team_id = int(parts[2].split()[0])
+        except ValueError:
+            await message.reply_text("team_id должен быть числом.")
+            return
+        ok = await delete_team(team_id)
+        if not ok:
+            await message.reply_text("Команда не найдена.")
+            return
+        await message.reply_text(f"✅ Команда #{team_id} удалена.")
+        return
+
+    await message.reply_text("Неизвестное действие. Используй /teams_admin help")
+
+
 async def handle_broadcast_text(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
@@ -13990,6 +14056,7 @@ def main():
     app.add_handler(CommandHandler("admin_ai_pass", ai_pass_command))
     app.add_handler(CommandHandler(("grant", "grunt"), grant_command))
     app.add_handler(CommandHandler("degrant", degrant_command))
+    app.add_handler(CommandHandler("teams_admin", teams_admin_command))
     app.add_handler(MessageHandler(filters.VIDEO | filters.Document.VIDEO, capture_intro_video))
     app.add_handler(CallbackQueryHandler(on_subscription_menu, pattern="^menu:subscription$"))
     app.add_handler(CallbackQueryHandler(on_subscription_choose, pattern="^sub:"))
