@@ -2875,14 +2875,17 @@ async def update_exercise_muscle_group(
     if mg_raw is None:
         mg_value: str | None = None
     elif isinstance(mg_raw, str):
-        mg_value = mg_raw.strip()
+        mg_value = mg_raw.strip().lower()
         if mg_value == "":
             mg_value = None
     else:
         raise HTTPException(status_code=400, detail="Некорректная группа")
 
-    if mg_value is not None and mg_value not in MUSCLE_CODES:
-        raise HTTPException(status_code=400, detail="Некорректная группа")
+    if mg_value is not None:
+        custom_groups = await list_user_muscle_groups(user_id)
+        allowed_groups = set(MUSCLE_CODES) | {str(code).strip().lower() for code, _name in custom_groups if str(code).strip()}
+        if mg_value not in allowed_groups:
+            raise HTTPException(status_code=400, detail="Некорректная группа")
 
     async with db.connect_db() as conn:
         cur = await conn.execute(

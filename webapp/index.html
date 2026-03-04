@@ -3031,6 +3031,9 @@
         historyCache: {},
         currentExerciseId: null,
         currentExerciseName: '',
+        currentExerciseMuscleGroup: '',
+        bindGroups: [],
+        bindLoading: false,
         historyIndex: {},
       },
       settings: {
@@ -5381,6 +5384,11 @@
       return formatMuscleGroup(code);
     }
 
+
+    function isUnassignedMuscleGroup(value) {
+      return normalizeMuscleKey(value) === 'none';
+    }
+
     function renderGroupsView() {
       const content = document.getElementById('libraryContent');
       content.innerHTML = '';
@@ -5487,6 +5495,14 @@
       title.className = 'card-title';
       title.textContent = state.library.history?.exercise_name || state.library.currentExerciseName || 'Упражнение';
       top.append(back, title);
+      if (isUnassignedMuscleGroup(state.library.currentExerciseMuscleGroup)) {
+        const bindBtn = document.createElement('button');
+        bindBtn.type = 'button';
+        bindBtn.className = 'btn';
+        bindBtn.textContent = 'Привязать к';
+        bindBtn.addEventListener('click', () => openLibraryBindGroups());
+        top.appendChild(bindBtn);
+      }
       content.appendChild(top);
 
       if (state.library.historyLoading) {
@@ -5585,6 +5601,90 @@
         emptyChart.textContent = 'Нет данных для выбранного периода.';
         content.appendChild(emptyChart);
       }
+    }
+
+
+    function renderLibraryBindGroups() {
+      const content = document.getElementById('libraryContent');
+      content.innerHTML = '';
+
+      const top = document.createElement('div');
+      top.className = 'library-topbar';
+      const back = document.createElement('button');
+      back.className = 'library-back';
+      back.textContent = '← Вернуться к упражнению';
+      back.addEventListener('click', () => {
+        state.library.view = 'details';
+        renderLibrary();
+      });
+      const title = document.createElement('div');
+      title.className = 'card-title';
+      title.textContent = 'Выбери группу мышц';
+      top.append(back, title);
+      content.appendChild(top);
+
+      if (state.library.bindLoading) {
+        const loading = document.createElement('div');
+        loading.className = 'library-empty';
+        loading.textContent = 'Загрузка…';
+        content.appendChild(loading);
+        return;
+      }
+
+      const groups = state.library.bindGroups || [];
+      if (!groups.length) {
+        const empty = document.createElement('div');
+        empty.className = 'library-empty';
+        empty.textContent = 'Нет групп. Создай свою группу и привяжи упражнение.';
+        content.appendChild(empty);
+      } else {
+        const grid = document.createElement('div');
+        grid.className = 'group-grid';
+        groups.forEach((group) => {
+          const card = document.createElement('div');
+          card.className = 'group-card';
+          const name = document.createElement('div');
+          name.className = 'group-name';
+          name.textContent = group.name || formatMuscleGroup(group.code);
+          const meta = document.createElement('div');
+          meta.className = 'group-count';
+          meta.textContent = group.is_custom ? 'Своя группа' : 'Группа мышц';
+          card.append(name, meta);
+          card.addEventListener('click', () => bindLibraryExerciseToGroup(group.code));
+          grid.appendChild(card);
+        });
+        content.appendChild(grid);
+      }
+
+      const actions = document.createElement('div');
+      actions.className = 'manage-actions';
+      const addGroupBtn = document.createElement('button');
+      addGroupBtn.type = 'button';
+      addGroupBtn.className = 'btn';
+      addGroupBtn.textContent = 'Создать группу мышц';
+      addGroupBtn.addEventListener('click', () => {
+        openTextPrompt({
+          title: 'Новая группа мышц',
+          placeholder: 'Название группы',
+          confirmLabel: 'Создать группу',
+          onConfirm: async (value) => {
+            const name = (value || '').trim();
+            if (!name) return;
+            try {
+              await apiFetch('/gymapi/catalog/group', {
+                method: 'POST',
+                body: JSON.stringify({ name }),
+              });
+              toast('Группа добавлена ✅');
+              await loadLibraryBindGroups();
+            } catch (_) {
+              toast('Ошибка связи');
+            }
+          },
+        });
+      });
+      actions.appendChild(addGroupBtn);
+      content.appendChild(actions);
     }
 
     function renderLibraryRunningHistory(container) {
@@ -5741,6 +5841,7 @@
       if (state.library.view === 'groups') renderGroupsView();
       else if (state.library.view === 'list') renderExercisesView();
       else if (state.library.view === 'details') renderHistoryDetails();
+      else if (state.library.view === 'bind') renderLibraryBindGroups();
     }
 
     function settingsDayLabel(day) {
@@ -7833,8 +7934,52 @@
       state.library.historyLoading = true;
       state.library.currentExerciseId = ex.id;
       state.library.currentExerciseName = ex.name;
+      state.library.currentExerciseMuscleGroup = ex.muscle_group || '';
       renderLibrary();
       await loadExerciseHistory(ex.id);
+    }
+
+    async function loadLibraryBindGroups() {
+      state.library.bindLoading = true;
+      renderLibrary();
+      try {
+        const data = await apiFetch('/gymapi/catalog/groups', { silent: true });
+        state.library.bindGroups = (data.groups || []).filter((group) => normalizeMuscleKey(group.code) !== 'none');
+      } finally {
+        state.library.bindLoading = false;
+        renderLibrary();
+      }
+    }
+
+    async function openLibraryBindGroups() {
+      state.library.view = 'bind';
+      state.library.bindGroups = [];
+      await loadLibraryBindGroups();
+    }
+
+    async function bindLibraryExerciseToGroup(groupCode) {
+      const exerciseId = Number(state.library.currentExerciseId || 0);
+      const code = (groupCode || '').toString().trim().toLowerCase();
+      if (!exerciseId || !code) return;
+      try {
+        await apiFetch(`/gymapi/library/exercise/${exerciseId}/muscle`, {
+          method: 'PUT',
+          body: JSON.stringify({ muscle_group: code }),
+        });
+        state.library.currentExerciseMuscleGroup = code;
+        state.library.historyCache = {};
+        await loadLibraryGroups();
+        const targetGroup = (state.library.groups || []).find((group) => (group.code || '').toString().toLowerCase() === code);
+        if (targetGroup) {
+          await openGroup(targetGroup);
+        } else {
+          state.library.view = 'groups';
+          renderLibrary();
+        }
+        toast('Упражнение привязано ✅');
+      } catch (_) {
+        toast('Ошибка связи');
+      }
     }
 
     function filterHistoryPoints(points, rangeCode) {
@@ -8090,8 +8235,9 @@
       if (state.manage?.menuOpen) { setManageMenu(false); return; }
       if (state.manage?.mode === 'delete') { setManageMode('normal'); return; }
       if (state.currentRoute === 'library' && state.library.view !== 'groups') {
+        if (state.library.view === 'bind') { state.library.view = 'details'; renderLibrary(); return; }
         if (state.library.view === 'details') { state.library.view = 'list'; renderLibrary(); return; }
-      if (state.library.view === 'list') { state.library.view = 'groups'; renderLibrary(); return; }
+        if (state.library.view === 'list') { state.library.view = 'groups'; renderLibrary(); return; }
       }
       if (state.currentRoute === 'settings' && state.settings.view !== 'menu') {
         state.settings.view = 'menu';
@@ -8745,27 +8891,24 @@
       return sets.map((set) => formatSetDetail(set)).filter(Boolean).join(' • ');
     }
 
-    function findPreviousBestSet(previousSets = []) {
-      if (!previousSets.length) return null;
-      let best = previousSets[0];
-      previousSets.forEach((set) => {
-        const weight = Number(set.weight_kg || 0);
-        const bestWeight = Number(best.weight_kg || 0);
-        if (weight > bestWeight) { best = set; return; }
-        if (weight === bestWeight) {
-          const reps = Number(set.reps || 0);
-          const bestReps = Number(best.reps || 0);
-          if (reps > bestReps) { best = set; return; }
-          if (reps === bestReps) {
-            const seconds = Number(set.seconds || 0);
-            const bestSeconds = Number(best.seconds || 0);
-            if (seconds > bestSeconds) best = set;
-          }
-        }
-      });
-      const bestWeight = Number(best.weight_kg || 0);
-      if (bestWeight > 0) return best;
-      return previousSets[previousSets.length - 1] || best;
+    function summarizePreviousSets(previousSets = []) {
+      if (!Array.isArray(previousSets) || !previousSets.length) return '';
+      const normalized = previousSets.map((set) => ({
+        weight_kg: Number(set?.weight_kg || 0),
+        reps: Number(set?.reps || 0),
+        seconds: Number(set?.seconds || 0),
+      }));
+      const first = normalized[0];
+      const allSame = normalized.every((set) => (
+        set.weight_kg === first.weight_kg
+        && set.reps === first.reps
+        && set.seconds === first.seconds
+      ));
+      if (allSame) {
+        const detail = formatSetDetail(first);
+        return detail ? `${normalized.length}×${detail}` : '';
+      }
+      return formatSetDetail(normalized[normalized.length - 1]);
     }
 
     function updateLastSummary(exercise) {
@@ -8788,13 +8931,12 @@
         const latest = previousSets[previousSets.length - 1];
         applyDraftFromSet(exercise.user_exercise_id, latest);
       }
-      const best = findPreviousBestSet(previousSets);
-      if (!best) {
+      const detail = summarizePreviousSets(previousSets);
+      if (!detail) {
         summary.classList.remove('show');
         summary.textContent = '';
         return;
       }
-      const detail = formatSetDetail(best);
       const dateLabel = ctx.data?.previous_date ? ` (${ctx.data.previous_date})` : '';
       summary.textContent = detail ? `В прошлый раз${dateLabel}: ${detail}` : '';
       summary.classList.toggle('show', Boolean(detail));
@@ -8818,7 +8960,7 @@
       }
       const count = exercise.sets?.length || 0;
       if (!count) {
-        const prev = formatSetsCompact(exercise.previous_sets || []);
+        const prev = summarizePreviousSets(exercise.previous_sets || []);
         return prev ? `В прошлый раз: ${prev}` : 'Подходов пока нет';
       }
       const last = formatLastSet(exercise);

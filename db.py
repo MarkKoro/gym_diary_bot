@@ -2591,8 +2591,22 @@ async def list_user_library_groups(user_id: int):
             FROM user_exercises ue
             JOIN exercises e ON e.id=ue.exercise_id
             WHERE ue.user_id=?
+              AND (
+                EXISTS(
+                  SELECT 1
+                  FROM sets st
+                  JOIN sessions s ON s.id=st.session_id
+                  JOIN user_exercises ue_hist ON ue_hist.id=st.user_exercise_id
+                  WHERE s.user_id=? AND ue_hist.exercise_id=e.id AND st.is_warmup=0
+                )
+                OR EXISTS(
+                  SELECT 1
+                  FROM running_entries re
+                  WHERE re.user_id=? AND re.exercise_id=e.id AND re.is_draft=0
+                )
+              )
             """,
-            (user_id,),
+            (user_id, user_id, user_id),
         )
         rows = await cur.fetchall()
 
@@ -2621,6 +2635,25 @@ async def list_user_group_exercises(user_id: int, group_code: str, query: str | 
     if query:
         conditions.append("LOWER(e.name) LIKE ?")
         params.append(f"%{query.lower()}%")
+
+    conditions.append(
+        """
+        (
+            EXISTS(
+                SELECT 1
+                FROM sets st
+                JOIN sessions s ON s.id=st.session_id
+                JOIN user_exercises ue_hist ON ue_hist.id=st.user_exercise_id
+                WHERE s.user_id=ue.user_id AND ue_hist.exercise_id=e.id AND st.is_warmup=0
+            )
+            OR EXISTS(
+                SELECT 1
+                FROM running_entries re
+                WHERE re.user_id=ue.user_id AND re.exercise_id=e.id AND re.is_draft=0
+            )
+        )
+        """.strip()
+    )
 
     where_clause = " AND ".join(conditions)
     async with connect_db() as db:
