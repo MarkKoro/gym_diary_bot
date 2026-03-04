@@ -2571,10 +2571,11 @@
         </div>
         <div id="systemList" class="system-list"></div>
         <div class="system-create">
-          <div class="settings-row inline">
+          <div id="systemCreateRow" class="settings-row inline">
             <input id="systemNewName" class="settings-input" placeholder="Название системы">
             <button id="systemAddBtn" class="btn primary" disabled>Добавить</button>
           </div>
+          <div id="systemCreateBlockedHint" class="timer-hint hidden">Невозможно создать систему: у подопечного нет активной подписки.</div>
         </div>
       </div>
     </div>
@@ -3782,7 +3783,7 @@
     function renderProductivityButton() {
       const btn = document.getElementById('productivityBtn');
       if (!btn) return;
-      btn.classList.toggle('hidden', !state.settings.ui.showProductivityButton || !state.settings.leaderboardVisible || state.manage.mode === 'delete');
+      btn.classList.toggle('hidden', !!state.acting.userId || !state.settings.ui.showProductivityButton || !state.settings.leaderboardVisible || state.manage.mode === 'delete');
       const score = Number(state.settings.productivity.score) || 0;
       const angle = gaugeAngleFromScore(score);
       const needle = document.getElementById('productivityNeedleSmall');
@@ -3794,7 +3795,7 @@
     function applyHeaderWidgetVisibility() {
       const hideForDelete = state.manage.mode === 'delete';
       const productivityBtn = document.getElementById('productivityBtn');
-      if (productivityBtn) productivityBtn.classList.toggle('hidden', hideForDelete || !state.settings.ui.showProductivityButton || !state.settings.leaderboardVisible);
+      if (productivityBtn) productivityBtn.classList.toggle('hidden', !!state.acting.userId || hideForDelete || !state.settings.ui.showProductivityButton || !state.settings.leaderboardVisible);
       const systemBtn = document.getElementById('systemOpenBtn');
       if (systemBtn) systemBtn.classList.toggle('hidden', hideForDelete || !state.settings.ui.showSystemButton);
     }
@@ -3834,6 +3835,10 @@
     }
 
     function openProductivitySheet() {
+      if (state.acting.userId) {
+        toast('Хаб продуктивности недоступен в режиме тренера');
+        return;
+      }
       if (!state.settings.leaderboardVisible) {
         toast('Режим анонимности включён');
         return;
@@ -4953,6 +4958,9 @@
     function renderSystemsHub() {
       const systems = state.settings.systems;
       const list = document.getElementById('systemList');
+      const createRow = document.getElementById('systemCreateRow');
+      const blockedHint = document.getElementById('systemCreateBlockedHint');
+      const blockedByTraineeSubscription = !!state.acting.userId && !state.subscription.active;
       if (!list) return;
       if (systems.loading) {
         list.innerHTML = '<div class="muted-inline">Загружаем системы…</div>';
@@ -4990,6 +4998,8 @@
           </div>
         `;
       }).join('') || '<div class="muted-inline">Систем пока нет.</div>';
+      if (createRow) createRow.classList.toggle('hidden', blockedByTraineeSubscription);
+      if (blockedHint) blockedHint.classList.toggle('hidden', !blockedByTraineeSubscription);
     }
 
     function setSystemCreateButtonState() {
@@ -5031,6 +5041,10 @@
     }
 
     async function confirmCreateSystem() {
+      if (state.acting.userId && !state.subscription.active) {
+        toast('Невозможно создать систему: у подопечного нет активной подписки');
+        return;
+      }
       const input = document.getElementById('systemNewName');
       const name = (input?.value || '').trim();
       if (!name) return;
@@ -6126,6 +6140,30 @@
       }
     }
 
+    function updateCoachModeUI() {
+      const inCoachMode = !!state.acting.userId;
+      const hideInCoachMode = new Set(['achievements', 'subscription', 'settings']);
+      document.querySelectorAll('.menu-item[data-route]').forEach((btn) => {
+        const route = btn.dataset.route;
+        if (!route) return;
+        if (route === 'measurements') {
+          const traineeName = (state.acting.name || '').trim();
+          btn.textContent = inCoachMode && traineeName
+            ? `${ROUTE_TITLES.measurements} / ${traineeName}`
+            : ROUTE_TITLES.measurements;
+          return;
+        }
+        if (hideInCoachMode.has(route)) {
+          btn.classList.toggle('hidden', inCoachMode);
+        }
+      });
+      const teamsBtn = document.querySelector('.menu-item[data-action="open-teams"]');
+      if (teamsBtn) teamsBtn.classList.toggle('hidden', inCoachMode);
+      if (inCoachMode && ['achievements', 'subscription', 'settings', 'teams'].includes(state.currentRoute)) {
+        navigateTo('today', true);
+      }
+    }
+
     function updateActingBanner() {
       const banner = document.getElementById('actingHeaderText');
       if (!banner) return;
@@ -6133,6 +6171,8 @@
         banner.classList.add('hidden');
         banner.textContent = '';
         updateSettingsAccess();
+        updateCoachModeUI();
+        syncHeaderTitle();
         return;
       }
       const name = state.acting.name || 'подопечный';
@@ -6140,6 +6180,8 @@
       banner.textContent = `Режим тренера: ${name}${suffix}`;
       banner.classList.remove('hidden');
       updateSettingsAccess();
+      updateCoachModeUI();
+      syncHeaderTitle();
     }
 
     function renderTraineeSheet() {
@@ -8250,6 +8292,13 @@
     function syncHeaderTitle() {
       const header = document.getElementById('headerTitle');
       if (!header) return;
+      if (state.currentRoute === 'measurements') {
+        const traineeName = (state.acting?.name || '').trim();
+        header.textContent = traineeName
+          ? `${ROUTE_TITLES.measurements} / ${traineeName}`
+          : ROUTE_TITLES.measurements;
+        return;
+      }
       header.textContent = state.currentRoute === 'today'
         ? getTodayHeaderTitle()
         : (ROUTE_TITLES[state.currentRoute] || ROUTE_TITLES.today);
@@ -8300,8 +8349,8 @@
 
     function applyRoute(route) {
       const normalized = ROUTE_TITLES[route] ? route : 'today';
-      if (normalized === 'settings' && state.acting.userId) {
-        toast('Настройки недоступны в режиме тренера');
+      if (state.acting.userId && ['settings', 'achievements', 'subscription', 'teams'].includes(normalized)) {
+        toast('Раздел недоступен в режиме тренера');
         navigateTo('today', true);
         return;
       }
@@ -8335,6 +8384,7 @@
       });
       closeDrawer();
       updateSettingsAccess();
+      updateCoachModeUI();
       updateBackButton(normalized);
       if (normalized === 'library') {
         renderLibrary();
