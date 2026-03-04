@@ -3105,6 +3105,7 @@
             profileError: null,
             requests: { q: '', items: [], total: 0, offset: 0, limit: 20, loading: false, open: false, error: null, pendingCount: 0 },
             style: { loading: false, options: null, saving: false, open: false, error: null, selected: { frame_code: null, bg_code: null, emblem_code: null } },
+            roles: { open: false },
             members: { open: false },
             busy: { join: false, create: false, leave: false, accept: false, reject: false, styleSave: false, deleteTeam: false, removeMember: false, roleSave: false },
           },
@@ -4092,7 +4093,7 @@
           <button class="btn" data-action="team-copy-code" data-code="${escapeHtml(my.join_code || '')}">Скопировать код</button>
           <button class="btn ${teams.busy.leave ? 'btn-disabled' : ''}" ${teams.busy.leave ? 'disabled' : ''} data-action="team-leave">Покинуть</button>
           ${(state.isAdmin || my.role === 'captain') ? `<button class="btn ${teams.busy.deleteTeam ? 'btn-disabled' : ''}" ${teams.busy.deleteTeam ? 'disabled' : ''} data-action="team-delete" data-team-id="${my.team_id}">Удалить команду</button>` : ''}
-          ${my.role === 'captain' ? `<button class="btn" data-action="team-requests-open">Заявки${Number(teams.requests.pendingCount || 0) > 0 ? ' (' + Number(teams.requests.pendingCount) + ')' : ''}</button><button class="btn" data-action="team-style-open">Стиль</button>` : ''}
+          ${my.role === 'captain' ? `<button class="btn" data-action="team-requests-open">Заявки${Number(teams.requests.pendingCount || 0) > 0 ? ' (' + Number(teams.requests.pendingCount) + ')' : ''}</button><button class="btn" data-action="team-style-open">Стиль</button><button class="btn" data-action="team-roles-open">Роли</button>` : ''}
         </div>
       `;
     }
@@ -4241,12 +4242,11 @@
       const selectedTeam = selectedProfile.team || {};
       const selectedMembers = Array.isArray(selectedProfile.members) ? selectedProfile.members : [];
 
-      const buildMembersList = (members, teamId) => {
+      const buildMembersList = (members) => {
         const safe = Array.isArray(members) ? members : [];
         return safe.map((m) => {
           const isActive = Number(lb.selectedUserId || 0) === Number(m.user_id || 0);
           const roleCode = normalizeTeamMemberRole(m.role);
-          const canManageMember = Boolean((state.isAdmin || (isCaptain && isMyProfileOpen)) && Number(m.user_id || 0) !== Number(state.userId || 0));
           return `
             <div class="leader-item" id="teamLeaderItem-${m.user_id}">
               <button class="leader-row ${isActive ? 'active' : ''}" style="margin-top:6px;" data-action="leader-open" data-user-id="${m.user_id}">
@@ -4257,17 +4257,33 @@
                 </div>
                 <div class="timer-hint">${isActive ? 'Скрыть' : 'Открыть'}</div>
               </button>
+              ${isActive ? profileMarkup : ''}
+            </div>`;
+        }).join('') || '<div class="timer-hint" style="margin-top:8px;">Пока нет участников.</div>';
+      };
+
+      const buildRolesList = (members, teamId) => {
+        const safe = Array.isArray(members) ? members : [];
+        return safe.map((m) => {
+          const roleCode = normalizeTeamMemberRole(m.role);
+          const canManageMember = Boolean((state.isAdmin || (isCaptain && isMyProfileOpen)) && Number(m.user_id || 0) !== Number(state.userId || 0));
+          return `
+            <div class="leader-row" style="margin-top:6px; cursor:default;">
+              <div class="leader-rank">${Math.max(0, Math.min(100, Number(m.score || 0)))}</div>
+              <div style="flex:1; min-width:0;">
+                <div class="leader-name">@${escapeHtml(m.username || ('athlete_'+m.user_id))}</div>
+                <div class="team-meta">${escapeHtml(teamMemberRoleBadge(roleCode))}</div>
+              </div>
               ${canManageMember ? `
-                <div style="display:flex; gap:6px; flex-wrap:wrap; margin-top:6px; margin-left:52px;">
+                <div style="display:flex; gap:6px; flex-wrap:wrap; justify-content:flex-end;">
                   <select class="settings-input" style="max-width:170px;" data-role-select-user-id="${m.user_id}">
                     <option value="private" ${roleCode === 'private' ? 'selected' : ''}>Рядовой</option>
                     <option value="colonel" ${roleCode === 'colonel' ? 'selected' : ''}>Полковник</option>
                   </select>
-                  <button class="btn small-btn ${teams.busy.roleSave ? 'btn-disabled' : ''}" ${teams.busy.roleSave ? 'disabled' : ''} data-action="team-member-role-save" data-team-id="${Number(teamId || 0)}" data-user-id="${m.user_id}">Сохранить роль</button>
+                  <button class="btn small-btn ${teams.busy.roleSave ? 'btn-disabled' : ''}" ${teams.busy.roleSave ? 'disabled' : ''} data-action="team-member-role-save" data-team-id="${Number(teamId || 0)}" data-user-id="${m.user_id}">Сохранить</button>
                   <button class="btn small-btn ${teams.busy.removeMember ? 'btn-disabled' : ''}" ${teams.busy.removeMember ? 'disabled' : ''} data-action="team-member-remove" data-team-id="${Number(teamId || 0)}" data-user-id="${m.user_id}">Исключить</button>
                 </div>
-              ` : ''}
-              ${isActive ? profileMarkup : ''}
+              ` : `<div class="team-meta">${escapeHtml(teamMemberRoleBadge(roleCode))}</div>`}
             </div>`;
         }).join('') || '<div class="timer-hint" style="margin-top:8px;">Пока нет участников.</div>';
       };
@@ -4310,6 +4326,16 @@
               ` : `<div class="timer-hint" style="margin-top:8px;">${escapeHtml(teams.style.error || 'Загружаем стили…')}</div>`}
             </div>`;
         }
+        if (isCaptain && teams.roles.open) {
+          return `
+            <div class="card" style="padding:12px; margin-top:10px;" id="teamRolesPanel">
+              <div class="card-title">Роли участников</div>
+              <div class="team-meta" style="margin-top:8px;">Участники: ${Number(selectedTeam.members_count || selectedMembers.length || 0)}</div>
+              <div style="margin-top:8px; display:grid; gap:6px;">
+                ${buildRolesList(selectedMembers, selectedTeam.team_id || my.team_id)}
+              </div>
+            </div>`;
+        }
         if (teams.profileLoading) {
           return '<div class="card" style="padding:12px; margin-top:10px;"><div class="muted-inline">Загружаем участников команды…</div></div>';
         }
@@ -4320,7 +4346,7 @@
           <div class="card" style="padding:12px; margin-top:10px;" id="teamMembersPanel">
             <div class="card-title">Участники команды</div>
             <div class="team-meta" style="margin-top:8px;">Участники: ${Number(selectedTeam.members_count || selectedMembers.length || 0)}</div>
-            ${buildMembersList(selectedMembers, selectedTeam.team_id || my.team_id)}
+            ${buildMembersList(selectedMembers)}
           </div>`;
       })();
 
@@ -4357,7 +4383,7 @@
               <button class="btn" data-action="team-copy-code" data-code="${escapeHtml(my.join_code || '')}">Скопировать код</button>
               <button class="btn ${teams.busy.leave ? 'btn-disabled' : ''}" ${teams.busy.leave ? 'disabled' : ''} data-action="team-leave">Покинуть</button>
               ${canDeleteTeam ? `<button class="btn ${teams.busy.deleteTeam ? 'btn-disabled' : ''}" ${teams.busy.deleteTeam ? 'disabled' : ''} data-action="team-delete" data-team-id="${my.team_id}">Удалить команду</button>` : ''}
-              ${isCaptain ? `<button class="btn" data-action="team-requests-open">Заявки${Number(teams.requests.pendingCount || 0) > 0 ? ' (' + Number(teams.requests.pendingCount) + ')' : ''}</button><button class="btn" data-action="team-style-open">Стиль</button>` : ''}
+              ${isCaptain ? `<button class="btn" data-action="team-requests-open">Заявки${Number(teams.requests.pendingCount || 0) > 0 ? ' (' + Number(teams.requests.pendingCount) + ')' : ''}</button><button class="btn" data-action="team-style-open">Стиль</button><button class="btn" data-action="team-roles-open">Роли</button>` : ''}
             </div>
           </div>`;
       })();
@@ -12145,6 +12171,7 @@
             teams.members.open = false;
             teams.requests.open = false;
             teams.style.open = false;
+            teams.roles.open = false;
             state.settings.productivity.leaderboard.selectedUserId = null;
             state.settings.productivity.leaderboard.profile = null;
             state.settings.productivity.leaderboard.profileLoading = false;
@@ -12154,6 +12181,7 @@
           teams.members.open = (myTeamId > 0 && teamId === myTeamId);
           teams.requests.open = false;
           teams.style.open = false;
+          teams.roles.open = false;
           loadTeamProfile(teamId).then(() => {
             if (teamId === myTeamId) scrollToTeamPanel('teamMembersPanel');
             else scrollToTeamPanel(`leaderboardTeamPanel-${teamId}`);
@@ -12166,6 +12194,7 @@
           teams.profile = null;
           teams.selectedTeamId = null;
           teams.members.open = false;
+          teams.roles.open = false;
           renderTeamsSection();
           return;
         }
@@ -12226,6 +12255,7 @@
           teams.requests.open = willOpen;
           teams.style.open = false;
           teams.members.open = false;
+          teams.roles.open = false;
           teams.requests.offset = 0;
           const openRequests = () => {
             if (!willOpen) {
@@ -12261,6 +12291,7 @@
           const teamId = Number(teams.selectedTeamId || teams.my?.team_id || 0);
           if (teamId > 0) {
             teams.members.open = false;
+            teams.roles.open = false;
             loadTeamProfile(teamId).catch(console.error);
           }
           return;
@@ -12283,6 +12314,30 @@
           if (requestId > 0) actionRequestReject(requestId).catch(console.error);
           return;
         }
+        if (action === 'team-roles-open') {
+          const teams = state.settings.productivity.teams;
+          const myTeamId = Number(teams.my?.team_id || 0);
+          if (myTeamId <= 0) return;
+          const willOpen = !teams.roles.open;
+          teams.roles.open = willOpen;
+          teams.requests.open = false;
+          teams.style.open = false;
+          teams.members.open = false;
+          const openRoles = () => {
+            if (!willOpen) {
+              renderTeamsSection();
+              return;
+            }
+            renderTeamsSection();
+            scrollToTeamPanel('teamRolesPanel');
+          };
+          if (!(teams.view === 'profile' && Number(teams.selectedTeamId || 0) === myTeamId)) {
+            loadTeamProfile(myTeamId).then(openRoles).catch(console.error);
+          } else {
+            openRoles();
+          }
+          return;
+        }
         if (action === 'team-style-open') {
           const teams = state.settings.productivity.teams;
           const myTeamId = Number(teams.my?.team_id || 0);
@@ -12291,6 +12346,7 @@
           teams.style.open = willOpen;
           teams.requests.open = false;
           teams.members.open = false;
+          teams.roles.open = false;
           const openStyle = () => {
             if (!willOpen) {
               renderTeamsSection();
@@ -12391,6 +12447,7 @@
             teams.members.open = false;
             teams.requests.open = false;
             teams.style.open = false;
+            teams.roles.open = false;
             state.settings.productivity.leaderboard.selectedUserId = null;
             state.settings.productivity.leaderboard.profile = null;
             state.settings.productivity.leaderboard.profileLoading = false;
@@ -12400,6 +12457,7 @@
           teams.members.open = (myTeamId > 0 && teamId === myTeamId);
           teams.requests.open = false;
           teams.style.open = false;
+          teams.roles.open = false;
           loadTeamProfile(teamId).then(() => {
             if (teamId === myTeamId) scrollToTeamPanel('teamMembersPanel');
             else scrollToTeamPanel(`leaderboardTeamPanel-${teamId}`);
@@ -12461,6 +12519,7 @@
           teams.profile = null;
           teams.selectedTeamId = null;
           teams.members.open = false;
+          teams.roles.open = false;
           renderTeamsManageRoute();
           return;
         }
@@ -12475,6 +12534,7 @@
           teams.requests.open = willOpen;
           teams.style.open = false;
           teams.members.open = false;
+          teams.roles.open = false;
           teams.requests.offset = 0;
           const openRequests = () => {
             if (!willOpen) {
@@ -12490,6 +12550,30 @@
           }
           return;
         }
+        if (action === 'team-roles-open') {
+          const teams = state.settings.productivity.teams;
+          const myTeamId = Number(teams.my?.team_id || 0);
+          if (myTeamId <= 0) return;
+          const willOpen = !teams.roles.open;
+          teams.roles.open = willOpen;
+          teams.requests.open = false;
+          teams.style.open = false;
+          teams.members.open = false;
+          const openRoles = () => {
+            if (!willOpen) {
+              renderTeamsManageRoute();
+              return;
+            }
+            renderTeamsManageRoute();
+            scrollToTeamPanel('teamRolesPanel');
+          };
+          if (!(teams.view === 'profile' && Number(teams.selectedTeamId || 0) === myTeamId)) {
+            loadTeamProfile(myTeamId).then(openRoles).catch(console.error);
+          } else {
+            openRoles();
+          }
+          return;
+        }
         if (action === 'team-style-open') {
           const teams = state.settings.productivity.teams;
           const myTeamId = Number(teams.my?.team_id || 0);
@@ -12498,6 +12582,7 @@
           teams.style.open = willOpen;
           teams.requests.open = false;
           teams.members.open = false;
+          teams.roles.open = false;
           const openStyle = () => {
             if (!willOpen) {
               renderTeamsManageRoute();
