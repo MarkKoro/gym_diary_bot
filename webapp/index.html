@@ -4241,12 +4241,12 @@
       const selectedTeam = selectedProfile.team || {};
       const selectedMembers = Array.isArray(selectedProfile.members) ? selectedProfile.members : [];
 
-      const buildMembersList = (members) => {
+      const buildMembersList = (members, teamId) => {
         const safe = Array.isArray(members) ? members : [];
         return safe.map((m) => {
           const isActive = Number(lb.selectedUserId || 0) === Number(m.user_id || 0);
           const roleCode = normalizeTeamMemberRole(m.role);
-          const canManageMember = Boolean(isCaptain && isMyProfileOpen && Number(m.user_id || 0) !== Number(state.userId || 0));
+          const canManageMember = Boolean((state.isAdmin || (isCaptain && isMyProfileOpen)) && Number(m.user_id || 0) !== Number(state.userId || 0));
           return `
             <div class="leader-item" id="teamLeaderItem-${m.user_id}">
               <button class="leader-row ${isActive ? 'active' : ''}" style="margin-top:6px;" data-action="leader-open" data-user-id="${m.user_id}">
@@ -4263,8 +4263,8 @@
                     <option value="private" ${roleCode === 'private' ? 'selected' : ''}>Рядовой</option>
                     <option value="colonel" ${roleCode === 'colonel' ? 'selected' : ''}>Полковник</option>
                   </select>
-                  <button class="btn small-btn ${teams.busy.roleSave ? 'btn-disabled' : ''}" ${teams.busy.roleSave ? 'disabled' : ''} data-action="team-member-role-save" data-user-id="${m.user_id}">Сохранить роль</button>
-                  <button class="btn small-btn ${teams.busy.removeMember ? 'btn-disabled' : ''}" ${teams.busy.removeMember ? 'disabled' : ''} data-action="team-member-remove" data-user-id="${m.user_id}">Исключить</button>
+                  <button class="btn small-btn ${teams.busy.roleSave ? 'btn-disabled' : ''}" ${teams.busy.roleSave ? 'disabled' : ''} data-action="team-member-role-save" data-team-id="${Number(teamId || 0)}" data-user-id="${m.user_id}">Сохранить роль</button>
+                  <button class="btn small-btn ${teams.busy.removeMember ? 'btn-disabled' : ''}" ${teams.busy.removeMember ? 'disabled' : ''} data-action="team-member-remove" data-team-id="${Number(teamId || 0)}" data-user-id="${m.user_id}">Исключить</button>
                 </div>
               ` : ''}
               ${isActive ? profileMarkup : ''}
@@ -4320,7 +4320,7 @@
           <div class="card" style="padding:12px; margin-top:10px;" id="teamMembersPanel">
             <div class="card-title">Участники команды</div>
             <div class="team-meta" style="margin-top:8px;">Участники: ${Number(selectedTeam.members_count || selectedMembers.length || 0)}</div>
-            ${buildMembersList(selectedMembers)}
+            ${buildMembersList(selectedMembers, selectedTeam.team_id || my.team_id)}
           </div>`;
       })();
 
@@ -4384,7 +4384,7 @@
               <div class="card" style="padding:12px; margin-top:8px;" id="leaderboardTeamPanel-${teamId}">
                 <div class="card-title">${escapeHtml(profileTeam.name || item.name || 'Команда')}</div>
                 <div class="team-meta" style="margin-top:8px;">Участники: ${Number(profileTeam.members_count || members.length || 0)}</div>
-                ${buildMembersList(members)}
+                ${buildMembersList(members, profileTeam.team_id || teamId)}
               </div>`;
           }
           return `${teamCard}${inlinePanel}`;
@@ -12197,7 +12197,7 @@
         }
         if (action === 'team-member-remove') {
           const teams = state.settings.productivity.teams;
-          const teamId = Number(teams.selectedTeamId || teams.my?.team_id || 0);
+          const teamId = Number(target.dataset.teamId || teams.selectedTeamId || teams.my?.team_id || 0);
           const memberUserId = Number(target.dataset.userId || 0);
           if (teamId <= 0 || memberUserId <= 0) return;
           if (!confirm('Исключить участника из команды?')) return;
@@ -12206,7 +12206,7 @@
         }
         if (action === 'team-member-role-save') {
           const teams = state.settings.productivity.teams;
-          const teamId = Number(teams.selectedTeamId || teams.my?.team_id || 0);
+          const teamId = Number(target.dataset.teamId || teams.selectedTeamId || teams.my?.team_id || 0);
           const memberUserId = Number(target.dataset.userId || 0);
           const select = document.querySelector(`[data-role-select-user-id="${memberUserId}"]`);
           const role = select ? String(select.value || 'private') : 'private';
@@ -12434,7 +12434,7 @@
         }
         if (action === 'team-member-remove') {
           const teams = state.settings.productivity.teams;
-          const teamId = Number(teams.selectedTeamId || teams.my?.team_id || 0);
+          const teamId = Number(target.dataset.teamId || teams.selectedTeamId || teams.my?.team_id || 0);
           const memberUserId = Number(target.dataset.userId || 0);
           if (teamId <= 0 || memberUserId <= 0) return;
           if (!confirm('Исключить участника из команды?')) return;
@@ -12443,7 +12443,7 @@
         }
         if (action === 'team-member-role-save') {
           const teams = state.settings.productivity.teams;
-          const teamId = Number(teams.selectedTeamId || teams.my?.team_id || 0);
+          const teamId = Number(target.dataset.teamId || teams.selectedTeamId || teams.my?.team_id || 0);
           const memberUserId = Number(target.dataset.userId || 0);
           const select = document.querySelector(`[data-role-select-user-id="${memberUserId}"]`);
           const role = select ? String(select.value || 'private') : 'private';

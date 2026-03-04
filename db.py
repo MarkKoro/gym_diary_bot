@@ -4487,22 +4487,63 @@ async def delete_team(team_id: int) -> bool:
         return True
 
 
-async def remove_team_member(team_id: int, captain_user_id: int, member_user_id: int) -> None:
+async def list_all_teams(limit: int = 100, offset: int = 0) -> tuple[list[dict], int]:
+    safe_limit = max(1, min(int(limit or 100), 500))
+    safe_offset = max(0, int(offset or 0))
+    async with connect_db() as db:
+        total_cur = await db.execute("SELECT COUNT(*) FROM teams")
+        total = int((await total_cur.fetchone() or [0])[0] or 0)
+        cur = await db.execute(
+            """
+            SELECT
+                t.id,
+                t.name,
+                t.join_code,
+                t.owner_user_id,
+                COALESCE(t.is_open, 0),
+                COALESCE(t.created_at, ''),
+                COUNT(CASE WHEN tm.left_at IS NULL THEN 1 END) AS members_count
+            FROM teams t
+            LEFT JOIN team_members tm ON tm.team_id = t.id
+            GROUP BY t.id
+            ORDER BY t.id DESC
+            LIMIT ? OFFSET ?
+            """,
+            (safe_limit, safe_offset),
+        )
+        rows = await cur.fetchall()
+    items = [
+        {
+            "team_id": int(row[0]),
+            "name": (row[1] or "").strip() or f"team_{int(row[0])}",
+            "join_code": (row[2] or "").strip(),
+            "owner_user_id": int(row[3] or 0),
+            "is_open": bool(int(row[4] or 0)),
+            "created_at": row[5] or "",
+            "members_count": int(row[6] or 0),
+        }
+        for row in rows
+    ]
+    return items, total
+
+
+async def remove_team_member(team_id: int, captain_user_id: int, member_user_id: int, *, actor_is_admin: bool = False) -> None:
     if int(captain_user_id) == int(member_user_id):
         raise ValueError("cannot_remove_self")
     now = _now_utc_iso()
     async with connect_db() as db:
-        cur = await db.execute(
-            """
-            SELECT 1
-            FROM team_members
-            WHERE team_id=? AND user_id=? AND role='captain' AND left_at IS NULL
-            LIMIT 1
-            """,
-            (team_id, captain_user_id),
-        )
-        if not await cur.fetchone():
-            raise ValueError("not_team_captain")
+        if not actor_is_admin:
+            cur = await db.execute(
+                """
+                SELECT 1
+                FROM team_members
+                WHERE team_id=? AND user_id=? AND role='captain' AND left_at IS NULL
+                LIMIT 1
+                """,
+                (team_id, captain_user_id),
+            )
+            if not await cur.fetchone():
+                raise ValueError("not_team_captain")
 
         cur = await db.execute(
             """
@@ -4518,24 +4559,25 @@ async def remove_team_member(team_id: int, captain_user_id: int, member_user_id:
         await db.commit()
 
 
-async def set_team_member_role(team_id: int, captain_user_id: int, member_user_id: int, role: str) -> None:
+async def set_team_member_role(team_id: int, captain_user_id: int, member_user_id: int, role: str, *, actor_is_admin: bool = False) -> None:
     safe_role = str(role or "").strip().lower()
     if safe_role not in {"captain", "colonel", "private"}:
         raise ValueError("invalid_role")
     if safe_role == "captain":
         raise ValueError("captain_role_locked")
     async with connect_db() as db:
-        cur = await db.execute(
-            """
-            SELECT 1
-            FROM team_members
-            WHERE team_id=? AND user_id=? AND role='captain' AND left_at IS NULL
-            LIMIT 1
-            """,
-            (team_id, captain_user_id),
-        )
-        if not await cur.fetchone():
-            raise ValueError("not_team_captain")
+        if not actor_is_admin:
+            cur = await db.execute(
+                """
+                SELECT 1
+                FROM team_members
+                WHERE team_id=? AND user_id=? AND role='captain' AND left_at IS NULL
+                LIMIT 1
+                """,
+                (team_id, captain_user_id),
+            )
+            if not await cur.fetchone():
+                raise ValueError("not_team_captain")
         cur = await db.execute(
             """
             UPDATE team_members
@@ -5103,7 +5145,7 @@ async def fetch_team_leaderboard(limit: int = 10, offset: int = 0):
     return paged, total, ranked
 
 
-async def fetch_team_profile(team_id: int, viewer_user_id: int):
+async def fetch_team_profile(team_id: int, viewer_user_id: int, *, include_members_for_admin: bool = False):
     _, _, full = await fetch_team_leaderboard(limit=10000, offset=0)
     summary = next((item for item in full if int(item["team_id"]) == int(team_id)), None)
     if not summary:
@@ -5122,7 +5164,7 @@ async def fetch_team_profile(team_id: int, viewer_user_id: int):
         role_row = await cur.fetchone()
 
         members = None
-        if role_row:
+        if role_row or include_members_for_admin:
             cur = await db.execute(
                 """
                 WITH completed_sessions AS (
@@ -5218,15 +5260,15 @@ async def fetch_team_profile(team_id: int, viewer_user_id: int):
             members = []
             for row in rows:
                 m = {
-                    "training_days_28": int(row[3] or 0),
-                    "sessions_28": int(row[2] or 0),
-                    "training_weeks_8": int(row[4] or 0),
-                    "sets_28": int(row[5] or 0),
-                    "volume_28": float(row[6] or 0),
-                    "avg_weighted_reps": float(row[7] or 0),
-                    "active_exercise_count": int(row[8] or 0),
-                    "completion_ratio": float(row[9] or 0),
-                    "progression_index": float(row[10] or 0),
+                    "sessions_28": int(row[3] or 0),
+                    "training_days_28": int(row[4] or 0),
+                    "training_weeks_8": int(row[5] or 0),
+                    "sets_28": int(row[6] or 0),
+                    "volume_28": float(row[7] or 0),
+                    "avg_weighted_reps": float(row[8] or 0),
+                    "active_exercise_count": int(row[9] or 0),
+                    "completion_ratio": float(row[10] or 0),
+                    "progression_index": float(row[11] or 0),
                 }
                 members.append(
                     {
