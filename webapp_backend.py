@@ -127,6 +127,9 @@ from db import (
     accept_team_request,
     reject_team_request,
     leave_team,
+    delete_team,
+    remove_team_member,
+    set_team_member_role,
     set_team_style,
     fetch_team_leaderboard,
     fetch_team_profile,
@@ -5101,6 +5104,53 @@ async def teams_join_by_code(payload: dict = Body(default_factory=dict), ctx: Au
 @app.post('/teams/leave')
 async def teams_leave(ctx: AuthCtx = Depends(get_auth_ctx)):
     await leave_team(int(ctx.user_id))
+    return {'ok': True}
+
+
+@app.post('/teams/{team_id}/delete')
+async def teams_delete(team_id: int, ctx: AuthCtx = Depends(get_auth_ctx)):
+    me_team = await get_user_team(int(ctx.user_id))
+    is_admin = int(ctx.tg_id) in ADMIN_IDS
+    if not is_admin:
+        if not me_team or int(me_team.get('team_id') or 0) != int(team_id) or me_team.get('role') != 'captain':
+            raise HTTPException(status_code=403, detail='captain_or_admin_only')
+    deleted = await delete_team(int(team_id))
+    if not deleted:
+        raise HTTPException(status_code=404, detail='team_not_found')
+    return {'ok': True}
+
+
+@app.post('/teams/{team_id}/members/{member_user_id}/remove')
+async def teams_remove_member(team_id: int, member_user_id: int, ctx: AuthCtx = Depends(get_auth_ctx)):
+    try:
+        await remove_team_member(int(team_id), int(ctx.user_id), int(member_user_id))
+    except ValueError as exc:
+        detail = str(exc)
+        if detail == 'not_team_captain':
+            raise HTTPException(status_code=403, detail=detail) from exc
+        if detail in {'member_not_found', 'cannot_remove_self'}:
+            raise HTTPException(status_code=400, detail=detail) from exc
+        raise HTTPException(status_code=400, detail='remove_member_failed') from exc
+    return {'ok': True}
+
+
+@app.post('/teams/{team_id}/members/{member_user_id}/role')
+async def teams_set_member_role(
+    team_id: int,
+    member_user_id: int,
+    payload: dict = Body(default_factory=dict),
+    ctx: AuthCtx = Depends(get_auth_ctx),
+):
+    role = str(payload.get('role') or '').strip().lower()
+    try:
+        await set_team_member_role(int(team_id), int(ctx.user_id), int(member_user_id), role)
+    except ValueError as exc:
+        detail = str(exc)
+        if detail == 'not_team_captain':
+            raise HTTPException(status_code=403, detail=detail) from exc
+        if detail in {'member_not_found', 'invalid_role', 'captain_role_locked'}:
+            raise HTTPException(status_code=400, detail=detail) from exc
+        raise HTTPException(status_code=400, detail='set_member_role_failed') from exc
     return {'ok': True}
 
 
