@@ -1827,6 +1827,12 @@
     .leaderboard-list { display: grid; gap: 8px; margin-top: 10px; }
     .leader-item { display: grid; gap: 6px; }
     .leader-row { border: 1px solid var(--border); border-radius: 12px; padding: 10px; display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 10px; background: var(--bg); cursor: pointer; }
+    .team-role-row { align-items: start; }
+    .team-role-actions { display:flex; gap:6px; flex-wrap:wrap; justify-content:flex-end; }
+    @media (max-width: 620px) {
+      .team-role-row { grid-template-columns: auto 1fr; }
+      .team-role-actions { grid-column: 1 / -1; justify-content: flex-start; padding-left: 44px; }
+    }
     .leader-row.active { border-color: color-mix(in srgb, var(--accent) 50%, var(--border)); }
     .team-card { position: relative; border: 1px solid var(--border); border-radius: 14px; padding: 12px; background: color-mix(in srgb, var(--bg) 92%, transparent); display: grid; grid-template-columns: auto 1fr auto; gap: 10px; align-items: center; overflow: hidden; width: 100%; text-align: left; color: #f8fafc; text-shadow: 0 1px 2px rgba(2,6,23,.65); }
     .team-card::before { content: ''; position: absolute; inset: 0; border-radius: 14px; pointer-events: none; opacity: .95; z-index: 0; }
@@ -3884,11 +3890,12 @@
         const unlockedAt = i.unlocked_at ? String(i.unlocked_at).slice(0, 10) : 'дата не указана';
         return `<span class="mini-badge" title="${escapeHtml(`${title} · ${unlockedAt}`)}" aria-label="${escapeHtml(`${title}, ${unlockedAt}`)}">${escapeHtml(i.icon || '🏅')}</span>`;
       }).join('');
+      const leaderName = lb.profile.displayName || `@${lb.profile.username || `athlete_${lb.profile.leader_user_id}`}`;
       return `
         <div class="leader-profile" id="leaderProfileInline">
           <div class="leader-profile-head">
             <div>
-              <div class="card-title">План лидера @${lb.profile.username || 'athlete'}${mark ? ` ${mark}` : ''}</div>
+              <div class="card-title">План лидера ${escapeHtml(leaderName)}${mark ? ` ${mark}` : ''}</div>
               <div class="timer-hint">Можно переключать системы и копировать выбранную себе.</div>
               ${iconsHtml ? `<div class="leader-badges">${iconsHtml}</div>` : ''}
             </div>
@@ -4279,16 +4286,19 @@
         const safe = Array.isArray(members) ? members : [];
         return safe.map((m) => {
           const roleCode = normalizeTeamMemberRole(m.role);
-          const canManageMember = Boolean((state.isAdmin || (isCaptain && isMyProfileOpen)) && Number(m.user_id || 0) !== Number(state.userId || 0));
+          const myUserId = Number(state.userId || my?.user_id || 0);
+          const memberUserId = Number(m.user_id || 0);
+          const isSelf = myUserId > 0 && memberUserId === myUserId;
+          const canManageMember = Boolean((state.isAdmin || (isCaptain && isMyProfileOpen)) && !isSelf && roleCode !== 'captain');
           return `
-            <div class="leader-row" style="margin-top:6px; cursor:default;">
+            <div class="leader-row team-role-row" style="margin-top:6px; cursor:default;">
               <div class="leader-rank">${Math.max(0, Math.min(100, Number(m.score || 0)))}</div>
               <div style="flex:1; min-width:0;">
                 <div class="leader-name">@${escapeHtml(m.username || ('athlete_'+m.user_id))}</div>
                 <div class="team-meta">${escapeHtml(teamMemberRoleBadge(roleCode))}</div>
               </div>
               ${canManageMember ? `
-                <div style="display:flex; gap:6px; flex-wrap:wrap; justify-content:flex-end;">
+                <div class="team-role-actions">
                   <select class="settings-input" style="max-width:170px;" data-role-select-user-id="${m.user_id}">
                     <option value="private" ${roleCode === 'private' ? 'selected' : ''}>Рядовой</option>
                     <option value="colonel" ${roleCode === 'colonel' ? 'selected' : ''}>Полковник</option>
@@ -4843,9 +4853,16 @@
         const data = await apiFetch(`/gymapi/leaderboard/productivity/${leaderUserId}/plan${suffix}`);
         if (requestId !== Number(lb.profileRequestId || 0) || Number(lb.selectedUserId || 0) !== selected) return;
         const row = (lb.items || []).find((item) => Number(item.user_id) === Number(leaderUserId));
+        const teamMembers = Array.isArray(state.settings.productivity.teams.profile?.members)
+          ? state.settings.productivity.teams.profile.members
+          : [];
+        const teamRow = teamMembers.find((item) => Number(item.user_id) === Number(leaderUserId));
+        const username = row?.username || teamRow?.username || '';
+        const displayName = username ? `@${username}` : `Участник #${leaderUserId}`;
         lb.profile = {
           leader_user_id: Number(leaderUserId),
-          username: row?.username || `athlete_${leaderUserId}`,
+          username,
+          displayName,
           system_id: data.system_id,
           systems: data.systems || [],
           days: data.days || [],
