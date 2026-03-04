@@ -1521,8 +1521,8 @@
     .productivity-help { margin-top: 8px; padding: 10px; border: 1px solid var(--border); border-radius: 12px; font-size: 13px; color: var(--muted); background: color-mix(in srgb, var(--bg) 78%, transparent); }
     .productivity-gauge-large { width: 140px; height: 140px; }
     .productivity-gauge-large .gauge-arrow { transform-origin: 50px 50px; transition: transform 0.35s ease; }
-    .productivity-cards { margin-top: 10px; display: grid; grid-template-columns: repeat(auto-fit, minmax(145px, 1fr)); gap: 8px; }
-    .productivity-mini-card { border: 1px solid var(--border); border-radius: 10px; padding: 8px; background: color-mix(in srgb, var(--bg) 80%, transparent); display: grid; gap: 3px; }
+    .productivity-cards { margin-top: 10px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+    .productivity-mini-card { border: 1px solid var(--border); border-radius: 10px; padding: 8px; min-height: 74px; background: color-mix(in srgb, var(--bg) 80%, transparent); display: grid; gap: 3px; align-content: start; }
     .productivity-mini-label { color: var(--muted); font-size: 11px; }
     .productivity-mini-rank { font-weight: 800; font-size: 13px; }
     .productivity-space { min-height: 120px; border-radius: 12px; border: 1px dashed var(--border); margin-top: 12px; padding: 10px; color: var(--muted); font-size: 13px; }
@@ -1866,23 +1866,37 @@
     [data-theme="dark"] .mini-badge { background: rgba(255,255,255,0.08); }
     .badge-popup {
       position: fixed;
-      inset: 0;
       z-index: 72;
-      display: grid;
-      place-items: center;
-      background: color-mix(in srgb, var(--bg) 56%, transparent);
-      backdrop-filter: blur(5px);
-      padding: 16px;
+      pointer-events: none;
     }
     .badge-popup-card {
-      width: min(320px, 100%);
+      width: min(220px, calc(100vw - 24px));
       border-radius: 14px;
       border: 1px solid var(--border);
       box-shadow: var(--shadow);
       background: color-mix(in srgb, var(--card) 95%, var(--bg));
-      padding: 12px;
+      padding: 10px;
       display: grid;
-      gap: 8px;
+      gap: 6px;
+      position: relative;
+      pointer-events: auto;
+    }
+    .badge-popup-arrow {
+      position: absolute;
+      width: 10px;
+      height: 10px;
+      background: color-mix(in srgb, var(--card) 95%, var(--bg));
+      border-left: 1px solid var(--border);
+      border-top: 1px solid var(--border);
+      transform: rotate(45deg);
+      left: 16px;
+    }
+    .badge-popup-card.place-bottom .badge-popup-arrow {
+      top: -6px;
+    }
+    .badge-popup-card.place-top .badge-popup-arrow {
+      bottom: -6px;
+      transform: rotate(225deg);
     }
     .leader-day-card { border: 1px solid var(--border); border-radius: 10px; padding: 8px; background: var(--bg); }
     .leader-day-title { font-weight: 800; margin-bottom: 6px; }
@@ -3051,6 +3065,7 @@
         ui: {
           showTimerButton: true,
           showProductivityButton: true,
+          showSystemButton: true,
           tintEnabled: false,
           tintMode: 'sides',
           tintGlyphEnabled: false,
@@ -3628,6 +3643,7 @@
         if (parsed && typeof parsed === 'object') {
           state.settings.ui.showTimerButton = parsed.showTimerButton !== false;
           state.settings.ui.showProductivityButton = parsed.showProductivityButton !== false;
+          state.settings.ui.showSystemButton = parsed.showSystemButton !== false;
           state.settings.ui.tintEnabled = parsed.tintEnabled === true;
           state.settings.ui.tintGlyphEnabled = parsed.tintGlyphEnabled === true;
           state.settings.ui.tintImmersionEnabled = parsed.tintImmersionEnabled === true;
@@ -3724,6 +3740,7 @@
         { key: 'attendance', label: 'Посещаемость', topPercent: toTopPercent(Math.round((facts.attendance * 0.7 + facts.weeklyFrequency * 0.3) * 100)), detail: `${state.completedDays?.size || 0} завершённых тренировок` },
         { key: 'progress', label: 'Прогресс в весах', topPercent: toTopPercent(Math.round((facts.progress * 0.65 + facts.strengthLoad * 0.35) * 100)), detail: `${Math.round(facts.volume)} кг тренировочного объёма` },
         { key: 'creativity', label: 'Креативность', topPercent: toTopPercent(Math.round((facts.creativity * 0.75 + facts.bodyControl * 0.25) * 100)), detail: `${facts.exerciseCount} разных упражнений` },
+        { key: 'consistency', label: 'Постоянство', topPercent: toTopPercent(Math.round(facts.consistency * 100)), detail: `${Math.round(facts.weeklyFrequency * 100)}% регулярности за последние недели` },
       ];
       state.settings.productivity.score = score;
       state.settings.productivity.topPercent = toTopPercent(score);
@@ -3759,6 +3776,8 @@
       const hideForDelete = state.manage.mode === 'delete';
       const productivityBtn = document.getElementById('productivityBtn');
       if (productivityBtn) productivityBtn.classList.toggle('hidden', hideForDelete || !state.settings.ui.showProductivityButton || !state.settings.leaderboardVisible);
+      const systemBtn = document.getElementById('systemOpenBtn');
+      if (systemBtn) systemBtn.classList.toggle('hidden', hideForDelete || !state.settings.ui.showSystemButton);
     }
 
     function renderProductivityHub() {
@@ -3773,7 +3792,7 @@
       if (scoreText) scoreText.textContent = `${score}/100`;
       if (topText) topText.textContent = `Топ ${topPercent}%`;
       if (help) {
-        help.textContent = 'Индекс собирается из частоты тренировок, прогрессии рабочих весов и разнообразия упражнений.';
+        help.textContent = 'Индекс собирается из посещаемости, прогрессии рабочих весов, креативности и постоянства тренировок.';
         help.classList.toggle('hidden', !state.settings.productivity.helpOpen);
       }
       if (helpBtn) helpBtn.setAttribute('aria-expanded', state.settings.productivity.helpOpen ? 'true' : 'false');
@@ -3896,7 +3915,18 @@
       const profileHtml = renderLeaderProfileMarkup(lb);
       const popup = lb.badgePopup;
       const popupHtml = popup
-        ? `<div class="badge-popup" data-action="leader-badge-close"><div class="badge-popup-card" role="dialog" aria-modal="true"><div class="card-title">${escapeHtml(popup.title || 'Медаль')}</div><div class="timer-hint">Получена: ${escapeHtml(popup.unlockedAt || 'дата не указана')}</div><button type="button" class="btn small-btn" data-action="leader-badge-close">Закрыть</button></div></div>`
+        ? (() => {
+            const winW = window.innerWidth || 360;
+            const winH = window.innerHeight || 640;
+            const cardW = Math.min(220, winW - 24);
+            const left = Math.max(12, Math.min((Number(popup.x) || winW / 2) - cardW / 2, winW - cardW - 12));
+            const preferBottom = (Number(popup.y) || 0) < (winH - 160);
+            const top = preferBottom
+              ? Math.max(10, Number(popup.y) || 10)
+              : Math.max(10, (Number(popup.y) || winH) - 124);
+            const placeClass = preferBottom ? 'place-bottom' : 'place-top';
+            return `<div class="badge-popup" style="left:${Math.round(left)}px; top:${Math.round(top)}px;"><div class="badge-popup-card ${placeClass}" role="dialog" aria-modal="false"><span class="badge-popup-arrow" aria-hidden="true"></span><div class="card-title">${escapeHtml(popup.title || 'Медаль')}</div><div class="timer-hint">Получена: ${escapeHtml(popup.unlockedAt || 'дата не указана')}</div><button type="button" class="btn small-btn" data-action="leader-badge-close">Закрыть</button></div></div>`;
+          })()
         : '';
       const selectedInPage = lb.items.some((item) => Number(item.user_id) === Number(lb.selectedUserId || 0));
       const detachedProfile = (!selectedInPage && profileHtml) ? `<div class="leader-item">${profileHtml}</div>` : '';
@@ -4627,6 +4657,19 @@
       } finally {
         teams.busy.styleSave = false;
         renderTeamsSection();
+      }
+    }
+
+    async function refreshProductivitySummary() {
+      try {
+        const data = await apiFetch('/gymapi/leaderboard/productivity?limit=1&offset=0');
+        if (Number.isFinite(Number(data?.my_score)) && Number(data.my_score) >= 0) {
+          state.settings.productivity.score = Number(data.my_score);
+          state.settings.productivity.topPercent = Number(data.my_top_percent || state.settings.productivity.topPercent || 100);
+          renderProductivityButton();
+        }
+      } catch (e) {
+        console.error(e);
       }
     }
 
@@ -6659,7 +6702,7 @@
       const s = state.settings;
       const trainer = s.trainer || {};
       const view = s.view || 'menu';
-      const ui = s.ui || { showTimerButton: true, showProductivityButton: true, tintEnabled: true, tintMode: 'sides', tintGlyphEnabled: false };
+      const ui = s.ui || { showProductivityButton: true, showSystemButton: true, tintEnabled: true, tintMode: 'sides', tintGlyphEnabled: false };
       const backButton = '<button class="btn small-btn settings-back" data-action="settings-back">← К списку настроек</button>';
       if (view === 'menu') {
         container.innerHTML = `
@@ -6669,7 +6712,7 @@
               <div class="settings-menu-group">
                 <div class="settings-menu-title">План и тренировки</div>
                 <button class="settings-menu-item" data-action="open-settings" data-section="plan">
-                  <span>План тренировок</span>
+                  <span>Тренировочные дни</span>
                   <span class="settings-menu-arrow">›</span>
                 </button>
                 <button class="settings-menu-item" data-action="open-settings" data-section="groups">
@@ -6677,7 +6720,7 @@
                   <span class="settings-menu-arrow">›</span>
                 </button>
                 <button class="settings-menu-item" data-action="open-settings" data-section="widgets">
-                  <span>Главный экран</span>
+                  <span>Внешний вид приложения</span>
                   <span class="settings-menu-arrow">›</span>
                 </button>
               </div>
@@ -6790,7 +6833,7 @@
       const sections = {
         plan: `
           <div class="card">
-            <div class="card-title">План тренировок</div>
+            <div class="card-title">Тренировочные дни</div>
             <div class="settings-row settings-panel">
               <div class="label">Система тренировок</div>
               <div class="hint">Сейчас активна: <b>${escapeHtml(s.systems.activeSystemName || '—')}</b>. Выбор ниже сразу обновляет план дней для выбранной системы.</div>
@@ -6816,14 +6859,7 @@
         `,
         widgets: `
           <div class="card">
-            <div class="card-title">Главный экран</div>
-            <div class="settings-row settings-panel inline">
-              <div>
-                <div class="label">Кнопка таймера</div>
-                <div class="hint">Показать или скрыть кнопку таймера в шапке.</div>
-              </div>
-              <button class="btn small-btn toggle-icon" data-action="toggle-timer-widget">${ui.showTimerButton ? '🟢 Включено' : '⚪ Выключено'}</button>
-            </div>
+            <div class="card-title">Внешний вид приложения</div>
             <div class="settings-row settings-panel inline">
               <div>
                 <div class="label">Спидометр продуктивности</div>
@@ -6833,10 +6869,10 @@
             </div>
             <div class="settings-row settings-panel inline">
               <div>
-                <div class="label">Участие в рейтинге</div>
-                <div class="hint">Если выключить — ты исчезнешь из лидерборда и твой профиль станет недоступен для просмотра другим.</div>
+                <div class="label">Кнопка систем</div>
+                <div class="hint">Показывать или скрывать кнопку управления тренировочными системами в шапке.</div>
               </div>
-              <button class="btn small-btn" data-action="toggle-leaderboard-visibility">${s.leaderboardVisible ? 'Показываться' : 'Анонимно'}</button>
+              <button class="btn small-btn toggle-icon" data-action="toggle-system-widget">${ui.showSystemButton ? '🟢 Включено' : '⚪ Выключено'}</button>
             </div>
             <div class="settings-row settings-panel inline">
               <div>
@@ -6943,8 +6979,18 @@
         service: `
           <div class="card">
             <div class="card-title">Сервисные действия</div>
+            <div class="settings-row settings-panel" style="margin-bottom: 8px;">
+              <div class="hint">Нажимая на кнопку «Убрать галочки», вы сбрасываете статусы завершённых дней и упражнений. Это полезно, если отметки случайно сбились.</div>
+            </div>
             <div class="settings-actions">
               <button class="btn danger" data-action="clear-completions">Убрать галочки</button>
+            </div>
+            <div class="settings-row settings-panel inline" style="margin-top: 10px;">
+              <div>
+                <div class="label">Участие в рейтинге</div>
+                <div class="hint">Если выключить — вы исчезнете из лидерборда, а ваш профиль и достижения не будут видны другим участникам.</div>
+              </div>
+              <button class="btn small-btn" data-action="toggle-leaderboard-visibility">${s.leaderboardVisible ? 'Показываться' : 'Анонимно'}</button>
             </div>
           </div>
         `,
@@ -7616,8 +7662,8 @@
             await saveRemindersFromUI();
             return;
           }
-          if (action === 'toggle-timer-widget') {
-            state.settings.ui.showTimerButton = !state.settings.ui.showTimerButton;
+          if (action === 'toggle-system-widget') {
+            state.settings.ui.showSystemButton = !state.settings.ui.showSystemButton;
             saveUiPreferences();
             applyHeaderWidgetVisibility();
             renderSettings();
@@ -12168,9 +12214,12 @@
         }
         if (action === 'leader-badge-open') {
           const lb = state.settings.productivity.leaderboard;
+          const rect = target.getBoundingClientRect();
           lb.badgePopup = {
             title: String(target.dataset.title || 'Медаль'),
             unlockedAt: String(target.dataset.unlockedAt || 'дата не указана'),
+            x: Math.round(rect.left + rect.width / 2),
+            y: Math.round(rect.bottom + 8),
           };
           renderLeaderboardSection();
           return;
@@ -13039,6 +13088,7 @@
       const onboardingActive = await checkOnboardingStatus();
       if (!onboardingActive) {
         await loadToday();
+        refreshProductivitySummary().catch(console.error);
         ensureSettingsOverviewLoaded({ refreshExercises: true }).catch(console.error);
       }
     }
