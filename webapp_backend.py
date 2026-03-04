@@ -1938,21 +1938,22 @@ def _format_prev_summary(data: tuple[int, int, int, float] | None) -> str | None
     return f"{int(count)}× {value}"
 
 
-async def _get_previous_done_date(user_id: int, ue_id: int, exclude_session_id: int | None) -> str | None:
+async def _get_previous_done_date(user_id: int, exercise_id: int, exclude_session_id: int | None) -> str | None:
     async with db.connect_db() as conn:
         cur = await conn.execute(
             """
             SELECT s.date
             FROM session_exercises se
+            JOIN user_exercises ue ON ue.id = se.user_exercise_id
             JOIN sessions s ON s.id = se.session_id
-            WHERE se.user_exercise_id=?
+            WHERE ue.exercise_id=?
               AND s.user_id=?
               AND se.is_done=1
               AND se.session_id<>?
             ORDER BY s.date DESC, COALESCE(se.done_at, s.date || 'T00:00:00') DESC
             LIMIT 1
             """,
-            (ue_id, user_id, exclude_session_id or -1),
+            (exercise_id, user_id, exclude_session_id or -1),
         )
         row = await cur.fetchone()
         if not row:
@@ -2124,6 +2125,12 @@ async def day_sheet(
         else:
             sets_rows = await db.fetch_exercise_sets(session_id, ue_id)
             exercise_payload["sets"] = _serialize_sets(sets_rows)
+            previous_sets_rows = await db.fetch_last_session_sets(user_id, day_index, ue_id, iso_date, active_system_id)
+            exercise_payload["previous_sets"] = _serialize_sets(previous_sets_rows)
+            exercise_payload["previous_summary"] = _format_prev_summary(
+                await db.get_last_session_summary(user_id, day_index, ue_id, iso_date, active_system_id)
+            )
+            exercise_payload["previous_date"] = await _get_previous_done_date(user_id, int(exercise_id), session_id)
         exercises.append(exercise_payload)
 
     return {
@@ -2682,13 +2689,13 @@ async def exercise_context(
     _prev_note_session_id, previous_note = await db.get_latest_completed_note(
         user_id, exercise_id, exclude_session_id=session_id
     )
-    previous_date = await _get_previous_done_date(user_id, ue_id, session_id)
+    previous_date = await _get_previous_done_date(user_id, exercise_id, session_id)
     previous_summary = _format_prev_summary(
         await db.get_last_session_summary(user_id, day_index, ue_id, iso_date, await get_active_training_system_id(user_id))
     )
     previous_sets_rows = await db.fetch_last_session_sets(user_id, day_index, ue_id, iso_date, await get_active_training_system_id(user_id))
     async with db.connect_db() as conn:
-        completed_count = await db.count_completed_sessions_for_user_exercise(conn, user_id, ue_id)
+        completed_count = await db.count_completed_sessions_for_exercise(conn, user_id, exercise_id)
 
     return {
         "ok": True,
