@@ -9304,7 +9304,13 @@ async def wizard_router(
             if parts[3] == "mg":
                 group = parts[4]
                 if group == "other":
-                    context.user_data["awaiting_group_name"] = (day, q.message.chat_id, q.message.message_id, "wizard")
+                    context.user_data["awaiting_group_name"] = (
+                        day,
+                        q.message.chat_id,
+                        q.message.message_id,
+                        "wizard",
+                        user_id,
+                    )
                     await show_screen(q, context, f'Укажи группу мышц для дня {day}, которой нет в списке.', None, user_id)
                     return
                 selected = context.user_data.setdefault("day_groups", {}).setdefault(day, set())
@@ -10051,8 +10057,11 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         await try_delete(update.message)
         context.user_data.pop(RUNNING_INPUT_KEY, None)
-        u = update.effective_user
-        user_id = await get_or_create_user(u.id, u.username)
+        target_user_id = running_state.get("target_user_id")
+        try:
+            target_user_id = int(target_user_id)
+        except (TypeError, ValueError):
+            target_user_id = user_id
         if update_kwargs:
             await update_running_entry(entry_id, **update_kwargs)
         chat_id = running_state.get("chat_id")
@@ -10061,7 +10070,7 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         sheet_info = running_state.get("sheet")
         is_library = bool(running_state.get("is_library"))
-        prefs = await load_ui_preferences(user_id)
+        prefs = await load_ui_preferences(target_user_id)
         if sheet_info and not is_library:
             target_day = int(sheet_info.get("day", running_state.get("day", 0)))
             target_page = int(sheet_info.get("page", 0))
@@ -10069,7 +10078,7 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 context,
                 chat_id,
                 msg_id,
-                user_id,
+                target_user_id,
                 target_day,
                 target_page,
                 prefs=prefs,
@@ -10078,7 +10087,9 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         day = int(running_state.get("day", 0))
         ue_id = int(running_state.get("ue_id", 0))
         selected = get_flex_selected(context, day, ue_id)
-        view = await render_exercise_view(user_id, day, ue_id, selected, prefs=prefs)
+        view = await render_exercise_view(
+            target_user_id, day, ue_id, selected, prefs=prefs
+        )
         set_flex_selected(context, day, ue_id, view.selected_set)
         kb = build_exercise_actions_markup(
             view,
@@ -10107,13 +10118,16 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("Название не должно быть пустым.")
             return
         await try_delete(update.message)
-        u = update.effective_user
-        user_id = await get_or_create_user(u.id, u.username)
-        custom_items = await load_custom_measurements(user_id, context)
-        user_categories = await load_measurement_categories(user_id, context)
+        target_user_id = category_state.get("target_user_id")
+        try:
+            target_user_id = int(target_user_id)
+        except (TypeError, ValueError):
+            target_user_id = user_id
+        custom_items = await load_custom_measurements(target_user_id, context)
+        user_categories = await load_measurement_categories(target_user_id, context)
         letter = next_category_letter(user_categories, custom_items)
-        await add_measurement_category(user_id, letter, name)
-        user_categories = await load_measurement_categories(user_id, context)
+        await add_measurement_category(target_user_id, letter, name)
+        user_categories = await load_measurement_categories(target_user_id, context)
         chat_id = category_state.get("chat_id")
         msg_id = category_state.get("message_id")
         back_callback = category_state.get("back", "measure:add")
@@ -10122,8 +10136,8 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data.pop(MEASUREMENT_CATEGORY_INPUT_KEY, None)
         if not chat_id or not msg_id:
             return
-        prefs = await load_ui_preferences(user_id)
-        custom_items = await load_custom_measurements(user_id, context)
+        prefs = await load_ui_preferences(target_user_id)
+        custom_items = await load_custom_measurements(target_user_id, context)
         categories = measurement_categories_list(
             user_categories,
             include_custom_fallback=True,
@@ -10177,16 +10191,19 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text("Название не должно быть пустым.")
                 return
             await try_delete(update.message)
-            u = update.effective_user
-            user_id = await get_or_create_user(u.id, u.username)
+            target_user_id = custom_state.get("target_user_id")
+            try:
+                target_user_id = int(target_user_id)
+            except (TypeError, ValueError):
+                target_user_id = user_id
             chat_id = custom_state.get("chat_id")
             msg_id = custom_state.get("message_id")
             back_callback = custom_state.get("back", "measure:add")
             if not chat_id or not msg_id:
                 context.user_data.pop(MEASUREMENT_CUSTOM_KEY, None)
                 return
-            custom_items = await load_custom_measurements(user_id, context)
-            user_categories = await load_measurement_categories(user_id, context)
+            custom_items = await load_custom_measurements(target_user_id, context)
+            user_categories = await load_measurement_categories(target_user_id, context)
             categories = measurement_categories_list(
                 user_categories,
                 include_custom_fallback=True,
@@ -10196,7 +10213,7 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if origin and any(code == origin for code, _ in categories):
                 await prompt_custom_measurement_value(
                     context,
-                    user_id,
+                    target_user_id,
                     chat_id,
                     msg_id,
                     back_callback,
@@ -10215,7 +10232,7 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 back_callback=back_callback,
                 context=context,
             )
-            prefs = await load_ui_preferences(user_id)
+            prefs = await load_ui_preferences(target_user_id)
             text, kb = prepare_ui_output(prompt, kb, prefs)
             await context.bot.edit_message_text(
                 text,
@@ -10277,11 +10294,9 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if amrap_state:
         if not await ensure_can_edit_from_message(context, update):
             return
-        day, ue_id, chat_id, msg_id = context.user_data.pop(AMRAP_SCHEME_KEY)
+        day, ue_id, chat_id, msg_id, target_user_id = context.user_data.pop(AMRAP_SCHEME_KEY)
         new_scheme = update.message.text.strip() if update.message and update.message.text else ""
         await try_delete(update.message)
-        u = update.effective_user
-        user_id = await get_or_create_user(u.id, u.username)
         ex_id, name, raw_group = await get_exercise_info(ue_id)
         if resolve_group(name, raw_group) != "metcon" or name != AMRAP_EXERCISE_NAME:
             if chat_id and msg_id:
@@ -10292,10 +10307,12 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
                 remember_message(chat_id, msg_id)
             return
-        await set_exercise_scheme(user_id, day, ex_id, new_scheme or None)
+        await set_exercise_scheme(target_user_id, day, ex_id, new_scheme or None)
         selected = get_flex_selected(context, day, ue_id)
-        prefs = await load_ui_preferences(user_id)
-        view = await render_exercise_view(user_id, day, ue_id, selected, prefs=prefs)
+        prefs = await load_ui_preferences(target_user_id)
+        view = await render_exercise_view(
+            target_user_id, day, ue_id, selected, prefs=prefs
+        )
         is_library = day == 0
         set_flex_selected(context, day, ue_id, view.selected_set)
         kb = build_exercise_actions_markup(
@@ -10321,27 +10338,25 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if lib_custom:
         if not await ensure_can_edit_from_message(context, update):
             return
-        group, chat_id, msg_id = lib_custom
+        group, chat_id, msg_id, target_user_id = lib_custom
         name = normalize_whitespace(update.message.text or "")
         if not name:
             await update.message.reply_text("Название не должно быть пустым. Попробуй ещё раз.")
             return
         context.user_data.pop(LIBRARY_CUSTOM_KEY, None)
         await try_delete(update.message)
-        u = update.effective_user
-        user_id = await get_or_create_user(u.id, u.username)
-        exists = await user_has_library_exercise(user_id, name)
+        exists = await user_has_library_exercise(target_user_id, name)
         if not exists:
             ex_id = await get_or_create_exercise(name, group)
-            await add_user_exercise(user_id, 0, ex_id)
+            await add_user_exercise(target_user_id, 0, ex_id)
         ex_rows = await list_exercises_by_group(group)
-        selected = set(await list_user_exercise_ids(user_id, 0, group))
+        selected = set(await list_user_exercise_ids(target_user_id, 0, group))
         requested_page = get_kb_page(context, "lib", group)
         kb, page_value, _ = library_add_exercises_kb(
             group, ex_rows, selected, page=requested_page, context=context
         )
         set_kb_page(context, "lib", group, page_value)
-        custom = await get_custom_groups(user_id, context)
+        custom = await get_custom_groups(target_user_id, context)
         await context.bot.edit_message_text(
             library_exercises_text(group, custom),
             chat_id=chat_id,
@@ -10353,16 +10368,14 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if context.user_data.get("awaiting_group_name"):
         if not await ensure_can_edit_from_message(context, update):
             return
-        day, chat_id, msg_id, mode = context.user_data.pop("awaiting_group_name")
+        day, chat_id, msg_id, mode, target_user_id = context.user_data.pop("awaiting_group_name")
         name = normalize_whitespace(update.message.text or "")
         if not name:
-            context.user_data["awaiting_group_name"] = (day, chat_id, msg_id, mode)
+            context.user_data["awaiting_group_name"] = (day, chat_id, msg_id, mode, target_user_id)
             await update.message.reply_text("Название не должно быть пустым.")
             return
-        u = update.effective_user
-        user_id = await get_or_create_user(u.id, u.username)
-        code = await add_user_muscle_group(user_id, name)
-        custom = await get_custom_groups(user_id, context)
+        code = await add_user_muscle_group(target_user_id, name)
+        custom = await get_custom_groups(target_user_id, context)
         custom[code] = name
         await try_delete(update.message)
         if mode == "wizard":
@@ -10378,7 +10391,7 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         elif mode == "library":
             context.user_data["lib_return"] = ("group", code)
             ex_rows = await list_exercises_by_group(code)
-            selected_ids = set(await list_user_exercise_ids(user_id, 0, code))
+            selected_ids = set(await list_user_exercise_ids(target_user_id, 0, code))
             requested_page = get_kb_page(context, "lib", code)
             kb, page_value, _ = library_add_exercises_kb(
                 code, ex_rows, selected_ids, page=requested_page, context=context
@@ -10394,7 +10407,7 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             context.user_data["add_group"] = (day, code)
             ex_rows = await list_exercises_by_group(code)
-            selected_ids = set(await list_user_exercise_ids(user_id, day, code))
+            selected_ids = set(await list_user_exercise_ids(target_user_id, day, code))
             requested_page = get_kb_page(context, "day", code, day)
             kb, page_value, _ = day_add_exercises_kb(
                 day, code, ex_rows, selected_ids, page=requested_page, context=context
@@ -11377,6 +11390,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "message_id": q.message.message_id,
                 "back": "measure:manage",
                 "mode": "add",
+                "target_user_id": target_user_id,
             }
             kb = InlineKeyboardMarkup(
                 [[InlineKeyboardButton(BACK_BTN, callback_data="measure:manage")]]
@@ -11613,6 +11627,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "back": back_callback,
                 "mode": mode,
                 "pending_name": pending_name,
+                "target_user_id": target_user_id,
             }
             context.user_data[MEASUREMENT_CATEGORY_BACK_KEY] = back_callback
             kb = InlineKeyboardMarkup(
@@ -11661,6 +11676,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "back": back_target,
                 "origin": category,
                 "step": "name",
+                "target_user_id": target_user_id,
             }
             kb = InlineKeyboardMarkup(
                 [[InlineKeyboardButton(BACK_BTN, callback_data=back_target)]]
@@ -12125,6 +12141,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         q.message.chat.id,
                         q.message.message_id,
                         "library",
+                        target_user_id,
                     )
                     kb = InlineKeyboardMarkup(
                         [[InlineKeyboardButton(BACK_BTN, callback_data="lib:add:mg_back")]]
@@ -12160,6 +12177,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         group,
                         q.message.chat.id,
                         q.message.message_id,
+                        target_user_id,
                     )
                     kb = InlineKeyboardMarkup(
                         [[InlineKeyboardButton(t("BACK"), callback_data=f"lib:add:mg:{group}")]]
@@ -12305,6 +12323,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         "field": target,
                         "day": day,
                         "ue_id": ue_id,
+                        "target_user_id": target_user_id,
                         "chat_id": q.message.chat_id,
                         "message_id": q.message.message_id,
                         "is_library": is_library,
@@ -13052,6 +13071,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     q.message.chat_id,
                     q.message.message_id,
                     "day",
+                    target_user_id,
                 )
                 kb = InlineKeyboardMarkup(
                     [
@@ -13237,6 +13257,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         q.message.chat_id,
                         q.message.message_id,
                         "day",
+                        target_user_id,
                     )
                     kb = InlineKeyboardMarkup(
                         [[InlineKeyboardButton(BACK_BTN, callback_data=f"day:add:{day}:mg_back")]]
@@ -13436,6 +13457,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     ue_id,
                     q.message.chat_id,
                     q.message.message_id,
+                    target_user_id,
                 )
                 kb = InlineKeyboardMarkup(
                     [[InlineKeyboardButton(t("BACK"), callback_data=f"ex:view:{day}:{ue_id}")]]

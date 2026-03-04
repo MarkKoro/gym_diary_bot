@@ -2575,7 +2575,6 @@
             <input id="systemNewName" class="settings-input" placeholder="Название системы">
             <button id="systemAddBtn" class="btn primary" disabled>Добавить</button>
           </div>
-          <div id="systemCreateBlockedHint" class="timer-hint hidden">Невозможно создать систему: у подопечного нет активной подписки.</div>
         </div>
       </div>
     </div>
@@ -3156,6 +3155,7 @@
         measurements: {
           loading: false,
           loaded: false,
+          ownerContextKey: '',
           lastUpdate: '',
           categories: [],
           itemsByCode: {},
@@ -4959,8 +4959,6 @@
       const systems = state.settings.systems;
       const list = document.getElementById('systemList');
       const createRow = document.getElementById('systemCreateRow');
-      const blockedHint = document.getElementById('systemCreateBlockedHint');
-      const blockedByTraineeSubscription = !!state.acting.userId && !state.subscription.active;
       if (!list) return;
       if (systems.loading) {
         list.innerHTML = '<div class="muted-inline">Загружаем системы…</div>';
@@ -4998,8 +4996,7 @@
           </div>
         `;
       }).join('') || '<div class="muted-inline">Систем пока нет.</div>';
-      if (createRow) createRow.classList.toggle('hidden', blockedByTraineeSubscription);
-      if (blockedHint) blockedHint.classList.toggle('hidden', !blockedByTraineeSubscription);
+      if (createRow) createRow.classList.remove('hidden');
     }
 
     function setSystemCreateButtonState() {
@@ -5041,17 +5038,13 @@
     }
 
     async function confirmCreateSystem() {
-      if (state.acting.userId && !state.subscription.active) {
-        toast('Невозможно создать систему: у подопечного нет активной подписки');
-        return;
-      }
       const input = document.getElementById('systemNewName');
       const name = (input?.value || '').trim();
       if (!name) return;
       const days = Math.max(1, Math.min(7, Number(state.settings.systems.newDays) || 3));
       let replaceExisting = false;
       if (!state.subscription.active && (state.settings.systems.items || []).length >= 1) {
-        const ok = window.confirm('Внимание, ваша нынешняя система полностью перезапишется. История упражнений сохранится. Продолжить?');
+        const ok = window.confirm('У тебя нет подписки, поэтому новая система перезапишет текущую. История тренировок сохранится. Продолжить?');
         if (!ok) return;
         replaceExisting = true;
       }
@@ -5114,9 +5107,18 @@
       }
       if (action === 'system-delete' && id > 0) {
         openConfirmModal?.(async () => {
-          await apiFetch(`/gymapi/systems/${id}`, { method: 'DELETE' });
-          await loadSystems();
-          await refreshTodayData({ keepDay: true });
+          try {
+            await apiFetch(`/gymapi/systems/${id}`, { method: 'DELETE', silent: true });
+            await loadSystems();
+            await refreshTodayData({ keepDay: true });
+          } catch (e) {
+            const msg = String(e?.message || '');
+            if (msg.includes('единственную систему')) {
+              toast('Упс, вы пытаетесь удалить свою единственную систему. Мы не можем вам этого позволить сделать. Если хотите, создайте новую систему снизу — она перезапишет текущую.');
+              return;
+            }
+            toast(msg || 'Не удалось удалить систему');
+          }
         }, 'Удалить систему?', 'Система тренировок будет удалена. Продолжить?');
         return;
       }
@@ -6257,6 +6259,7 @@
         name: trainee.name || '',
         canEdit: trainee.canEdit !== false,
       };
+      resetScopedCachesForActorSwitch();
       updateActingBanner();
       closeTraineeSheet();
       navigateTo('today');
@@ -6266,11 +6269,57 @@
 
     async function clearActingUser() {
       state.acting = { userId: null, name: '', canEdit: true };
+      resetScopedCachesForActorSwitch();
       updateActingBanner();
       closeTraineeSheet();
       navigateTo('today');
       await loadToday();
       toast('Вы вернулись в свой дневник');
+    }
+
+    function activeOwnerContextKey() {
+      const ownerId = Number(state.acting?.userId || state.userId || 0);
+      return String(ownerId || 'self');
+    }
+
+    function resetScopedCachesForActorSwitch() {
+      state.settings.measurements = {
+        ...state.settings.measurements,
+        loading: false,
+        loaded: false,
+        ownerContextKey: '',
+        lastUpdate: '',
+        categories: [],
+        itemsByCode: {},
+        history: {},
+        expanded: {},
+        menuOpen: false,
+        formView: null,
+        sheet: {
+          mode: null,
+          code: null,
+          view: 'list',
+          source: null,
+        },
+      };
+      state.settings.systems = {
+        ...state.settings.systems,
+        activeSystemId: null,
+        activeSystemName: '',
+        items: [],
+        loading: false,
+      };
+      state.library = {
+        ...state.library,
+        loading: false,
+        groups: [],
+        exercises: [],
+        selectedGroup: null,
+        history: null,
+        historyLoading: false,
+        historyCache: {},
+        historyIndex: {},
+      };
     }
 
     function renderTrainerHub() {
@@ -7248,6 +7297,7 @@
         };
         if (!data.is_trainer && state.acting.userId) {
           state.acting = { userId: null, name: '', canEdit: true };
+          resetScopedCachesForActorSwitch();
           updateActingBanner();
         }
         updateTraineeButtonVisibility();
@@ -7278,6 +7328,14 @@
 
     async function loadMeasurementsOverview({ force = false } = {}) {
       const measurements = state.settings.measurements;
+      const ownerContextKey = activeOwnerContextKey();
+      if (measurements.ownerContextKey && measurements.ownerContextKey !== ownerContextKey) {
+        measurements.loaded = false;
+        measurements.categories = [];
+        measurements.itemsByCode = {};
+        measurements.history = {};
+        measurements.expanded = {};
+      }
       if (measurements.loading || (measurements.loaded && !force)) return;
       measurements.loading = true;
       renderMeasurementsView();
@@ -7303,6 +7361,7 @@
           expandedMap[category.code] = category.code === activeCode;
         });
         measurements.loaded = true;
+        measurements.ownerContextKey = ownerContextKey;
       } catch (e) {
         toast('Не удалось загрузить замеры');
       } finally {
@@ -8004,6 +8063,7 @@
             await loadTrainerOverview();
             if (state.acting.userId && Number(traineeId) === Number(state.acting.userId)) {
               state.acting = { userId: null, name: '', canEdit: true };
+              resetScopedCachesForActorSwitch();
               updateActingBanner();
             }
             return;
@@ -12087,6 +12147,7 @@
             await loadTrainerOverview();
             if (state.acting.userId && Number(traineeId) === Number(state.acting.userId)) {
               state.acting = { userId: null, name: '', canEdit: true };
+              resetScopedCachesForActorSwitch();
               updateActingBanner();
             }
             renderTraineeSheet();
