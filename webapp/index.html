@@ -3086,7 +3086,6 @@
             selectedUserId: null,
             profileLoading: false,
             profile: null,
-            badgePopup: null,
           },
           teams: {
             loading: false,
@@ -3835,7 +3834,6 @@
       state.settings.productivity.leaderboard.selectedUserId = null;
       state.settings.productivity.leaderboard.profile = null;
       state.settings.productivity.leaderboard.profileLoading = false;
-      state.settings.productivity.leaderboard.badgePopup = null;
       syncFinishFabVisibility();
     }
 
@@ -3870,7 +3868,7 @@
       const iconsHtml = icons.slice(0, 8).map((i) => {
         const title = i.title || i.icon || 'Медаль';
         const unlockedAt = i.unlocked_at ? String(i.unlocked_at).slice(0, 10) : 'дата не указана';
-        return `<button type="button" class="mini-badge" data-action="leader-badge-open" data-title="${escapeHtml(String(title))}" data-unlocked-at="${escapeHtml(unlockedAt)}">${escapeHtml(i.icon || '🏅')}</button>`;
+        return `<span class="mini-badge" title="${escapeHtml(`${title} · ${unlockedAt}`)}" aria-label="${escapeHtml(`${title}, ${unlockedAt}`)}">${escapeHtml(i.icon || '🏅')}</span>`;
       }).join('');
       return `
         <div class="leader-profile" id="leaderProfileInline">
@@ -3913,21 +3911,6 @@
       }
 
       const profileHtml = renderLeaderProfileMarkup(lb);
-      const popup = lb.badgePopup;
-      const popupHtml = popup
-        ? (() => {
-            const winW = window.innerWidth || 360;
-            const winH = window.innerHeight || 640;
-            const cardW = Math.min(220, winW - 24);
-            const left = Math.max(12, Math.min((Number(popup.x) || winW / 2) - cardW / 2, winW - cardW - 12));
-            const preferBottom = (Number(popup.y) || 0) < (winH - 160);
-            const top = preferBottom
-              ? Math.max(10, Number(popup.y) || 10)
-              : Math.max(10, (Number(popup.y) || winH) - 124);
-            const placeClass = preferBottom ? 'place-bottom' : 'place-top';
-            return `<div class="badge-popup" style="left:${Math.round(left)}px; top:${Math.round(top)}px;"><div class="badge-popup-card ${placeClass}" role="dialog" aria-modal="false"><span class="badge-popup-arrow" aria-hidden="true"></span><div class="card-title">${escapeHtml(popup.title || 'Медаль')}</div><div class="timer-hint">Получена: ${escapeHtml(popup.unlockedAt || 'дата не указана')}</div><button type="button" class="btn small-btn" data-action="leader-badge-close">Закрыть</button></div></div>`;
-          })()
-        : '';
       const selectedInPage = lb.items.some((item) => Number(item.user_id) === Number(lb.selectedUserId || 0));
       const detachedProfile = (!selectedInPage && profileHtml) ? `<div class="leader-item">${profileHtml}</div>` : '';
       listEl.innerHTML = detachedProfile + lb.items.map((item) => {
@@ -3947,7 +3930,7 @@
             ${isActive ? profileHtml : ''}
           </div>
         `;
-      }).join('') + popupHtml;
+      }).join('');
     }
 
     function debounce(fn, ms) {
@@ -12210,23 +12193,6 @@
         if (action === 'open-subscription') {
           closeProductivitySheet();
           navigateTo('subscription');
-          return;
-        }
-        if (action === 'leader-badge-open') {
-          const lb = state.settings.productivity.leaderboard;
-          const rect = target.getBoundingClientRect();
-          lb.badgePopup = {
-            title: String(target.dataset.title || 'Медаль'),
-            unlockedAt: String(target.dataset.unlockedAt || 'дата не указана'),
-            x: Math.round(rect.left + rect.width / 2),
-            y: Math.round(rect.bottom + 8),
-          };
-          renderLeaderboardSection();
-          return;
-        }
-        if (action === 'leader-badge-close') {
-          state.settings.productivity.leaderboard.badgePopup = null;
-          renderLeaderboardSection();
           return;
         }
         if (action === 'leader-open') {
