@@ -3759,20 +3759,23 @@ async def fetch_last_session_sets(user_id: int, day_index: int, ue_id: int, toda
         return await cur.fetchall()
 
 
-async def count_completed_sessions_for_user_exercise(conn, user_id: int, ue_id: int) -> int:
+async def count_completed_sessions_for_exercise(conn, user_id: int, exercise_id: int) -> int:
     """
-    Сколько раз пользователь завершал упражнение (is_done=1) в любых сессиях.
+    Сколько раз пользователь завершал упражнение (is_done=1) во всех сессиях.
+    Счёт ведётся по catalog exercise_id, а не по user_exercise_id,
+    чтобы история синхронизировалась между днями/системами.
     """
     cur = await conn.execute(
         """
         SELECT COUNT(*)
         FROM session_exercises se
         JOIN sessions s ON s.id = se.session_id
+        JOIN user_exercises ue ON ue.id = se.user_exercise_id
         WHERE s.user_id = ?
-          AND se.user_exercise_id = ?
+          AND ue.exercise_id = ?
           AND se.is_done = 1
         """,
-        (int(user_id), int(ue_id)),
+        (int(user_id), int(exercise_id)),
     )
     row = await cur.fetchone()
     return int((row[0] if row else 0) or 0)

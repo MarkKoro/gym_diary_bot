@@ -8740,6 +8740,11 @@
       return formatSetDetail(last);
     }
 
+    function formatSetsCompact(sets = []) {
+      if (!Array.isArray(sets) || !sets.length) return '';
+      return sets.map((set) => formatSetDetail(set)).filter(Boolean).join(' • ');
+    }
+
     function findPreviousBestSet(previousSets = []) {
       if (!previousSets.length) return null;
       let best = previousSets[0];
@@ -8779,6 +8784,10 @@
         return;
       }
       const previousSets = ctx.data?.previous_sets || [];
+      if (previousSets.length) {
+        const latest = previousSets[previousSets.length - 1];
+        applyDraftFromSet(exercise.user_exercise_id, latest);
+      }
       const best = findPreviousBestSet(previousSets);
       if (!best) {
         summary.classList.remove('show');
@@ -8786,7 +8795,8 @@
         return;
       }
       const detail = formatSetDetail(best);
-      summary.textContent = detail ? `В прошлый раз: ${detail}` : '';
+      const dateLabel = ctx.data?.previous_date ? ` (${ctx.data.previous_date})` : '';
+      summary.textContent = detail ? `В прошлый раз${dateLabel}: ${detail}` : '';
       summary.classList.toggle('show', Boolean(detail));
     }
 
@@ -8807,7 +8817,10 @@
         return parts.join(' • ');
       }
       const count = exercise.sets?.length || 0;
-      if (!count) return 'Подходов пока нет';
+      if (!count) {
+        const prev = formatSetsCompact(exercise.previous_sets || []);
+        return prev ? `В прошлый раз: ${prev}` : 'Подходов пока нет';
+      }
       const last = formatLastSet(exercise);
       return `Подходы: ${count} • Последний: ${last || '—'}`;
     }
@@ -8830,9 +8843,16 @@
       return sets.length ? sets[sets.length - 1] : null;
     }
 
-    function getCachedLastValues(ueId) {
+    function getLastValuesCacheKey(exercise) {
+      const exerciseId = Number(exercise?.exercise_id || 0);
+      if (exerciseId > 0) return `gd_last_vals_ex_${exerciseId}`;
+      const ueId = Number(exercise?.user_exercise_id || 0);
+      return `gd_last_vals_${ueId}`;
+    }
+
+    function getCachedLastValues(exercise) {
       try {
-        const raw = localStorage.getItem(`gd_last_vals_${ueId}`);
+        const raw = localStorage.getItem(getLastValuesCacheKey(exercise));
         if (!raw) return null;
         const parsed = JSON.parse(raw);
         return {
@@ -8843,14 +8863,14 @@
       } catch (_) { return null; }
     }
 
-    function saveCachedLastValues(ueId, values) {
+    function saveCachedLastValues(exercise, values) {
       try {
         const payload = {
           weight_kg: Number(values.weight_kg || 0),
           reps: Number(values.reps || 0),
           seconds: Number(values.seconds || 0),
         };
-        localStorage.setItem(`gd_last_vals_${ueId}`, JSON.stringify(payload));
+        localStorage.setItem(getLastValuesCacheKey(exercise), JSON.stringify(payload));
       } catch (_) {}
     }
 
@@ -8862,10 +8882,21 @@
           reps: Number(last.reps || 0),
           seconds: Number(last.seconds || 0),
         };
-        saveCachedLastValues(exercise.user_exercise_id, values);
+        saveCachedLastValues(exercise, values);
         return values;
       }
-      const cached = getCachedLastValues(exercise.user_exercise_id);
+      const previousSets = exercise.previous_sets || [];
+      if (previousSets.length) {
+        const latest = previousSets[previousSets.length - 1];
+        const values = {
+          weight_kg: Number(latest.weight_kg || 0),
+          reps: Number(latest.reps || 0),
+          seconds: Number(latest.seconds || 0),
+        };
+        saveCachedLastValues(exercise, values);
+        return values;
+      }
+      const cached = getCachedLastValues(exercise);
       if (cached) return cached;
       return { weight_kg: 0, reps: 0, seconds: 0 };
     }
@@ -8891,8 +8922,9 @@
     }
 
     function applyDraftFromSet(ueId, set) {
+      const exercise = state.exercises.get(ueId);
       if (!set) {
-        const cached = getCachedLastValues(ueId) || ensureDraft(ueId);
+        const cached = (exercise ? getCachedLastValues(exercise) : null) || ensureDraft(ueId);
         updateDraft(ueId, cached);
         return;
       }
@@ -8902,7 +8934,7 @@
         seconds: Number(set.seconds || 0),
       };
       updateDraft(ueId, values);
-      saveCachedLastValues(ueId, values);
+      if (exercise) saveCachedLastValues(exercise, values);
     }
 
     function ensureRunningDraft(ueId) {
@@ -9007,7 +9039,8 @@
       const rounded = field === 'weight_kg' ? Math.round(next * 10) / 10 : Math.round(next);
       const draft = { ...ensureDraft(ueId), [field]: rounded };
       updateDraft(ueId, draft);
-      saveCachedLastValues(ueId, draft);
+      const exercise = state.exercises.get(ueId);
+      if (exercise) saveCachedLastValues(exercise, draft);
       return rounded;
     }
 
@@ -12596,9 +12629,10 @@
         title.className = 'history-title';
         title.textContent = 'Прошлый раз';
         container.appendChild(title);
-        if (data.previous_date || data.previous_summary) {
+        const fallbackSummary = formatSetsCompact(data.previous_sets || []);
+        if (data.previous_date || data.previous_summary || fallbackSummary) {
           const line = document.createElement('div');
-          line.textContent = `${data.previous_date || '—'} — ${data.previous_summary || '—'}`;
+          line.textContent = `${data.previous_date || '—'} — ${data.previous_summary || fallbackSummary || '—'}`;
           container.appendChild(line);
         }
         if (data.previous_sets && data.previous_sets.length) {
