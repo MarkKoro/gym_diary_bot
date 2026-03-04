@@ -3106,7 +3106,7 @@
             requests: { q: '', items: [], total: 0, offset: 0, limit: 20, loading: false, open: false, error: null, pendingCount: 0 },
             style: { loading: false, options: null, saving: false, open: false, error: null, selected: { frame_code: null, bg_code: null, emblem_code: null } },
             members: { open: false },
-            busy: { join: false, create: false, leave: false, accept: false, reject: false, styleSave: false },
+            busy: { join: false, create: false, leave: false, accept: false, reject: false, styleSave: false, deleteTeam: false, removeMember: false, roleSave: false },
           },
         },
         systems: {
@@ -3993,6 +3993,26 @@
       team_emblem_spider: '🕸️',
     };
 
+
+    const TEAM_MEMBER_ROLE_META = {
+      captain: { title: 'Капитан', icon: '🛡️' },
+      colonel: { title: 'Полковник', icon: '⭐' },
+      private: { title: 'Рядовой', icon: '•' },
+      member: { title: 'Рядовой', icon: '•' },
+    };
+
+    function normalizeTeamMemberRole(role) {
+      const value = String(role || '').trim().toLowerCase();
+      if (value === 'captain' || value === 'colonel' || value === 'private') return value;
+      return 'private';
+    }
+
+    function teamMemberRoleBadge(role) {
+      const safe = normalizeTeamMemberRole(role);
+      const meta = TEAM_MEMBER_ROLE_META[safe] || TEAM_MEMBER_ROLE_META.private;
+      return `${meta.icon} ${meta.title}`;
+    }
+
     function renderProductivityTabs() {
       const tab = state.settings.productivity.activeTab || 'people';
       document.querySelectorAll('#productivityTabs .seg-btn').forEach((btn) => {
@@ -4071,6 +4091,7 @@
         <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:10px;" id="teamMyActions">
           <button class="btn" data-action="team-copy-code" data-code="${escapeHtml(my.join_code || '')}">Скопировать код</button>
           <button class="btn ${teams.busy.leave ? 'btn-disabled' : ''}" ${teams.busy.leave ? 'disabled' : ''} data-action="team-leave">Покинуть</button>
+          ${(state.isAdmin || my.role === 'captain') ? `<button class="btn ${teams.busy.deleteTeam ? 'btn-disabled' : ''}" ${teams.busy.deleteTeam ? 'disabled' : ''} data-action="team-delete" data-team-id="${my.team_id}">Удалить команду</button>` : ''}
           ${my.role === 'captain' ? `<button class="btn" data-action="team-requests-open">Заявки${Number(teams.requests.pendingCount || 0) > 0 ? ' (' + Number(teams.requests.pendingCount) + ')' : ''}</button><button class="btn" data-action="team-style-open">Стиль</button>` : ''}
         </div>
       `;
@@ -4111,15 +4132,17 @@
         const teamProfileHtml = expanded ? `
           <div class="card" style="padding:10px; margin-top:8px;">
             <div class="team-meta">Участники: ${Number(teams.profile?.team?.members_count || item.members_count || 0)} · Нажми на участника, чтобы раскрыть профиль.</div>
+            ${state.isAdmin ? `<div style="margin-top:8px;"><button class="btn ${teams.busy.deleteTeam ? 'btn-disabled' : ''}" ${teams.busy.deleteTeam ? 'disabled' : ''} data-action="team-delete" data-team-id="${item.team_id}">Удалить команду</button></div>` : ''}
             ${members.map((m) => {
               const isActive = Number(lb.selectedUserId || 0) === Number(m.user_id || 0);
+              const roleCode = normalizeTeamMemberRole(m.role);
               return `
                 <div class="leader-item" id="teamLeaderItem-${m.user_id}">
                   <button class="leader-row ${isActive ? 'active' : ''} ${m.title_frame_code || ''}" style="margin-top:6px;" data-action="leader-open" data-user-id="${m.user_id}">
                     <div class="leader-rank">${Math.max(0, Math.min(100, Number(m.score || 0)))}</div>
                     <div>
                       <div class="leader-name">@${escapeHtml(m.username || ('athlete_'+m.user_id))}</div>
-                      <div class="team-meta">Завершено дней за 28д: ${Number(m.training_days_28 || 0)}</div>
+                      <div class="team-meta">${escapeHtml(teamMemberRoleBadge(roleCode))} · Завершено дней за 28д: ${Number(m.training_days_28 || 0)}</div>
                     </div>
                     <div class="timer-hint">${isActive ? 'Скрыть' : 'Открыть'}</div>
                   </button>
@@ -4212,6 +4235,7 @@
       const my = teams.my;
       const profileMarkup = renderLeaderProfileMarkup(lb);
       const isCaptain = my && my.role === 'captain';
+      const canDeleteTeam = !!(state.isAdmin || isCaptain);
       const isMyProfileOpen = Boolean(my && teams.view === 'profile' && Number(teams.selectedTeamId || 0) === Number(my.team_id || 0));
       const selectedProfile = teams.profile || {};
       const selectedTeam = selectedProfile.team || {};
@@ -4221,16 +4245,28 @@
         const safe = Array.isArray(members) ? members : [];
         return safe.map((m) => {
           const isActive = Number(lb.selectedUserId || 0) === Number(m.user_id || 0);
+          const roleCode = normalizeTeamMemberRole(m.role);
+          const canManageMember = Boolean(isCaptain && isMyProfileOpen && Number(m.user_id || 0) !== Number(state.userId || 0));
           return `
             <div class="leader-item" id="teamLeaderItem-${m.user_id}">
               <button class="leader-row ${isActive ? 'active' : ''}" style="margin-top:6px;" data-action="leader-open" data-user-id="${m.user_id}">
                 <div class="leader-rank">${Math.max(0, Math.min(100, Number(m.score || 0)))}</div>
                 <div>
                   <div class="leader-name">@${escapeHtml(m.username || ('athlete_'+m.user_id))}</div>
-                  <div class="team-meta">Тренировок за 28д: ${Number(m.training_days_28 || 0)}</div>
+                  <div class="team-meta">${escapeHtml(teamMemberRoleBadge(roleCode))} · Тренировок за 28д: ${Number(m.training_days_28 || 0)}</div>
                 </div>
                 <div class="timer-hint">${isActive ? 'Скрыть' : 'Открыть'}</div>
               </button>
+              ${canManageMember ? `
+                <div style="display:flex; gap:6px; flex-wrap:wrap; margin-top:6px; margin-left:52px;">
+                  <select class="settings-input" style="max-width:170px;" data-role-select-user-id="${m.user_id}">
+                    <option value="private" ${roleCode === 'private' ? 'selected' : ''}>Рядовой</option>
+                    <option value="colonel" ${roleCode === 'colonel' ? 'selected' : ''}>Полковник</option>
+                  </select>
+                  <button class="btn small-btn ${teams.busy.roleSave ? 'btn-disabled' : ''}" ${teams.busy.roleSave ? 'disabled' : ''} data-action="team-member-role-save" data-user-id="${m.user_id}">Сохранить роль</button>
+                  <button class="btn small-btn ${teams.busy.removeMember ? 'btn-disabled' : ''}" ${teams.busy.removeMember ? 'disabled' : ''} data-action="team-member-remove" data-user-id="${m.user_id}">Исключить</button>
+                </div>
+              ` : ''}
               ${isActive ? profileMarkup : ''}
             </div>`;
         }).join('') || '<div class="timer-hint" style="margin-top:8px;">Пока нет участников.</div>';
@@ -4320,6 +4356,7 @@
             <div style="display:flex; gap:8px; flex-wrap:wrap;" id="teamManageActions">
               <button class="btn" data-action="team-copy-code" data-code="${escapeHtml(my.join_code || '')}">Скопировать код</button>
               <button class="btn ${teams.busy.leave ? 'btn-disabled' : ''}" ${teams.busy.leave ? 'disabled' : ''} data-action="team-leave">Покинуть</button>
+              ${canDeleteTeam ? `<button class="btn ${teams.busy.deleteTeam ? 'btn-disabled' : ''}" ${teams.busy.deleteTeam ? 'disabled' : ''} data-action="team-delete" data-team-id="${my.team_id}">Удалить команду</button>` : ''}
               ${isCaptain ? `<button class="btn" data-action="team-requests-open">Заявки${Number(teams.requests.pendingCount || 0) > 0 ? ' (' + Number(teams.requests.pendingCount) + ')' : ''}</button><button class="btn" data-action="team-style-open">Стиль</button>` : ''}
             </div>
           </div>`;
@@ -4550,6 +4587,68 @@
         console.error(e);
       } finally {
         teams.busy.leave = false;
+        renderTeamsSection();
+      }
+    }
+
+    async function actionTeamDelete(teamId) {
+      const teams = state.settings.productivity.teams;
+      if (teams.busy.deleteTeam) return;
+      teams.busy.deleteTeam = true;
+      renderTeamsSection();
+      try {
+        await apiFetch(`/gymapi/teams/${Number(teamId)}/delete`, { method: 'POST' });
+        toast('Команда удалена');
+        teams.view = 'list';
+        teams.profile = null;
+        teams.selectedTeamId = null;
+        await loadTeamsMe();
+        await loadTeamLeaderboard();
+      } catch (e) {
+        toast('Не удалось удалить команду');
+        console.error(e);
+      } finally {
+        teams.busy.deleteTeam = false;
+        renderTeamsSection();
+      }
+    }
+
+    async function actionTeamMemberRemove(teamId, memberUserId) {
+      const teams = state.settings.productivity.teams;
+      if (teams.busy.removeMember) return;
+      teams.busy.removeMember = true;
+      renderTeamsSection();
+      try {
+        await apiFetch(`/gymapi/teams/${Number(teamId)}/members/${Number(memberUserId)}/remove`, { method: 'POST' });
+        toast('Участник исключён');
+        if (teams.selectedTeamId) await loadTeamProfile(teams.selectedTeamId);
+        await loadTeamLeaderboard();
+      } catch (e) {
+        toast('Не удалось исключить участника');
+        console.error(e);
+      } finally {
+        teams.busy.removeMember = false;
+        renderTeamsSection();
+      }
+    }
+
+    async function actionTeamMemberRoleSave(teamId, memberUserId, role) {
+      const teams = state.settings.productivity.teams;
+      if (teams.busy.roleSave) return;
+      teams.busy.roleSave = true;
+      renderTeamsSection();
+      try {
+        await apiFetch(`/gymapi/teams/${Number(teamId)}/members/${Number(memberUserId)}/role`, {
+          method: 'POST',
+          body: JSON.stringify({ role: normalizeTeamMemberRole(role) }),
+        });
+        toast('Роль обновлена');
+        if (teams.selectedTeamId) await loadTeamProfile(teams.selectedTeamId);
+      } catch (e) {
+        toast('Не удалось обновить роль');
+        console.error(e);
+      } finally {
+        teams.busy.roleSave = false;
         renderTeamsSection();
       }
     }
@@ -12089,6 +12188,32 @@
           actionTeamLeave().catch(console.error);
           return;
         }
+        if (action === 'team-delete') {
+          const teamId = Number(target.dataset.teamId || state.settings.productivity.teams.my?.team_id || 0);
+          if (teamId <= 0) return;
+          if (!confirm('Удалить команду? Это действие необратимо.')) return;
+          actionTeamDelete(teamId).catch(console.error);
+          return;
+        }
+        if (action === 'team-member-remove') {
+          const teams = state.settings.productivity.teams;
+          const teamId = Number(teams.selectedTeamId || teams.my?.team_id || 0);
+          const memberUserId = Number(target.dataset.userId || 0);
+          if (teamId <= 0 || memberUserId <= 0) return;
+          if (!confirm('Исключить участника из команды?')) return;
+          actionTeamMemberRemove(teamId, memberUserId).catch(console.error);
+          return;
+        }
+        if (action === 'team-member-role-save') {
+          const teams = state.settings.productivity.teams;
+          const teamId = Number(teams.selectedTeamId || teams.my?.team_id || 0);
+          const memberUserId = Number(target.dataset.userId || 0);
+          const select = document.querySelector(`[data-role-select-user-id="${memberUserId}"]`);
+          const role = select ? String(select.value || 'private') : 'private';
+          if (teamId <= 0 || memberUserId <= 0) return;
+          actionTeamMemberRoleSave(teamId, memberUserId, role).catch(console.error);
+          return;
+        }
         if (action === 'team-copy-code') {
           copyTextToClipboard(target.dataset.code || '').catch(console.error);
           return;
@@ -12298,6 +12423,32 @@
         if (action === 'team-leave') {
           if (!confirm('Покинуть команду?')) return;
           actionTeamLeave().catch(console.error);
+          return;
+        }
+        if (action === 'team-delete') {
+          const teamId = Number(target.dataset.teamId || state.settings.productivity.teams.my?.team_id || 0);
+          if (teamId <= 0) return;
+          if (!confirm('Удалить команду? Это действие необратимо.')) return;
+          actionTeamDelete(teamId).catch(console.error);
+          return;
+        }
+        if (action === 'team-member-remove') {
+          const teams = state.settings.productivity.teams;
+          const teamId = Number(teams.selectedTeamId || teams.my?.team_id || 0);
+          const memberUserId = Number(target.dataset.userId || 0);
+          if (teamId <= 0 || memberUserId <= 0) return;
+          if (!confirm('Исключить участника из команды?')) return;
+          actionTeamMemberRemove(teamId, memberUserId).catch(console.error);
+          return;
+        }
+        if (action === 'team-member-role-save') {
+          const teams = state.settings.productivity.teams;
+          const teamId = Number(teams.selectedTeamId || teams.my?.team_id || 0);
+          const memberUserId = Number(target.dataset.userId || 0);
+          const select = document.querySelector(`[data-role-select-user-id="${memberUserId}"]`);
+          const role = select ? String(select.value || 'private') : 'private';
+          if (teamId <= 0 || memberUserId <= 0) return;
+          actionTeamMemberRoleSave(teamId, memberUserId, role).catch(console.error);
           return;
         }
         if (action === 'team-copy-code') {

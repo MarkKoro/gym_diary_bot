@@ -4438,6 +4438,12 @@ async def get_user_team(user_id: int) -> dict | None:
 async def leave_team(user_id: int) -> None:
     now = _now_utc_iso()
     async with connect_db() as db:
+        cur = await db.execute(
+            "SELECT team_id FROM team_members WHERE user_id=? AND left_at IS NULL LIMIT 1",
+            (user_id,),
+        )
+        row = await cur.fetchone()
+        team_id = int(row[0]) if row else None
         await db.execute(
             """
             UPDATE team_members
@@ -4446,6 +4452,100 @@ async def leave_team(user_id: int) -> None:
             """,
             (now, user_id),
         )
+        if team_id:
+            await _delete_team_if_empty(db, team_id)
+        await db.commit()
+
+
+async def _delete_team_if_empty(db, team_id: int) -> bool:
+    cur = await db.execute(
+        "SELECT COUNT(*) FROM team_members WHERE team_id=? AND left_at IS NULL",
+        (team_id,),
+    )
+    members_left = int((await cur.fetchone() or [0])[0] or 0)
+    if members_left > 0:
+        return False
+    await db.execute("DELETE FROM team_join_requests WHERE team_id=?", (team_id,))
+    await db.execute("DELETE FROM team_achievements WHERE team_id=?", (team_id,))
+    await db.execute("DELETE FROM team_daily_scores WHERE team_id=?", (team_id,))
+    await db.execute("DELETE FROM team_members WHERE team_id=?", (team_id,))
+    await db.execute("DELETE FROM teams WHERE id=?", (team_id,))
+    return True
+
+
+async def delete_team(team_id: int) -> bool:
+    async with connect_db() as db:
+        cur = await db.execute("SELECT 1 FROM teams WHERE id=? LIMIT 1", (team_id,))
+        if not await cur.fetchone():
+            return False
+        await db.execute("DELETE FROM team_join_requests WHERE team_id=?", (team_id,))
+        await db.execute("DELETE FROM team_achievements WHERE team_id=?", (team_id,))
+        await db.execute("DELETE FROM team_daily_scores WHERE team_id=?", (team_id,))
+        await db.execute("DELETE FROM team_members WHERE team_id=?", (team_id,))
+        await db.execute("DELETE FROM teams WHERE id=?", (team_id,))
+        await db.commit()
+        return True
+
+
+async def remove_team_member(team_id: int, captain_user_id: int, member_user_id: int) -> None:
+    if int(captain_user_id) == int(member_user_id):
+        raise ValueError("cannot_remove_self")
+    now = _now_utc_iso()
+    async with connect_db() as db:
+        cur = await db.execute(
+            """
+            SELECT 1
+            FROM team_members
+            WHERE team_id=? AND user_id=? AND role='captain' AND left_at IS NULL
+            LIMIT 1
+            """,
+            (team_id, captain_user_id),
+        )
+        if not await cur.fetchone():
+            raise ValueError("not_team_captain")
+
+        cur = await db.execute(
+            """
+            UPDATE team_members
+            SET left_at=?
+            WHERE team_id=? AND user_id=? AND left_at IS NULL
+            """,
+            (now, team_id, member_user_id),
+        )
+        if not cur.rowcount:
+            raise ValueError("member_not_found")
+        await _delete_team_if_empty(db, team_id)
+        await db.commit()
+
+
+async def set_team_member_role(team_id: int, captain_user_id: int, member_user_id: int, role: str) -> None:
+    safe_role = str(role or "").strip().lower()
+    if safe_role not in {"captain", "colonel", "private"}:
+        raise ValueError("invalid_role")
+    if safe_role == "captain":
+        raise ValueError("captain_role_locked")
+    async with connect_db() as db:
+        cur = await db.execute(
+            """
+            SELECT 1
+            FROM team_members
+            WHERE team_id=? AND user_id=? AND role='captain' AND left_at IS NULL
+            LIMIT 1
+            """,
+            (team_id, captain_user_id),
+        )
+        if not await cur.fetchone():
+            raise ValueError("not_team_captain")
+        cur = await db.execute(
+            """
+            UPDATE team_members
+            SET role=?
+            WHERE team_id=? AND user_id=? AND left_at IS NULL
+            """,
+            (safe_role, team_id, member_user_id),
+        )
+        if not cur.rowcount:
+            raise ValueError("member_not_found")
         await db.commit()
 
 
@@ -4656,7 +4756,7 @@ async def accept_team_request(request_id: int, captain_user_id: int) -> dict:
             INSERT INTO team_members(team_id, user_id, role, joined_at, left_at)
             VALUES(?,?,?,?,NULL)
             """,
-            (team_id, user_id, "member", now),
+            (team_id, user_id, "private", now),
         )
         await db.execute(
             """
@@ -4773,7 +4873,7 @@ async def join_team_direct(team_id: int, user_id: int) -> None:
                 INSERT INTO team_members(team_id, user_id, role, joined_at, left_at)
                 VALUES(?,?,?,?,NULL)
                 """,
-                (team_id, user_id, "member", now),
+                (team_id, user_id, "private", now),
             )
         except aiosqlite.IntegrityError as exc:
             await db.rollback()
@@ -5091,6 +5191,7 @@ async def fetch_team_profile(team_id: int, viewer_user_id: int):
                 )
                 SELECT tm.user_id,
                        COALESCE(u.username, ''),
+                       COALESCE(tm.role, 'private'),
                        COALESCE(rs.sessions_28, 0),
                        COALESCE(rs.training_days_28, 0),
                        COALESCE(rs.training_weeks_8, 0),
@@ -5131,10 +5232,11 @@ async def fetch_team_profile(team_id: int, viewer_user_id: int):
                     {
                         "user_id": int(row[0]),
                         "username": (row[1] or "").strip() or f"athlete_{int(row[0])}",
+                        "role": (row[2] or "private"),
                         "score": int(round(_leaderboard_score(m) * 100)),
-                        "sessions_28": int(row[2] or 0),
-                        "training_days_28": int(row[3] or 0),
-                        "title_frame_code": (row[11] or None),
+                        "sessions_28": int(row[3] or 0),
+                        "training_days_28": int(row[4] or 0),
+                        "title_frame_code": (row[12] or None),
                     }
                 )
             members.sort(key=lambda item: (-int(item["score"]), -int(item["sessions_28"]), int(item["user_id"])))
