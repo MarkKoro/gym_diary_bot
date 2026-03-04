@@ -3126,7 +3126,7 @@
             style: { loading: false, options: null, saving: false, open: false, error: null, selected: { frame_code: null, bg_code: null, emblem_code: null } },
             roles: { open: false },
             members: { open: false },
-            busy: { join: false, create: false, leave: false, accept: false, reject: false, styleSave: false, deleteTeam: false, removeMember: false, roleSave: false },
+            busy: { join: false, joinSelected: false, create: false, leave: false, accept: false, reject: false, styleSave: false, deleteTeam: false, removeMember: false, roleSave: false },
           },
         },
         systems: {
@@ -4084,7 +4084,7 @@
               <input id="teamCreateName" class="settings-input" placeholder="Название команды" value="${escapeHtml(teams.create.name || '')}">
             </div>
             <label class="timer-hint" style="display:flex; gap:8px; align-items:center; margin-bottom:8px;">
-              <input id="teamCreateOpen" type="checkbox" ${teams.create.isOpen ? 'checked' : ''}> Открытая команда (без заявок)
+              <input id="teamCreateOpen" type="checkbox" ${teams.create.isOpen ? 'checked' : ''}> Открытая команда (иначе закрытая — вход по заявке)
             </label>
             <button class="btn primary ${teams.busy.create ? 'btn-disabled' : ''}" ${teams.busy.create ? 'disabled' : ''} data-action="team-create">Создать</button>
             ` : `
@@ -4124,6 +4124,23 @@
     }
 
 
+    function renderTeamJoinAction(item) {
+      const teams = state.settings.productivity.teams;
+      if (teams.my) return '';
+      const teamId = Number(item?.team_id || 0);
+      if (teamId <= 0) return '';
+      const isOpen = !!item?.is_open;
+      const hasPending = !!item?.has_pending_request;
+      if (hasPending) {
+        return `<div style="margin-top:8px;"><button class="btn btn-disabled" disabled>Заявка отправлена</button></div>`;
+      }
+      const action = isOpen ? 'team-join-selected' : 'team-request-selected';
+      const title = isOpen ? 'Вступить' : 'Подать заявку';
+      const busy = !!teams.busy.joinSelected;
+      return `<div style="margin-top:8px;"><button class="btn primary ${busy ? 'btn-disabled' : ''}" ${busy ? 'disabled' : ''} data-action="${action}" data-team-id="${teamId}">${title}</button></div>`;
+    }
+
+
     function renderTeamboardList() {
       const teams = state.settings.productivity.teams;
       const lb = state.settings.productivity.leaderboard;
@@ -4158,6 +4175,7 @@
         const teamProfileHtml = expanded ? `
           <div class="card" style="padding:10px; margin-top:8px;">
             <div class="team-meta">Участники: ${Number(teams.profile?.team?.members_count || item.members_count || 0)} · Нажми на участника, чтобы раскрыть профиль.</div>
+            ${renderTeamJoinAction(teams.profile?.team || item)}
             ${state.isAdmin ? `<div style="margin-top:8px;"><button class="btn ${teams.busy.deleteTeam ? 'btn-disabled' : ''}" ${teams.busy.deleteTeam ? 'disabled' : ''} data-action="team-delete" data-team-id="${item.team_id}">Удалить команду</button></div>` : ''}
             ${members.map((m) => {
               const isActive = Number(lb.selectedUserId || 0) === Number(m.user_id || 0);
@@ -4393,7 +4411,7 @@
               <div class="timer-hint" style="margin-bottom:8px;">Или создай свою команду.</div>
               ${premium ? `
                 <div class="settings-row inline" style="margin-bottom:8px;"><input id="teamCreateNameManage" class="settings-input" placeholder="Название команды" value="${escapeHtml(teams.create.name || '')}"></div>
-                <label class="timer-hint" style="display:flex; gap:8px; align-items:center; margin-bottom:8px;"><input id="teamCreateOpenManage" type="checkbox" ${teams.create.isOpen ? 'checked' : ''}> Открытая команда</label>
+                <label class="timer-hint" style="display:flex; gap:8px; align-items:center; margin-bottom:8px;"><input id="teamCreateOpenManage" type="checkbox" ${teams.create.isOpen ? 'checked' : ''}> Открытая команда (иначе закрытая — вход по заявке)</label>
                 <button class="btn primary ${teams.busy.create ? 'btn-disabled' : ''}" ${teams.busy.create ? 'disabled' : ''} data-action="team-create-manage">Создать команду</button>
               ` : '<button class="btn" data-action="open-subscription">Создать команду (Премиум)</button>'}
             </div>`;
@@ -4438,6 +4456,7 @@
               <div class="card" style="padding:12px; margin-top:8px;" id="leaderboardTeamPanel-${teamId}">
                 <div class="card-title">${escapeHtml(profileTeam.name || item.name || 'Команда')}</div>
                 <div class="team-meta" style="margin-top:8px;">Участники: ${Number(profileTeam.members_count || members.length || 0)}</div>
+                ${renderTeamJoinAction(profileTeam.team_id ? profileTeam : item)}
                 ${buildMembersList(members, profileTeam.team_id || teamId)}
               </div>`;
           }
@@ -4598,6 +4617,43 @@
         console.error(e);
       } finally {
         teams.busy.join = false;
+        renderTeamsSection();
+      }
+    }
+
+
+    async function actionTeamJoinSelected(teamId, isOpen) {
+      const teams = state.settings.productivity.teams;
+      if (teams.busy.joinSelected) return;
+      const selectedTeamId = Number(teamId || 0);
+      if (selectedTeamId <= 0) return;
+      if (!state.settings.leaderboardVisible) {
+        toast('Включи публичность, чтобы участвовать в командах');
+        return;
+      }
+      teams.busy.joinSelected = true;
+      renderTeamsSection();
+      try {
+        if (isOpen) {
+          await apiFetch(`/gymapi/teams/${selectedTeamId}/join`, { method: 'POST' });
+          toast('Вы вступили в команду ✅');
+        } else {
+          await apiFetch(`/gymapi/teams/${selectedTeamId}/request`, { method: 'POST' });
+          toast('Заявка отправлена ✅');
+        }
+        await loadTeamsMe();
+        await loadTeamLeaderboard();
+        const myTeamId = Number(state.settings.productivity.teams.my?.team_id || 0);
+        if (myTeamId > 0) {
+          await loadTeamProfile(myTeamId);
+        } else if (Number(teams.selectedTeamId || 0) === selectedTeamId) {
+          await loadTeamProfile(selectedTeamId);
+        }
+      } catch (e) {
+        toast(isOpen ? 'Не удалось вступить в команду' : 'Не удалось отправить заявку');
+        console.error(e);
+      } finally {
+        teams.busy.joinSelected = false;
         renderTeamsSection();
       }
     }
@@ -12329,6 +12385,12 @@
           }).catch(console.error);
           return;
         }
+        if (action === 'team-join-selected' || action === 'team-request-selected') {
+          const teamId = Number(target.dataset.teamId || 0);
+          if (teamId <= 0) return;
+          actionTeamJoinSelected(teamId, action === 'team-join-selected').catch(console.error);
+          return;
+        }
         if (action === 'team-back') {
           const teams = state.settings.productivity.teams;
           teams.view = 'list';
@@ -12603,6 +12665,12 @@
             if (teamId === myTeamId) scrollToTeamPanel('teamMembersPanel');
             else scrollToTeamPanel(`leaderboardTeamPanel-${teamId}`);
           }).catch(console.error);
+          return;
+        }
+        if (action === 'team-join-selected' || action === 'team-request-selected') {
+          const teamId = Number(target.dataset.teamId || 0);
+          if (teamId <= 0) return;
+          actionTeamJoinSelected(teamId, action === 'team-join-selected').catch(console.error);
           return;
         }
         if (action === 'team-join-manage') {

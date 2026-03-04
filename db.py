@@ -4648,6 +4648,21 @@ async def create_or_get_join_request(team_id: int, user_id: int) -> dict:
         }
 
 
+async def has_pending_join_request(team_id: int, user_id: int) -> bool:
+    async with connect_db() as db:
+        cur = await db.execute(
+            """
+            SELECT 1
+            FROM team_join_requests
+            WHERE team_id=? AND user_id=? AND status='pending'
+            LIMIT 1
+            """,
+            (team_id, user_id),
+        )
+        row = await cur.fetchone()
+    return bool(row)
+
+
 async def cancel_join_request(team_id: int, user_id: int) -> None:
     now = _now_utc_iso()
     async with connect_db() as db:
@@ -5026,7 +5041,8 @@ async def fetch_team_leaderboard(limit: int = 10, offset: int = 0):
                    t.name,
                    COALESCE(t.frame_code, NULL),
                    COALESCE(t.bg_code, NULL),
-                   COALESCE(t.emblem_code, NULL)
+                   COALESCE(t.emblem_code, NULL),
+                   COALESCE(t.is_open, 0)
             FROM team_users tu
             JOIN teams t ON t.id = tu.team_id
             LEFT JOIN recent_sessions rs ON rs.user_id = tu.user_id
@@ -5048,6 +5064,7 @@ async def fetch_team_leaderboard(limit: int = 10, offset: int = 0):
                 "frame_code": row[14],
                 "bg_code": row[15],
                 "emblem_code": row[16],
+                "is_open": bool(int(row[17] or 0)),
                 "members_count": 0,
                 "active_members_7d": 0,
                 "sessions_7": 0,
