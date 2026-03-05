@@ -2878,9 +2878,15 @@
             <div class="sheet-title">Редактор подходов</div>
             <div class="sheet-subtitle" id="sheetSubtitle"></div>
           </div>
-          <div class="sheet-header-source" id="sheetSourceMetaWrap" style="display:none;">
-            <button type="button" class="source-meta-btn" id="sheetSourceMetaBtn" title="Данные источника">Источник (?)</button>
-            <div class="source-meta-pop" id="sheetSourceMetaPop"></div>
+          <div style="display:flex; gap:6px; margin-left:auto; align-items:flex-start;">
+            <div class="sheet-header-source" id="sheetSourceMetaWrap" style="display:none;">
+              <button type="button" class="source-meta-btn" id="sheetSourceMetaBtn" title="Данные источника">Источник (?)</button>
+              <div class="source-meta-pop" id="sheetSourceMetaPop"></div>
+            </div>
+            <div class="sheet-header-source" id="sheetNoteMetaWrap" style="display:none;">
+              <button type="button" class="source-meta-btn" id="sheetNoteMetaBtn" title="Заметка">Заметка (?)</button>
+              <div class="source-meta-pop" id="sheetNoteMetaPop"></div>
+            </div>
           </div>
         </div>
         <div class="segmented" id="editorTabs">
@@ -9296,6 +9302,8 @@
         ctx.loaded = true;
         ctx.error = false;
         ctx.data = { ...(ctx.data || {}), current_note: data.current_note };
+        const exercise = state.exercises.get(ueId);
+        if (exercise) exercise.current_note = String(data.current_note || '');
         setNoteStatus('Сохранено ✅', true);
       } catch (e) {
         ctx.error = true;
@@ -10227,7 +10235,7 @@
       const titleWrap = document.createElement('div');
       titleWrap.className = 'card-title';
       titleWrap.textContent = exercise.name;
-      if (exercise.note) {
+      if (hasExerciseNoteMeta(exercise)) {
         const note = document.createElement('span');
         note.className = 'note-indicator';
         note.textContent = '📝';
@@ -10278,12 +10286,46 @@
         sourceBtn.addEventListener('click', async (ev) => {
           ev.preventDefault();
           ev.stopPropagation();
-          toggleSourceMetaPopover(exercise.user_exercise_id, sourceBtn, sourcePop);
+          toggleSourceMetaPopover(`${exercise.user_exercise_id}:ai`, sourceBtn, sourcePop);
         });
 
         sourceWrap.appendChild(sourceBtn);
         sourceWrap.appendChild(sourcePop);
         header.appendChild(sourceWrap);
+      }
+      if (!isDeleteMode && hasExerciseNoteMeta(exercise)) {
+        const noteWrap = document.createElement('div');
+        noteWrap.className = 'source-meta-wrap';
+
+        const noteBtn = document.createElement('button');
+        noteBtn.className = 'source-meta-btn';
+        noteBtn.type = 'button';
+        noteBtn.textContent = 'Заметка (?)';
+
+        const notePop = document.createElement('div');
+        notePop.className = 'source-meta-pop';
+        notePop.innerHTML = buildExerciseNoteMetaContent(exercise);
+        const editBtn = notePop.querySelector('[data-note-edit="1"]');
+        if (editBtn) {
+          editBtn.addEventListener('click', (ev) => {
+            ev.preventDefault();
+            ev.stopPropagation();
+            closeSourceMetaPopover();
+            openEditor(exercise.user_exercise_id);
+            setActiveTab('note');
+            renderEditor();
+          });
+        }
+
+        noteBtn.addEventListener('click', async (ev) => {
+          ev.preventDefault();
+          ev.stopPropagation();
+          toggleSourceMetaPopover(`${exercise.user_exercise_id}:note`, noteBtn, notePop);
+        });
+
+        noteWrap.appendChild(noteBtn);
+        noteWrap.appendChild(notePop);
+        header.appendChild(noteWrap);
       }
       if (isDeleteMode) {
         const delBtn = document.createElement('button');
@@ -13474,6 +13516,29 @@
       return 'Предложено ИИ (?)';
     }
 
+    function getExerciseNoteText(exercise, ctx = null) {
+      const contextData = (ctx && ctx.data) ? ctx.data : null;
+      const fromContext = String(contextData?.current_note || '').trim();
+      if (fromContext) return fromContext;
+      const fromSheet = String(exercise?.current_note || '').trim();
+      if (fromSheet) return fromSheet;
+      return String(exercise?.source_meta?.note || '').trim();
+    }
+
+    function hasExerciseNoteMeta(exercise, ctx = null) {
+      return getExerciseNoteText(exercise, ctx).length > 0;
+    }
+
+    function buildExerciseNoteMetaContent(exercise, ctx = null) {
+      const note = getExerciseNoteText(exercise, ctx);
+      if (!note) return `<div class="muted">Заметки пока нет</div>`;
+      return `
+        <div class="source-meta-title">Заметка</div>
+        <div class="source-meta-howto">${escapeHtml(note).replace(/\n/g, '<br>')}</div>
+        <button type="button" class="outline-btn" data-note-edit="1" style="padding:4px 8px;font-size:12px;min-height:24px;">Исправить</button>
+      `;
+    }
+
     function buildSourceMetaContent(exercise, ctx = null) {
       const meta = (exercise && exercise.source_meta) ? exercise.source_meta : {};
       const sourceKind = String(meta.source_kind || '').toLowerCase();
@@ -13512,7 +13577,41 @@
       btn.onclick = (ev) => {
         ev.preventDefault();
         ev.stopPropagation();
-        toggleSourceMetaPopover(exercise.user_exercise_id, btn, pop);
+        toggleSourceMetaPopover(`${exercise.user_exercise_id}:ai`, btn, pop);
+      };
+    }
+
+    function updateSheetNoteMeta(exercise) {
+      const wrap = document.getElementById('sheetNoteMetaWrap');
+      const btn = document.getElementById('sheetNoteMetaBtn');
+      const pop = document.getElementById('sheetNoteMetaPop');
+      if (!wrap || !btn || !pop) return;
+      const ctx = getOrCreateContext(exercise.user_exercise_id);
+      const hasNote = hasExerciseNoteMeta(exercise, ctx);
+      if (!hasNote) {
+        wrap.style.display = 'none';
+        btn.classList.remove('active');
+        pop.classList.remove('show');
+        pop.innerHTML = '';
+        return;
+      }
+      wrap.style.display = '';
+      btn.textContent = 'Заметка (?)';
+      pop.innerHTML = buildExerciseNoteMetaContent(exercise, ctx);
+      const editBtn = pop.querySelector('[data-note-edit="1"]');
+      if (editBtn) {
+        editBtn.onclick = (ev) => {
+          ev.preventDefault();
+          ev.stopPropagation();
+          closeSourceMetaPopover();
+          setActiveTab('note');
+          renderEditor();
+        };
+      }
+      btn.onclick = (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        toggleSourceMetaPopover(`${exercise.user_exercise_id}:note`, btn, pop);
       };
     }
 
@@ -13522,6 +13621,7 @@
       if (!exercise) return;
       document.getElementById('sheet').classList.add('show');
       updateSheetSourceMeta(exercise);
+      updateSheetNoteMeta(exercise);
       document.getElementById('sheetSubtitle').textContent = `Упражнение: ${exercise.name}`;
       setActiveTab(state.editor.tab || 'sets');
       const isRunning = isRunningExercise(exercise);

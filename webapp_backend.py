@@ -928,7 +928,7 @@ async def _build_ai_context_payload(user_id: int) -> dict:
 
         rows = await db.fetch_day_exercises(user_id, day_i, today_iso, active_system_id)
         ex_list: list[dict] = []
-        for ue_id, ex_name, muscle_group, _is_done, exercise_id in rows:
+        for ue_id, ex_name, muscle_group, _is_done, exercise_id, _note in rows:
             ex_id = int(exercise_id)
             item = {
                 'user_exercise_id': int(ue_id),
@@ -2152,7 +2152,7 @@ async def day_sheet(
     exercises_rows = await db.fetch_day_exercises(user_id, day_index, iso_date, active_system_id)
     exercise_sources = await fetch_training_system_exercise_sources(active_system_id, day_index)
     exercises: list[dict] = []
-    for ue_id, name, muscle_group, is_done, exercise_id in exercises_rows:
+    for ue_id, name, muscle_group, is_done, exercise_id, session_note in exercises_rows:
         normalized_group = _normalize_group(muscle_group)
         exercise_payload: dict[str, object] = {
             "user_exercise_id": int(ue_id),
@@ -2160,6 +2160,7 @@ async def day_sheet(
             "name": name,
             "muscle_group": muscle_group,
             "is_done": bool(is_done),
+            "current_note": (session_note or "").strip(),
         }
         source_meta = exercise_sources.get(int(exercise_id), {}) if exercise_sources else {}
         if source_meta:
@@ -2175,6 +2176,7 @@ async def day_sheet(
                 "seconds": int(source_meta.get("seconds") or 0),
                 "weight_kg": float(source_meta.get("weight_kg") or 0.0),
                 "muscle_group": _clip_text(str(source_meta.get("muscle_group") or "").strip(), 40),
+                "note": _clip_text(str(source_meta.get("note") or "").strip(), 1200),
             }
         if normalized_group == "run":
             running_state = await _build_running_state(
@@ -2761,6 +2763,15 @@ async def exercise_context(
     session_id = await db.get_or_create_today_session(user_id, iso_date, day_index, await get_active_training_system_id(user_id))
 
     current_note = await db.get_exercise_note(session_id, ue_id)
+    if not (current_note or "").strip():
+        source_meta = await db.get_training_system_exercise_source(
+            await get_active_training_system_id(user_id),
+            day_index,
+            exercise_id,
+        )
+        source_note = str(source_meta.get("note") or "").strip()
+        if source_note:
+            current_note = source_note
     _prev_note_session_id, previous_note = await db.get_latest_completed_note(
         user_id, exercise_id, exclude_session_id=session_id
     )
