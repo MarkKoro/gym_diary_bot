@@ -195,12 +195,28 @@ logger = logging.getLogger(__name__)
 MAX_INITDATA_AGE_SEC = 24 * 60 * 60
 
 SYSTEMS_LIMIT_GRACE_DAYS = 7
+STAR_RUB_RATE = 1.79
+STAR_MARKUP = 1.10
+
 SUBSCRIPTION_PLANS = {
     '1m': {'title': '1 месяц', 'days': 30, 'amount_rub': 100},
     '6m': {'title': '6 месяцев', 'days': 180, 'amount_rub': 600},
     '12m': {'title': '12 месяцев', 'days': 365, 'amount_rub': 1000},
 }
 
+
+
+
+def _plan_amount_stars(amount_rub: int | float) -> int:
+    raw = (float(amount_rub) * STAR_MARKUP) / STAR_RUB_RATE
+    # Округляем вверх до шага 5, чтобы цена выглядела аккуратно
+    # и не была ниже расчётной.
+    return int(max(1, ((int(raw + 4.9999)) // 5) * 5))
+
+
+def _resolve_payment_method(raw: str | None) -> str:
+    value = str(raw or '').strip().lower()
+    return 'stars' if value == 'stars' else 'rub'
 
 def _subscription_features() -> list[str]:
     return [
@@ -271,22 +287,35 @@ def _looks_like_telegram_provider_token(token: str) -> bool:
     return value.count(':') >= 2
 
 
-async def _create_telegram_subscription_invoice_link(user_id: int, plan_code: str) -> tuple[str, str, dict]:
-    if not TG_TOKEN or not YK_TOKEN:
+async def _create_telegram_subscription_invoice_link(
+    user_id: int,
+    plan_code: str,
+    *,
+    payment_method: str = 'rub',
+) -> tuple[str, str, dict]:
+    method = _resolve_payment_method(payment_method)
+    if not TG_TOKEN:
+        raise HTTPException(status_code=503, detail='Оплата временно недоступна')
+    if method == 'rub' and not YK_TOKEN:
         raise HTTPException(status_code=503, detail='Оплата временно недоступна')
     plan = SUBSCRIPTION_PLANS.get(plan_code)
     if not plan:
         raise HTTPException(status_code=400, detail='Неизвестный тариф')
 
-    payload = f'sub:{user_id}:{plan_code}'
+    payload = f'websub:{user_id}:{plan_code}:{method}'
     body = {
         'title': f"Подписка — {plan['title']}",
         'description': 'Подписка на умный дневник тренировок Progressor.',
         'payload': payload,
-        'provider_token': YK_TOKEN,
-        'currency': 'RUB',
-        'prices': [{'label': plan['title'], 'amount': int(plan['amount_rub']) * 100}],
     }
+    if method == 'stars':
+        body['currency'] = 'XTR'
+        body['prices'] = [{'label': f"{plan['title']} · Telegram Stars", 'amount': _plan_amount_stars(plan['amount_rub'])}]
+    else:
+        body['provider_token'] = YK_TOKEN
+        body['currency'] = 'RUB'
+        body['prices'] = [{'label': plan['title'], 'amount': int(plan['amount_rub']) * 100}]
+
     async with httpx.AsyncClient(timeout=15.0) as client:
         resp = await client.post(f'https://api.telegram.org/bot{TG_TOKEN}/createInvoiceLink', json=body)
     if resp.status_code >= 400:
@@ -298,13 +327,16 @@ async def _create_telegram_subscription_invoice_link(user_id: int, plan_code: st
     if not confirmation_url:
         raise HTTPException(status_code=502, detail='Платёжный сервис вернул неполный ответ')
 
+    amount_minor = _plan_amount_stars(plan['amount_rub']) if method == 'stars' else int(plan['amount_rub']) * 100
+    currency = 'XTR' if method == 'stars' else 'RUB'
+
     await db.create_payment_record(
         user_id=user_id,
         provider='telegram',
-        amount=int(plan['amount_rub']) * 100,
-        currency='RUB',
+        amount=amount_minor,
+        currency=currency,
         status='pending',
-        payload={'plan': plan_code, 'title': plan['title'], 'confirmation_url': confirmation_url},
+        payload={'plan': plan_code, 'title': plan['title'], 'confirmation_url': confirmation_url, 'payment_method': method},
         external_id=payload,
     )
     return payload, confirmation_url, plan
@@ -1808,6 +1840,50 @@ async def get_active_day_completions(user_id: int) -> set[int]:
     return {day for day, _ in parsed}
 
 
+async def _normalize_day_completion_cycle(user_id: int, day_index: int, active_days: list[tuple[int, str]]) -> set[int]:
+    """
+    Нормализует завершённые дни так, чтобы цикл не застревал в состоянии,
+    когда отмечены все дни, и чтобы при переходе на новый круг сбрасывались
+    отметки будущих дней из предыдущего круга.
+    """
+    active_system_id = await get_active_training_system_id(user_id)
+    active_day_indexes = [int(d) for d, _ in (active_days or [])]
+    if not active_day_indexes:
+        return set()
+
+    completed = await get_active_day_completions(user_id)
+    if not completed:
+        return completed
+
+    day_pos = {day: idx for idx, day in enumerate(active_day_indexes)}
+    current_pos = day_pos.get(int(day_index))
+
+    # Пользователь начал новый круг (например, после дня 3 отметил день 1):
+    # убираем отметки "будущих" дней прошлого круга.
+    if current_pos is not None:
+        future_days = {
+            day for day in completed
+            if day in day_pos and day_pos[day] > current_pos
+        }
+        if future_days:
+            async with db.connect_db() as conn:
+                await conn.executemany(
+                    "DELETE FROM day_completions WHERE user_id=? AND system_id=? AND day_index=?",
+                    [(user_id, active_system_id, int(day)) for day in future_days],
+                )
+                await conn.commit()
+            completed = await get_active_day_completions(user_id)
+
+    # Если отмечены все активные дни, оставляем только текущий завершённый день,
+    # чтобы следующий запуск открывался на первом незавершённом дне нового круга.
+    if all(day in completed for day in active_day_indexes):
+        await clear_day_completions(user_id, active_system_id)
+        await mark_day_completed(user_id, int(day_index), datetime.now(UTC).isoformat(), active_system_id)
+        completed = await get_active_day_completions(user_id)
+
+    return completed
+
+
 async def _load_user_settings(user_id: int):
     settings = await db.fetch_user_settings(user_id)
     if not settings:
@@ -2023,27 +2099,9 @@ async def day_today(ctx: AuthCtx = Depends(get_auth_ctx)):
 
     suggested = active_day_indexes[0] if active_day_indexes else 1
 
-    # 1) Приоритет у расписания: если на сегодня назначен конкретный день, открываем его.
-    reminders = await list_user_reminders(user_id)
-    if reminders and active_day_indexes:
-        tz_name = await get_user_timezone(user_id)
-        zone = resolve_user_zone(tz_name)
-        today_dow = datetime.now(zone).weekday()
-        dow_to_day_no: dict[int, int] = {}
-        for day_no, dow, _, _ in reminders:
-            try:
-                day_no_val = int(day_no)
-                dow_val = int(dow)
-            except (TypeError, ValueError):
-                continue
-            if day_no_val in active_day_indexes and 0 <= dow_val <= 6 and dow_val not in dow_to_day_no:
-                dow_to_day_no[dow_val] = day_no_val
-        mapped_day = dow_to_day_no.get(today_dow)
-        if mapped_day in active_day_indexes:
-            suggested = int(mapped_day)
-
-    # 2) Без расписания — первый незавершённый активный день.
-    elif active_day_indexes:
+    # Всегда открываем первый незавершённый активный день текущего цикла.
+    # Расписание не должно принудительно переводить на уже завершённый день.
+    if active_day_indexes:
         for day_index in active_day_indexes:
             if day_index not in completed:
                 suggested = int(day_index)
@@ -2336,7 +2394,8 @@ async def complete_day(
     await mark_day_completed(user_id, day_index, completed_at, active_system_id)
     await mark_copy_trained(user_id, active_system_id, completed_at)
     await _evaluate_achievements(user_id)
-    completed = await get_active_day_completions(user_id)
+    _, active_days = await _validate_day(user_id, day_index)
+    completed = await _normalize_day_completion_cycle(user_id, day_index, active_days)
     last_completed_at = await db.get_day_completion(user_id, day_index, active_system_id)
     last_completed_volume_kg = await db.get_day_completion_volume_kg(
         user_id,
@@ -2583,7 +2642,8 @@ async def complete_running_state(
         await mark_day_completed(user_id, day_index, completed_at, active_system_id)
         await mark_copy_trained(user_id, active_system_id, completed_at)
         await _evaluate_achievements(user_id)
-        completed_days = await get_active_day_completions(user_id)
+        _, active_days = await _validate_day(user_id, day_index)
+        completed_days = await _normalize_day_completion_cycle(user_id, day_index, active_days)
         day_completed = True
     last_completed_at = await db.get_day_completion(user_id, day_index, active_system_id)
     last_completed_volume_kg = await db.get_day_completion_volume_kg(
@@ -2653,7 +2713,8 @@ async def mark_exercise_done_fast(
         await mark_day_completed(user_id, day_index, completed_at, active_system_id)
         await mark_copy_trained(user_id, active_system_id, completed_at)
         await _evaluate_achievements(user_id)
-        completed_days = await get_active_day_completions(user_id)
+        _, active_days = await _validate_day(user_id, day_index)
+        completed_days = await _normalize_day_completion_cycle(user_id, day_index, active_days)
         day_completed = True
 
     last_completed_at = await db.get_day_completion(user_id, day_index, active_system_id)
@@ -4849,6 +4910,7 @@ def _subscription_payload(active: dict | None, latest: dict | None) -> dict:
                 'title': cfg['title'],
                 'days': cfg['days'],
                 'amount_rub': cfg['amount_rub'],
+                'amount_stars': _plan_amount_stars(cfg['amount_rub']),
             }
             for code, cfg in SUBSCRIPTION_PLANS.items()
         ],
@@ -5148,10 +5210,10 @@ async def teams_leave(ctx: AuthCtx = Depends(get_auth_ctx)):
 @app.post('/teams/{team_id}/delete')
 async def teams_delete(team_id: int, ctx: AuthCtx = Depends(get_auth_ctx)):
     me_team = await get_user_team(int(ctx.user_id))
-    is_admin = int(ctx.tg_id) in ADMIN_IDS
-    if not is_admin:
-        if not me_team or int(me_team.get('team_id') or 0) != int(team_id) or me_team.get('role') != 'captain':
-            raise HTTPException(status_code=403, detail='captain_or_admin_only')
+    if not me_team or int(me_team.get('team_id') or 0) != int(team_id):
+        raise HTTPException(status_code=403, detail='founder_only')
+    if int(me_team.get('owner_user_id') or 0) != int(ctx.user_id):
+        raise HTTPException(status_code=403, detail='founder_only')
     deleted = await delete_team(int(team_id))
     if not deleted:
         raise HTTPException(status_code=404, detail='team_not_found')
@@ -5586,9 +5648,16 @@ async def subscription_overview(ctx: AuthCtx = Depends(get_auth_ctx)):
 async def subscription_payment_start(payload: dict = Body(default_factory=dict), ctx: AuthCtx = Depends(get_auth_ctx)):
     user_id = int(ctx.user_id)
     plan_code = str(payload.get('plan_code') or '').strip()
+    payment_method = _resolve_payment_method(payload.get('payment_method'))
 
-    if _looks_like_telegram_provider_token(YK_TOKEN):
-        payment_id, confirmation_url, _plan = await _create_telegram_subscription_invoice_link(user_id, plan_code)
+    if payment_method == 'stars':
+        payment_id, confirmation_url, _plan = await _create_telegram_subscription_invoice_link(
+            user_id, plan_code, payment_method='stars'
+        )
+    elif _looks_like_telegram_provider_token(YK_TOKEN):
+        payment_id, confirmation_url, _plan = await _create_telegram_subscription_invoice_link(
+            user_id, plan_code, payment_method='rub'
+        )
     else:
         payment_id, confirmation_url, _plan = await _create_subscription_payment(
             user_id,

@@ -82,6 +82,17 @@ TEAM_ACHIEVEMENTS: tuple[TeamAchievementDef, ...] = (
 ACHIEVEMENTS_BY_CODE = {item.code: item for item in ACHIEVEMENTS}
 FRAME_TO_CODE = {item.frame_code: item.code for item in ACHIEVEMENTS}
 TEAM_ACHIEVEMENTS_BY_CODE = {item.code: item for item in TEAM_ACHIEVEMENTS}
+ACHIEVEMENT_UNLOCK_HINTS: dict[str, str] = {
+    "first_set": "Сделай 1 рабочий подход.",
+    "first_day_done": "Заверши 1 тренировочный день.",
+    "coach_1": "Подключи хотя бы одного подопечного.",
+    "apprentice_10": "Стань подопечным и закрой 10 тренировочных дней.",
+    "team_joined": "Вступи в любую команду.",
+    "team_founder": "Создай свою команду.",
+    "leaderboard_on": "Включи участие в рейтинге в настройках.",
+    "copied_plan_3days": "Скопируй систему и закрой в ней 3 дня.",
+}
+
 TEAM_STYLE_CATALOG = {
     "frames": {item.team_frame_code: item.code for item in TEAM_ACHIEVEMENTS},
     "bgs": {item.team_bg_code: item.code for item in TEAM_ACHIEVEMENTS},
@@ -170,6 +181,16 @@ async def _fetch_team_metrics(team_id: int) -> dict:
         top1_streak_days += 1
         expected_day = expected_day - timedelta(days=1)
 
+    night_q = """
+        SELECT COUNT(*)
+        FROM day_completion_history dch
+        JOIN team_members tm ON tm.user_id = dch.user_id
+        WHERE tm.team_id=? AND tm.left_at IS NULL
+          AND dch.completed_at >= datetime('now', '-28 day')
+          AND (CAST(strftime('%H', dch.completed_at) AS INTEGER) >= 23 OR CAST(strftime('%H', dch.completed_at) AS INTEGER) <= 4)
+    """
+    night_sessions_28 = int((await (await conn.execute(night_q, (team_id,))).fetchone() or [0])[0] or 0)
+
     return {
         "members_count": members_count,
         "active_members_7d": active_members_7d,
@@ -180,6 +201,7 @@ async def _fetch_team_metrics(team_id: int) -> dict:
         "top1_streak_days": top1_streak_days,
         "top3_days_28": top3_days_28,
         "top10_days_28": top10_days_28,
+        "night_sessions_28": night_sessions_28,
     }
 
 
@@ -280,7 +302,7 @@ async def _fetch_metrics(user_id: int) -> dict:
         team_sessions_per_member_28 = float(t["sessions_28"]) / max(1, team_members_count)
         if team_role == "captain":
             async with db.connect_db() as conn:
-                q = "SELECT COUNT(*) FROM team_members WHERE team_id=? AND left_at IS NULL AND role='member'"
+                q = "SELECT COUNT(*) FROM team_members WHERE team_id=? AND left_at IS NULL AND role<>'captain'"
                 captain_recruits_count = int((await (await conn.execute(q, (team_id,))).fetchone())[0] or 0)
 
     local_dates: list[datetime] = []
@@ -317,6 +339,7 @@ async def _fetch_metrics(user_id: int) -> dict:
         "team_sessions_per_member_28": team_sessions_per_member_28,
         "captain_recruits_count": captain_recruits_count,
         "team_joined_at": team_joined_at_raw,
+        "team_night_sessions_28": int(t["night_sessions_28"]) if team_id is not None else 0,
     }
 
 
@@ -356,7 +379,7 @@ async def evaluate_team(team_id: int) -> dict:
         "t_top1_week": m["best_rank_7"] is not None and m["best_rank_7"] == 1,
         "t_top1_month": m["top1_streak_days"] >= 30,
         "t_consistency_28": (m["sessions_28"] / max(1, m["members_count"])) >= 12,
-        "t_night_ops": False,
+        "t_night_ops": m["night_sessions_28"] >= 12 and m["members_count"] >= 3,
         "t_web_of_power": m["top3_days_28"] >= 21 and m["members_count"] >= 8,
     }
 
@@ -408,7 +431,7 @@ async def evaluate(user_id: int) -> dict:
         "copied_plan_3days": m["copied_plan_3days"] >= 1,
         "inspired_3": m["inspired"] >= 3,
         "arnold_15": m["inspired"] >= 15,
-        "coach_1": m["coach_ok"] >= 1,
+        "coach_1": m["accepted_trainees"] >= 1,
         "apprentice_10": m["accepted_trainer_links"] >= 1 and m["day_done_total"] >= 10,
         "comeback_14": _has_comeback_14(m["local_completions"]),
         "day_done_50": m["day_done_total"] >= 50,
@@ -421,7 +444,7 @@ async def evaluate(user_id: int) -> dict:
         "team_top1_week": m["team_best_rank_7"] is not None and m["team_best_rank_7"] == 1,
         "team_month_top1": m["team_top1_streak_days"] >= 30,
         "team_consistency": m["team_sessions_per_member_28"] >= 12,
-        "team_night_ops": False,
+        "team_night_ops": m["team_night_sessions_28"] >= 6,
         "team_recruit_3": m["team_role"] == "captain" and m["captain_recruits_count"] >= 3,
         "team_recruit_8": m["team_role"] == "captain" and m["captain_recruits_count"] >= 8,
         "team_loyal_30": m["team_id"] is not None and team_loyal_30,
@@ -487,6 +510,7 @@ async def achievements_overview_payload(user_id: int, has_subscription: bool, is
                 "unlocked": bool(is_admin) or item.code in unlocked_map,
                 "unlocked_at": unlocked_map.get(item.code),
                 "secret": bool(item.secret),
+                "unlock_hint": ACHIEVEMENT_UNLOCK_HINTS.get(item.code),
             }
             for item in ACHIEVEMENTS
         ],
