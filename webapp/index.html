@@ -12694,10 +12694,27 @@
       });
       document.getElementById('productivitySheet').addEventListener('input', (e) => {
         const target = e.target;
+        if (target && (target.id === 'teamCreateName' || target.id === 'teamCreateNameManage')) {
+          state.settings.productivity.teams.create.name = String(target.value || '');
+        }
         if (target && target.id === 'teamReqSearch') {
           const teams = state.settings.productivity.teams;
           teams.requests.q = String(target.value || '').trim();
           debouncedLoadTeamRequests();
+        }
+      });
+      document.getElementById('productivitySheet').addEventListener('change', (e) => {
+        const target = e.target;
+        if (target && (target.id === 'teamCreateOpen' || target.id === 'teamCreateOpenManage')) {
+          state.settings.productivity.teams.create.isOpen = !!target.checked;
+        }
+      });
+      document.getElementById('productivitySheet').addEventListener('pointerdown', (e) => {
+        const target = e.target;
+        if (!(target instanceof HTMLElement)) return;
+        if (target.id === 'teamCreateName' || target.id === 'teamCreateNameManage') {
+          e.stopPropagation();
+          target.focus();
         }
       });
 
