@@ -5127,7 +5127,15 @@ async def teams_create(payload: dict = Body(default_factory=dict), ctx: AuthCtx 
     raw_name = str(payload.get('name') or '').strip()
     if len(raw_name) < 2 or len(raw_name) > 32:
         raise HTTPException(status_code=400, detail='name_length_2_32')
-    is_open = bool(payload.get('is_open', False))
+    raw_is_open = payload.get('is_open', False)
+    if isinstance(raw_is_open, bool):
+        is_open = raw_is_open
+    elif isinstance(raw_is_open, (int, float)):
+        is_open = raw_is_open != 0
+    elif isinstance(raw_is_open, str):
+        is_open = raw_is_open.strip().lower() in {'1', 'true', 'yes', 'y', 'on'}
+    else:
+        is_open = False
     team = await create_team(user_id, raw_name, is_open=is_open)
     return {'ok': True, 'team': team}
 
