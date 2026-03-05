@@ -1631,6 +1631,26 @@ async def fetch_training_system_exercise_sources(system_id: int, day_index: int)
     return result
 
 
+async def get_training_system_exercise_source(system_id: int, day_index: int, exercise_id: int) -> dict:
+    async with connect_db() as db:
+        cur = await db.execute(
+            """
+            SELECT source_payload
+            FROM training_system_exercise_sources
+            WHERE system_id=? AND day_index=? AND exercise_id=?
+            LIMIT 1
+            """,
+            (int(system_id), int(day_index), int(exercise_id)),
+        )
+        row = await cur.fetchone()
+    if not row:
+        return {}
+    try:
+        return json.loads(row[0] or '{}')
+    except Exception:
+        return {}
+
+
 async def upsert_training_system_exercise_source(system_id: int, day_index: int, exercise_id: int, source_payload: dict):
     async with connect_db() as db:
         await db.execute(
@@ -1918,7 +1938,7 @@ async def fetch_day_exercises(
     async with connect_db() as db:
         cur = await db.execute(
             """
-        SELECT ue.id, e.name, e.muscle_group, IFNULL(se.is_done,0), ue.exercise_id
+        SELECT ue.id, e.name, e.muscle_group, IFNULL(se.is_done,0), ue.exercise_id, se.note
         FROM user_exercises ue
         JOIN exercises e ON e.id = ue.exercise_id
         LEFT JOIN sessions s
@@ -7167,6 +7187,20 @@ async def copy_training_system_from_user(source_user_id: int, target_user_id: in
                 'reps': int((last_row[0] if last_row else 0) or 0),
                 'weight_kg': float((last_row[1] if last_row else 0.0) or 0.0),
             }
+            note_cur = await db.execute(
+                """
+                SELECT se.note
+                FROM session_exercises se
+                JOIN sessions s ON s.id=se.session_id
+                JOIN user_exercises ue ON ue.id=se.user_exercise_id
+                WHERE s.user_id=? AND ue.exercise_id=? AND TRIM(COALESCE(se.note, ''))<>''
+                ORDER BY s.date DESC, s.id DESC
+                LIMIT 1
+                """,
+                (source_user_id, ex_id),
+            )
+            note_row = await note_cur.fetchone()
+            snapshot['note'] = (note_row[0] or '').strip() if note_row else ''
             source_snapshot_cache[ex_id] = snapshot
             return snapshot
 
@@ -7180,19 +7214,34 @@ async def copy_training_system_from_user(source_user_id: int, target_user_id: in
             if cached:
                 return int(cached)
             cur_find = await db.execute(
-                "SELECT id FROM exercises WHERE LOWER(name)=LOWER(?) AND COALESCE(muscle_group,'')=? LIMIT 1",
-                (normalized_name, normalized_group),
+                "SELECT id, COALESCE(muscle_group,'') FROM exercises WHERE LOWER(name)=LOWER(?) LIMIT 1",
+                (normalized_name,),
             )
             row_find = await cur_find.fetchone()
             if row_find:
                 ex_id = int(row_find[0])
+                existing_group = (row_find[1] or "").strip().lower()
+                if normalized_group != existing_group and existing_group in {"", "other"}:
+                    await db.execute(
+                        "UPDATE exercises SET muscle_group=? WHERE id=?",
+                        (normalized_group, ex_id),
+                    )
                 exercise_cache[key] = ex_id
                 return ex_id
             cur_new = await db.execute(
-                "INSERT INTO exercises(name, muscle_group) VALUES(?, ?)",
+                "INSERT OR IGNORE INTO exercises(name, muscle_group) VALUES(?, ?)",
                 (normalized_name, normalized_group),
             )
-            ex_id = int(cur_new.lastrowid)
+            ex_id = int(cur_new.lastrowid or 0)
+            if ex_id <= 0:
+                cur_retry = await db.execute(
+                    "SELECT id FROM exercises WHERE LOWER(name)=LOWER(?) LIMIT 1",
+                    (normalized_name,),
+                )
+                row_retry = await cur_retry.fetchone()
+                if not row_retry:
+                    raise RuntimeError(f"Не удалось создать упражнение: {normalized_name}")
+                ex_id = int(row_retry[0])
             exercise_cache[key] = ex_id
             return ex_id
 
@@ -7234,6 +7283,7 @@ async def copy_training_system_from_user(source_user_id: int, target_user_id: in
             inherited_sets_count = source_meta.get('sets_count')
             inherited_reps = source_meta.get('reps')
             inherited_weight = source_meta.get('weight_kg')
+            inherited_note = source_meta.get('note')
             snapshot = await get_source_snapshot(payload_source_exercise_id)
             payload = {
                 'source_user_id': int(inherited_source_user_id) if inherited_source_user_id is not None else int(source_user_id),
@@ -7243,6 +7293,7 @@ async def copy_training_system_from_user(source_user_id: int, target_user_id: in
                 'sets_count': int(inherited_sets_count) if inherited_sets_count is not None else int(snapshot.get('sets_count') or 0),
                 'reps': int(inherited_reps) if inherited_reps is not None else int(snapshot.get('reps') or 0),
                 'weight_kg': float(inherited_weight) if inherited_weight is not None else float(snapshot.get('weight_kg') or 0.0),
+                'note': str(inherited_note) if inherited_note is not None else str(snapshot.get('note') or ''),
             }
             await db.execute(
                 """

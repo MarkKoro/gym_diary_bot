@@ -3415,7 +3415,7 @@ def render_day_text(
     last_done = last_done or {}
     prefs = prefs or UiPreferences()
     groups: dict[str, list[tuple[int, str, int, int]]] = {}
-    for ue_id, name, group, done, ex_id in ex_rows:
+    for ue_id, name, group, done, ex_id, _note in ex_rows:
         resolved = resolve_group(name, group)
         groups.setdefault(resolved, []).append((ue_id, name, done, ex_id))
     if not groups:
@@ -5614,7 +5614,7 @@ async def fetch_day_sheet_data(
     data: list[dict] = []
     for_time_loaded = False
     last_for_time: int | None = None
-    for ue_id, name, group, done_flag, ex_id in ex_rows:
+    for ue_id, name, group, done_flag, ex_id, _note in ex_rows:
         resolved_group = resolve_group(name, group)
         with_weight, kind = get_display_flags(resolved_group, name)
         weight_enabled = with_weight or resolved_group in {"workout", "core"}
@@ -6377,7 +6377,7 @@ async def build_summary_map(
     summary: dict[int, str] = {}
     system_id = await _active_system_id(user_id)
     session_id = await get_session_for_day(user_id, today, day, system_id=system_id)
-    for ue_id, name, group, _, ex_id in ex_rows:
+    for ue_id, name, group, _, ex_id, _note in ex_rows:
         resolved = resolve_group(name, group)
         with_weight, kind = get_display_flags(resolved, name)
         weight_enabled = with_weight or resolved in {"workout", "core"}
@@ -6525,7 +6525,7 @@ async def show_day_group_view(
     )
     lines.append("")
     items: list[tuple[int, str, int]] = []
-    for ue_id, name, g, done, ex_id in ex_rows:
+    for ue_id, name, g, done, ex_id, _note in ex_rows:
         resolved = resolve_group(name, g)
         if resolved != group:
             continue
