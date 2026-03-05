@@ -3134,7 +3134,7 @@
             profileLoading: false,
             profile: null,
             join: { code: '' },
-            create: { name: '', isOpen: true },
+            create: { name: '', isOpen: false },
             error: null,
             profileError: null,
             requests: { q: '', items: [], total: 0, offset: 0, limit: 20, loading: false, open: false, error: null, pendingCount: 0 },
@@ -4048,6 +4048,16 @@
       return 'private';
     }
 
+    function parseOpenTeamFlag(value) {
+      if (typeof value === 'boolean') return value;
+      if (typeof value === 'number') return value !== 0;
+      const normalized = String(value || '').trim().toLowerCase();
+      if (!normalized) return false;
+      if (['1', 'true', 'yes', 'y', 'on', 'open', 'public'].includes(normalized)) return true;
+      if (['0', 'false', 'no', 'n', 'off', 'closed', 'private'].includes(normalized)) return false;
+      return false;
+    }
+
     function teamMemberRoleBadge(role) {
       const safe = normalizeTeamMemberRole(role);
       const meta = TEAM_MEMBER_ROLE_META[safe] || TEAM_MEMBER_ROLE_META.private;
@@ -4098,9 +4108,13 @@
             <div class="settings-row inline" style="margin-bottom:8px;">
               <input id="teamCreateName" class="settings-input" placeholder="Название команды" value="${escapeHtml(teams.create.name || '')}">
             </div>
-            <label class="timer-hint" style="display:flex; gap:8px; align-items:center; margin-bottom:8px;">
-              <input id="teamCreateOpen" type="checkbox" ${teams.create.isOpen ? 'checked' : ''}> Открытая команда (иначе закрытая — вход по заявке)
-            </label>
+            <div style="display:grid; gap:6px; margin-bottom:8px;">
+              <select id="teamCreateVisibility" class="settings-select">
+                <option value="closed" ${teams.create.isOpen ? "" : "selected"}>Закрытая команда</option>
+                <option value="open" ${teams.create.isOpen ? "selected" : ""}>Открытая команда</option>
+              </select>
+              <div class="timer-hint">Открытая: любой может сразу вступить. Закрытая: вход строго по заявке.</div>
+            </div>
             <button class="btn primary ${teams.busy.create ? 'btn-disabled' : ''}" ${teams.busy.create ? 'disabled' : ''} data-action="team-create">Создать</button>
             ` : `
             <div class="timer-hint" style="margin-bottom:8px;">🔒 Создание команды доступно в премиум-подписке.</div>
@@ -4133,7 +4147,7 @@
           <button class="btn" data-action="team-copy-code" data-code="${escapeHtml(my.join_code || '')}">Скопировать код</button>
           <button class="btn ${teams.busy.leave ? 'btn-disabled' : ''}" ${teams.busy.leave ? 'disabled' : ''} data-action="team-leave">Покинуть</button>
           ${(my.role === 'captain' && Number(my.owner_user_id || 0) === Number(state.userId || 0)) ? `<button class="btn ${teams.busy.deleteTeam ? 'btn-disabled' : ''}" ${teams.busy.deleteTeam ? 'disabled' : ''} data-action="team-delete" data-team-id="${my.team_id}">Удалить команду</button>` : ''}
-          ${my.role === 'captain' ? `${!my.is_open ? `<button class="btn" data-action="team-requests-open">Заявки${Number(teams.requests.pendingCount || 0) > 0 ? ' (' + Number(teams.requests.pendingCount) + ')' : ''}</button>` : ''}<button class="btn" data-action="team-style-open">Стиль</button><button class="btn" data-action="team-roles-open">Роли</button>` : ''}
+          ${my.role === 'captain' ? `${!parseOpenTeamFlag(my.is_open) ? `<button class="btn" data-action="team-requests-open">Заявки${Number(teams.requests.pendingCount || 0) > 0 ? ' (' + Number(teams.requests.pendingCount) + ')' : ''}</button>` : ''}<button class="btn" data-action="team-style-open">Стиль</button><button class="btn" data-action="team-roles-open">Роли</button>` : ''}
         </div>
       `;
     }
@@ -4144,7 +4158,7 @@
       if (teams.my) return '';
       const teamId = Number(item?.team_id || 0);
       if (teamId <= 0) return '';
-      const isOpen = !!item?.is_open;
+      const isOpen = parseOpenTeamFlag(item?.is_open);
       const hasPending = !!item?.has_pending_request;
       const membersCount = Number(item?.members_count || 0);
       const isFull = membersCount >= 25;
@@ -4152,7 +4166,7 @@
         return `<div style="margin-top:8px;"><button class="btn btn-disabled" disabled>Заявка отправлена</button></div>`;
       }
       const action = isOpen ? 'team-join-selected' : 'team-request-selected';
-      const title = isOpen ? 'Вступить в группу' : 'Подать заявку';
+      const title = isOpen ? 'Вступить в команду' : 'Подать заявку';
       const busy = !!teams.busy.joinSelected;
       const disabled = busy || isFull;
       const button = `<button class="btn primary ${disabled ? 'btn-disabled' : ''}" ${disabled ? 'disabled' : ''} data-action="${action}" data-team-id="${teamId}">${title}</button>`;
@@ -4431,7 +4445,13 @@
               <div class="timer-hint" style="margin-bottom:8px;">Или создай свою команду.</div>
               ${premium ? `
                 <div class="settings-row inline" style="margin-bottom:8px;"><input id="teamCreateNameManage" class="settings-input" placeholder="Название команды" value="${escapeHtml(teams.create.name || '')}"></div>
-                <label class="timer-hint" style="display:flex; gap:8px; align-items:center; margin-bottom:8px;"><input id="teamCreateOpenManage" type="checkbox" ${teams.create.isOpen ? 'checked' : ''}> Открытая команда (иначе закрытая — вход по заявке)</label>
+                <div style="display:grid; gap:6px; margin-bottom:8px;">
+                  <select id="teamCreateVisibilityManage" class="settings-select">
+                    <option value="closed" ${teams.create.isOpen ? "" : "selected"}>Закрытая команда</option>
+                    <option value="open" ${teams.create.isOpen ? "selected" : ""}>Открытая команда</option>
+                  </select>
+                  <div class="timer-hint">Открытая: любой может сразу вступить. Закрытая: вход строго по заявке.</div>
+                </div>
                 <button class="btn primary ${teams.busy.create ? 'btn-disabled' : ''}" ${teams.busy.create ? 'disabled' : ''} data-action="team-create-manage">Создать команду</button>
               ` : '<button class="btn" data-action="open-subscription">Создать команду (Премиум)</button>'}
             </div>`;
@@ -4449,7 +4469,7 @@
               <button class="btn" data-action="team-copy-code" data-code="${escapeHtml(my.join_code || '')}">Скопировать код</button>
               <button class="btn ${teams.busy.leave ? 'btn-disabled' : ''}" ${teams.busy.leave ? 'disabled' : ''} data-action="team-leave">Покинуть</button>
               ${canDeleteTeam ? `<button class="btn ${teams.busy.deleteTeam ? 'btn-disabled' : ''}" ${teams.busy.deleteTeam ? 'disabled' : ''} data-action="team-delete" data-team-id="${my.team_id}">Удалить команду</button>` : ''}
-              ${isCaptain ? `${!my.is_open ? `<button class="btn" data-action="team-requests-open">Заявки${Number(teams.requests.pendingCount || 0) > 0 ? ' (' + Number(teams.requests.pendingCount) + ')' : ''}</button>` : ''}<button class="btn" data-action="team-style-open">Стиль</button><button class="btn" data-action="team-roles-open">Роли</button>` : ''}
+              ${isCaptain ? `${!parseOpenTeamFlag(my.is_open) ? `<button class="btn" data-action="team-requests-open">Заявки${Number(teams.requests.pendingCount || 0) > 0 ? ' (' + Number(teams.requests.pendingCount) + ')' : ''}</button>` : ''}<button class="btn" data-action="team-style-open">Стиль</button><button class="btn" data-action="team-roles-open">Роли</button>` : ''}
             </div>
           </div>`;
       })();
@@ -12476,7 +12496,7 @@
         }
         if (action === 'team-create') {
           const name = document.getElementById('teamCreateName')?.value || '';
-          const isOpen = !!document.getElementById('teamCreateOpen')?.checked;
+          const isOpen = String(document.getElementById('teamCreateVisibility')?.value || 'closed') === 'open';
           state.settings.productivity.teams.create.name = name;
           state.settings.productivity.teams.create.isOpen = isOpen;
           actionTeamCreate(name, isOpen).catch(console.error);
@@ -12705,8 +12725,8 @@
       });
       document.getElementById('productivitySheet').addEventListener('change', (e) => {
         const target = e.target;
-        if (target && (target.id === 'teamCreateOpen' || target.id === 'teamCreateOpenManage')) {
-          state.settings.productivity.teams.create.isOpen = !!target.checked;
+        if (target && (target.id === 'teamCreateVisibility' || target.id === 'teamCreateVisibilityManage')) {
+          state.settings.productivity.teams.create.isOpen = String(target.value || 'closed') === 'open';
         }
       });
       document.getElementById('productivitySheet').addEventListener('pointerdown', (e) => {
@@ -12765,7 +12785,7 @@
         }
         if (action === 'team-create-manage') {
           const name = document.getElementById('teamCreateNameManage')?.value || '';
-          const isOpen = !!document.getElementById('teamCreateOpenManage')?.checked;
+          const isOpen = String(document.getElementById('teamCreateVisibilityManage')?.value || 'closed') === 'open';
           state.settings.productivity.teams.create.name = name;
           state.settings.productivity.teams.create.isOpen = isOpen;
           actionTeamCreate(name, isOpen).catch(console.error);
