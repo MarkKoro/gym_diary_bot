@@ -8364,14 +8364,26 @@ async def handle_broadcast_callback(q, context: ContextTypes.DEFAULT_TYPE):
 
 
 def build_subscription_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        [
-            [InlineKeyboardButton("1 месяц — 100 ₽", callback_data="sub:1m")],
-            [InlineKeyboardButton("6 месяцев — 600 ₽", callback_data="sub:6m")],
-            [InlineKeyboardButton("12 месяцев — 1000 ₽", callback_data="sub:12m")],
-            [InlineKeyboardButton("⬅️ Назад", callback_data="back:main")],
-        ]
-    )
+    rows: list[list[InlineKeyboardButton]] = [
+        [InlineKeyboardButton("1 месяц — 100 ₽", callback_data="sub:1m")],
+        [InlineKeyboardButton("6 месяцев — 600 ₽", callback_data="sub:6m")],
+        [InlineKeyboardButton("12 месяцев — 1000 ₽", callback_data="sub:12m")],
+    ]
+    for code in ("1m", "6m", "12m"):
+        plan = SUBSCRIPTION_PLANS.get(code)
+        if not plan:
+            continue
+        months_label = plan["title"].replace("Подписка на ", "")
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    f"{months_label} — {plan_amount_stars(plan['amount_rub'])} ⭐",
+                    callback_data=f"sub:stars:{code}",
+                )
+            ]
+        )
+    rows.append([InlineKeyboardButton("⬅️ Назад", callback_data="back:main")])
+    return InlineKeyboardMarkup(rows)
 
 
 async def on_subscription_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -8397,7 +8409,17 @@ async def on_subscription_choose(update: Update, context: ContextTypes.DEFAULT_T
     await query.answer()
 
     data = query.data
-    _, plan_code = data.split(":", 1)
+    parts = data.split(":")
+    payment_method = "rub"
+    if len(parts) == 2:
+        _, plan_code = parts
+    elif len(parts) == 3 and parts[1] == "stars":
+        plan_code = parts[2]
+        payment_method = "stars"
+    else:
+        await query.edit_message_text("Неизвестный тариф. Попробуйте ещё раз.")
+        return
+
     plan = SUBSCRIPTION_PLANS.get(plan_code)
     if not plan:
         await query.edit_message_text("Неизвестный тариф. Попробуйте ещё раз.")
@@ -8406,18 +8428,30 @@ async def on_subscription_choose(update: Update, context: ContextTypes.DEFAULT_T
     user = update.effective_user
     db_user_id = await get_or_create_user(user.id, user.username)
     title = plan["title"]
-    payload = f"sub:{user.id}:{plan_code}"
-    currency = "RUB"
-    price_rub = plan["amount_rub"]
-    prices = [LabeledPrice(label=title, amount=price_rub * 100)]
+    if payment_method == "stars":
+        payload = f"setsubstars:{db_user_id}:{plan_code}"
+        currency = "XTR"
+        amount = plan_amount_stars(plan["amount_rub"])
+        prices = [LabeledPrice(label=f"{title} · Stars", amount=amount)]
+        provider_token = ""
+        description = "Оплата подписки в Telegram Stars"
+        payment_payload = {"plan": plan_code, "payment_method": "stars"}
+    else:
+        payload = f"sub:{user.id}:{plan_code}"
+        currency = "RUB"
+        amount = plan["amount_rub"] * 100
+        prices = [LabeledPrice(label=title, amount=amount)]
+        provider_token = YK_TOKEN
+        description = "Оплата подписки в gym_diary_bot"
+        payment_payload = {"plan": plan_code}
 
     await create_payment_record(
         user_id=db_user_id,
         provider="telegram",
-        amount=price_rub * 100,
+        amount=amount,
         currency=currency,
         status="pending",
-        payload={"plan": plan_code},
+        payload=payment_payload,
         external_id=payload,
     )
 
@@ -8434,8 +8468,8 @@ async def on_subscription_choose(update: Update, context: ContextTypes.DEFAULT_T
 
     await query.message.reply_invoice(
         title=title,
-        description="Оплата подписки в gym_diary_bot",
-        provider_token=YK_TOKEN,
+        description=description,
+        provider_token=provider_token,
         currency=currency,
         prices=prices,
         payload=payload,
