@@ -167,6 +167,16 @@ async def _fetch_team_metrics(team_id: int) -> dict:
             )
         ).fetchall()
 
+        night_q = """
+            SELECT COUNT(*)
+            FROM day_completion_history dch
+            JOIN team_members tm ON tm.user_id = dch.user_id
+            WHERE tm.team_id=? AND tm.left_at IS NULL
+              AND dch.completed_at >= datetime('now', '-28 day')
+              AND (CAST(strftime('%H', dch.completed_at) AS INTEGER) >= 23 OR CAST(strftime('%H', dch.completed_at) AS INTEGER) <= 4)
+        """
+        night_sessions_28 = int((await (await conn.execute(night_q, (team_id,))).fetchone() or [0])[0] or 0)
+
     top1_streak_days = 0
     expected_day = datetime.now(UTC).date()
     for day_iso, rank in streak_rows:
@@ -180,16 +190,6 @@ async def _fetch_team_metrics(team_id: int) -> dict:
             break
         top1_streak_days += 1
         expected_day = expected_day - timedelta(days=1)
-
-    night_q = """
-        SELECT COUNT(*)
-        FROM day_completion_history dch
-        JOIN team_members tm ON tm.user_id = dch.user_id
-        WHERE tm.team_id=? AND tm.left_at IS NULL
-          AND dch.completed_at >= datetime('now', '-28 day')
-          AND (CAST(strftime('%H', dch.completed_at) AS INTEGER) >= 23 OR CAST(strftime('%H', dch.completed_at) AS INTEGER) <= 4)
-    """
-    night_sessions_28 = int((await (await conn.execute(night_q, (team_id,))).fetchone() or [0])[0] or 0)
 
     return {
         "members_count": members_count,
