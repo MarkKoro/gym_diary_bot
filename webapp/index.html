@@ -290,6 +290,8 @@
     }
     .subscription-plan-btn .plan-price { color: #ffffff; opacity: 1; }
     .subscription-plan-btn .plan-note { display: none; }
+    .plan-picker-grid { display:grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    .subscription-plan-btn.compact { padding: 10px 12px; font-size: 14px; }
     .subscription-cta-title { font-size: 16px; font-weight: 800; letter-spacing: -0.01em; }
     .subscription-cta-subtitle { color: var(--muted); font-size: 13px; }
     .subscription-sheet-note { color: var(--muted); font-size: 13px; }
@@ -497,6 +499,7 @@
       color: var(--text);
     }
     .ach-locked { opacity: 0.45; filter: grayscale(1); }
+    .ach-new-chip { margin-left: 8px; font-size: 10px; font-weight: 800; letter-spacing: .03em; text-transform: uppercase; color: #fff; background: #ef4444; border-radius: 999px; padding: 2px 6px; }
     .ach-row { display: flex; align-items: center; gap: 10px; }
     .ach-icon { width: 24px; min-width: 24px; text-align: center; font-size: 20px; line-height: 1; }
       .card {
@@ -1240,19 +1243,29 @@
     .measurement-card[data-category="records"]::before { background: #6d4c41; }
     .measurement-card[data-category="vitals"]::before { background: #1e88e5; }
     .measurement-card[data-category="custom"]::before { background: #8e24aa; }
-    .measurement-card-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+    .measurement-card-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; width: 100%; border: 0; background: transparent; padding: 0; color: inherit; text-align: left; cursor: pointer; }
     .measurement-card-title { font-weight: 700; }
     .measurement-card-toggle {
-      border: none;
-      background: none;
       color: var(--accent);
       font-weight: 700;
-      cursor: pointer;
       display: inline-flex;
       align-items: center;
-      gap: 6px;
+      gap: 8px;
     }
-    .measurement-card-toggle span { font-size: 12px; color: var(--muted); }
+    .measurement-count-badge {
+      font-size: 12px;
+      color: var(--text);
+      background: color-mix(in srgb, var(--accent) 16%, transparent);
+      border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--border));
+      border-radius: 999px;
+      min-width: 24px;
+      height: 24px;
+      padding: 0 8px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 700;
+    }
     .measurement-card.collapsed .measurement-category { display: none; }
     .measurement-category { display: grid; gap: 10px; }
     .measurement-item {
@@ -2332,7 +2345,7 @@
         <button class="menu-item active" data-route="today">Сегодня</button>
         <button class="menu-item" data-route="measurements">Мои замеры</button>
         <button class="menu-item" data-route="library">Статистика упражнений</button>
-        <button class="menu-item" data-route="achievements">Достижения</button>
+        <button class="menu-item with-badge" data-route="achievements" id="drawerAchievementsBtn">Достижения <span id="drawerAchievementsBadge" class="menu-item-badge hidden">0</span></button>
         <button class="menu-item with-badge" data-action="open-teams" id="drawerTeamsBtn">Команды <span id="drawerTeamsBadge" class="menu-item-badge hidden">0</span></button>
         <button class="menu-item" data-route="subscription" id="drawerSubscriptionBtn">Подписка · неактивно</button>
         <button class="menu-item" data-route="settings">Настройки</button>
@@ -3050,6 +3063,8 @@
         savingFrame: false,
         savingBadge: false,
         activeTab: 'achievements',
+        unseenCodes: new Set(),
+        lastSeenAt: '',
       },
       library: {
         view: 'groups',
@@ -4117,8 +4132,8 @@
         <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:10px;" id="teamMyActions">
           <button class="btn" data-action="team-copy-code" data-code="${escapeHtml(my.join_code || '')}">Скопировать код</button>
           <button class="btn ${teams.busy.leave ? 'btn-disabled' : ''}" ${teams.busy.leave ? 'disabled' : ''} data-action="team-leave">Покинуть</button>
-          ${(state.isAdmin || my.role === 'captain') ? `<button class="btn ${teams.busy.deleteTeam ? 'btn-disabled' : ''}" ${teams.busy.deleteTeam ? 'disabled' : ''} data-action="team-delete" data-team-id="${my.team_id}">Удалить команду</button>` : ''}
-          ${my.role === 'captain' ? `<button class="btn" data-action="team-requests-open">Заявки${Number(teams.requests.pendingCount || 0) > 0 ? ' (' + Number(teams.requests.pendingCount) + ')' : ''}</button><button class="btn" data-action="team-style-open">Стиль</button><button class="btn" data-action="team-roles-open">Роли</button>` : ''}
+          ${(my.role === 'captain' && Number(my.owner_user_id || 0) === Number(state.userId || 0)) ? `<button class="btn ${teams.busy.deleteTeam ? 'btn-disabled' : ''}" ${teams.busy.deleteTeam ? 'disabled' : ''} data-action="team-delete" data-team-id="${my.team_id}">Удалить команду</button>` : ''}
+          ${my.role === 'captain' ? `${!my.is_open ? `<button class="btn" data-action="team-requests-open">Заявки${Number(teams.requests.pendingCount || 0) > 0 ? ' (' + Number(teams.requests.pendingCount) + ')' : ''}</button>` : ''}<button class="btn" data-action="team-style-open">Стиль</button><button class="btn" data-action="team-roles-open">Роли</button>` : ''}
         </div>
       `;
     }
@@ -4131,13 +4146,18 @@
       if (teamId <= 0) return '';
       const isOpen = !!item?.is_open;
       const hasPending = !!item?.has_pending_request;
-      if (hasPending) {
+      const membersCount = Number(item?.members_count || 0);
+      const isFull = membersCount >= 25;
+      if (hasPending && !isOpen) {
         return `<div style="margin-top:8px;"><button class="btn btn-disabled" disabled>Заявка отправлена</button></div>`;
       }
       const action = isOpen ? 'team-join-selected' : 'team-request-selected';
-      const title = isOpen ? 'Вступить' : 'Подать заявку';
+      const title = isOpen ? 'Вступить в группу' : 'Подать заявку';
       const busy = !!teams.busy.joinSelected;
-      return `<div style="margin-top:8px;"><button class="btn primary ${busy ? 'btn-disabled' : ''}" ${busy ? 'disabled' : ''} data-action="${action}" data-team-id="${teamId}">${title}</button></div>`;
+      const disabled = busy || isFull;
+      const button = `<button class="btn primary ${disabled ? 'btn-disabled' : ''}" ${disabled ? 'disabled' : ''} data-action="${action}" data-team-id="${teamId}">${title}</button>`;
+      const fullHint = isFull ? '<div class="timer-hint" style="margin-top:6px;">Максимум участников уже достигнут.</div>' : '';
+      return `<div style="margin-top:8px;">${button}${fullHint}</div>`;
     }
 
 
@@ -4176,7 +4196,7 @@
           <div class="card" style="padding:10px; margin-top:8px;">
             <div class="team-meta">Участники: ${Number(teams.profile?.team?.members_count || item.members_count || 0)} · Нажми на участника, чтобы раскрыть профиль.</div>
             ${renderTeamJoinAction(teams.profile?.team || item)}
-            ${state.isAdmin ? `<div style="margin-top:8px;"><button class="btn ${teams.busy.deleteTeam ? 'btn-disabled' : ''}" ${teams.busy.deleteTeam ? 'disabled' : ''} data-action="team-delete" data-team-id="${item.team_id}">Удалить команду</button></div>` : ''}
+            
             ${members.map((m) => {
               const isActive = Number(lb.selectedUserId || 0) === Number(m.user_id || 0);
               const roleCode = normalizeTeamMemberRole(m.role);
@@ -4279,7 +4299,7 @@
       const my = teams.my;
       const profileMarkup = renderLeaderProfileMarkup(lb);
       const isCaptain = my && my.role === 'captain';
-      const canDeleteTeam = !!(state.isAdmin || isCaptain);
+      const canDeleteTeam = !!(isCaptain && Number(my?.owner_user_id || 0) === Number(state.userId || 0));
       const isMyProfileOpen = Boolean(my && teams.view === 'profile' && Number(teams.selectedTeamId || 0) === Number(my.team_id || 0));
       const selectedProfile = teams.profile || {};
       const selectedTeam = selectedProfile.team || {};
@@ -4364,9 +4384,9 @@
               <div class="card-title">Стиль команды</div>
               ${teams.style.options ? `
                 <div style="display:grid; gap:8px; margin-top:8px;">
-                  <select id="teamStyleFrameManage" class="settings-select">${['<option value="">— Рамка</option>', ...(teams.style.options.allowed?.frames || []).map((x) => `<option value="${x}" ${x===(teams.style.selected?.frame_code||'')?'selected':''}>${teamStyleLabel(x)}</option>`)].join('')}</select>
-                  <select id="teamStyleBgManage" class="settings-select">${['<option value="">— Фон</option>', ...(teams.style.options.allowed?.bgs || []).map((x) => `<option value="${x}" ${x===(teams.style.selected?.bg_code||'')?'selected':''}>${teamStyleLabel(x)}</option>`)].join('')}</select>
-                  <select id="teamStyleEmblemManage" class="settings-select">${['<option value="">— Эмблема</option>', ...(teams.style.options.allowed?.emblems || []).map((x) => `<option value="${x}" ${x===(teams.style.selected?.emblem_code||'')?'selected':''}>${teamStyleLabel(x)}</option>`)].join('')}</select>
+                  <select id="teamStyleFrameManage" class="settings-select">${['<option value="">Без рамки</option>', ...(teams.style.options.allowed?.frames || []).map((x) => `<option value="${x}" ${x===(teams.style.selected?.frame_code||'')?'selected':''}>${teamStyleLabel(x)}</option>`)].join('')}</select>
+                  <select id="teamStyleBgManage" class="settings-select">${['<option value="">Без фона</option>', ...(teams.style.options.allowed?.bgs || []).map((x) => `<option value="${x}" ${x===(teams.style.selected?.bg_code||'')?'selected':''}>${teamStyleLabel(x)}</option>`)].join('')}</select>
+                  <select id="teamStyleEmblemManage" class="settings-select">${['<option value="">Без эмблемы</option>', ...(teams.style.options.allowed?.emblems || []).map((x) => `<option value="${x}" ${x===(teams.style.selected?.emblem_code||'')?'selected':''}>${teamStyleLabel(x)}</option>`)].join('')}</select>
                   <button class="btn primary" data-action="team-style-save">Сохранить стиль</button>
                 </div>
               ` : `<div class="timer-hint" style="margin-top:8px;">${escapeHtml(teams.style.error || 'Загружаем стили…')}</div>`}
@@ -4429,7 +4449,7 @@
               <button class="btn" data-action="team-copy-code" data-code="${escapeHtml(my.join_code || '')}">Скопировать код</button>
               <button class="btn ${teams.busy.leave ? 'btn-disabled' : ''}" ${teams.busy.leave ? 'disabled' : ''} data-action="team-leave">Покинуть</button>
               ${canDeleteTeam ? `<button class="btn ${teams.busy.deleteTeam ? 'btn-disabled' : ''}" ${teams.busy.deleteTeam ? 'disabled' : ''} data-action="team-delete" data-team-id="${my.team_id}">Удалить команду</button>` : ''}
-              ${isCaptain ? `<button class="btn" data-action="team-requests-open">Заявки${Number(teams.requests.pendingCount || 0) > 0 ? ' (' + Number(teams.requests.pendingCount) + ')' : ''}</button><button class="btn" data-action="team-style-open">Стиль</button><button class="btn" data-action="team-roles-open">Роли</button>` : ''}
+              ${isCaptain ? `${!my.is_open ? `<button class="btn" data-action="team-requests-open">Заявки${Number(teams.requests.pendingCount || 0) > 0 ? ' (' + Number(teams.requests.pendingCount) + ')' : ''}</button>` : ''}<button class="btn" data-action="team-style-open">Стиль</button><button class="btn" data-action="team-roles-open">Роли</button>` : ''}
             </div>
           </div>`;
       })();
@@ -6568,16 +6588,16 @@
               `;
             })
             .join('');
-          const toggleLabel = expanded ? 'Скрыть' : 'Показать';
           const toggleCount = items.length ? `${items.length}` : '0';
           return `
             <div class="card measurement-card ${expanded ? '' : 'collapsed'}" data-category="${category.code}">
-              <div class="measurement-card-head">
+              <button class="measurement-card-head" data-action="measurement-toggle" data-code="${category.code}" aria-expanded="${expanded}">
                 <div class="measurement-card-title">${category.name}</div>
-                <button class="measurement-card-toggle" data-action="measurement-toggle" data-code="${category.code}" aria-expanded="${expanded}">
-                  ${toggleLabel} <span>${toggleCount}</span>
-                </button>
-              </div>
+                <div class="measurement-card-toggle">
+                  <span>${expanded ? 'Скрыть' : 'Развернуть'}</span>
+                  <span class="measurement-count-badge">${toggleCount}</span>
+                </div>
+              </button>
               <div class="measurement-category">${itemsHtml || '<div class="muted-inline">Замеров пока нет.</div>'}</div>
             </div>
           `;
@@ -6679,6 +6699,55 @@
       `;
     }
 
+    function getAchievementSeenStorageKey() {
+      return `achievements_seen_at:${Number(state.userId || 0)}`;
+    }
+
+    function updateAchievementsNewBadge() {
+      const badge = document.getElementById('drawerAchievementsBadge');
+      const btn = document.getElementById('drawerAchievementsBtn');
+      const count = Number(state.achievements?.unseenCodes?.size || 0);
+      if (badge) {
+        badge.textContent = String(count);
+        badge.classList.toggle('hidden', count <= 0);
+      }
+      if (btn) btn.classList.toggle('active-notify', count > 0);
+    }
+
+    function refreshAchievementsUnseenState() {
+      const ov = state.achievements?.overview;
+      const list = Array.isArray(ov?.achievements) ? ov.achievements : [];
+      const storageKey = getAchievementSeenStorageKey();
+      const seenAt = state.achievements.lastSeenAt || localStorage.getItem(storageKey) || '';
+      state.achievements.lastSeenAt = seenAt;
+      const unseen = new Set();
+      for (const a of list) {
+        if (!a?.unlocked || !a?.code) continue;
+        const unlockedAt = String(a.unlocked_at || '');
+        if (!unlockedAt) continue;
+        if (!seenAt || unlockedAt > seenAt) unseen.add(String(a.code));
+      }
+      for (const code of (ov?.newly_unlocked || [])) unseen.add(String(code));
+      state.achievements.unseenCodes = unseen;
+      updateAchievementsNewBadge();
+    }
+
+    function markAchievementsAsSeen() {
+      const ov = state.achievements?.overview;
+      const list = Array.isArray(ov?.achievements) ? ov.achievements : [];
+      let maxTs = '';
+      for (const a of list) {
+        const ts = String(a?.unlocked_at || '');
+        if (ts && ts > maxTs) maxTs = ts;
+      }
+      if (maxTs) {
+        state.achievements.lastSeenAt = maxTs;
+        localStorage.setItem(getAchievementSeenStorageKey(), maxTs);
+      }
+      state.achievements.unseenCodes = new Set();
+      updateAchievementsNewBadge();
+    }
+
     function renderAchievementsScreen() {
       const root = document.getElementById('achievementsContent');
       if (!root) return;
@@ -6714,6 +6783,7 @@
       const hasSub = !!ov?.has_subscription;
       const currentFrame = ov?.cosmetics?.title_frame_code || null;
       const currentBadge = ov?.cosmetics?.badge_code || null;
+      const unseenCodes = state.achievements.unseenCodes || new Set();
       const activeTab = ['achievements', 'status', 'frames'].includes(state.achievements.activeTab)
         ? state.achievements.activeTab
         : 'achievements';
@@ -6930,8 +7000,8 @@
           row.innerHTML = `
             <div class="ach-icon">${escapeHtml(a.icon || '🏅')}</div>
             <div>
-              <div style="font-weight:700">${escapeHtml(a.title || a.code || 'Достижение')}</div>
-              <div class="timer-hint">${lockedMode ? 'Закрыто' : ('Открыто' + (a.unlocked_at ? ' · ' + String(a.unlocked_at).slice(0, 10) : ''))}</div>
+              <div style="font-weight:700">${escapeHtml(a.title || a.code || 'Достижение')}${!lockedMode && unseenCodes.has(String(a.code || '')) ? '<span class=\"ach-new-chip\">New</span>' : ''}</div>
+              <div class="timer-hint">${lockedMode ? 'Закрыто' : ('Открыто' + (a.unlocked_at ? ' · ' + String(a.unlocked_at).slice(0, 10) : ''))}</div>${a.unlock_hint ? `<div class="timer-hint" style="margin-top:4px;">${escapeHtml(String(a.unlock_hint))}</div>` : ''}
             </div>
           `;
           it.appendChild(row);
@@ -7291,6 +7361,7 @@
         const data = await apiFetch('/gymapi/achievements/overview');
         state.achievements.overview = data;
         state.achievements.loaded = true;
+        refreshAchievementsUnseenState();
         applyTitleFrame();
         applyHeaderFrames();
       } catch (e) {
@@ -7298,7 +7369,7 @@
         toast('Не удалось загрузить достижения');
       } finally {
         state.achievements.loading = false;
-        if (state.currentRoute === 'achievements') renderAchievementsScreen();
+        if (state.currentRoute === 'achievements') { renderAchievementsScreen(); markAchievementsAsSeen(); }
       }
     }
 
@@ -7408,13 +7479,8 @@
         measurements.expanded = measurements.expanded || {};
         const categoryList = measurements.categories || [];
         const expandedMap = measurements.expanded;
-        const firstCode = categoryList[0]?.code;
-        let activeCode = categoryList.find((category) => expandedMap[category.code])?.code;
-        if (!activeCode && firstCode) {
-          activeCode = firstCode;
-        }
         categoryList.forEach((category) => {
-          expandedMap[category.code] = category.code === activeCode;
+          if (typeof expandedMap[category.code] !== 'boolean') expandedMap[category.code] = false;
         });
         measurements.loaded = true;
         measurements.ownerContextKey = ownerContextKey;
@@ -7756,11 +7822,7 @@
         const code = target.dataset.code;
         if (!code) return true;
         const expanded = measurements.expanded || {};
-        const isExpanded = Boolean(expanded[code]);
-        Object.keys(expanded).forEach((key) => {
-          expanded[key] = false;
-        });
-        expanded[code] = !isExpanded;
+        expanded[code] = !Boolean(expanded[code]);
         measurements.expanded = expanded;
         renderMeasurementsView();
         return true;
@@ -8509,6 +8571,7 @@
       if (normalized === 'achievements') {
         renderAchievementsScreen();
         if (!state.achievements.loaded && !state.achievements.loading) loadAchievementsOverview();
+        else markAchievementsAsSeen();
       }
       if (normalized === 'settings') {
         const pendingView = state.settings.pendingView || 'menu';
@@ -12079,10 +12142,14 @@
       const summary = '';
       const items = plans.map((p) => {
         const monthWord = p.code === '1m' ? '1 месяц' : (p.code === '6m' ? '6 месяцев' : (p.code === '12m' ? '12 месяцев' : p.title));
-        return `<button class="btn subscription-plan-btn" data-plan-code="${p.code}"><span class="plan-price">${monthWord} — ${p.amount_rub} ₽</span></button>`;
+        const stars = Number(p.amount_stars || 0);
+        return `
+          <button class="btn subscription-plan-btn compact" data-plan-code="${p.code}" data-payment-method="rub"><span class="plan-price">${monthWord} — ${p.amount_rub} ₽</span></button>
+          <button class="btn subscription-plan-btn compact" data-plan-code="${p.code}" data-payment-method="stars"><span class="plan-price">${monthWord} — ${stars} ⭐</span></button>
+        `;
       }).join('');
-      wrap.innerHTML = `${summary}${items || '<div class="timer-hint">Тарифы недоступны</div>'}`;
-      wrap.querySelectorAll('[data-plan-code]').forEach((btn) => btn.addEventListener('click', () => startSubscriptionPayment(btn.dataset.planCode).catch(console.error)));
+      wrap.innerHTML = `${summary}<div class="plan-picker-grid">${items || '<div class="timer-hint">Тарифы недоступны</div>'}</div>`;
+      wrap.querySelectorAll('[data-plan-code]').forEach((btn) => btn.addEventListener('click', () => startSubscriptionPayment(btn.dataset.planCode, btn.dataset.paymentMethod || 'rub').catch(console.error)));
       document.getElementById('planPickerSheet')?.classList.add('show');
     }
 
@@ -12090,9 +12157,9 @@
       document.getElementById('planPickerSheet')?.classList.remove('show');
     }
 
-    async function startSubscriptionPayment(planCode) {
+    async function startSubscriptionPayment(planCode, paymentMethod = 'rub') {
       closePaywall();
-      const data = await apiFetch('/gymapi/subscription/payment/start', { method: 'POST', body: JSON.stringify({ plan_code: planCode }) });
+      const data = await apiFetch('/gymapi/subscription/payment/start', { method: 'POST', body: JSON.stringify({ plan_code: planCode, payment_method: paymentMethod }) });
       state.subscription.payment.paymentId = data.payment_id;
       closePlanPicker();
       const tg = getTg();
@@ -12567,9 +12634,9 @@
         if (action === 'team-style-save') {
           const teams = state.settings.productivity.teams;
           teams.style.selected = {
-            frame_code: document.getElementById('teamStyleFrame')?.value || null,
-            bg_code: document.getElementById('teamStyleBg')?.value || null,
-            emblem_code: document.getElementById('teamStyleEmblem')?.value || null,
+            frame_code: ((document.getElementById('teamStyleFrame')?.value ?? '').trim() || null),
+            bg_code: ((document.getElementById('teamStyleBg')?.value ?? '').trim() || null),
+            emblem_code: ((document.getElementById('teamStyleEmblem')?.value ?? '').trim() || null),
           };
           saveTeamStyleSelected().then(() => scrollToTeamPanel('teamStylePanel')).catch(console.error);
           return;
@@ -12618,9 +12685,9 @@
         if (target && (target.id === 'teamStyleFrame' || target.id === 'teamStyleBg' || target.id === 'teamStyleEmblem')) {
           const teams = state.settings.productivity.teams;
           teams.style.selected = {
-            frame_code: document.getElementById('teamStyleFrame')?.value || null,
-            bg_code: document.getElementById('teamStyleBg')?.value || null,
-            emblem_code: document.getElementById('teamStyleEmblem')?.value || null,
+            frame_code: ((document.getElementById('teamStyleFrame')?.value ?? '').trim() || null),
+            bg_code: ((document.getElementById('teamStyleBg')?.value ?? '').trim() || null),
+            emblem_code: ((document.getElementById('teamStyleEmblem')?.value ?? '').trim() || null),
           };
           renderTeamsSection();
         }
@@ -12817,9 +12884,9 @@
         if (action === 'team-style-save') {
           const teams = state.settings.productivity.teams;
           teams.style.selected = {
-            frame_code: document.getElementById('teamStyleFrameManage')?.value || teams.style.selected?.frame_code || null,
-            bg_code: document.getElementById('teamStyleBgManage')?.value || teams.style.selected?.bg_code || null,
-            emblem_code: document.getElementById('teamStyleEmblemManage')?.value || teams.style.selected?.emblem_code || null,
+            frame_code: ((document.getElementById('teamStyleFrameManage')?.value ?? '').trim() || null),
+            bg_code: ((document.getElementById('teamStyleBgManage')?.value ?? '').trim() || null),
+            emblem_code: ((document.getElementById('teamStyleEmblemManage')?.value ?? '').trim() || null),
           };
           saveTeamStyleSelected().then(() => scrollToTeamPanel('teamStylePanel')).catch(console.error);
           return;
@@ -12835,6 +12902,24 @@
             return;
           }
           if (userId > 0) openLeaderProfile(userId).catch(console.error);
+          return;
+        }
+        if (action === 'leader-profile-close') {
+          state.settings.productivity.leaderboard.profile = null;
+          state.settings.productivity.leaderboard.selectedUserId = null;
+          renderTeamsManageRoute();
+          return;
+        }
+        if (action === 'leader-copy-plan') {
+          const userId = Number(target.dataset.userId || 0);
+          const systemId = Number(target.dataset.systemId || 0) || null;
+          if (userId > 0) copyLeaderPlan(userId, systemId).catch(console.error);
+          return;
+        }
+        if (action === 'leader-system-select') {
+          const userId = Number(target.dataset.userId || 0);
+          const systemId = Number(target.dataset.systemId || 0) || null;
+          if (userId > 0) openLeaderProfile(userId, systemId).catch(console.error);
           return;
         }
       });

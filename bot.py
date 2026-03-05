@@ -310,8 +310,16 @@ SUBSCRIPTION_PAYMENT_KEY = "subscription_payment"
 EXERCISE_NOTE_INPUT_KEY = "awaiting_exercise_note"
 INTRO_AWAIT_KEY = "await_intro_video"
 YK_PROVIDER = "yookassa"
+STAR_RUB_RATE = 1.79
+STAR_MARKUP = 1.10
+
 
 RESOLVE_TARGET_USER_KEY = "resolved_target_user"
+
+def plan_amount_stars(amount_rub: int | float) -> int:
+    raw = (float(amount_rub) * STAR_MARKUP) / STAR_RUB_RATE
+    return int(max(1, ((int(raw + 4.9999)) // 5) * 5))
+
 
 SUBSCRIPTION_PLANS = {
     "1m": {
@@ -8495,12 +8503,15 @@ async def show_subscription_overview(
         lines.append("")
         lines.append("Приём платежей временно недоступен.")
     rows: list[list[InlineKeyboardButton]] = []
-    if YK_TOKEN:
+    if YK_TOKEN or TG_TOKEN:
         for code, plan in SUBSCRIPTION_PLANS.items():
-            label = f"{plan['title']} — {plan['amount_rub']} ₽"
-            rows.append(
-                [InlineKeyboardButton(label, callback_data=f"set:subscription:plan:{code}")]
-            )
+            rub_label = f"{plan['title']} — {plan['amount_rub']} ₽"
+            stars_price = plan_amount_stars(plan['amount_rub'])
+            stars_label = f"{plan['title']} — {stars_price} ⭐"
+            rows.append([
+                InlineKeyboardButton(rub_label, callback_data=f"set:subscription:plan:{code}"),
+                InlineKeyboardButton(stars_label, callback_data=f"set:subscription:planstars:{code}"),
+            ])
     if pending:
         rows.append(
             [
@@ -8622,6 +8633,53 @@ async def start_subscription_payment(
         ]
     )
     await show_screen(q, context, text, kb, user_id)
+
+
+async def start_subscription_payment_stars(
+    q, context: ContextTypes.DEFAULT_TYPE, user_id: int, plan_code: str
+):
+    plan = SUBSCRIPTION_PLANS.get(plan_code)
+    if not plan:
+        await q.answer("Тариф не найден.", show_alert=True)
+        return
+    stars_amount = plan_amount_stars(plan['amount_rub'])
+    payload = f"setsubstars:{user_id}:{plan_code}"
+    try:
+        user_info = await find_user_by_id(user_id)
+        if not user_info:
+            await q.answer("Пользователь не найден.", show_alert=True)
+            return
+        tg_user_id = int(user_info[1])
+    except Exception:
+        await q.answer("Не удалось создать счёт.", show_alert=True)
+        return
+
+    await create_payment_record(
+        user_id=user_id,
+        provider="telegram",
+        amount=stars_amount,
+        currency="XTR",
+        status="pending",
+        payload={"plan": plan_code, "payment_method": "stars"},
+        external_id=payload,
+    )
+
+    try:
+        await context.bot.send_invoice(
+            chat_id=tg_user_id,
+            title=f"Подписка — {plan['title']}",
+            description="Оплата подписки в Telegram Stars",
+            payload=payload,
+            currency="XTR",
+            prices=[LabeledPrice(label=f"{plan['title']} · Stars", amount=stars_amount)],
+            provider_token="",
+        )
+    except Exception:
+        await q.answer("Не удалось создать счёт в звёздах.", show_alert=True)
+        return
+
+    await q.answer("Счёт в звёздах отправлен.", show_alert=False)
+    await show_subscription_overview(q, context, user_id)
 
 
 async def check_subscription_payment(
@@ -12723,6 +12781,9 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 if sub_action == "plan" and len(parts) >= 4:
                     await start_subscription_payment(q, context, target_user_id, parts[3])
                     return
+                if sub_action == "planstars" and len(parts) >= 4:
+                    await start_subscription_payment_stars(q, context, target_user_id, parts[3])
+                    return
                 if sub_action == "check" and len(parts) >= 4:
                     await check_subscription_payment(q, context, target_user_id, parts[3])
                     return
@@ -14017,16 +14078,24 @@ async def successful_payment_handler(update: Update, context: ContextTypes.DEFAU
     payload = payment.invoice_payload
 
     parts = payload.split(":")
-    if len(parts) != 3:
+    if len(parts) < 3:
         return
 
-    _, user_id_str, plan_code = parts
-    tg_user_id = int(user_id_str)
-
-    user_info = await find_user_by_tg_id(tg_user_id)
-    if not user_info:
+    prefix = parts[0]
+    if prefix not in {"sub", "setsubstars", "websub"}:
         return
-    user_id = user_info[0]
+
+    user_id_str = parts[1]
+    plan_code = parts[2]
+
+    if prefix == "sub":
+        tg_user_id = int(user_id_str)
+        user_info = await find_user_by_tg_id(tg_user_id)
+        if not user_info:
+            return
+        user_id = user_info[0]
+    else:
+        user_id = int(user_id_str)
 
     plan = SUBSCRIPTION_PLANS.get(plan_code)
     if not plan:
@@ -14035,7 +14104,7 @@ async def successful_payment_handler(update: Update, context: ContextTypes.DEFAU
     await update_payment_status(
         payload,
         "paid",
-        {"paid_at": datetime.utcnow().isoformat(timespec="seconds")},
+        {"paid_at": datetime.utcnow().isoformat(timespec="seconds"), "currency": payment.currency, "total_amount": payment.total_amount},
     )
 
     await grant_subscription_days(
