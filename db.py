@@ -5125,6 +5125,7 @@ async def fetch_team_leaderboard(limit: int = 10, offset: int = 0):
             {
                 "team_id": int(team["team_id"]),
                 "name": team["name"],
+                "is_open": bool(team["is_open"]),
                 "score": team_score,
                 "members_count": members_count,
                 "active_members_7d": int(team["active_members_7d"]),

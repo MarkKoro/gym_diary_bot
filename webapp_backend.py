@@ -452,6 +452,18 @@ def _to_float(value: object, default: float = 0.0) -> float:
         return default
 
 
+def _team_join_policy(team_like: dict | None) -> str:
+    return 'open' if bool((team_like or {}).get('is_open')) else 'closed'
+
+
+def _team_join_action_for_viewer(*, team_like: dict | None, me_team: dict | None, has_pending_request: bool) -> str:
+    if me_team:
+        return 'none'
+    if has_pending_request and not bool((team_like or {}).get('is_open')):
+        return 'pending'
+    return 'join' if bool((team_like or {}).get('is_open')) else 'request'
+
+
 def _clip_text(text: str, limit: int) -> str:
     src = (text or '').strip()
     if len(src) <= limit:
@@ -5108,6 +5120,7 @@ async def teams_me(ctx: AuthCtx = Depends(get_auth_ctx)):
             "name": team["team_name"],
             "join_code": team["join_code"],
             "is_open": bool(team["is_open"]),
+            "join_policy": _team_join_policy(team),
             "frame_code": team.get("frame_code"),
             "bg_code": team.get("bg_code"),
             "emblem_code": team.get("emblem_code"),
@@ -5404,6 +5417,12 @@ async def teams_leaderboard(
                 'bg_code': bg_code,
                 'emblem_code': emblem_code,
                 'is_open': bool(item.get('is_open')),
+                'join_policy': _team_join_policy(item),
+                'join_action': _team_join_action_for_viewer(
+                    team_like=item,
+                    me_team=me_team,
+                    has_pending_request=(team_id in pending_request_team_ids),
+                ),
                 'has_pending_request': team_id in pending_request_team_ids,
             }
         )
@@ -5531,6 +5550,7 @@ async def teams_profile(team_id: int, ctx: AuthCtx = Depends(get_auth_ctx)):
         has_pending_request = await has_pending_join_request(int(team['team_id']), int(ctx.user_id))
 
     return {
+        'viewer_has_team': bool(me_team),
         'team': {
             'rank': int(team['rank']),
             'team_id': int(team['team_id']),
@@ -5545,6 +5565,12 @@ async def teams_profile(team_id: int, ctx: AuthCtx = Depends(get_auth_ctx)):
             'bg_code': bg_code,
             'emblem_code': emblem_code,
             'is_open': bool(team.get('is_open')),
+            'join_policy': _team_join_policy(team),
+            'join_action': _team_join_action_for_viewer(
+                team_like=team,
+                me_team=me_team,
+                has_pending_request=bool(has_pending_request),
+            ),
             'has_pending_request': bool(has_pending_request),
         },
         'members': members,

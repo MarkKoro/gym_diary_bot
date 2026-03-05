@@ -4158,15 +4158,17 @@
       if (teams.my) return '';
       const teamId = Number(item?.team_id || 0);
       if (teamId <= 0) return '';
-      const isOpen = parseOpenTeamFlag(item?.is_open);
-      const hasPending = !!item?.has_pending_request;
+      const joinAction = String(item?.join_action || '').trim().toLowerCase();
+      const joinPolicy = String(item?.join_policy || '').trim().toLowerCase();
+      const isOpen = joinPolicy ? joinPolicy === 'open' : parseOpenTeamFlag(item?.is_open);
+      const hasPending = joinAction ? joinAction === 'pending' : !!item?.has_pending_request;
       const membersCount = Number(item?.members_count || 0);
       const isFull = membersCount >= 25;
       if (hasPending && !isOpen) {
         return `<div style="margin-top:8px;"><button class="btn btn-disabled" disabled>Заявка отправлена</button></div>`;
       }
-      const action = isOpen ? 'team-join-selected' : 'team-request-selected';
-      const title = isOpen ? 'Вступить в команду' : 'Подать заявку';
+      const action = (joinAction === 'join' || (joinAction !== 'request' && isOpen)) ? 'team-join-selected' : 'team-request-selected';
+      const title = action === 'team-join-selected' ? 'Вступить в команду' : 'Подать заявку';
       const busy = !!teams.busy.joinSelected;
       const disabled = busy || isFull;
       const button = `<button class="btn primary ${disabled ? 'btn-disabled' : ''}" ${disabled ? 'disabled' : ''} data-action="${action}" data-team-id="${teamId}">${title}</button>`;
