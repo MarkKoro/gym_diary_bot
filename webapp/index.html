@@ -9666,6 +9666,7 @@
     }) {
       if (!containerEl) return;
       const prevText = containerEl.textContent;
+      let finalized = false;
 
       const input = document.createElement('input');
       input.type = 'number';
@@ -9681,18 +9682,26 @@
       containerEl.textContent = '';
       containerEl.appendChild(input);
 
-      const commit = () => {
-        let v = Number(input.value);
-        if (Number.isNaN(v)) v = Number(value || 0);
-        v = Math.min(max, Math.max(min, v));
-        const k = Math.pow(10, decimals);
-        v = Math.round(v * k) / k;
+      const commit = ({ defer = false } = {}) => {
+        if (finalized) return;
+        finalized = true;
+        const run = () => {
+          let v = Number(input.value);
+          if (Number.isNaN(v)) v = Number(value || 0);
+          v = Math.min(max, Math.max(min, v));
+          const k = Math.pow(10, decimals);
+          v = Math.round(v * k) / k;
 
-        containerEl.textContent = prevText; // will be re-rendered anyway
-        onCommit?.(v);
+          containerEl.textContent = prevText; // will be re-rendered anyway
+          onCommit?.(v);
+        };
+        if (defer) setTimeout(run, 0);
+        else run();
       };
 
       const cancel = () => {
+        if (finalized) return;
+        finalized = true;
         containerEl.textContent = prevText;
       };
 
@@ -9701,7 +9710,7 @@
         if (e.key === 'Enter') commit();
         if (e.key === 'Escape') cancel();
       });
-      input.addEventListener('blur', commit);
+      input.addEventListener('blur', () => commit({ defer: true }));
 
       input.focus();
       input.select();
@@ -9758,6 +9767,8 @@
           decimals: field === 'weight_kg' ? 1 : 0,
           inputMode: field === 'weight_kg' ? 'decimal' : 'numeric',
           onCommit: (next) => {
+            const current = Number(draft[field] || 0);
+            if (next === current) return;
             setDraftValue(ueId, field, next);
             renderWorkoutBody(ueId);
           },
@@ -13335,7 +13346,7 @@
           inputMode: field === 'kg' ? 'decimal' : 'numeric',
           onCommit: (next) => {
             const delta = next - current;
-            if (!delta) { renderEditor(); return; }
+            if (!delta) return;
             queueExerciseAction(state.editor.ueId, () => incSet(state.editor.ueId, field, delta)).catch(console.error);
           }
         };
