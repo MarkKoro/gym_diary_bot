@@ -7088,11 +7088,27 @@ async def copy_training_system_from_user(source_user_id: int, target_user_id: in
                 source_meta_map[(int(day_no), int(ex_id))] = {}
 
         now = datetime.now(UTC).isoformat()
-        cur = await db.execute(
-            "INSERT INTO training_systems(user_id, name, color, created_at) VALUES(?,?,?,?)",
-            (target_user_id, name, color, now),
+        existing_target_cur = await db.execute(
+            "SELECT id FROM training_systems WHERE user_id=? AND LOWER(name)=LOWER(?) LIMIT 1",
+            (target_user_id, name),
         )
-        new_system_id = int(cur.lastrowid)
+        existing_target_row = await existing_target_cur.fetchone()
+        if existing_target_row:
+            new_system_id = int(existing_target_row[0])
+            await db.execute(
+                "UPDATE training_systems SET color=?, created_at=? WHERE id=? AND user_id=?",
+                (color, now, new_system_id, target_user_id),
+            )
+            await db.execute("DELETE FROM training_system_exercise_sources WHERE system_id=?", (new_system_id,))
+            await db.execute("DELETE FROM training_system_exercises WHERE system_id=?", (new_system_id,))
+            await db.execute("DELETE FROM training_system_reminders WHERE system_id=?", (new_system_id,))
+            await db.execute("DELETE FROM training_system_days WHERE system_id=?", (new_system_id,))
+        else:
+            cur = await db.execute(
+                "INSERT INTO training_systems(user_id, name, color, created_at) VALUES(?,?,?,?)",
+                (target_user_id, name, color, now),
+            )
+            new_system_id = int(cur.lastrowid)
 
         custom_groups_cache: dict[str, str] = {}
 
