@@ -562,6 +562,7 @@
       .exercise-card.busy { opacity: 0.6; pointer-events: none; }
       .exercise-card .card-title { display: flex; align-items: center; gap: 6px; }
       .exercise-head { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 10px; align-items: flex-start; }
+      .exercise-head-meta { display: grid; gap: 6px; justify-items: end; align-content: flex-start; }
       .exercise-info { display: grid; gap: 6px; min-width: 0; }
       .exercise-meta { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
     .source-meta-wrap { position: relative; margin-left: auto; }
@@ -2049,7 +2050,6 @@
       .day-option .subtitle { color: var(--muted); font-size: 13px; }
       .today-shell { display: flex; flex-direction: column; gap: 14px; transition: opacity 0.18s ease, transform 0.18s ease; }
       .today-shell.switching { opacity: 0.3; transform: translateY(6px); }
-      .note-indicator { font-size: 18px; }
       .exercise-row { display: flex; flex-direction: column; gap: 10px; }
       .primary-link { padding: 10px 14px; border-radius: 12px; background: var(--accent); color: #fff; border: none; font-weight: 700; box-shadow: 0 8px 18px rgba(0,122,255,0.18); cursor: pointer; }
       .primary-link:active { transform: translateY(1px); }
@@ -10232,15 +10232,11 @@
       header.className = 'exercise-head';
       const info = document.createElement('div');
       info.className = 'exercise-info';
+      const headerMeta = document.createElement('div');
+      headerMeta.className = 'exercise-head-meta';
       const titleWrap = document.createElement('div');
       titleWrap.className = 'card-title';
       titleWrap.textContent = exercise.name;
-      if (hasExerciseNoteMeta(exercise)) {
-        const note = document.createElement('span');
-        note.className = 'note-indicator';
-        note.textContent = '📝';
-        titleWrap.appendChild(note);
-      }
       const meta = document.createElement('div');
       meta.className = 'exercise-meta';
       if (isDone) {
@@ -10267,7 +10263,7 @@
         meta.appendChild(setsPill);
       }
       info.append(titleWrap, meta);
-      header.appendChild(info);
+      header.append(info, headerMeta);
 
       // source/meta (только предложено ИИ)
       if (!isDeleteMode && hasUsefulSourceMetaContent(exercise)) {
@@ -10291,7 +10287,7 @@
 
         sourceWrap.appendChild(sourceBtn);
         sourceWrap.appendChild(sourcePop);
-        header.appendChild(sourceWrap);
+        headerMeta.appendChild(sourceWrap);
       }
       if (!isDeleteMode && hasExerciseNoteMeta(exercise)) {
         const noteWrap = document.createElement('div');
@@ -10325,8 +10321,12 @@
 
         noteWrap.appendChild(noteBtn);
         noteWrap.appendChild(notePop);
-        header.appendChild(noteWrap);
+        headerMeta.appendChild(noteWrap);
       }
+      if (!headerMeta.children.length) {
+        headerMeta.remove();
+      }
+
       if (isDeleteMode) {
         const delBtn = document.createElement('button');
         delBtn.type = 'button';
@@ -10336,6 +10336,7 @@
           ev.stopPropagation();
           handleExerciseDelete(exercise);
         });
+        headerMeta.remove();
         header.appendChild(delBtn);
       }
 
