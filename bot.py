@@ -10595,6 +10595,7 @@ async def photo_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q: CallbackQuery | None = None
     try:
         q = update.callback_query
         await q.answer()
@@ -14090,8 +14091,15 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         await show_screen(q, context, view.text, kb, target_user_id)
         return
+    except (IndexError, ValueError) as exc:
+        logger.warning("Malformed callback payload in menu_router: %s", exc)
+        if q is not None:
+            with contextlib.suppress(TelegramError):
+                text, kb, _ = await compose_main_menu(target_user_id)
+                await show_screen(q, context, text, kb, target_user_id)
+        return
     finally:
-        message = getattr(q, "message", None)
+        message = getattr(q, "message", None) if q is not None else None
         if message:
             chat = getattr(message, "chat", None)
             chat_id = getattr(chat, "id", None) if chat else getattr(message, "chat_id", None)
