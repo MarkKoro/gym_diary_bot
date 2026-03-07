@@ -3259,6 +3259,7 @@
 
     async function waitTelegramInitData(timeoutMs = 15000) {
       const start = Date.now();
+      const quickExitMs = 1200;
 
       while (Date.now() - start < timeoutMs) {
         const tg = getTg();
@@ -3267,14 +3268,16 @@
         if (tg && typeof tg.initData === 'string') initData = tg.initData || '';
         if (!initData) initData = getInitDataFromUrl();
 
-        // If we have both tg + initData, we're good
         if (tg && initData) return { tg, initData };
 
-        // If tg exists but initData is still empty, give it time (Telegram can populate it late)
-        await sleep(150);
+        // Outside Telegram we don't need to block boot for long polling.
+        if (!tg && !initData && (Date.now() - start) >= quickExitMs) {
+          return { tg: null, initData: '' };
+        }
+
+        await sleep(tg ? 120 : 220);
       }
 
-      // Final attempt
       const tg = getTg();
       let initData = (tg && typeof tg.initData === 'string') ? (tg.initData || '') : '';
       if (!initData) initData = getInitDataFromUrl();
@@ -3602,6 +3605,40 @@
       overlay._hideTimer = setTimeout(hide, durationMs);
     }
 
+    function explainActionError(actionLabel, err, fallback = 'Попробуйте ещё раз.') {
+      const reason = normalizeError(err).split('\n').find(Boolean) || '';
+      if (reason) {
+        return `${actionLabel}: ${reason}`.slice(0, 280);
+      }
+      return `${actionLabel}. ${fallback}`;
+    }
+
+    function reportActionError(actionLabel, err, fallback = 'Попробуйте ещё раз.') {
+      const details = explainActionError(actionLabel, err, fallback);
+      showErrorOverlay(details, {
+        title: 'Не получилось выполнить действие',
+        details,
+        variant: 'soft',
+        durationMs: 8200,
+      });
+      console.error(actionLabel, err);
+    }
+
+    function runUiAction(actionLabel, action, fallback = 'Попробуйте ещё раз.') {
+      Promise.resolve()
+        .then(() => action())
+        .catch((err) => reportActionError(actionLabel, err, fallback));
+    }
+
+    function scheduleDeferredAction(action) {
+      const runner = () => Promise.resolve().then(action).catch((err) => console.warn('Deferred action failed', err));
+      if (typeof window.requestIdleCallback === 'function') {
+        window.requestIdleCallback(() => runner(), { timeout: 1200 });
+      } else {
+        setTimeout(() => runner(), 0);
+      }
+    }
+
     function setGlobalActionOverlay(visible, title = 'Применяем изменения…') {
       const overlay = document.getElementById('globalActionOverlay');
       const titleEl = document.getElementById('globalActionOverlayTitle');
@@ -3642,9 +3679,10 @@
         showFatal(payload, kind);
         showErrorOverlay(msg, { title: 'Критическая ошибка', details: msg, variant: 'hard', durationMs: 9000 });
       } else {
-        showErrorOverlay('Не удалось выполнить действие. Попробуйте ещё раз или откройте приложение заново.', {
-          title: 'Упс, возникла ошибка',
-          details: 'Мы уже записали технические детали. Если проблема повторяется — просто перезапустите экран.',
+        const userMessage = normalizeError(payload).split('\n').find(Boolean) || 'Не удалось выполнить действие.';
+        showErrorOverlay(userMessage, {
+          title: 'Ошибка выполнения действия',
+          details: `${userMessage}. Если ошибка повторяется — перезапустите экран.` ,
           variant: 'soft',
           durationMs: 8000,
         });
@@ -3869,8 +3907,8 @@
       document.body.classList.add('productivity-open');
       document.getElementById('productivitySheet')?.classList.add('show');
       syncFinishFabVisibility();
-      if ((state.settings.productivity.activeTab || "people") === "people") loadProductivityLeaderboard().catch(console.error);
-      else ensureTeamsHubLoaded().catch(console.error);
+      if ((state.settings.productivity.activeTab || "people") === "people") runUiAction('Не удалось загрузить таблицу продуктивности', () => loadProductivityLeaderboard());
+      else runUiAction('Не удалось загрузить раздел команд', () => ensureTeamsHubLoaded());
     }
 
     function closeProductivitySheet() {
@@ -4519,14 +4557,14 @@
       const next = tab === 'teams' ? 'teams' : 'people';
       state.settings.productivity.activeTab = next;
       renderProductivityHub();
-      if ((state.settings.productivity.activeTab || "people") === "people") loadProductivityLeaderboard().catch(console.error);
-      else ensureTeamsHubLoaded().catch(console.error);
+      if ((state.settings.productivity.activeTab || "people") === "people") runUiAction('Не удалось загрузить таблицу продуктивности', () => loadProductivityLeaderboard());
+      else runUiAction('Не удалось загрузить раздел команд', () => ensureTeamsHubLoaded());
     }
 
     const debouncedLoadTeamRequests = debounce(() => {
       const teams = state.settings.productivity.teams;
       teams.requests.offset = 0;
-      loadTeamRequests().catch(console.error);
+      runUiAction('Не удалось загрузить заявки команды', () => loadTeamRequests());
     }, 300);
 
     async function loadTeamsMe() {
@@ -5495,7 +5533,7 @@
       const productivityBtn = document.getElementById('productivityBtn');
       if (productivityBtn) productivityBtn.addEventListener('click', (e) => { e.stopPropagation(); openProductivitySheet(); });
       const systemBtn = document.getElementById('systemOpenBtn');
-      if (systemBtn) systemBtn.addEventListener('click', (e) => { e.stopPropagation(); openSystemSheet().catch(console.error); });
+      if (systemBtn) systemBtn.addEventListener('click', (e) => { e.stopPropagation(); runUiAction('Не удалось открыть выбор системы', () => openSystemSheet()); });
 
       document.getElementById('timerCloseBtn')?.addEventListener('click', closeTimerSheet);
       document.getElementById('productivityCloseBtn')?.addEventListener('click', closeProductivitySheet);
@@ -6346,7 +6384,7 @@
 
     function openTraineeSheet() {
       if (!state.settings.trainer.loading) {
-        loadTrainerOverview().catch(console.error);
+        runUiAction('Не удалось загрузить данные тренерского режима', () => loadTrainerOverview());
       }
       renderTraineeSheet();
       document.getElementById('traineeSheet')?.classList.add('show');
@@ -7561,9 +7599,9 @@
       document.getElementById('measurementSheet')?.classList.add('show');
       document.body.classList.add('drawer-open');
       if (!measurements.loaded) {
-        loadMeasurementsOverview().catch(console.error);
+        runUiAction('Не удалось загрузить раздел замеров', () => loadMeasurementsOverview());
       }
-      loadAllMeasurementHistories().catch(console.error);
+      runUiAction('Не удалось загрузить историю замеров', () => loadAllMeasurementHistories());
     }
 
     function openMeasurementSheet(mode, code) {
@@ -7577,7 +7615,7 @@
       document.getElementById('measurementSheet')?.classList.add('show');
       document.body.classList.add('drawer-open');
       if (mode === 'history' && (!measurements.history[code] || measurements.history[code].loading)) {
-        loadMeasurementHistory(code).catch(console.error);
+        runUiAction('Не удалось загрузить историю замера', () => loadMeasurementHistory(code));
       }
       if (mode === 'entry') {
         setTimeout(() => {
@@ -8017,15 +8055,15 @@
               state.library.groups = [];
               state.library.exercises = [];
               state.library.view = 'groups';
-              if (state.currentRoute === 'library') loadLibraryGroups().catch(console.error);
+              if (state.currentRoute === 'library') runUiAction('Не удалось загрузить библиотеку упражнений', () => loadLibraryGroups());
               if (state.currentRoute === 'today' && state.dayIndex) {
-                refreshTodayData({ keepDay: true }).catch(console.error);
+                runUiAction('Не удалось обновить экран дня', () => refreshTodayData({ keepDay: true }));
               }
               toast('Группа удалена');
             };
             if (openConfirmModal) {
               openConfirmModal(
-                () => performDelete().catch(console.error),
+                () => runUiAction('Не удалось удалить элемент', () => performDelete()),
                 'Удалить группу мышц?',
                 'Удаление сотрёт все упражнения и историю из этой группы. Продолжить?',
               );
@@ -8035,7 +8073,7 @@
             return;
           }
           if (action === 'open-system-hub') {
-            openSystemSheet().catch(console.error);
+            runUiAction('Не удалось открыть выбор системы', () => openSystemSheet());
             return;
           }
           if (action === 'system-select') {
@@ -8550,7 +8588,7 @@
 
     function renderTeamsRouteCard() {
       renderTeamsManageRoute();
-      ensureTeamsHubLoaded().catch(console.error);
+      runUiAction('Не удалось загрузить раздел команд', () => ensureTeamsHubLoaded());
     }
 
     function applyRoute(route) {
@@ -8594,7 +8632,7 @@
       updateBackButton(normalized);
       if (normalized === 'library') {
         renderLibrary();
-        loadLibraryGroups().catch(console.error);
+        runUiAction('Не удалось загрузить библиотеку упражнений', () => loadLibraryGroups());
       }
       if (normalized === 'achievements') {
         renderAchievementsScreen();
@@ -8610,19 +8648,19 @@
         if (!state.settings.trainer.loading) loadTrainerOverview();
         if (!state.settings.share.loading) loadShareResults();
         if (pendingView === 'measurements') {
-          loadMeasurementsOverview().catch(console.error);
+          runUiAction('Не удалось загрузить раздел замеров', () => loadMeasurementsOverview());
         }
       }
       if (normalized === 'measurements') {
         renderMeasurementsScreen();
-        loadMeasurementsOverview().catch(console.error);
+        runUiAction('Не удалось загрузить раздел замеров', () => loadMeasurementsOverview());
       }
       if (normalized === 'teams') {
         renderTeamsRouteCard();
       }
       if (normalized === 'subscription') {
         renderSubscriptionScreen();
-        loadSubscriptionOverview().catch(console.error);
+        scheduleDeferredAction(() => loadSubscriptionOverview());
       }
       syncFinishFabVisibility();
     }
@@ -8956,7 +8994,7 @@
       } catch (error) {
         console.error(error);
       }
-      ensureSettingsOverviewLoaded({ refreshExercises: true }).catch(console.error);
+      runUiAction('Не удалось загрузить экран настроек', () => ensureSettingsOverviewLoaded({ refreshExercises: true }));
       try {
         await apiFetch('/gymapi/onboarding/finish', { method: 'POST', silent: true });
       } catch (error) {
@@ -9199,7 +9237,7 @@
         option.append(labels, badge);
         option.addEventListener('click', () => {
           closeDayPicker();
-          if (d.day_index !== state.dayIndex) loadSheet(d.day_index).catch(console.error);
+          if (d.day_index !== state.dayIndex) runUiAction('Не удалось открыть выбранный день', () => loadSheet(d.day_index));
         });
         container.appendChild(option);
       });
@@ -9218,7 +9256,7 @@
       const next = state.activeDays[nextIdx];
       if (next) {
         triggerHaptic();
-        loadSheet(next.day_index).catch(console.error);
+        runUiAction('Не удалось открыть следующий день', () => loadSheet(next.day_index));
       }
     }
 
@@ -9799,7 +9837,7 @@
       removeBtn.disabled = !(exercise.sets || []).length;
       removeBtn.addEventListener('click', (ev) => { ev.stopPropagation(); handleWorkoutRemove(exercise); });
       const doneBtn = document.createElement('button'); doneBtn.type = 'button'; doneBtn.className = 'outline-btn done-btn'; doneBtn.textContent = '✅ Готово';
-      doneBtn.addEventListener('click', (ev) => { ev.stopPropagation(); handleExerciseDone(ueId).catch(console.error); });
+      doneBtn.addEventListener('click', (ev) => { ev.stopPropagation(); runUiAction('Не удалось отметить упражнение выполненным', () => handleExerciseDone(ueId)); });
       const detailsBtn = document.createElement('button'); detailsBtn.type = 'button'; detailsBtn.className = 'outline-btn'; detailsBtn.textContent = 'ℹ️ Детали';
       detailsBtn.addEventListener('click', (ev) => { ev.stopPropagation(); openEditor(exercise.user_exercise_id); });
       actionsRow.append(addBtn, removeBtn, detailsBtn, doneBtn);
@@ -9965,7 +10003,7 @@
       const historyBtn = document.createElement('button'); historyBtn.type = 'button'; historyBtn.className = 'btn'; historyBtn.textContent = 'История';
       historyBtn.addEventListener('click', (ev) => { ev.stopPropagation(); openEditor(exercise.user_exercise_id); });
       const doneBtn = document.createElement('button'); doneBtn.type = 'button'; doneBtn.className = 'outline-btn done-btn'; doneBtn.textContent = '✅ Готово';
-      doneBtn.addEventListener('click', (ev) => { ev.stopPropagation(); handleRunningDone(exercise).catch(console.error); });
+      doneBtn.addEventListener('click', (ev) => { ev.stopPropagation(); runUiAction('Не удалось сохранить завершение пробежки', () => handleRunningDone(exercise)); });
       actionsRow.append(historyBtn, doneBtn);
       container.appendChild(actionsRow);
     }
@@ -10787,11 +10825,11 @@
       lastDataRefresh = now;
       if (!state.isTelegram) return;
       if (state.onboarding.active) return;
-      if (!state.settings.loading) loadSettingsOverview().catch(console.error);
-      if (!state.settings.trainer.loading) loadTrainerOverview().catch(console.error);
-      if (state.currentRoute === 'library') loadLibraryGroups().catch(console.error);
+      if (!state.settings.loading) runUiAction('Не удалось загрузить настройки', () => loadSettingsOverview());
+      if (!state.settings.trainer.loading) runUiAction('Не удалось загрузить данные тренерского режима', () => loadTrainerOverview());
+      if (state.currentRoute === 'library') runUiAction('Не удалось загрузить библиотеку упражнений', () => loadLibraryGroups());
       if (state.currentRoute === 'today' && !state.editor.open && !state.manage.add.open) {
-        refreshTodayData({ keepDay: true }).catch(console.error);
+        runUiAction('Не удалось обновить экран дня', () => refreshTodayData({ keepDay: true }));
       }
     }
 
@@ -11101,7 +11139,7 @@
       state.manage.add.view = 'exercises';
       state.manage.add.selectedGroup = group;
       renderManageContent();
-      loadManageExercises(group).catch(console.error);
+      runUiAction('Не удалось загрузить упражнения группы', () => loadManageExercises(group));
     }
 
     function openManageAddSheet() {
@@ -11117,7 +11155,7 @@
       document.getElementById('manageExerciseSheet').classList.add('show');
       renderManageContent();
       renderManageDayOptions();
-      loadManageGroups().catch(console.error);
+      runUiAction('Не удалось загрузить группы упражнений', () => loadManageGroups());
     }
 
     function closeManageAddSheet(opts = {}) {
@@ -11165,7 +11203,7 @@
           state.manage.add.dayIndex = d.day_index;
           closeManageDayPicker();
           renderManageDay();
-          if (state.manage.add.view === 'exercises') loadManageExercises(state.manage.add.selectedGroup).catch(console.error);
+          if (state.manage.add.view === 'exercises') runUiAction('Не удалось обновить список упражнений', () => loadManageExercises(state.manage.add.selectedGroup));
         });
         container.appendChild(option);
       });
@@ -11180,7 +11218,7 @@
         triggerHaptic();
         state.manage.add.dayIndex = next.day_index;
         renderManageDay();
-        if (state.manage.add.view === 'exercises') loadManageExercises(state.manage.add.selectedGroup).catch(console.error);
+        if (state.manage.add.view === 'exercises') runUiAction('Не удалось обновить список упражнений', () => loadManageExercises(state.manage.add.selectedGroup));
       }
     }
 
@@ -11224,7 +11262,7 @@
               body: JSON.stringify({ name }),
             });
             toast('Группа добавлена ✅');
-            loadManageGroups().catch(console.error);
+            runUiAction('Не удалось загрузить группы упражнений', () => loadManageGroups());
           } catch (_) {
             toast('Ошибка связи');
           }
@@ -11249,9 +11287,9 @@
               body: JSON.stringify({ name, muscle_group: group.code }),
             });
             toast('Добавлено ✅');
-            loadManageExercises(group).catch(console.error);
+            runUiAction('Не удалось загрузить упражнения группы', () => loadManageExercises(group));
             if (Number(dayIndex) === Number(state.dayIndex)) {
-              loadSheet(state.dayIndex).catch(console.error);
+              runUiAction('Не удалось обновить карточку дня', () => loadSheet(state.dayIndex));
             }
           } catch (_) {
             toast('Ошибка связи');
@@ -12165,7 +12203,7 @@
         </div>
       `;
       updateDrawerSubscriptionStatus();
-      container.querySelectorAll('[data-sub-action="open-picker"], [data-sub-action="change-plan"]').forEach((btn) => btn.addEventListener('click', () => openPlanPicker().catch(console.error)));
+      container.querySelectorAll('[data-sub-action="open-picker"], [data-sub-action="change-plan"]').forEach((btn) => btn.addEventListener('click', () => runUiAction('Не удалось открыть выбор плана', () => openPlanPicker())));
     }
 
     function formatDateLocal(value) {
@@ -12225,7 +12263,7 @@
         `;
       }).join('');
       wrap.innerHTML = `${summary}<div class="plan-picker-grid">${items || '<div class="timer-hint">Тарифы недоступны</div>'}</div>`;
-      wrap.querySelectorAll('[data-plan-code]').forEach((btn) => btn.addEventListener('click', () => startSubscriptionPayment(btn.dataset.planCode, btn.dataset.paymentMethod || 'rub').catch(console.error)));
+      wrap.querySelectorAll('[data-plan-code]').forEach((btn) => btn.addEventListener('click', () => runUiAction('Не удалось запустить оплату подписки', () => startSubscriptionPayment(btn.dataset.planCode, btn.dataset.paymentMethod || 'rub'))));
       document.getElementById('planPickerSheet')?.classList.add('show');
     }
 
@@ -12433,10 +12471,10 @@
       document.getElementById('aiCoachCloseBtn')?.addEventListener('click', () => { if (!state.aiCoach.loading) closeAiCoachSheet(); });
       document.getElementById('aiCoachAskBtn').addEventListener('click', () => {
         const retry = state.aiCoach.hasResponse;
-        askAiCoach({ retry }).catch(console.error);
+        runUiAction('Не удалось получить ответ ИИ', () => askAiCoach({ retry }), 'Проверьте подключение и повторите запрос.');
       });
-      document.getElementById('aiCoachApplyAllBtn').addEventListener('click', () => applyAiCoachPlan().catch(console.error));
-      document.getElementById('aiCoachCopySystemBtn').addEventListener('click', () => applyAiCoachPlan().catch(console.error));
+      document.getElementById('aiCoachApplyAllBtn').addEventListener('click', () => runUiAction('Не удалось применить план ИИ', () => applyAiCoachPlan()));
+      document.getElementById('aiCoachCopySystemBtn').addEventListener('click', () => runUiAction('Не удалось перенести план в систему', () => applyAiCoachPlan()));
       document.getElementById('aiCoachResultScroll').addEventListener('click', (e) => {
         const btn = e.target.closest('[data-ai-decision]');
         if (btn) {
@@ -12461,7 +12499,7 @@
       });
       document.getElementById('paywallSheet').addEventListener('click', (e) => { if (e.target.id === 'paywallSheet') closePaywall(); });
       document.getElementById('planPickerSheet').addEventListener('click', (e) => { if (e.target.id === 'planPickerSheet') closePlanPicker(); });
-      document.getElementById('paywallBuyBtn').addEventListener('click', () => { closePaywall(); openPlanPicker().catch(console.error); });
+      document.getElementById('paywallBuyBtn').addEventListener('click', () => { closePaywall(); runUiAction('Не удалось открыть выбор подписки', () => openPlanPicker()); });
       document.getElementById('paywallCancelBtn').addEventListener('click', closePaywall);
       document.getElementById('planPickerCloseBtn')?.addEventListener('click', closePlanPicker);
       document.getElementById('systemSheet').addEventListener('click', async (e) => {
@@ -12522,16 +12560,16 @@
           teams.requests.open = false;
           teams.style.open = false;
           teams.roles.open = false;
-          loadTeamProfile(teamId).then(() => {
+          runUiAction('Не удалось открыть карточку команды', () => loadTeamProfile(teamId).then(() => {
             if (teamId === myTeamId) scrollToTeamPanel('teamMembersPanel');
             else scrollToTeamPanel(`leaderboardTeamPanel-${teamId}`);
-          }).catch(console.error);
+          }));
           return;
         }
         if (action === 'team-join-selected' || action === 'team-request-selected') {
           const teamId = Number(target.dataset.teamId || 0);
           if (teamId <= 0) return;
-          actionTeamJoinSelected(teamId, action === 'team-join-selected').catch(console.error);
+          runUiAction('Не удалось отправить заявку в команду', () => actionTeamJoinSelected(teamId, action === 'team-join-selected'));
           return;
         }
         if (action === 'team-back') {
@@ -12547,7 +12585,7 @@
         if (action === 'team-join') {
           const code = document.getElementById('teamJoinCode')?.value || '';
           state.settings.productivity.teams.join.code = code;
-          actionTeamJoinByCode(code).catch(console.error);
+          runUiAction('Не удалось вступить в команду по коду', () => actionTeamJoinByCode(code));
           return;
         }
         if (action === 'team-create') {
@@ -12555,19 +12593,19 @@
           const isOpen = String(document.getElementById('teamCreateVisibility')?.value || 'closed') === 'open';
           state.settings.productivity.teams.create.name = name;
           state.settings.productivity.teams.create.isOpen = isOpen;
-          actionTeamCreate(name, isOpen).catch(console.error);
+          runUiAction('Не удалось создать команду', () => actionTeamCreate(name, isOpen));
           return;
         }
         if (action === 'team-leave') {
           if (!confirm('Покинуть команду?')) return;
-          actionTeamLeave().catch(console.error);
+          runUiAction('Не удалось выйти из команды', () => actionTeamLeave());
           return;
         }
         if (action === 'team-delete') {
           const teamId = Number(target.dataset.teamId || state.settings.productivity.teams.my?.team_id || 0);
           if (teamId <= 0) return;
           if (!confirm('Удалить команду? Это действие необратимо.')) return;
-          actionTeamDelete(teamId).catch(console.error);
+          runUiAction('Не удалось удалить команду', () => actionTeamDelete(teamId));
           return;
         }
         if (action === 'team-member-remove') {
@@ -12576,7 +12614,7 @@
           const memberUserId = Number(target.dataset.userId || 0);
           if (teamId <= 0 || memberUserId <= 0) return;
           if (!confirm('Исключить участника из команды?')) return;
-          actionTeamMemberRemove(teamId, memberUserId).catch(console.error);
+          runUiAction('Не удалось удалить участника из команды', () => actionTeamMemberRemove(teamId, memberUserId));
           return;
         }
         if (action === 'team-member-role-save') {
@@ -12586,11 +12624,11 @@
           const select = document.querySelector(`[data-role-select-user-id="${memberUserId}"]`);
           const role = select ? String(select.value || 'private') : 'private';
           if (teamId <= 0 || memberUserId <= 0) return;
-          actionTeamMemberRoleSave(teamId, memberUserId, role).catch(console.error);
+          runUiAction('Не удалось сохранить роль участника', () => actionTeamMemberRoleSave(teamId, memberUserId, role));
           return;
         }
         if (action === 'team-copy-code') {
-          copyTextToClipboard(target.dataset.code || '').catch(console.error);
+          runUiAction('Не удалось скопировать код', () => copyTextToClipboard(target.dataset.code || ''));
           return;
         }
         if (action === 'team-requests-open') {
@@ -12608,10 +12646,10 @@
               renderTeamsSection();
               return;
             }
-            loadTeamRequests().then(() => scrollToTeamPanel('teamRequestsPanel')).catch(console.error);
+            runUiAction('Не удалось загрузить заявки команды', () => loadTeamRequests().then(() => scrollToTeamPanel('teamRequestsPanel')));
           };
           if (!(teams.view === 'profile' && Number(teams.selectedTeamId || 0) === myTeamId)) {
-            loadTeamProfile(myTeamId).then(openRequests).catch(console.error);
+            runUiAction('Не удалось открыть заявки команды', () => loadTeamProfile(myTeamId).then(openRequests));
           } else {
             openRequests();
           }
@@ -12621,15 +12659,15 @@
           const teams = state.settings.productivity.teams;
           teams.requests.q = document.getElementById('teamReqSearch')?.value || '';
           teams.requests.offset = 0;
-          loadTeamRequests().catch(console.error);
+          runUiAction('Не удалось загрузить заявки команды', () => loadTeamRequests());
           return;
         }
         if (action === 'team-retry-my') {
-          loadTeamsMe().catch(console.error);
+          runUiAction('Не удалось загрузить профиль команды', () => loadTeamsMe());
           return;
         }
         if (action === 'team-retry-board') {
-          loadTeamLeaderboard().catch(console.error);
+          runUiAction('Не удалось загрузить таблицу команд', () => loadTeamLeaderboard());
           return;
         }
         if (action === 'team-retry-profile') {
@@ -12638,26 +12676,26 @@
           if (teamId > 0) {
             teams.members.open = false;
             teams.roles.open = false;
-            loadTeamProfile(teamId).catch(console.error);
+            runUiAction('Не удалось загрузить профиль команды', () => loadTeamProfile(teamId));
           }
           return;
         }
         if (action === 'team-retry-requests') {
-          loadTeamRequests().catch(console.error);
+          runUiAction('Не удалось загрузить заявки команды', () => loadTeamRequests());
           return;
         }
         if (action === 'team-retry-style') {
-          loadTeamStyleOptions().catch(console.error);
+          runUiAction('Не удалось загрузить стили команды', () => loadTeamStyleOptions());
           return;
         }
         if (action === 'team-req-accept') {
           const requestId = Number(target.dataset.requestId || 0);
-          if (requestId > 0) actionRequestAccept(requestId).catch(console.error);
+          if (requestId > 0) runUiAction('Не удалось принять заявку', () => actionRequestAccept(requestId));
           return;
         }
         if (action === 'team-req-reject') {
           const requestId = Number(target.dataset.requestId || 0);
-          if (requestId > 0) actionRequestReject(requestId).catch(console.error);
+          if (requestId > 0) runUiAction('Не удалось отклонить заявку', () => actionRequestReject(requestId));
           return;
         }
         if (action === 'team-roles-open') {
@@ -12678,7 +12716,7 @@
             scrollToTeamPanel('teamRolesPanel');
           };
           if (!(teams.view === 'profile' && Number(teams.selectedTeamId || 0) === myTeamId)) {
-            loadTeamProfile(myTeamId).then(openRoles).catch(console.error);
+            runUiAction('Не удалось открыть роли команды', () => loadTeamProfile(myTeamId).then(openRoles));
           } else {
             openRoles();
           }
@@ -12698,10 +12736,10 @@
               renderTeamsSection();
               return;
             }
-            loadTeamStyleOptions().then(() => scrollToTeamPanel('teamStylePanel')).catch(console.error);
+            runUiAction('Не удалось открыть стили команды', () => loadTeamStyleOptions().then(() => scrollToTeamPanel('teamStylePanel')));
           };
           if (!(teams.view === 'profile' && Number(teams.selectedTeamId || 0) === myTeamId)) {
-            loadTeamProfile(myTeamId).then(openStyle).catch(console.error);
+            runUiAction('Не удалось открыть стиль команды', () => loadTeamProfile(myTeamId).then(openStyle));
           } else {
             openStyle();
           }
@@ -12714,7 +12752,7 @@
             bg_code: ((document.getElementById('teamStyleBg')?.value ?? '').trim() || null),
             emblem_code: ((document.getElementById('teamStyleEmblem')?.value ?? '').trim() || null),
           };
-          saveTeamStyleSelected().then(() => scrollToTeamPanel('teamStylePanel')).catch(console.error);
+          runUiAction('Не удалось сохранить стиль команды', () => saveTeamStyleSelected().then(() => scrollToTeamPanel('teamStylePanel')));
           return;
         }
         if (action === 'open-subscription') {
@@ -12733,7 +12771,7 @@
             else renderLeaderboardSection();
             return;
           }
-          if (userId > 0) openLeaderProfile(userId).catch(console.error);
+          if (userId > 0) runUiAction('Не удалось открыть профиль лидера', () => openLeaderProfile(userId));
           return;
         }
         if (action === 'leader-profile-close') {
@@ -12746,13 +12784,13 @@
         if (action === 'leader-copy-plan') {
           const userId = Number(target.dataset.userId || 0);
           const systemId = Number(target.dataset.systemId || 0) || null;
-          if (userId > 0) copyLeaderPlan(userId, systemId).catch(console.error);
+          if (userId > 0) runUiAction('Не удалось скопировать план лидера', () => copyLeaderPlan(userId, systemId));
           return;
         }
         if (action === 'leader-system-select') {
           const userId = Number(target.dataset.userId || 0);
           const systemId = Number(target.dataset.systemId || 0) || null;
-          if (userId > 0) openLeaderProfile(userId, systemId).catch(console.error);
+          if (userId > 0) runUiAction('Не удалось открыть профиль лидера', () => openLeaderProfile(userId, systemId));
           return;
         }
       });
@@ -12821,22 +12859,22 @@
           teams.requests.open = false;
           teams.style.open = false;
           teams.roles.open = false;
-          loadTeamProfile(teamId).then(() => {
+          runUiAction('Не удалось открыть карточку команды', () => loadTeamProfile(teamId).then(() => {
             if (teamId === myTeamId) scrollToTeamPanel('teamMembersPanel');
             else scrollToTeamPanel(`leaderboardTeamPanel-${teamId}`);
-          }).catch(console.error);
+          }));
           return;
         }
         if (action === 'team-join-selected' || action === 'team-request-selected') {
           const teamId = Number(target.dataset.teamId || 0);
           if (teamId <= 0) return;
-          actionTeamJoinSelected(teamId, action === 'team-join-selected').catch(console.error);
+          runUiAction('Не удалось отправить заявку в команду', () => actionTeamJoinSelected(teamId, action === 'team-join-selected'));
           return;
         }
         if (action === 'team-join-manage') {
           const code = document.getElementById('teamJoinCodeManage')?.value || '';
           state.settings.productivity.teams.join.code = code;
-          actionTeamJoinByCode(code).catch(console.error);
+          runUiAction('Не удалось вступить в команду по коду', () => actionTeamJoinByCode(code));
           return;
         }
         if (action === 'team-create-manage') {
@@ -12844,19 +12882,19 @@
           const isOpen = String(document.getElementById('teamCreateVisibilityManage')?.value || 'closed') === 'open';
           state.settings.productivity.teams.create.name = name;
           state.settings.productivity.teams.create.isOpen = isOpen;
-          actionTeamCreate(name, isOpen).catch(console.error);
+          runUiAction('Не удалось создать команду', () => actionTeamCreate(name, isOpen));
           return;
         }
         if (action === 'team-leave') {
           if (!confirm('Покинуть команду?')) return;
-          actionTeamLeave().catch(console.error);
+          runUiAction('Не удалось выйти из команды', () => actionTeamLeave());
           return;
         }
         if (action === 'team-delete') {
           const teamId = Number(target.dataset.teamId || state.settings.productivity.teams.my?.team_id || 0);
           if (teamId <= 0) return;
           if (!confirm('Удалить команду? Это действие необратимо.')) return;
-          actionTeamDelete(teamId).catch(console.error);
+          runUiAction('Не удалось удалить команду', () => actionTeamDelete(teamId));
           return;
         }
         if (action === 'team-member-remove') {
@@ -12865,7 +12903,7 @@
           const memberUserId = Number(target.dataset.userId || 0);
           if (teamId <= 0 || memberUserId <= 0) return;
           if (!confirm('Исключить участника из команды?')) return;
-          actionTeamMemberRemove(teamId, memberUserId).catch(console.error);
+          runUiAction('Не удалось удалить участника из команды', () => actionTeamMemberRemove(teamId, memberUserId));
           return;
         }
         if (action === 'team-member-role-save') {
@@ -12875,11 +12913,11 @@
           const select = document.querySelector(`[data-role-select-user-id="${memberUserId}"]`);
           const role = select ? String(select.value || 'private') : 'private';
           if (teamId <= 0 || memberUserId <= 0) return;
-          actionTeamMemberRoleSave(teamId, memberUserId, role).catch(console.error);
+          runUiAction('Не удалось сохранить роль участника', () => actionTeamMemberRoleSave(teamId, memberUserId, role));
           return;
         }
         if (action === 'team-copy-code') {
-          copyTextToClipboard(target.dataset.code || '').catch(console.error);
+          runUiAction('Не удалось скопировать код', () => copyTextToClipboard(target.dataset.code || ''));
           return;
         }
         if (action === 'team-back') {
@@ -12892,9 +12930,9 @@
           renderTeamsManageRoute();
           return;
         }
-        if (action === 'team-retry-my') { loadTeamsMe().catch(console.error); return; }
-        if (action === 'team-req-accept') { const requestId = Number(target.dataset.requestId || 0); if (requestId > 0) actionRequestAccept(requestId).catch(console.error); return; }
-        if (action === 'team-req-reject') { const requestId = Number(target.dataset.requestId || 0); if (requestId > 0) actionRequestReject(requestId).catch(console.error); return; }
+        if (action === 'team-retry-my') { runUiAction('Не удалось загрузить профиль команды', () => loadTeamsMe()); return; }
+        if (action === 'team-req-accept') { const requestId = Number(target.dataset.requestId || 0); if (requestId > 0) runUiAction('Не удалось принять заявку', () => actionRequestAccept(requestId)); return; }
+        if (action === 'team-req-reject') { const requestId = Number(target.dataset.requestId || 0); if (requestId > 0) runUiAction('Не удалось отклонить заявку', () => actionRequestReject(requestId)); return; }
         if (action === 'team-requests-open') {
           const teams = state.settings.productivity.teams;
           const myTeamId = Number(teams.my?.team_id || 0);
@@ -12910,10 +12948,10 @@
               renderTeamsManageRoute();
               return;
             }
-            loadTeamRequests().then(() => scrollToTeamPanel('teamRequestsPanel')).catch(console.error);
+            runUiAction('Не удалось загрузить заявки команды', () => loadTeamRequests().then(() => scrollToTeamPanel('teamRequestsPanel')));
           };
           if (!(teams.view === 'profile' && Number(teams.selectedTeamId || 0) === myTeamId)) {
-            loadTeamProfile(myTeamId).then(openRequests).catch(console.error);
+            runUiAction('Не удалось открыть заявки команды', () => loadTeamProfile(myTeamId).then(openRequests));
           } else {
             openRequests();
           }
@@ -12937,7 +12975,7 @@
             scrollToTeamPanel('teamRolesPanel');
           };
           if (!(teams.view === 'profile' && Number(teams.selectedTeamId || 0) === myTeamId)) {
-            loadTeamProfile(myTeamId).then(openRoles).catch(console.error);
+            runUiAction('Не удалось открыть роли команды', () => loadTeamProfile(myTeamId).then(openRoles));
           } else {
             openRoles();
           }
@@ -12957,10 +12995,10 @@
               renderTeamsManageRoute();
               return;
             }
-            loadTeamStyleOptions().then(() => scrollToTeamPanel('teamStylePanel')).catch(console.error);
+            runUiAction('Не удалось открыть стили команды', () => loadTeamStyleOptions().then(() => scrollToTeamPanel('teamStylePanel')));
           };
           if (!(teams.view === 'profile' && Number(teams.selectedTeamId || 0) === myTeamId)) {
-            loadTeamProfile(myTeamId).then(openStyle).catch(console.error);
+            runUiAction('Не удалось открыть стиль команды', () => loadTeamProfile(myTeamId).then(openStyle));
           } else {
             openStyle();
           }
@@ -12971,7 +13009,7 @@
           const teams = state.settings.productivity.teams;
           teams.requests.q = document.getElementById('teamReqSearchManage')?.value || '';
           teams.requests.offset = 0;
-          loadTeamRequests().catch(console.error);
+          runUiAction('Не удалось загрузить заявки команды', () => loadTeamRequests());
           return;
         }
         if (action === 'team-style-save') {
@@ -12981,7 +13019,7 @@
             bg_code: ((document.getElementById('teamStyleBgManage')?.value ?? '').trim() || null),
             emblem_code: ((document.getElementById('teamStyleEmblemManage')?.value ?? '').trim() || null),
           };
-          saveTeamStyleSelected().then(() => scrollToTeamPanel('teamStylePanel')).catch(console.error);
+          runUiAction('Не удалось сохранить стиль команды', () => saveTeamStyleSelected().then(() => scrollToTeamPanel('teamStylePanel')));
           return;
         }
         if (action === 'leader-open') {
@@ -12994,7 +13032,7 @@
             renderTeamsManageRoute();
             return;
           }
-          if (userId > 0) openLeaderProfile(userId).catch(console.error);
+          if (userId > 0) runUiAction('Не удалось открыть профиль лидера', () => openLeaderProfile(userId));
           return;
         }
         if (action === 'leader-profile-close') {
@@ -13006,13 +13044,13 @@
         if (action === 'leader-copy-plan') {
           const userId = Number(target.dataset.userId || 0);
           const systemId = Number(target.dataset.systemId || 0) || null;
-          if (userId > 0) copyLeaderPlan(userId, systemId).catch(console.error);
+          if (userId > 0) runUiAction('Не удалось скопировать план лидера', () => copyLeaderPlan(userId, systemId));
           return;
         }
         if (action === 'leader-system-select') {
           const userId = Number(target.dataset.userId || 0);
           const systemId = Number(target.dataset.systemId || 0) || null;
-          if (userId > 0) openLeaderProfile(userId, systemId).catch(console.error);
+          if (userId > 0) runUiAction('Не удалось открыть профиль лидера', () => openLeaderProfile(userId, systemId));
           return;
         }
       });
@@ -13020,24 +13058,24 @@
       document.getElementById('leaderboardPrevBtn')?.addEventListener('click', () => {
         const lb = state.settings.productivity.leaderboard;
         lb.offset = Math.max(0, lb.offset - lb.limit);
-        loadProductivityLeaderboard().catch(console.error);
+        runUiAction('Не удалось загрузить таблицу продуктивности', () => loadProductivityLeaderboard());
       });
       document.getElementById('leaderboardNextBtn')?.addEventListener('click', () => {
         const lb = state.settings.productivity.leaderboard;
         if (lb.offset + lb.limit >= lb.total) return;
         lb.offset = lb.offset + lb.limit;
-        loadProductivityLeaderboard().catch(console.error);
+        runUiAction('Не удалось загрузить таблицу продуктивности', () => loadProductivityLeaderboard());
       });
       document.getElementById('teamboardPrevBtn')?.addEventListener('click', () => {
         const teams = state.settings.productivity.teams;
         teams.offset = Math.max(0, teams.offset - teams.limit);
-        loadTeamLeaderboard().catch(console.error);
+        runUiAction('Не удалось загрузить таблицу команд', () => loadTeamLeaderboard());
       });
       document.getElementById('teamboardNextBtn')?.addEventListener('click', () => {
         const teams = state.settings.productivity.teams;
         if (teams.offset + teams.limit >= teams.total) return;
         teams.offset = teams.offset + teams.limit;
-        loadTeamLeaderboard().catch(console.error);
+        runUiAction('Не удалось загрузить таблицу команд', () => loadTeamLeaderboard());
       });
       document.getElementById('editorClose').addEventListener('click', closeEditor);
       document.getElementById('editorAddSet').addEventListener('click', () => queueExerciseAction(state.editor.ueId, () => addSet(state.editor.ueId, { toastOnSave: true })));
@@ -13072,7 +13110,7 @@
           if (!state.editor.ueId) return;
           const tab = btn.dataset.tab;
           setActiveTab(tab);
-          if (tab !== 'sets') ensureExerciseContext(state.editor.ueId).catch(console.error);
+          if (tab !== 'sets') runUiAction('Не удалось загрузить данные упражнения', () => ensureExerciseContext(state.editor.ueId));
           renderEditor();
         });
       });
@@ -13347,7 +13385,7 @@
           onCommit: (next) => {
             const delta = next - current;
             if (!delta) return;
-            queueExerciseAction(state.editor.ueId, () => incSet(state.editor.ueId, field, delta)).catch(console.error);
+            runUiAction('Не удалось изменить значение сета', () => queueExerciseAction(state.editor.ueId, () => incSet(state.editor.ueId, field, delta)));
           }
         };
       });
@@ -13717,26 +13755,26 @@
       setupSettingsHandlers();
       setupMeasurementsHandlers();
       setupMeasurementSheetHandlers();
-      await loadViewerRole();
+      Promise.resolve().then(() => loadViewerRole()).catch((err) => console.warn('Viewer role detection failed', err));
       openConfirmModal = setupModal();
       bindEvents();
       syncFinishFabVisibility();
-      loadAchievementsOverview().catch(console.error);
+      scheduleDeferredAction(() => loadAchievementsOverview());
       loadTimerPillPosition();
       bindTimer();
       setupVisibilityRefresh();
       updateActingBanner();
       applyHeaderWidgetVisibility();
       if (!state.isTelegram) { handleRouteFromHash(); return; }
-      loadSystems().catch(console.error);
-      loadSubscriptionOverview().catch(console.error);
+      runUiAction('Не удалось загрузить тренировочные системы', () => loadSystems());
+      scheduleDeferredAction(() => loadSubscriptionOverview());
       state.startDayIndex = getDayIndexFromUrl();
-      loadTrainerOverview().catch(console.error);
+      runUiAction('Не удалось загрузить данные тренерского режима', () => loadTrainerOverview());
       const onboardingActive = await checkOnboardingStatus();
       if (!onboardingActive) {
         await loadToday();
-        refreshProductivitySummary().catch(console.error);
-        ensureSettingsOverviewLoaded({ refreshExercises: true }).catch(console.error);
+        scheduleDeferredAction(() => refreshProductivitySummary());
+        runUiAction('Не удалось загрузить экран настроек', () => ensureSettingsOverviewLoaded({ refreshExercises: true }));
       }
     }
 
@@ -13769,7 +13807,7 @@
       } catch (err) {
         console.error(err);
         showFatal(err, 'boot()');
-        showErrorOverlay('Произошла ошибка запуска');
+        showErrorOverlay(explainActionError('Ошибка запуска приложения', err, 'Перезапустите экран в Telegram.'), { title: 'Ошибка запуска', details: explainActionError('Ошибка запуска приложения', err, 'Перезапустите экран в Telegram.') });
         setStatus('error');
       } finally {
         hideBoot();
