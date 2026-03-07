@@ -2763,21 +2763,6 @@ async def exercise_context(
     session_id = await db.get_or_create_today_session(user_id, iso_date, day_index, await get_active_training_system_id(user_id))
 
     current_note = await db.get_exercise_persistent_note(user_id, exercise_id)
-    if not (current_note or "").strip():
-        source_meta = await db.get_training_system_exercise_source(
-            await get_active_training_system_id(user_id),
-            day_index,
-            exercise_id,
-        )
-        source_note = str(source_meta.get("note") or "").strip()
-        if source_note:
-            source_user_id = int(source_meta.get("source_user_id") or 0)
-            if source_user_id > 0:
-                await db.append_imported_exercise_note(user_id, exercise_id, source_user_id, source_note)
-                current_note = await db.get_exercise_persistent_note(user_id, exercise_id)
-            else:
-                current_note = source_note
-                await db.set_exercise_persistent_note(user_id, exercise_id, source_note)
     previous_note = None
     previous_date = await _get_previous_done_date(user_id, exercise_id, session_id)
     previous_summary = _format_prev_summary(

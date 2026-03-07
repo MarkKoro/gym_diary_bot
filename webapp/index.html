@@ -13576,7 +13576,7 @@
       if (fromContext) return fromContext;
       const fromSheet = String(exercise?.current_note || '').trim();
       if (fromSheet) return fromSheet;
-      return String(exercise?.source_meta?.note || '').trim();
+      return '';
     }
 
     function hasExerciseNoteMeta(exercise, ctx = null) {
