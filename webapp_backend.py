@@ -2762,7 +2762,7 @@ async def exercise_context(
     iso_date = _iso_date(target_date)
     session_id = await db.get_or_create_today_session(user_id, iso_date, day_index, await get_active_training_system_id(user_id))
 
-    current_note = await db.get_exercise_note(session_id, ue_id)
+    current_note = await db.get_exercise_persistent_note(user_id, exercise_id)
     if not (current_note or "").strip():
         source_meta = await db.get_training_system_exercise_source(
             await get_active_training_system_id(user_id),
@@ -2772,9 +2772,8 @@ async def exercise_context(
         source_note = str(source_meta.get("note") or "").strip()
         if source_note:
             current_note = source_note
-    _prev_note_session_id, previous_note = await db.get_latest_completed_note(
-        user_id, exercise_id, exclude_session_id=session_id
-    )
+            await db.set_exercise_persistent_note(user_id, exercise_id, source_note)
+    previous_note = None
     previous_date = await _get_previous_done_date(user_id, exercise_id, session_id)
     previous_summary = _format_prev_summary(
         await db.get_last_session_summary(user_id, day_index, ue_id, iso_date, await get_active_training_system_id(user_id))
@@ -2808,7 +2807,7 @@ async def update_exercise_note(
 ):
     user_id = ctx.user_id
     await _validate_day(user_id, day_index)
-    await _resolve_user_exercise_id(user_id, ue_id, day_index)
+    exercise_id = await _resolve_user_exercise_id(user_id, ue_id, day_index)
 
     note_raw = (payload or {}).get("note", "")
     note_clean = note_raw.strip() if isinstance(note_raw, str) else ""
@@ -2816,8 +2815,8 @@ async def update_exercise_note(
 
     target_date = _parse_date_param(date)
     iso_date = _iso_date(target_date)
-    session_id = await db.get_or_create_today_session(user_id, iso_date, day_index, await get_active_training_system_id(user_id))
-    await db.set_exercise_note(session_id, ue_id, note_value)
+    await db.get_or_create_today_session(user_id, iso_date, day_index, await get_active_training_system_id(user_id))
+    await db.set_exercise_persistent_note(user_id, exercise_id, note_value)
 
     return {"ok": True, "current_note": note_value}
 

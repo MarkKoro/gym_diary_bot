@@ -161,9 +161,8 @@ from db import (
     get_session_last_values,
     remove_last_set,
     mark_exercise_done,
-    set_exercise_note,
-    get_exercise_note,
-    get_latest_completed_note,
+    set_exercise_persistent_note,
+    get_exercise_persistent_note,
     list_recent_progress,
     count_exercise_progress_entries,
     list_last_done_dates,
@@ -5622,11 +5621,8 @@ async def fetch_day_sheet_data(
         today_sets_full = []
         if session_id:
             today_sets_full = await fetch_exercise_sets(session_id, ue_id)
-        current_note = await get_exercise_note(session_id, ue_id) if session_id else None
-        _, prev_note_val = await get_latest_completed_note(
-            user_id, ex_id, exclude_session_id=session_id
-        )
-        previous_note = prev_note_val if prev_note_val else None
+        current_note = await get_exercise_persistent_note(user_id, ex_id)
+        previous_note = None
         last_sets = await fetch_last_session_sets(user_id, day_index, ue_id, date_str)
         entry: dict[str, object] = {
             "ue_id": ue_id,
@@ -6384,11 +6380,8 @@ async def build_summary_map(
         current_sets_full: list[tuple[int, int, int, float, int]] = []
         if session_id:
             current_sets_full = await fetch_exercise_sets(session_id, ue_id)
-        current_note = await get_exercise_note(session_id, ue_id) if session_id else None
-        _, prev_note_val = await get_latest_completed_note(
-            user_id, ex_id, exclude_session_id=session_id
-        )
-        previous_note = prev_note_val if prev_note_val else None
+        current_note = await get_exercise_persistent_note(user_id, ex_id)
+        previous_note = None
         baseline = await get_baseline(user_id, day, ex_id)
         last_label = ""
         if resolved == "kb":
@@ -6606,11 +6599,8 @@ async def render_library_group_text(
         result_text = summary
         if not result_text:
             result_text = t("NOT_FIXED")
-        current_note = await get_exercise_note(session_id, ue_id) if session_id else None
-        _, prev_note_val = await get_latest_completed_note(
-            user_id, ex_id, exclude_session_id=session_id
-        )
-        note_lines = build_note_lines(current_note, prev_note_val)
+        current_note = await get_exercise_persistent_note(user_id, ex_id)
+        note_lines = build_note_lines(current_note, None)
         lines.append(f"{prefix}{name}")
         lines.append(f"• Последний результат: {result_text}")
         for note_line in note_lines:
@@ -6688,11 +6678,8 @@ async def render_exercise_view(
     prefs = prefs or await load_ui_preferences(user_id)
     with_weight, kind = get_display_flags(group, name)
     weight_enabled = with_weight or group in {"workout", "core"}
-    current_note = await get_exercise_note(session_id, ue_id)
-    prev_session_id, prev_note_value = await get_latest_completed_note(
-        user_id, ex_id, exclude_session_id=session_id
-    )
-    previous_note = prev_note_value if prev_note_value else None
+    current_note = await get_exercise_persistent_note(user_id, ex_id)
+    previous_note = None
     is_amrap = group == "metcon" and name == AMRAP_EXERCISE_NAME
     is_for_time = group == "metcon" and name == FOR_TIME_EXERCISE_NAME
 
@@ -10068,10 +10055,8 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data.pop(EXERCISE_NOTE_INPUT_KEY, None)
         day = int(note_state.get("day", 0))
         ue_id = int(note_state.get("ue_id", 0))
-        today = await get_user_local_date(user_id)
-        system_id = await _active_system_id(user_id)
-        session_id = await get_or_create_today_session(user_id, today, day, system_id=system_id)
-        await set_exercise_note(session_id, ue_id, note_text)
+        ex_id, _name, _group = await get_exercise_info(ue_id)
+        await set_exercise_persistent_note(user_id, ex_id, note_text)
         chat_id = note_state.get("chat_id")
         msg_id = note_state.get("message_id")
         if chat_id and msg_id:
