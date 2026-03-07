@@ -973,6 +973,14 @@ async def init_db():
             UNIQUE(session_id, user_exercise_id)
         );
 
+        CREATE TABLE IF NOT EXISTS exercise_notes(
+            user_id INTEGER NOT NULL,
+            exercise_id INTEGER NOT NULL,
+            note TEXT,
+            updated_at TEXT,
+            PRIMARY KEY(user_id, exercise_id)
+        );
+
         CREATE TABLE IF NOT EXISTS exercise_baseline(
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id INTEGER,
@@ -1401,6 +1409,42 @@ async def init_db():
             await db.execute("ALTER TABLE session_exercises ADD COLUMN note TEXT")
         except Exception:
             pass
+        await db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS exercise_notes(
+                user_id INTEGER NOT NULL,
+                exercise_id INTEGER NOT NULL,
+                note TEXT,
+                updated_at TEXT,
+                PRIMARY KEY(user_id, exercise_id)
+            )
+            """
+        )
+        await db.execute(
+            """
+            INSERT OR IGNORE INTO exercise_notes(user_id, exercise_id, note, updated_at)
+            SELECT
+                s.user_id,
+                ue.exercise_id,
+                se.note,
+                COALESCE(se.done_at, s.date || 'T00:00:00')
+            FROM session_exercises se
+            JOIN sessions s ON s.id = se.session_id
+            JOIN user_exercises ue ON ue.id = se.user_exercise_id
+            WHERE COALESCE(TRIM(se.note), '') <> ''
+              AND se.session_id = (
+                SELECT se2.session_id
+                FROM session_exercises se2
+                JOIN sessions s2 ON s2.id = se2.session_id
+                JOIN user_exercises ue2 ON ue2.id = se2.user_exercise_id
+                WHERE s2.user_id = s.user_id
+                  AND ue2.exercise_id = ue.exercise_id
+                  AND COALESCE(TRIM(se2.note), '') <> ''
+                ORDER BY s2.date DESC, COALESCE(se2.done_at, s2.date || 'T00:00:00') DESC, se2.session_id DESC
+                LIMIT 1
+              )
+            """
+        )
         try:
             await db.execute("ALTER TABLE session_exercises ADD COLUMN last_seconds INTEGER")
         except Exception:
@@ -3955,37 +3999,88 @@ async def mark_exercise_done(session_id: int, ue_id: int):
 
 async def set_exercise_note(session_id: int, ue_id: int, note: str | None):
     async with connect_db() as db:
-        await db.execute(
+        cur = await db.execute(
             """
-            INSERT INTO session_exercises(
-                session_id,
-                user_exercise_id,
-                is_done,
-                is_microcycle,
-                done_at,
-                last_reps,
-                last_seconds,
-                last_weight,
-                note
-            ) VALUES(?,?,0,0,NULL,NULL,NULL,NULL,?)
-            ON CONFLICT(session_id, user_exercise_id)
-            DO UPDATE SET note=excluded.note
+            SELECT s.user_id, ue.exercise_id
+            FROM sessions s
+            JOIN user_exercises ue ON ue.id=?
+            WHERE s.id=?
             """,
-            (session_id, ue_id, note),
+            (ue_id, session_id),
         )
-        await db.commit()
+        row = await cur.fetchone()
+        if not row:
+            return
+        await set_exercise_persistent_note(int(row[0]), int(row[1]), note, db=db)
+
+
+async def set_exercise_persistent_note(
+    user_id: int,
+    exercise_id: int,
+    note: str | None,
+    *,
+    db: aiosqlite.Connection | None = None,
+):
+    note_value = (note or "").strip() or None
+    owns_connection = db is None
+    conn = db
+    if conn is None:
+        conn_cm = connect_db()
+        conn = await conn_cm.__aenter__()
+    assert conn is not None
+    try:
+        if note_value is None:
+            await conn.execute(
+                "DELETE FROM exercise_notes WHERE user_id=? AND exercise_id=?",
+                (user_id, exercise_id),
+            )
+        else:
+            await conn.execute(
+                """
+                INSERT INTO exercise_notes(user_id, exercise_id, note, updated_at)
+                VALUES(?,?,?,?)
+                ON CONFLICT(user_id, exercise_id)
+                DO UPDATE SET note=excluded.note, updated_at=excluded.updated_at
+                """,
+                (user_id, exercise_id, note_value, datetime.now(UTC).isoformat()),
+            )
+        if owns_connection:
+            await conn.commit()
+    finally:
+        if owns_connection:
+            await conn_cm.__aexit__(None, None, None)
+
+
+async def get_exercise_persistent_note(user_id: int, exercise_id: int) -> str | None:
+    async with connect_db() as db:
+        cur = await db.execute(
+            "SELECT note FROM exercise_notes WHERE user_id=? AND exercise_id=?",
+            (user_id, exercise_id),
+        )
+        row = await cur.fetchone()
+        if not row:
+            return None
+        note_value = row[0]
+        if note_value is None:
+            return None
+        return str(note_value)
 
 
 async def get_exercise_note(session_id: int, ue_id: int) -> str | None:
     async with connect_db() as db:
         cur = await db.execute(
-            "SELECT note FROM session_exercises WHERE session_id=? AND user_exercise_id=?",
-            (session_id, ue_id),
+            """
+            SELECT s.user_id, ue.exercise_id
+            FROM sessions s
+            JOIN user_exercises ue ON ue.id=?
+            WHERE s.id=?
+            """,
+            (ue_id, session_id),
         )
         row = await cur.fetchone()
         if not row:
             return None
-        return row[0]
+    return await get_exercise_persistent_note(int(row[0]), int(row[1]))
 
 
 async def get_latest_completed_note(
