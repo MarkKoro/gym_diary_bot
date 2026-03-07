@@ -1784,6 +1784,34 @@ async def apply_system_to_current_plan(user_id: int, system_id: int):
                 "UPDATE user_exercises SET is_archived=0 WHERE user_id=? AND exercise_id=? AND day_index=?",
                 (user_id, int(exercise_id), int(day_index)),
             )
+
+        sources_cur = await db.execute(
+            """
+            SELECT exercise_id, source_payload
+            FROM training_system_exercise_sources
+            WHERE system_id=?
+            """,
+            (system_id,),
+        )
+        for source_exercise_id, source_payload in await sources_cur.fetchall():
+            try:
+                payload = json.loads(source_payload or "{}")
+            except Exception:
+                payload = {}
+            source_note = str(payload.get("note") or "").strip()
+            if not source_note:
+                continue
+            source_user_id = int(payload.get("source_user_id") or 0)
+            if source_user_id <= 0:
+                continue
+            await append_imported_exercise_note(
+                int(user_id),
+                int(source_exercise_id),
+                int(source_user_id),
+                source_note,
+                db=db,
+            )
+
         cur = await db.execute(
             "SELECT day_no, dow, hour, minute FROM training_system_reminders WHERE system_id=?",
             (system_id,),
@@ -1982,7 +2010,7 @@ async def fetch_day_exercises(
     async with connect_db() as db:
         cur = await db.execute(
             """
-        SELECT ue.id, e.name, e.muscle_group, IFNULL(se.is_done,0), ue.exercise_id, se.note
+        SELECT ue.id, e.name, e.muscle_group, IFNULL(se.is_done,0), ue.exercise_id, en.note
         FROM user_exercises ue
         JOIN exercises e ON e.id = ue.exercise_id
         LEFT JOIN sessions s
@@ -1991,12 +2019,62 @@ async def fetch_day_exercises(
          AND s.day_index=ue.day_index
          AND s.system_id=?
         LEFT JOIN session_exercises se ON se.session_id=s.id AND se.user_exercise_id=ue.id
+        LEFT JOIN exercise_notes en ON en.user_id=ue.user_id AND en.exercise_id=ue.exercise_id
         WHERE ue.user_id=? AND ue.day_index=? AND ue.is_archived=0
         ORDER BY ue.id
         """,
             (date_str, resolved_system_id, user_id, day_index),
         )
         return await cur.fetchall()
+
+
+def _build_imported_note_block(source_name: str, note_text: str) -> str:
+    src = (source_name or "").strip() or "неизвестно"
+    note = (note_text or "").strip()
+    return f"Заметка от {src}:\n{note}"
+
+
+async def append_imported_exercise_note(
+    user_id: int,
+    exercise_id: int,
+    source_user_id: int,
+    note: str | None,
+    *,
+    db: aiosqlite.Connection | None = None,
+):
+    imported_note = (note or "").strip()
+    if not imported_note:
+        return
+    owns_connection = db is None
+    conn = db
+    if conn is None:
+        conn_cm = connect_db()
+        conn = await conn_cm.__aenter__()
+    assert conn is not None
+    try:
+        source_name = f"ID {int(source_user_id)}"
+        src_cur = await conn.execute("SELECT username FROM users WHERE id=?", (int(source_user_id),))
+        src_row = await src_cur.fetchone()
+        if src_row and src_row[0]:
+            source_name = f"@{str(src_row[0]).strip()}"
+
+        imported_block = _build_imported_note_block(source_name, imported_note)
+        current_cur = await conn.execute(
+            "SELECT note FROM exercise_notes WHERE user_id=? AND exercise_id=?",
+            (int(user_id), int(exercise_id)),
+        )
+        current_row = await current_cur.fetchone()
+        current_note = (str(current_row[0]) if current_row and current_row[0] is not None else "").strip()
+        if imported_block in current_note:
+            return
+
+        merged_note = imported_block if not current_note else f"{current_note}\n\n{imported_block}"
+        await set_exercise_persistent_note(int(user_id), int(exercise_id), merged_note, db=conn)
+        if owns_connection:
+            await conn.commit()
+    finally:
+        if owns_connection:
+            await conn_cm.__aexit__(None, None, None)
 
 
 async def get_latest_set_values_for_exercise(
