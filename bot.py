@@ -5493,23 +5493,17 @@ def build_last_done_dict(rows: list[tuple[int, str]]) -> dict[int, str]:
 
 def compose_exercise_line(mark: str, name: str, summary: str | None, last_done: str | None) -> str:
     details: list[str] = []
-    extra_lines: list[str] = []
     if last_done:
         details.append(last_done)
     if summary:
         summary_lines = str(summary).splitlines()
         if summary_lines:
             details.append(summary_lines[0])
-            if len(summary_lines) > 1:
-                extra_lines.extend(summary_lines[1:])
     prefix = f"{mark} " if mark else ""
     base = f"{prefix}{name}".strip()
     if details:
         base = f"{base} — {' — '.join(details)}"
-    lines = [base.strip()]
-    for line in extra_lines:
-        lines.append(f"   {line}")
-    return "\n".join(lines)
+    return base.strip()
 
 
 def build_prev_label(prev_summary: str | None, prev_date: str | None) -> str:
