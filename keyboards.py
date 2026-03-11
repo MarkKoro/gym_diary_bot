@@ -910,10 +910,10 @@ def reminder_day_kb(prefix: str = "wiz:rday", selected: int | None = None):
     rows.append([InlineKeyboardButton(BACK_BTN, callback_data=f"{prefix}:back")])
     return InlineKeyboardMarkup(rows)
 
-def day_kb(day_index: int, ex_rows: list[tuple[int, str, str, int, int]], *, context=None):
+def day_kb(day_index: int, ex_rows: list[tuple[int, str, str, int, int, str | None]], *, context=None):
     editing_allowed = _is_editing_allowed(context)
     groups: dict[str, list[tuple[int, str]]] = {}
-    for ue_id, name, group, _, _ in ex_rows:
+    for ue_id, name, group, *_ in ex_rows:
         groups.setdefault(group, []).append((ue_id, name))
     rows = []
     for group in groups.keys():
