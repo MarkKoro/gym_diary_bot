@@ -3332,6 +3332,14 @@
       Object.values(PENDING_PAYMENT_KEYS).forEach((k) => localStorage.removeItem(k));
     }
 
+    function clearSubscriptionPaymentState() {
+      state.subscription.payment.intent = null;
+      state.subscription.payment.source = 'webapp';
+      state.subscription.payment.prepared = null;
+      state.subscription.payment.paymentId = null;
+      state.subscription.payment.statusText = '';
+    }
+
     async function waitTelegramInitData(timeoutMs = 15000) {
       const start = Date.now();
       const quickExitMs = 1200;
@@ -9105,11 +9113,12 @@
       cancelBtn.addEventListener('click', hide);
       modal.addEventListener('click', (e) => { if (e.target === modal) hide(); });
       okBtn.addEventListener('click', () => { if (handler) handler(); hide(); });
-      return function open(fn, title, text, confirmLabel) {
+      return function open(fn, title, text, confirmLabel, options = {}) {
         handler = fn;
         if (title) titleEl.textContent = title;
         if (text) textEl.textContent = text;
         okBtn.textContent = (confirmLabel || 'Завершить').trim() || 'Завершить';
+        cancelBtn.style.display = options?.hideCancel ? 'none' : '';
         modal.classList.add('show');
       };
     }
@@ -12449,12 +12458,12 @@
         const data = await apiFetch(`/gymapi/api/payments/yookassa/status?payment_id=${encodeURIComponent(pending.payment_id)}`, { silent: true });
         const status = String(data.status || '');
         if (status === 'succeeded') {
-          state.subscription.payment.statusText = 'Оплата успешна. Подписка активирована ✅';
+          const paymentSource = state.subscription.payment.source;
           clearPendingPayment();
-          state.subscription.payment.prepared = null;
+          clearSubscriptionPaymentState();
           await loadSubscriptionOverview();
           await loadSystems();
-          if (state.subscription.payment.source === 'bot' && data.activated) {
+          if (paymentSource === 'bot' && data.activated) {
             try {
               await apiFetch('/gymapi/subscription/payment/notify-bot-success', { method: 'POST', body: JSON.stringify({}) });
             } catch (_) {
@@ -12466,12 +12475,16 @@
               return;
             }
           }
-          if (state.subscription.payment.source !== 'bot') {
+          if (paymentSource !== 'bot') {
             openConfirmModal?.(
               () => {},
               'Подписка активирована 🎉',
-              'Теперь доступны: AI-функции, создание своей команды и неограниченное число систем тренировок.',
-              'Отлично'
+              `✨ Спасибо за поддержку!
+⭐ Бонус: AI-функции и персональные корректировки от AI Coach
+⭐ Бонус: создание собственной команды
+⭐ Бонус: неограниченное число систем тренировок`,
+              'Отлично',
+              { hideCancel: true }
             );
             navigateTo('today', true);
           }
