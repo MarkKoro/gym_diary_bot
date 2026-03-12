@@ -291,6 +291,8 @@ def build_webapp_payment_url(plan_code: str) -> str:
         "screen": "payment",
         "kind": "subscription",
         "plan_id": str(plan_code),
+        "payment_method": "rub",
+        "source": "bot",
     })
     return urlunparse(parsed._replace(query=urlencode(query)))
 
@@ -8363,9 +8365,9 @@ async def handle_broadcast_callback(q, context: ContextTypes.DEFAULT_TYPE):
 
 def build_subscription_keyboard() -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = [
-        [InlineKeyboardButton("1 месяц — 100 ₽", callback_data="sub:1m")],
-        [InlineKeyboardButton("6 месяцев — 600 ₽", callback_data="sub:6m")],
-        [InlineKeyboardButton("12 месяцев — 1000 ₽", callback_data="sub:12m")],
+        [InlineKeyboardButton("1 месяц — 100 ₽", web_app=WebAppInfo(build_webapp_payment_url("1m")))],
+        [InlineKeyboardButton("6 месяцев — 600 ₽", web_app=WebAppInfo(build_webapp_payment_url("6m")))],
+        [InlineKeyboardButton("12 месяцев — 1000 ₽", web_app=WebAppInfo(build_webapp_payment_url("12m")))],
     ]
     for code in ("1m", "6m", "12m"):
         plan = SUBSCRIPTION_PLANS.get(code)
@@ -8532,7 +8534,7 @@ async def show_subscription_overview(
             stars_price = plan_amount_stars(plan['amount_rub'])
             stars_label = f"{plan['title']} — {stars_price} ⭐"
             rows.append([
-                InlineKeyboardButton(rub_label, callback_data=f"set:subscription:plan:{code}"),
+                InlineKeyboardButton(rub_label, web_app=WebAppInfo(build_webapp_payment_url(code))),
                 InlineKeyboardButton(stars_label, callback_data=f"set:subscription:planstars:{code}"),
             ])
     rows.append([InlineKeyboardButton(BACK_BTN, callback_data="menu:settings")])
