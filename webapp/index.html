@@ -317,6 +317,24 @@
     }
     .subscription-popup-title { font-size: 15px; font-weight: 800; }
     .subscription-popup-actions { display: grid; gap: 8px; }
+    .subscription-popup-close {
+      margin-top: 8px;
+      padding: 8px 16px;
+      border-radius: 999px;
+      border: 1px solid rgba(255, 255, 255, 0.78);
+      background: rgba(255, 255, 255, 0.08);
+      color: rgba(255, 255, 255, 0.92);
+      font-size: 13px;
+      font-weight: 600;
+      letter-spacing: 0.01em;
+      opacity: 0.72;
+      transition: opacity 0.2s ease, background-color 0.2s ease;
+    }
+    .subscription-popup-close:active,
+    .subscription-popup-close:hover {
+      opacity: 0.96;
+      background: rgba(255, 255, 255, 0.14);
+    }
     .loader-inline { width: 18px; height: 18px; border: 2px solid color-mix(in srgb, var(--text) 26%, transparent); border-top-color: var(--accent); border-radius: 999px; animation: spin 0.9s linear infinite; display: inline-block; vertical-align: middle; margin-right: 6px; }
     @keyframes spin { to { transform: rotate(360deg); } }
     .manage-menu {
@@ -12339,6 +12357,7 @@
             </div>
             ${paymentStatus}
           </div>
+          <button class="subscription-popup-close" type="button" data-sub-pay-action="close">Закрыть</button>
         </div>
       ` : '';
       const features = (sub.features || []).map((f) => `<li>${escapeHtml(f)}</li>`).join('');
@@ -12365,6 +12384,20 @@
       container.querySelectorAll('[data-sub-pay-action="prepare-rub"]').forEach((btn) => btn.addEventListener('click', () => runUiAction('Не удалось подготовить оплату', () => prepareRubRedirectPayment())));
       container.querySelectorAll('[data-sub-pay-action="open-rub"]').forEach((btn) => btn.addEventListener('click', () => openPreparedRubPayment()));
       container.querySelectorAll('[data-sub-pay-action="start-stars"]').forEach((btn) => btn.addEventListener('click', () => runUiAction('Не удалось запустить оплату', () => startSubscriptionPayment(intent?.planId, 'stars'))));
+      container.querySelectorAll('[data-sub-pay-action="close"]').forEach((btn) => btn.addEventListener('click', () => dismissSubscriptionPaymentPopup()));
+    }
+
+    function dismissSubscriptionPaymentPopup() {
+      clearPendingPayment();
+      clearSubscriptionPaymentState();
+      try {
+        const url = new URL(window.location.href);
+        ['screen', 'kind', 'plan_id', 'payment_method', 'source'].forEach((key) => url.searchParams.delete(key));
+        window.history.replaceState({}, '', url.toString());
+      } catch (_) {
+        // noop
+      }
+      renderSubscriptionScreen();
     }
 
     function formatDateLocal(value) {
