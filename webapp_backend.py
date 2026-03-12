@@ -5,6 +5,7 @@ import logging
 import re
 import httpx
 import uuid
+from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 from dataclasses import dataclass
 from datetime import UTC, datetime, date, time, timedelta
 from math import sqrt
@@ -235,6 +236,21 @@ def _has_yookassa_redirect_config() -> bool:
     return bool(str(YOOKASSA_SHOP_ID or '').strip() and str(YOOKASSA_SECRET_KEY or '').strip())
 
 
+def _resolve_payment_return_url() -> str:
+    base = str(resolve_yookassa_return_url() or '').strip()
+    if not base:
+        return base
+    bot_link = str(BOT_PUBLIC_LINK or '').strip()
+    if not bot_link and BOT_USERNAME:
+        bot_link = f"https://t.me/{BOT_USERNAME}"
+    if not bot_link:
+        return base
+    parsed = urlparse(base)
+    query = dict(parse_qsl(parsed.query, keep_blank_values=True))
+    query.setdefault('bot_link', bot_link)
+    return urlunparse(parsed._replace(query=urlencode(query)))
+
+
 async def _create_subscription_redirect_payment(user_id: int, plan_code: str, return_url: str | None = None) -> tuple[str, str, dict]:
     if not _has_yookassa_redirect_config():
         raise HTTPException(status_code=503, detail='Оплата временно недоступна')
@@ -253,7 +269,7 @@ async def _create_subscription_redirect_payment(user_id: int, plan_code: str, re
     body = {
         'amount': {'value': f'{amount:.2f}', 'currency': 'RUB'},
         'capture': True,
-        'confirmation': {'type': 'redirect', 'return_url': return_url or resolve_yookassa_return_url()},
+        'confirmation': {'type': 'redirect', 'return_url': return_url or _resolve_payment_return_url()},
         'description': f"Подписка Progressor на {plan['title']}",
         'metadata': metadata,
     }
@@ -5709,7 +5725,7 @@ async def subscription_payment_start(payload: dict = Body(default_factory=dict),
         payment_id, confirmation_url, _plan = await _create_subscription_redirect_payment(
             user_id,
             plan_code,
-            return_url=resolve_yookassa_return_url(),
+            return_url=_resolve_payment_return_url(),
         )
     return {
         'ok': True,
@@ -5768,7 +5784,7 @@ async def payment_redirect_create(payload: dict = Body(default_factory=dict), ct
     payment_id, confirmation_url, plan = await _create_subscription_redirect_payment(
         int(ctx.user_id),
         plan_id,
-        return_url=resolve_yookassa_return_url(),
+        return_url=_resolve_payment_return_url(),
     )
     return {
         'ok': True,
@@ -5825,6 +5841,36 @@ async def payment_yookassa_status(payment_id: str, ctx: AuthCtx = Depends(get_au
     result['already_finalized'] = bool(finalize.get('already_finalized'))
     result['expires_at'] = expires.isoformat() if expires else None
     return result
+
+
+@app.post('/subscription/payment/notify-bot-success')
+async def subscription_payment_notify_bot_success(ctx: AuthCtx = Depends(get_auth_ctx)):
+    if not TG_TOKEN:
+        return {'ok': False, 'sent': False}
+    user_info = await find_user_by_id(int(ctx.user_id))
+    if not user_info:
+        return {'ok': False, 'sent': False}
+    try:
+        tg_user_id = int(user_info[1])
+    except Exception:
+        return {'ok': False, 'sent': False}
+
+    text = (
+        '🎉 Подписка успешно активирована!\n\n'
+        'Теперь у вас доступны:\n'
+        '• AI-функции для прогресса и корректировок;\n'
+        '• Создание собственной команды;\n'
+        '• Неограниченное количество тренировочных систем;\n'
+        '• Отключение рекламных рассылок.\n\n'
+        'Откройте главное меню и продолжайте тренировку 💪'
+    )
+    try:
+        bot = Bot(token=TG_TOKEN)
+        await bot.send_message(chat_id=tg_user_id, text=text)
+    except Exception:
+        logger.exception('Failed to send post-payment bot message for user_id=%s', ctx.user_id)
+        return {'ok': False, 'sent': False}
+    return {'ok': True, 'sent': True}
 
 
 @app.post('/systems/resolve_limit')
