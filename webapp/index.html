@@ -295,7 +295,26 @@
     .subscription-cta-title { font-size: 16px; font-weight: 800; letter-spacing: -0.01em; }
     .subscription-cta-subtitle { color: var(--muted); font-size: 13px; }
     .subscription-sheet-note { color: var(--muted); font-size: 13px; }
-    .subscription-popup { border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--border)); border-radius: 14px; padding: 12px; background: color-mix(in srgb, var(--accent) 10%, var(--card)); display: grid; gap: 8px; box-shadow: 0 8px 18px rgba(15, 23, 42, 0.12); }
+    .subscription-popup-overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 130;
+      background: color-mix(in srgb, var(--bg) 62%, rgba(8, 12, 22, 0.62));
+      backdrop-filter: blur(9px);
+      display: grid;
+      place-items: center;
+      padding: 16px;
+    }
+    .subscription-popup {
+      width: min(520px, 100%);
+      border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--border));
+      border-radius: 16px;
+      padding: 14px;
+      background: color-mix(in srgb, var(--accent) 10%, var(--card));
+      display: grid;
+      gap: 10px;
+      box-shadow: 0 16px 40px rgba(15, 23, 42, 0.24);
+    }
     .subscription-popup-title { font-size: 15px; font-weight: 800; }
     .subscription-popup-actions { display: grid; gap: 8px; }
     .loader-inline { width: 18px; height: 18px; border: 2px solid color-mix(in srgb, var(--text) 26%, transparent); border-top-color: var(--accent); border-radius: 999px; animation: spin 0.9s linear infinite; display: inline-block; vertical-align: middle; margin-right: 6px; }
@@ -3283,6 +3302,7 @@
       createdAt: 'pending_payment_created_at',
       projectKey: 'pending_project_key',
       confirmationUrl: 'pending_confirmation_url',
+      source: 'pending_payment_source',
     };
 
     function getPaymentIntentFromUrl() {
@@ -3313,6 +3333,7 @@
       localStorage.setItem(PENDING_PAYMENT_KEYS.createdAt, String(Date.now()));
       localStorage.setItem(PENDING_PAYMENT_KEYS.projectKey, String(data.project_key || ''));
       localStorage.setItem(PENDING_PAYMENT_KEYS.confirmationUrl, String(data.confirmation_url || ''));
+      localStorage.setItem(PENDING_PAYMENT_KEYS.source, String(data.source || 'webapp'));
     }
 
     function readPendingPayment() {
@@ -3325,6 +3346,7 @@
         created_at: String(localStorage.getItem(PENDING_PAYMENT_KEYS.createdAt) || ''),
         project_key: String(localStorage.getItem(PENDING_PAYMENT_KEYS.projectKey) || ''),
         confirmation_url: String(localStorage.getItem(PENDING_PAYMENT_KEYS.confirmationUrl) || ''),
+        source: String(localStorage.getItem(PENDING_PAYMENT_KEYS.source) || '').trim().toLowerCase(),
       };
     }
 
@@ -3338,6 +3360,15 @@
       state.subscription.payment.prepared = null;
       state.subscription.payment.paymentId = null;
       state.subscription.payment.statusText = '';
+    }
+
+    function shouldCheckPendingPayment() {
+      if (state.subscription.payment.intent) return true;
+      const pending = readPendingPayment();
+      if (!pending?.payment_id) return false;
+      if (pending.source === 'bot' || pending.source === 'webapp') return true;
+      clearPendingPayment();
+      return false;
     }
 
     async function waitTelegramInitData(timeoutMs = 15000) {
@@ -10938,12 +10969,12 @@
       document.addEventListener('visibilitychange', () => {
         if (!document.hidden) {
           refreshAppData('visibility');
-          checkPendingRubPaymentStatus();
+          runUiAction('Не удалось проверить статус оплаты', () => checkPendingRubPaymentStatus());
         }
       });
       window.addEventListener('focus', () => {
         refreshAppData('focus');
-        checkPendingRubPaymentStatus();
+        runUiAction('Не удалось проверить статус оплаты', () => checkPendingRubPaymentStatus());
       });
       window.addEventListener('resize', positionManageMenu);
       window.addEventListener('scroll', positionManageMenu, true);
@@ -12296,16 +12327,18 @@
       const prepared = sub.payment.prepared;
       const paymentStatus = sub.payment.statusText ? `<div class="timer-hint">${escapeHtml(sub.payment.statusText)}</div>` : '';
       const paymentCard = intent ? `
-        <div class="subscription-popup">
-          <div class="subscription-popup-title">Оплата подписки (${escapeHtml(intent.planId)})</div>
-          <div class="subscription-sheet-note">RUB — через внешний redirect в YooKassa. Stars — внутри Telegram.</div>
-          <div class="subscription-popup-actions">
-            ${intent.paymentMethod === 'stars'
-              ? '<button class="btn primary" data-sub-pay-action="start-stars">Оплатить в Telegram Stars</button>'
-              : `<button class="btn ${prepared?.confirmation_url ? 'secondary' : 'primary'}" data-sub-pay-action="prepare-rub">Подготовить оплату</button>
-                 <button class="btn ${prepared?.confirmation_url ? 'primary' : 'secondary'}" data-sub-pay-action="open-rub" ${prepared?.confirmation_url ? '' : 'disabled'}>Открыть оплату в браузере</button>`}
+        <div class="subscription-popup-overlay">
+          <div class="subscription-popup">
+            <div class="subscription-popup-title">Оплата подписки (${escapeHtml(intent.planId)})</div>
+            <div class="subscription-sheet-note">RUB — через внешний redirect в YooKassa. Stars — внутри Telegram.</div>
+            <div class="subscription-popup-actions">
+              ${intent.paymentMethod === 'stars'
+                ? '<button class="btn primary" data-sub-pay-action="start-stars">Оплатить в Telegram Stars</button>'
+                : `<button class="btn ${prepared?.confirmation_url ? 'secondary' : 'primary'}" data-sub-pay-action="prepare-rub">Подготовить оплату</button>
+                   <button class="btn ${prepared?.confirmation_url ? 'primary' : 'secondary'}" data-sub-pay-action="open-rub" ${prepared?.confirmation_url ? '' : 'disabled'}>Открыть оплату в браузере</button>`}
+            </div>
+            ${paymentStatus}
           </div>
-          ${paymentStatus}
         </div>
       ` : '';
       const features = (sub.features || []).map((f) => `<li>${escapeHtml(f)}</li>`).join('');
@@ -12435,6 +12468,7 @@
         plan_id: intent.planId,
         project_key: data.project_key,
         confirmation_url: data.confirmation_url,
+        source: state.subscription.payment.source || 'webapp',
       });
       renderSubscriptionScreen();
     }
@@ -12449,6 +12483,7 @@
     }
 
     async function checkPendingRubPaymentStatus() {
+      if (!shouldCheckPendingPayment()) return;
       const pending = readPendingPayment();
       if (!pending?.payment_id) return;
       if (pending.project_key && state.subscription.projectKey && pending.project_key !== state.subscription.projectKey) return;
@@ -12480,9 +12515,9 @@
               () => {},
               'Подписка активирована 🎉',
               `✨ Спасибо за поддержку!
-⭐ Бонус: AI-функции и персональные корректировки от AI Coach
-⭐ Бонус: создание собственной команды
-⭐ Бонус: неограниченное число систем тренировок`,
+*⭐ Бонус: AI-функции и персональные корректировки от AI Coach ⭐*
+*⭐ Бонус: создание собственной команды ⭐*
+*⭐ Бонус: неограниченное число систем тренировок ⭐*`,
               'Отлично',
               { hideCancel: true }
             );
@@ -12495,6 +12530,14 @@
         } else {
           state.subscription.payment.statusText = 'Платёж ещё обрабатывается.';
         }
+      } catch (e) {
+        if (Number(e?.status || 0) === 404) {
+          clearPendingPayment();
+          state.subscription.payment.prepared = null;
+          state.subscription.payment.statusText = '';
+          return;
+        }
+        throw e;
       } finally {
         state.subscription.payment.checking = false;
         renderSubscriptionScreen();
@@ -13948,7 +13991,7 @@
       loadTimerPillPosition();
       bindTimer();
       setupVisibilityRefresh();
-      checkPendingRubPaymentStatus();
+      runUiAction('Не удалось проверить статус оплаты', () => checkPendingRubPaymentStatus());
       updateActingBanner();
       applyHeaderWidgetVisibility();
       if (!state.isTelegram) { handleRouteFromHash(); return; }

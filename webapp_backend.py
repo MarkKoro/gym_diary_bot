@@ -5866,7 +5866,13 @@ async def subscription_payment_notify_bot_success(ctx: AuthCtx = Depends(get_aut
     )
     try:
         bot = Bot(token=TG_TOKEN)
-        await bot.send_message(chat_id=tg_user_id, text=text)
+        await bot.send_message(
+            chat_id=tg_user_id,
+            text=text,
+            reply_markup=InlineKeyboardMarkup(
+                [[InlineKeyboardButton('Открыть главное меню', callback_data='menu:root')]]
+            ),
+        )
     except Exception:
         logger.exception('Failed to send post-payment bot message for user_id=%s', ctx.user_id)
         return {'ok': False, 'sent': False}
