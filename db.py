@@ -1105,7 +1105,11 @@ async def init_db():
             created_at TEXT,
             status TEXT,
             payload_json TEXT,
-            external_id TEXT
+            external_id TEXT,
+            provider_charge_id TEXT,
+            project_key TEXT,
+            finalized_at TEXT,
+            finalization_source TEXT
         );
 
         CREATE TABLE IF NOT EXISTS trainer_links(
@@ -1313,6 +1317,14 @@ async def init_db():
             )
         if not await _column_exists(db, "payments", "external_id"):
             await db.execute("ALTER TABLE payments ADD COLUMN external_id TEXT")
+        if not await _column_exists(db, "payments", "provider_charge_id"):
+            await db.execute("ALTER TABLE payments ADD COLUMN provider_charge_id TEXT")
+        if not await _column_exists(db, "payments", "project_key"):
+            await db.execute("ALTER TABLE payments ADD COLUMN project_key TEXT")
+        if not await _column_exists(db, "payments", "finalized_at"):
+            await db.execute("ALTER TABLE payments ADD COLUMN finalized_at TEXT")
+        if not await _column_exists(db, "payments", "finalization_source"):
+            await db.execute("ALTER TABLE payments ADD COLUMN finalization_source TEXT")
         if not await _column_exists(db, "running_entries", "heart_rate"):
             await db.execute("ALTER TABLE running_entries ADD COLUMN heart_rate INTEGER DEFAULT 0")
         if not await _column_exists(db, "running_entries", "duration_ms"):
@@ -3396,13 +3408,26 @@ async def create_payment_record(
     status: str,
     payload: dict | None = None,
     external_id: str | None = None,
+    provider_charge_id: str | None = None,
+    project_key: str | None = None,
 ) -> int:
     payload_json = json.dumps(payload or {}, ensure_ascii=False)
     async with connect_db() as db:
         await db.execute(
             """
-            INSERT INTO payments(user_id, provider, amount, currency, created_at, status, payload_json, external_id)
-            VALUES(?,?,?,?,?,?,?,?)
+            INSERT INTO payments(
+                user_id,
+                provider,
+                amount,
+                currency,
+                created_at,
+                status,
+                payload_json,
+                external_id,
+                provider_charge_id,
+                project_key
+            )
+            VALUES(?,?,?,?,?,?,?,?,?,?)
             """,
             (
                 user_id,
@@ -3413,6 +3438,8 @@ async def create_payment_record(
                 status,
                 payload_json,
                 external_id,
+                provider_charge_id,
+                project_key,
             ),
         )
         await db.commit()
@@ -3444,7 +3471,8 @@ async def get_payment_by_external_id(external_id: str) -> dict | None:
     async with connect_db() as db:
         cur = await db.execute(
             """
-            SELECT id, user_id, provider, amount, currency, created_at, status, payload_json
+            SELECT id, user_id, provider, amount, currency, created_at, status, payload_json,
+                   external_id, provider_charge_id, project_key, finalized_at, finalization_source
             FROM payments
             WHERE external_id=?
             LIMIT 1
@@ -3469,7 +3497,81 @@ async def get_payment_by_external_id(external_id: str) -> dict | None:
             "created_at": row[5],
             "status": row[6],
             "payload": payload,
+            "external_id": row[8],
+            "provider_charge_id": row[9],
+            "project_key": row[10],
+            "finalized_at": row[11],
+            "finalization_source": row[12],
         }
+
+
+async def finalize_payment_subscription_idempotent(
+    *,
+    external_id: str,
+    user_id: int,
+    expected_project_key: str,
+    days: int,
+    plan_code: str,
+    source: str,
+) -> dict:
+    now_iso = datetime.now(UTC).isoformat()
+    async with connect_db() as db:
+        await db.execute("BEGIN IMMEDIATE")
+        cur = await db.execute(
+            """
+            SELECT id, user_id, project_key, finalized_at
+            FROM payments
+            WHERE external_id=?
+            LIMIT 1
+            """,
+            (external_id,),
+        )
+        row = await cur.fetchone()
+        if not row:
+            await db.rollback()
+            return {"ok": False, "reason": "not_found"}
+        payment_row_id, payment_user_id, payment_project_key, finalized_at = row
+        if int(payment_user_id or 0) != int(user_id):
+            await db.rollback()
+            return {"ok": False, "reason": "forbidden"}
+        if str(payment_project_key or "") != str(expected_project_key or ""):
+            await db.rollback()
+            return {"ok": False, "reason": "project_key_mismatch"}
+        if finalized_at:
+            await db.rollback()
+            return {"ok": True, "already_finalized": True, "expires_at": None}
+
+        cur_active = await db.execute(
+            "SELECT expires_at FROM subscriptions WHERE user_id=? AND status='active' ORDER BY expires_at DESC LIMIT 1",
+            (user_id,),
+        )
+        active = await cur_active.fetchone()
+        now_dt = datetime.now(UTC)
+        base_dt = now_dt
+        if active and active[0]:
+            try:
+                active_dt = datetime.fromisoformat(active[0])
+                if active_dt.tzinfo is None:
+                    active_dt = active_dt.replace(tzinfo=UTC)
+                if active_dt > now_dt:
+                    base_dt = active_dt
+            except Exception:
+                pass
+        expires_at = base_dt + timedelta(days=max(1, int(days)))
+        await db.execute(
+            "INSERT INTO subscriptions(user_id, plan, started_at, expires_at, status) VALUES(?,?,?,?,?)",
+            (user_id, plan_code, now_dt.isoformat(), expires_at.isoformat(), "active"),
+        )
+        await db.execute(
+            "UPDATE subscriptions SET status='expired' WHERE user_id=? AND status='active' AND expires_at < ?",
+            (user_id, now_dt.isoformat()),
+        )
+        await db.execute(
+            "UPDATE payments SET finalized_at=?, finalization_source=? WHERE id=?",
+            (now_iso, source, payment_row_id),
+        )
+        await db.commit()
+        return {"ok": True, "already_finalized": False, "expires_at": expires_at}
 
 
 async def get_latest_pending_payment(user_id: int, provider: str = "yookassa") -> dict | None:

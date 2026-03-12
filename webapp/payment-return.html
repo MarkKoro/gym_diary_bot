@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Progressor — возврат оплаты</title>
+  <style>
+    body { font-family: -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif; background:#10131a; color:#fff; margin:0; display:grid; place-items:center; min-height:100vh; }
+    .box { text-align:center; opacity:.92; }
+  </style>
+</head>
+<body>
+  <div class="box">
+    <h3>Возвращаем вас в Progressor...</h3>
+    <p>Если переход не сработал, вернитесь в приложение вручную.</p>
+  </div>
+  <script>
+    (function () {
+      var target = '/gymapp_prod/';
+      try {
+        var p = window.location.pathname || '';
+        if (p.indexOf('/gymapp_prod/') !== -1) target = '/gymapp_prod/';
+      } catch (_) {}
+      setTimeout(function () { window.location.replace(target); }, 300);
+    })();
+  </script>
+</body>
+</html>

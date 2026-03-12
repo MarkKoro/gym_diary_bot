@@ -117,7 +117,8 @@ from settings import (
     TG_POOL_SIZE,
     JOIN_URL,
     ADMIN_IDS,
-    YK_TOKEN,
+    PUBLIC_BASE_URL,
+    WEBAPP_PUBLIC_PATH,
     SUBSCRIPTION_CHAT,
     BOT_PUBLIC_LINK,
     INSTRUCTION_URL,
@@ -276,6 +277,22 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("telegram").setLevel(logging.INFO)
 
 WEBAPP_URL = os.getenv("WEBAPP_URL", "https://telegrambotsforeveryone.duckdns.org/gymapp/")
+
+
+def build_webapp_payment_url(plan_code: str) -> str:
+    base = str(PUBLIC_BASE_URL or "https://telegrambotsforeveryone.duckdns.org").rstrip("/")
+    path = str(WEBAPP_PUBLIC_PATH or "/gymapp_prod").strip()
+    if not path.startswith('/'):
+        path = '/' + path
+    app_url = f"{base}{path.rstrip('/')}/"
+    parsed = urlparse(app_url)
+    query = dict(parse_qsl(parsed.query, keep_blank_values=True))
+    query.update({
+        "screen": "payment",
+        "kind": "subscription",
+        "plan_id": str(plan_code),
+    })
+    return urlunparse(parsed._replace(query=urlencode(query)))
 
 
 def build_webapp_day_url(day_index: int | None) -> str:
@@ -8384,7 +8401,7 @@ async def on_subscription_menu(update: Update, context: ContextTypes.DEFAULT_TYP
 
 
 async def on_subscription_choose(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Пользователь выбрал конкретный план — шлём инвойс через Telegram."""
+    """Пользователь выбрал конкретный план."""
 
     query = update.callback_query
     await query.answer()
@@ -8409,6 +8426,24 @@ async def on_subscription_choose(update: Update, context: ContextTypes.DEFAULT_T
     user = update.effective_user
     db_user_id = await get_or_create_user(user.id, user.username)
     title = plan["title"]
+    if payment_method != "stars":
+        payment_url = build_webapp_payment_url(plan_code)
+        await show_screen(
+            query,
+            context,
+            (
+                f"Оплата тарифа «{title}» в RUB откроется на защищённой странице YooKassa.\n"
+                "Это основной сценарий оплаты рублями.\n"
+                "Stars остаются внутри Telegram."
+            ),
+            InlineKeyboardMarkup([
+                [InlineKeyboardButton("💳 Открыть оплату RUB", web_app=WebAppInfo(payment_url))],
+                [InlineKeyboardButton("⬅️ Назад", callback_data="back:main")],
+            ]),
+            db_user_id,
+        )
+        return
+
     if payment_method == "stars":
         payload = f"setsubstars:{db_user_id}:{plan_code}"
         currency = "XTR"
@@ -8417,14 +8452,6 @@ async def on_subscription_choose(update: Update, context: ContextTypes.DEFAULT_T
         provider_token = ""
         description = "Оплата подписки в Telegram Stars"
         payment_payload = {"plan": plan_code, "payment_method": "stars"}
-    else:
-        payload = f"sub:{user.id}:{plan_code}"
-        currency = "RUB"
-        amount = plan["amount_rub"] * 100
-        prices = [LabeledPrice(label=title, amount=amount)]
-        provider_token = YK_TOKEN
-        description = "Оплата подписки в gym_diary_bot"
-        payment_payload = {"plan": plan_code}
 
     await create_payment_record(
         user_id=db_user_id,
@@ -8480,7 +8507,6 @@ async def show_subscription_overview(
 ):
     await cleanup_expired_subscriptions(user_id)
     active = await get_active_subscription(user_id)
-    pending = await get_latest_pending_payment(user_id)
     tz_code = await get_user_timezone(user_id)
     zone = resolve_user_zone(tz_code)
     lines = [
@@ -8496,29 +8522,11 @@ async def show_subscription_overview(
         lines.append(f"Активна до {expires_label}.")
     else:
         lines.append("Подписка не оформлена.")
-    if pending:
-        payload = pending.get("payload") or {}
-        plan_code = payload.get("plan")
-        plan_label = SUBSCRIPTION_PLANS.get(plan_code, {}).get("title")
-        amount_val = pending.get("amount") or 0
-        amount_rub = amount_val / 100 if amount_val else 0
-        lines.append("")
-        if plan_label and amount_rub:
-            lines.append(
-                f"Есть неоплаченный счёт: {plan_label} за {int(amount_rub)} ₽."
-            )
-        else:
-            lines.append("Есть неоплаченный счёт — можно проверить оплату ниже.")
-    if YK_TOKEN:
-        lines.append("")
-        lines.append(
-            "После оплаты вернись и нажми «Проверить оплату», чтобы активировать подписку."
-        )
-    else:
-        lines.append("")
-        lines.append("Приём платежей временно недоступен.")
+    lines.append("")
+    lines.append("Оплата в RUB проходит на защищённой внешней странице YooKassa через WebApp.")
+    lines.append("Telegram Stars остаются доступными и оплачиваются прямо в Telegram.")
     rows: list[list[InlineKeyboardButton]] = []
-    if YK_TOKEN or TG_TOKEN:
+    if TG_TOKEN:
         for code, plan in SUBSCRIPTION_PLANS.items():
             rub_label = f"{plan['title']} — {plan['amount_rub']} ₽"
             stars_price = plan_amount_stars(plan['amount_rub'])
@@ -8527,15 +8535,6 @@ async def show_subscription_overview(
                 InlineKeyboardButton(rub_label, callback_data=f"set:subscription:plan:{code}"),
                 InlineKeyboardButton(stars_label, callback_data=f"set:subscription:planstars:{code}"),
             ])
-    if pending:
-        rows.append(
-            [
-                InlineKeyboardButton(
-                    "🔄 Проверить оплату",
-                    callback_data=f"set:subscription:check:{pending['external_id']}",
-                )
-            ]
-        )
     rows.append([InlineKeyboardButton(BACK_BTN, callback_data="menu:settings")])
     kb = InlineKeyboardMarkup(rows)
     await show_screen(q, context, "\n".join(lines), kb, user_id)
@@ -8548,106 +8547,21 @@ async def start_subscription_payment(
     if not plan:
         await q.answer("Тариф не найден.", show_alert=True)
         return
-    if not YK_TOKEN:
-        await q.answer("Оплата временно недоступна.", show_alert=True)
-        return
-    amount = plan["amount_rub"]
-    description = f"Подписка на бота (поддержка проекта) — {plan['title']}"
-    try:
-        bot_username = context.bot.username
-        if not bot_username:
-            me = await context.bot.get_me()
-            bot_username = me.username or ""
-    except TelegramError:
-        bot_username = ""
-    return_url = SUPPORT_DEEPLINK or (JOIN_URL if JOIN_URL else None)
-    if not return_url:
-        return_url = f"https://t.me/{bot_username}" if bot_username else "https://t.me"
-    payload = {
-        "amount": {"value": f"{amount:.2f}", "currency": "RUB"},
-        "capture": True,
-        "confirmation": {"type": "redirect", "return_url": return_url},
-        "description": description,
-        "metadata": {"user_id": user_id, "plan": plan_code},
-    }
-    headers = {
-        "Authorization": f"Basic {YK_TOKEN}",
-        "Idempotence-Key": uuid.uuid4().hex,
-    }
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            response = await client.post(
-                "https://api.yookassa.ru/v3/payments",
-                json=payload,
-                headers=headers,
-            )
-            response.raise_for_status()
-    except httpx.HTTPStatusError as exc:
-        logger.warning(
-            "Yookassa payment creation failed: %s %s",
-            exc.response.status_code,
-            exc.response.text,
-        )
-        await context.bot.send_message(
-            q.message.chat_id,
-            "Не удалось создать платёж. Попробуй позже.",
-        )
-        return
-    except httpx.RequestError:
-        logger.exception("Yookassa payment creation error")
-        await context.bot.send_message(
-            q.message.chat_id,
-            "Не удалось связаться с платёжным сервисом. Попробуй позже.",
-        )
-        return
-    data = response.json()
-    payment_id = data.get("id")
-    confirmation = data.get("confirmation") or {}
-    confirmation_url = confirmation.get("confirmation_url")
-    if not payment_id or not confirmation_url:
-        logger.warning("Yookassa response missing payment data: %s", data)
-        await context.bot.send_message(
-            q.message.chat_id, "Не удалось получить ссылку на оплату."
-        )
-        return
-    payload_data = {
-        "plan": plan_code,
-        "amount": amount,
-        "title": plan["title"],
-        "confirmation_url": confirmation_url,
-    }
-    amount_kopecks = int(amount * 100)
-    await create_payment_record(
-        user_id,
-        YK_PROVIDER,
-        amount_kopecks,
-        "RUB",
-        "pending",
-        payload_data,
-        payment_id,
-    )
-    context.user_data[SUBSCRIPTION_PAYMENT_KEY] = {
-        "payment_id": payment_id,
-        "plan": plan_code,
-    }
+
+    payment_url = build_webapp_payment_url(plan_code)
     text = (
-        f"{plan['title']} — {amount} ₽.\n"
-        "Оплата пройдёт через ЮKassa.\n"
-        "После оплаты вернись и нажми «Проверить оплату», чтобы активировать подписку."
+        f"Оплата тарифа «{plan['title']}» в рублях откроется во внешнем защищённом окне YooKassa.\n"
+        "Это основной способ оплаты RUB.\n"
+        "Оплата Stars остаётся внутри Telegram."
     )
     kb = InlineKeyboardMarkup(
         [
-            [InlineKeyboardButton("💳 Оплатить", url=confirmation_url)],
-            [
-                InlineKeyboardButton(
-                    "🔄 Проверить оплату",
-                    callback_data=f"set:subscription:check:{payment_id}",
-                )
-            ],
+            [InlineKeyboardButton("💳 Перейти к оплате RUB", web_app=WebAppInfo(payment_url))],
             [InlineKeyboardButton(BACK_BTN, callback_data="set:subscription")],
         ]
     )
     await show_screen(q, context, text, kb, user_id)
+
 
 
 async def start_subscription_payment_stars(
@@ -8695,86 +8609,6 @@ async def start_subscription_payment_stars(
 
     await q.answer("Счёт в звёздах отправлен.", show_alert=False)
     await show_subscription_overview(q, context, user_id)
-
-
-async def check_subscription_payment(
-    q, context: ContextTypes.DEFAULT_TYPE, user_id: int, payment_id: str
-):
-    if not YK_TOKEN:
-        await q.answer("Проверка недоступна.", show_alert=True)
-        return
-    record = await get_payment_by_external_id(payment_id)
-    if not record:
-        await q.answer("Платёж не найден.", show_alert=True)
-        return
-    headers = {
-        "Authorization": f"Basic {YK_TOKEN}",
-    }
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            response = await client.get(
-                f"https://api.yookassa.ru/v3/payments/{payment_id}",
-                headers=headers,
-            )
-            response.raise_for_status()
-    except httpx.HTTPStatusError as exc:
-        logger.warning(
-            "Yookassa payment status failed: %s %s",
-            exc.response.status_code,
-            exc.response.text,
-        )
-        await context.bot.send_message(
-            q.message.chat_id,
-            "Не удалось проверить оплату. Попробуй позже.",
-        )
-        return
-    except httpx.RequestError:
-        logger.exception("Yookassa status request error")
-        await context.bot.send_message(
-            q.message.chat_id,
-            "Не удалось проверить оплату. Попробуй позже.",
-        )
-        return
-    data = response.json()
-    status = data.get("status", "")
-    await update_payment_status(payment_id, status, data)
-    if status == "succeeded":
-        payload = record.get("payload") or {}
-        plan_code = payload.get("plan") or "manual"
-        plan = SUBSCRIPTION_PLANS.get(plan_code)
-        days = plan["days"] if plan else 30
-        expires_at = await grant_subscription_days(user_id, days, plan=plan_code)
-        await cleanup_expired_subscriptions(user_id)
-        tz_code = await get_user_timezone(user_id)
-        zone = resolve_user_zone(tz_code)
-        expires_label = expires_at.astimezone(zone).strftime("%d.%m.%Y")
-        context.user_data.pop(SUBSCRIPTION_PAYMENT_KEY, None)
-        await context.bot.send_message(
-            q.message.chat_id,
-            f"Оплата получена. Подписка активна до {expires_label}.",
-        )
-        await show_subscription_overview(q, context, user_id)
-        return
-    if status in {"pending", "waiting_for_capture"}:
-        await context.bot.send_message(
-            q.message.chat_id,
-            "Платёж ещё обрабатывается. Проверь его чуть позже.",
-        )
-        return
-    if status == "canceled":
-        context.user_data.pop(SUBSCRIPTION_PAYMENT_KEY, None)
-        await context.bot.send_message(
-            q.message.chat_id,
-            "Платёж отменён. Если нужна помощь, напиши в поддержку.",
-        )
-        await show_subscription_overview(q, context, user_id)
-        return
-    await context.bot.send_message(
-        q.message.chat_id,
-        f"Текущий статус платежа: {status}.",
-    )
-    await show_subscription_overview(q, context, user_id)
-
 
 def wizard_catalog_text(day: int, group: str, prefs: UiPreferences) -> str:
     templates = {
@@ -12797,9 +12631,6 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     return
                 if sub_action == "planstars" and len(parts) >= 4:
                     await start_subscription_payment_stars(q, context, target_user_id, parts[3])
-                    return
-                if sub_action == "check" and len(parts) >= 4:
-                    await check_subscription_payment(q, context, target_user_id, parts[3])
                     return
                 await show_subscription_overview(q, context, target_user_id)
                 return

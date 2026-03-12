@@ -15,11 +15,13 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from settings import (
     ADMIN_IDS,
+    BOT_USERNAME,
     BOT_PUBLIC_LINK,
-    JOIN_URL,
-    SUPPORT_DEEPLINK,
+    PROJECT_KEY,
     TG_TOKEN,
-    YK_TOKEN,
+    YOOKASSA_SECRET_KEY,
+    YOOKASSA_SHOP_ID,
+    resolve_yookassa_return_url,
     get_openai_api_key,
     get_openai_model,
 )
@@ -229,36 +231,37 @@ def _subscription_features() -> list[str]:
     ]
 
 
-def _resolve_subscription_return_url() -> str:
-    if SUPPORT_DEEPLINK:
-        return SUPPORT_DEEPLINK
-    if JOIN_URL:
-        return JOIN_URL
-    if BOT_PUBLIC_LINK:
-        return BOT_PUBLIC_LINK
-    return 'https://t.me'
+def _has_yookassa_redirect_config() -> bool:
+    return bool(str(YOOKASSA_SHOP_ID or '').strip() and str(YOOKASSA_SECRET_KEY or '').strip())
 
 
-async def _create_subscription_payment(user_id: int, plan_code: str, return_url: str | None = None) -> tuple[str, str, dict]:
-    if not YK_TOKEN:
+async def _create_subscription_redirect_payment(user_id: int, plan_code: str, return_url: str | None = None) -> tuple[str, str, dict]:
+    if not _has_yookassa_redirect_config():
         raise HTTPException(status_code=503, detail='Оплата временно недоступна')
     plan = SUBSCRIPTION_PLANS.get(plan_code)
     if not plan:
         raise HTTPException(status_code=400, detail='Неизвестный тариф')
     amount = float(plan['amount_rub'])
+    metadata = {
+        'project_key': PROJECT_KEY,
+        'bot_username': BOT_USERNAME,
+        'user_id': str(user_id),
+        'kind': 'subscription',
+        'plan_id': plan_code,
+        'source': 'telegram_webapp',
+    }
     body = {
         'amount': {'value': f'{amount:.2f}', 'currency': 'RUB'},
         'capture': True,
-        'confirmation': {'type': 'redirect', 'return_url': return_url or 'https://t.me'},
-        'description': f"Подписка Progressor ({plan['title']})",
-        'metadata': {'user_id': user_id, 'plan': plan_code},
+        'confirmation': {'type': 'redirect', 'return_url': return_url or resolve_yookassa_return_url()},
+        'description': f"Подписка Progressor на {plan['title']}",
+        'metadata': metadata,
     }
     headers = {
-        'Authorization': f'Basic {YK_TOKEN}',
         'Idempotence-Key': str(uuid.uuid4()),
         'Content-Type': 'application/json',
     }
-    async with httpx.AsyncClient(timeout=20.0) as client:
+    async with httpx.AsyncClient(timeout=20.0, auth=(YOOKASSA_SHOP_ID, YOOKASSA_SECRET_KEY)) as client:
         resp = await client.post('https://api.yookassa.ru/v3/payments', json=body, headers=headers)
     if resp.status_code >= 400:
         raise HTTPException(status_code=502, detail='Не удалось создать платёж')
@@ -272,19 +275,30 @@ async def _create_subscription_payment(user_id: int, plan_code: str, return_url:
         provider='yookassa',
         amount=int(amount * 100),
         currency='RUB',
-        status='pending',
-        payload={'plan': plan_code, 'title': plan['title'], 'confirmation_url': confirmation_url},
+        status=str(data.get('status') or 'pending'),
+        payload={
+            'kind': 'subscription',
+            'plan_id': plan_code,
+            'plan': plan_code,
+            'title': plan['title'],
+            'confirmation_url': confirmation_url,
+            'metadata': metadata,
+        },
         external_id=payment_id,
+        provider_charge_id=payment_id,
+        project_key=PROJECT_KEY,
     )
     return payment_id, confirmation_url, plan
 
 
-def _looks_like_telegram_provider_token(token: str) -> bool:
-    value = str(token or '').strip()
-    if not value:
-        return False
-    # Пример формата провайдер-токена Telegram: 123456:TEST:abcdef...
-    return value.count(':') >= 2
+async def _yookassa_get_payment(payment_id: str) -> dict:
+    if not _has_yookassa_redirect_config():
+        raise HTTPException(status_code=503, detail='Оплата временно недоступна')
+    async with httpx.AsyncClient(timeout=15.0, auth=(YOOKASSA_SHOP_ID, YOOKASSA_SECRET_KEY)) as client:
+        resp = await client.get(f'https://api.yookassa.ru/v3/payments/{payment_id}')
+    if resp.status_code >= 400:
+        raise HTTPException(status_code=502, detail='Не удалось проверить платёж')
+    return resp.json()
 
 
 async def _create_telegram_subscription_invoice_link(
@@ -296,8 +310,8 @@ async def _create_telegram_subscription_invoice_link(
     method = _resolve_payment_method(payment_method)
     if not TG_TOKEN:
         raise HTTPException(status_code=503, detail='Оплата временно недоступна')
-    if method == 'rub' and not YK_TOKEN:
-        raise HTTPException(status_code=503, detail='Оплата временно недоступна')
+    if method != 'stars':
+        raise HTTPException(status_code=400, detail='Telegram invoice доступен только для Stars')
     plan = SUBSCRIPTION_PLANS.get(plan_code)
     if not plan:
         raise HTTPException(status_code=400, detail='Неизвестный тариф')
@@ -308,13 +322,8 @@ async def _create_telegram_subscription_invoice_link(
         'description': 'Подписка на умный дневник тренировок Progressor.',
         'payload': payload,
     }
-    if method == 'stars':
-        body['currency'] = 'XTR'
-        body['prices'] = [{'label': f"{plan['title']} · Telegram Stars", 'amount': _plan_amount_stars(plan['amount_rub'])}]
-    else:
-        body['provider_token'] = YK_TOKEN
-        body['currency'] = 'RUB'
-        body['prices'] = [{'label': plan['title'], 'amount': int(plan['amount_rub']) * 100}]
+    body['currency'] = 'XTR'
+    body['prices'] = [{'label': f"{plan['title']} · Telegram Stars", 'amount': _plan_amount_stars(plan['amount_rub'])}]
 
     async with httpx.AsyncClient(timeout=15.0) as client:
         resp = await client.post(f'https://api.telegram.org/bot{TG_TOKEN}/createInvoiceLink', json=body)
@@ -5681,7 +5690,8 @@ async def subscription_overview(ctx: AuthCtx = Depends(get_auth_ctx)):
     return {
         'ok': True,
         **_subscription_payload(active, latest),
-        'supports_web_payment': bool(YK_TOKEN),
+        'supports_web_payment': _has_yookassa_redirect_config(),
+        'project_key': PROJECT_KEY,
     }
 
 
@@ -5695,15 +5705,11 @@ async def subscription_payment_start(payload: dict = Body(default_factory=dict),
         payment_id, confirmation_url, _plan = await _create_telegram_subscription_invoice_link(
             user_id, plan_code, payment_method='stars'
         )
-    elif _looks_like_telegram_provider_token(YK_TOKEN):
-        payment_id, confirmation_url, _plan = await _create_telegram_subscription_invoice_link(
-            user_id, plan_code, payment_method='rub'
-        )
     else:
-        payment_id, confirmation_url, _plan = await _create_subscription_payment(
+        payment_id, confirmation_url, _plan = await _create_subscription_redirect_payment(
             user_id,
             plan_code,
-            return_url=_resolve_subscription_return_url(),
+            return_url=resolve_yookassa_return_url(),
         )
     return {
         'ok': True,
@@ -5726,14 +5732,7 @@ async def subscription_payment_status(payment_id: str, ctx: AuthCtx = Depends(ge
             status = 'succeeded'
         data = {'provider': 'telegram', 'status': status}
     else:
-        if not YK_TOKEN:
-            raise HTTPException(status_code=503, detail='Оплата временно недоступна')
-        headers = {'Authorization': f'Basic {YK_TOKEN}'}
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            resp = await client.get(f'https://api.yookassa.ru/v3/payments/{payment_id}', headers=headers)
-        if resp.status_code >= 400:
-            raise HTTPException(status_code=502, detail='Не удалось проверить платёж')
-        data = resp.json()
+        data = await _yookassa_get_payment(payment_id)
         status = str(data.get('status') or '')
         await db.update_payment_status(payment_id, status, data)
 
@@ -5743,15 +5742,89 @@ async def subscription_payment_status(payment_id: str, ctx: AuthCtx = Depends(ge
         payload_data = record.get('payload') or {}
         plan_code = str(payload_data.get('plan') or '1m')
         plan = SUBSCRIPTION_PLANS.get(plan_code) or SUBSCRIPTION_PLANS['1m']
-        active = await db.get_active_subscription(user_id)
-        if not active:
-            expires = await db.grant_subscription_days(user_id, int(plan['days']), plan=plan_code)
-            expires_at_iso = expires.isoformat()
-            activated = True
-        else:
-            expires_at_iso = active.get('expires_at').isoformat() if active.get('expires_at') else None
+        result = await db.finalize_payment_subscription_idempotent(
+            external_id=payment_id,
+            user_id=user_id,
+            expected_project_key=PROJECT_KEY,
+            days=int(plan['days']),
+            plan_code=plan_code,
+            source='subscription_payment_status',
+        )
+        if not result.get('ok'):
+            raise HTTPException(status_code=409, detail='Не удалось финализировать платёж')
+        expires = result.get('expires_at')
+        expires_at_iso = expires.isoformat() if expires else None
+        activated = not bool(result.get('already_finalized'))
 
     return {'ok': True, 'status': status, 'activated': activated, 'expires_at': expires_at_iso}
+
+
+@app.post('/api/payments/redirect/create')
+async def payment_redirect_create(payload: dict = Body(default_factory=dict), ctx: AuthCtx = Depends(get_auth_ctx)):
+    kind = str(payload.get('kind') or '').strip().lower()
+    plan_id = str(payload.get('plan_id') or '').strip()
+    if kind != 'subscription':
+        raise HTTPException(status_code=400, detail='Поддерживается только kind=subscription')
+    payment_id, confirmation_url, plan = await _create_subscription_redirect_payment(
+        int(ctx.user_id),
+        plan_id,
+        return_url=resolve_yookassa_return_url(),
+    )
+    return {
+        'ok': True,
+        'payment_id': payment_id,
+        'confirmation_url': confirmation_url,
+        'amount_rub': int(plan['amount_rub']),
+        'title': plan['title'],
+        'project_key': PROJECT_KEY,
+    }
+
+
+@app.get('/api/payments/yookassa/status')
+async def payment_yookassa_status(payment_id: str, ctx: AuthCtx = Depends(get_auth_ctx)):
+    user_id = int(ctx.user_id)
+    record = await db.get_payment_by_external_id(payment_id)
+    if not record or int(record.get('user_id') or 0) != user_id:
+        raise HTTPException(status_code=404, detail='Платёж не найден')
+
+    status = str(record.get('status') or '')
+    provider = str(record.get('provider') or '')
+    if provider != 'yookassa':
+        raise HTTPException(status_code=400, detail='Неверный провайдер платежа')
+
+    data = await _yookassa_get_payment(payment_id)
+    status = str(data.get('status') or status)
+    await db.update_payment_status(payment_id, status, data)
+
+    result = {
+        'ok': True,
+        'status': status,
+        'project_key': str(record.get('project_key') or ''),
+        'activated': False,
+        'already_finalized': False,
+        'expires_at': None,
+    }
+    if status != 'succeeded':
+        return result
+
+    payload_data = record.get('payload') or {}
+    plan_code = str(payload_data.get('plan_id') or payload_data.get('plan') or '1m')
+    plan = SUBSCRIPTION_PLANS.get(plan_code) or SUBSCRIPTION_PLANS['1m']
+    finalize = await db.finalize_payment_subscription_idempotent(
+        external_id=payment_id,
+        user_id=user_id,
+        expected_project_key=PROJECT_KEY,
+        days=int(plan['days']),
+        plan_code=plan_code,
+        source='api_payments_yookassa_status',
+    )
+    if not finalize.get('ok'):
+        raise HTTPException(status_code=409, detail='Не удалось финализировать платёж')
+    expires = finalize.get('expires_at')
+    result['activated'] = not bool(finalize.get('already_finalized'))
+    result['already_finalized'] = bool(finalize.get('already_finalized'))
+    result['expires_at'] = expires.isoformat() if expires else None
+    return result
 
 
 @app.post('/systems/resolve_limit')
