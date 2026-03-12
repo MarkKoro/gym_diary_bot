@@ -3043,7 +3043,22 @@
       isAdmin: false,
       systemSheetOpen: false,
       aiCoach: { open: false, loading: false, applying: false, mode: 'replace_exercises', answerText: '', parsed: null, summary: '', rationale: [], retriesUsed: 0, maxRetries: 3, usedRequests: 0, rejectedVariants: [], hasResponse: false, requestDayKey: '', appliedByDay: {}, warnings: [], decisions: {}, done: {}, replaceDayCursor: 1 },
-      subscription: { loading: false, active: false, activePlan: null, activeExpiresAt: null, plans: [], features: [], payment: { checking: false, paymentId: null } },
+      subscription: {
+        loading: false,
+        active: false,
+        activePlan: null,
+        activeExpiresAt: null,
+        projectKey: '',
+        plans: [],
+        features: [],
+        payment: {
+          checking: false,
+          paymentId: null,
+          prepared: null,
+          intent: null,
+          statusText: '',
+        },
+      },
       paywall: { open: false, reason: '' },
       productivitySheetOpen: false,
       muscleLoad: { groups: [], selectedKey: null, showAll: false, detailsOpen: true, byMuscle: {}, loading: false },
@@ -3255,6 +3270,56 @@
         if (Number.isFinite(num) && num > 0) return Math.floor(num);
       }
       return null;
+    }
+
+    const PENDING_PAYMENT_KEYS = {
+      id: 'pending_payment_id',
+      kind: 'pending_payment_kind',
+      planId: 'pending_payment_plan_id',
+      createdAt: 'pending_payment_created_at',
+      projectKey: 'pending_project_key',
+      confirmationUrl: 'pending_confirmation_url',
+    };
+
+    function getPaymentIntentFromUrl() {
+      try {
+        const params = new URLSearchParams(window.location.search || '');
+        if (params.get('screen') !== 'payment') return null;
+        const kind = String(params.get('kind') || '').trim().toLowerCase();
+        const planId = String(params.get('plan_id') || '').trim();
+        const method = String(params.get('payment_method') || 'rub').trim().toLowerCase();
+        if (!kind || !planId) return null;
+        return { kind, planId, paymentMethod: method === 'stars' ? 'stars' : 'rub' };
+      } catch (_) {
+        return null;
+      }
+    }
+
+    function storePendingPayment(data) {
+      if (!data) return;
+      localStorage.setItem(PENDING_PAYMENT_KEYS.id, String(data.payment_id || ''));
+      localStorage.setItem(PENDING_PAYMENT_KEYS.kind, String(data.kind || 'subscription'));
+      localStorage.setItem(PENDING_PAYMENT_KEYS.planId, String(data.plan_id || ''));
+      localStorage.setItem(PENDING_PAYMENT_KEYS.createdAt, String(Date.now()));
+      localStorage.setItem(PENDING_PAYMENT_KEYS.projectKey, String(data.project_key || ''));
+      localStorage.setItem(PENDING_PAYMENT_KEYS.confirmationUrl, String(data.confirmation_url || ''));
+    }
+
+    function readPendingPayment() {
+      const paymentId = String(localStorage.getItem(PENDING_PAYMENT_KEYS.id) || '').trim();
+      if (!paymentId) return null;
+      return {
+        payment_id: paymentId,
+        kind: String(localStorage.getItem(PENDING_PAYMENT_KEYS.kind) || 'subscription'),
+        plan_id: String(localStorage.getItem(PENDING_PAYMENT_KEYS.planId) || ''),
+        created_at: String(localStorage.getItem(PENDING_PAYMENT_KEYS.createdAt) || ''),
+        project_key: String(localStorage.getItem(PENDING_PAYMENT_KEYS.projectKey) || ''),
+        confirmation_url: String(localStorage.getItem(PENDING_PAYMENT_KEYS.confirmationUrl) || ''),
+      };
+    }
+
+    function clearPendingPayment() {
+      Object.values(PENDING_PAYMENT_KEYS).forEach((k) => localStorage.removeItem(k));
     }
 
     async function waitTelegramInitData(timeoutMs = 15000) {
@@ -8755,7 +8820,13 @@
         navigateTo(route);
       }));
       window.addEventListener('hashchange', handleRouteFromHash);
-      if (!location.hash) navigateTo('today', true); else handleRouteFromHash();
+      const intent = getPaymentIntentFromUrl();
+      if (intent) state.subscription.payment.intent = intent;
+      if (!location.hash) {
+        navigateTo(intent ? 'subscription' : 'today', true);
+      } else {
+        handleRouteFromHash();
+      }
     }
 
     function setStatus(mode) {
@@ -10839,9 +10910,15 @@
 
     function setupVisibilityRefresh() {
       document.addEventListener('visibilitychange', () => {
-        if (!document.hidden) refreshAppData('visibility');
+        if (!document.hidden) {
+          refreshAppData('visibility');
+          checkPendingRubPaymentStatus();
+        }
       });
-      window.addEventListener('focus', () => refreshAppData('focus'));
+      window.addEventListener('focus', () => {
+        refreshAppData('focus');
+        checkPendingRubPaymentStatus();
+      });
       window.addEventListener('resize', positionManageMenu);
       window.addEventListener('scroll', positionManageMenu, true);
     }
@@ -12167,6 +12244,7 @@
         state.subscription.activeExpiresAt = data.active_expires_at || null;
         state.subscription.plans = data.plans || [];
         state.subscription.features = data.features || [];
+        state.subscription.projectKey = data.project_key || '';
         updateDrawerSubscriptionStatus();
       } catch (e) {
         // noop
@@ -12188,6 +12266,22 @@
       const exactUntil = formatDateTimeLocal(sub.activeExpiresAt);
       const statusLabel = sub.active ? `Активна до ${exactUntil}` : 'Подписка не активна';
       const checking = sub.payment.checking ? '<div><span class="loader-inline"></span>Проверяем оплату…</div>' : '';
+      const intent = sub.payment.intent;
+      const prepared = sub.payment.prepared;
+      const paymentStatus = sub.payment.statusText ? `<div class="timer-hint">${escapeHtml(sub.payment.statusText)}</div>` : '';
+      const paymentCard = intent ? `
+        <div class="card">
+          <div class="subscription-cta-title">Оплата подписки (${escapeHtml(intent.planId)})</div>
+          <div class="subscription-sheet-note">RUB — через внешний redirect в YooKassa. Stars — внутри Telegram.</div>
+          <div class="subscription-plan-row">
+            ${intent.paymentMethod === 'stars'
+              ? '<button class="btn" data-sub-pay-action="start-stars">Оплатить в Telegram Stars</button>'
+              : '<button class="btn" data-sub-pay-action="prepare-rub">Подготовить оплату</button>'}
+            ${prepared?.confirmation_url ? '<button class="btn" data-sub-pay-action="open-rub">Открыть оплату в браузере</button>' : ''}
+          </div>
+          ${paymentStatus}
+        </div>
+      ` : '';
       const features = (sub.features || []).map((f) => `<li>${escapeHtml(f)}</li>`).join('');
       const accentNote = sub.active
         ? 'Спасибо за поддержку проекта. Подписка уже активна — все функции открыты.'
@@ -12205,9 +12299,13 @@
             ${cta}
           </div>
         </div>
+        ${paymentCard}
       `;
       updateDrawerSubscriptionStatus();
       container.querySelectorAll('[data-sub-action="open-picker"], [data-sub-action="change-plan"]').forEach((btn) => btn.addEventListener('click', () => runUiAction('Не удалось открыть выбор плана', () => openPlanPicker())));
+      container.querySelectorAll('[data-sub-pay-action="prepare-rub"]').forEach((btn) => btn.addEventListener('click', () => runUiAction('Не удалось подготовить оплату', () => prepareRubRedirectPayment())));
+      container.querySelectorAll('[data-sub-pay-action="open-rub"]').forEach((btn) => btn.addEventListener('click', () => openPreparedRubPayment()));
+      container.querySelectorAll('[data-sub-pay-action="start-stars"]').forEach((btn) => btn.addEventListener('click', () => runUiAction('Не удалось запустить оплату', () => startSubscriptionPayment(intent?.planId, 'stars'))));
     }
 
     function formatDateLocal(value) {
@@ -12277,47 +12375,77 @@
 
     async function startSubscriptionPayment(planCode, paymentMethod = 'rub') {
       closePaywall();
-      const data = await apiFetch('/gymapi/subscription/payment/start', { method: 'POST', body: JSON.stringify({ plan_code: planCode, payment_method: paymentMethod }) });
+      if (paymentMethod !== 'stars') {
+        state.subscription.payment.intent = { kind: 'subscription', planId: String(planCode || '1m'), paymentMethod: 'rub' };
+        state.subscription.payment.statusText = '';
+        closePlanPicker();
+        navigateTo('subscription', true);
+        renderSubscriptionScreen();
+        return;
+      }
+      const data = await apiFetch('/gymapi/subscription/payment/start', { method: 'POST', body: JSON.stringify({ plan_code: planCode, payment_method: 'stars' }) });
       state.subscription.payment.paymentId = data.payment_id;
       closePlanPicker();
       const tg = getTg();
       const paymentUrl = String(data.confirmation_url || '');
-      const isTelegramInvoice = /^https?:\/\/t\.me\/\$[\w-]+/i.test(paymentUrl);
-      const isTelegramDeepLink = /^https?:\/\/t\.me\//i.test(paymentUrl);
-      if (isTelegramInvoice && tg?.openInvoice) {
-        tg.openInvoice(paymentUrl, () => {});
-      } else if (isTelegramDeepLink && tg?.openTelegramLink) {
-        tg.openTelegramLink(paymentUrl);
-      } else if (tg?.openLink) {
-        tg.openLink(paymentUrl, { try_instant_view: false });
-      } else {
-        window.open(paymentUrl, '_blank');
-      }
-      await pollPaymentStatus(data.payment_id);
+      if (tg?.openInvoice) tg.openInvoice(paymentUrl, () => {});
     }
 
-    async function pollPaymentStatus(paymentId) {
-      if (!paymentId) return;
+    async function prepareRubRedirectPayment() {
+      const intent = state.subscription.payment.intent;
+      if (!intent?.planId) return;
+      const data = await apiFetch('/gymapi/api/payments/redirect/create', {
+        method: 'POST',
+        body: JSON.stringify({ kind: 'subscription', plan_id: intent.planId }),
+      });
+      state.subscription.payment.prepared = data;
+      state.subscription.payment.paymentId = data.payment_id;
+      state.subscription.payment.statusText = 'Платёж подготовлен. Открой оплату кнопкой ниже.';
+      storePendingPayment({
+        payment_id: data.payment_id,
+        kind: 'subscription',
+        plan_id: intent.planId,
+        project_key: data.project_key,
+        confirmation_url: data.confirmation_url,
+      });
+      renderSubscriptionScreen();
+    }
+
+    function openPreparedRubPayment() {
+      const prepared = state.subscription.payment.prepared || readPendingPayment();
+      const url = String(prepared?.confirmation_url || '');
+      if (!url) return;
+      const tg = getTg();
+      if (tg?.openLink) tg.openLink(url, { try_instant_view: false });
+      else window.open(url, '_blank');
+    }
+
+    async function checkPendingRubPaymentStatus() {
+      const pending = readPendingPayment();
+      if (!pending?.payment_id) return;
+      if (pending.project_key && state.subscription.projectKey && pending.project_key !== state.subscription.projectKey) return;
       state.subscription.payment.checking = true;
-      for (let i = 0; i < 40; i += 1) {
-        const data = await apiFetch(`/gymapi/subscription/payment/${encodeURIComponent(paymentId)}/status`, { silent: true });
+      renderSubscriptionScreen();
+      try {
+        const data = await apiFetch(`/gymapi/api/payments/yookassa/status?payment_id=${encodeURIComponent(pending.payment_id)}`, { silent: true });
         const status = String(data.status || '');
         if (status === 'succeeded') {
-          state.subscription.payment.checking = false;
-          toast('Оплата успешна. Подписка активирована ✅');
+          state.subscription.payment.statusText = 'Оплата успешна. Подписка активирована ✅';
+          clearPendingPayment();
+          state.subscription.payment.prepared = null;
           await loadSubscriptionOverview();
           await loadSystems();
-          return;
+        } else if (status === 'canceled') {
+          state.subscription.payment.statusText = 'Платёж отменён.';
+          clearPendingPayment();
+          state.subscription.payment.prepared = null;
+        } else {
+          state.subscription.payment.statusText = 'Платёж ещё обрабатывается.';
         }
-        if (status === 'canceled') {
-          state.subscription.payment.checking = false;
-          toast('Платёж отменён');
-          return;
-        }
-        await new Promise((r) => setTimeout(r, 2500));
+      } finally {
+        state.subscription.payment.checking = false;
+        renderSubscriptionScreen();
       }
-      state.subscription.payment.checking = false;
-      toast('Платёж ещё обрабатывается. Проверь чуть позже.');
     }
 
     function renderSystemsLimitSheet(limit) {
@@ -13767,6 +13895,7 @@
       loadTimerPillPosition();
       bindTimer();
       setupVisibilityRefresh();
+      checkPendingRubPaymentStatus();
       updateActingBanner();
       applyHeaderWidgetVisibility();
       if (!state.isTelegram) { handleRouteFromHash(); return; }
