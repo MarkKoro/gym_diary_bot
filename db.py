@@ -3843,6 +3843,83 @@ async def rename_day(user_id: int, day_index: int, label: str):
         )
         await db.commit()
 
+
+async def reorder_user_days(user_id: int, ordered_day_indexes: list[int]) -> dict[int, int]:
+    normalized = [int(day) for day in ordered_day_indexes if int(day) > 0]
+    if not normalized:
+        return {}
+    mapping: dict[int, int] = {int(old): idx + 1 for idx, old in enumerate(normalized)}
+    temp_offset = 100
+    async with connect_db() as db:
+        for old_idx, new_idx in mapping.items():
+            await db.execute(
+                "UPDATE user_days SET day_index=? WHERE user_id=? AND day_index=?",
+                (new_idx + temp_offset, user_id, old_idx),
+            )
+            await db.execute(
+                "UPDATE user_exercises SET day_index=? WHERE user_id=? AND day_index=?",
+                (new_idx + temp_offset, user_id, old_idx),
+            )
+            await db.execute(
+                "UPDATE exercise_baseline SET day_index=? WHERE user_id=? AND day_index=?",
+                (new_idx + temp_offset, user_id, old_idx),
+            )
+            await db.execute(
+                "UPDATE sessions SET day_index=? WHERE user_id=? AND day_index=?",
+                (new_idx + temp_offset, user_id, old_idx),
+            )
+            await db.execute(
+                "UPDATE day_completions SET day_index=? WHERE user_id=? AND day_index=?",
+                (new_idx + temp_offset, user_id, old_idx),
+            )
+            await db.execute(
+                "UPDATE day_completion_history SET day_index=? WHERE user_id=? AND day_index=?",
+                (new_idx + temp_offset, user_id, old_idx),
+            )
+            await db.execute(
+                "UPDATE running_entries SET day_index=? WHERE user_id=? AND day_index=?",
+                (new_idx + temp_offset, user_id, old_idx),
+            )
+            await db.execute(
+                "UPDATE user_reminders SET day_no=? WHERE user_id=? AND day_no=?",
+                (new_idx + temp_offset, user_id, old_idx),
+            )
+        for _, new_idx in mapping.items():
+            await db.execute(
+                "UPDATE user_days SET day_index=? WHERE user_id=? AND day_index=?",
+                (new_idx, user_id, new_idx + temp_offset),
+            )
+            await db.execute(
+                "UPDATE user_exercises SET day_index=? WHERE user_id=? AND day_index=?",
+                (new_idx, user_id, new_idx + temp_offset),
+            )
+            await db.execute(
+                "UPDATE exercise_baseline SET day_index=? WHERE user_id=? AND day_index=?",
+                (new_idx, user_id, new_idx + temp_offset),
+            )
+            await db.execute(
+                "UPDATE sessions SET day_index=? WHERE user_id=? AND day_index=?",
+                (new_idx, user_id, new_idx + temp_offset),
+            )
+            await db.execute(
+                "UPDATE day_completions SET day_index=? WHERE user_id=? AND day_index=?",
+                (new_idx, user_id, new_idx + temp_offset),
+            )
+            await db.execute(
+                "UPDATE day_completion_history SET day_index=? WHERE user_id=? AND day_index=?",
+                (new_idx, user_id, new_idx + temp_offset),
+            )
+            await db.execute(
+                "UPDATE running_entries SET day_index=? WHERE user_id=? AND day_index=?",
+                (new_idx, user_id, new_idx + temp_offset),
+            )
+            await db.execute(
+                "UPDATE user_reminders SET day_no=? WHERE user_id=? AND day_no=?",
+                (new_idx, user_id, new_idx + temp_offset),
+            )
+        await db.commit()
+    return mapping
+
 async def remove_user_exercise(user_id: int, day_index: int, ue_id: int):
     async with connect_db() as db:
         await db.execute(

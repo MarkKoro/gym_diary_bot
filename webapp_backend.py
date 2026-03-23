@@ -81,6 +81,7 @@ from db import (
     reactivate_trainer_links,
     remove_user_muscle_group,
     rename_day,
+    reorder_user_days,
     set_trainer_accepting_requests,
     set_app_meta,
     set_user_notifications_enabled,
@@ -4572,6 +4573,36 @@ async def settings_rename_day(
         "ok": True,
         "workouts_per_week": wpw,
         "days": [{"day_index": int(d), "label": lbl} for d, lbl in active_days],
+    }
+
+
+@app.post("/settings/days/reorder")
+async def settings_reorder_days(
+    payload: dict = Body(default_factory=dict),
+    ctx: AuthCtx = Depends(get_auth_ctx),
+):
+    user_id = ctx.user_id
+    wpw, active_days = await _load_user_settings(user_id)
+    active_indexes = [int(day_index) for day_index, _ in active_days]
+    order_raw = payload.get("order") or []
+    if not isinstance(order_raw, list):
+        raise HTTPException(status_code=400, detail="Некорректный порядок дней")
+    try:
+        order = [int(day) for day in order_raw]
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="Некорректный порядок дней")
+    if sorted(order) != sorted(active_indexes):
+        raise HTTPException(status_code=400, detail="Порядок не соответствует активным дням")
+    mapping = await reorder_user_days(user_id, order)
+    active_system_id = await get_active_training_system_id(user_id)
+    await sync_current_plan_to_system(user_id, active_system_id)
+    await sync_reminders_to_system(user_id, active_system_id)
+    wpw, active_days = await _load_user_settings(user_id)
+    return {
+        "ok": True,
+        "workouts_per_week": wpw,
+        "days": [{"day_index": int(d), "label": lbl} for d, lbl in active_days],
+        "day_mapping": {str(int(k)): int(v) for k, v in mapping.items()},
     }
 
 
