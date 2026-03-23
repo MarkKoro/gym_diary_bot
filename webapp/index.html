@@ -2083,11 +2083,28 @@
       [data-theme="light"] .timer-hint { color: rgba(255,255,255,0.85); }
       .day-sheet .sheet { max-width: 520px; }
       .day-sheet-title { font-size: 17px; font-weight: 800; margin-bottom: 10px; }
-      .day-option { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 12px; border-radius: 12px; border: 1px solid var(--border); background: var(--bg); cursor: pointer; }
+      .day-option { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 12px; border-radius: 12px; border: 1px solid var(--border); background: var(--bg); cursor: pointer; user-select: none; }
       .day-option.active { border-color: var(--accent); box-shadow: 0 8px 18px rgba(0,122,255,0.15); }
       .day-option .labels { display: grid; gap: 4px; }
       .day-option .title { font-weight: 700; }
       .day-option .subtitle { color: var(--muted); font-size: 13px; }
+      .day-option-right { display: inline-flex; align-items: center; gap: 8px; flex-shrink: 0; }
+      .day-drag-handle {
+        width: 32px;
+        height: 32px;
+        border-radius: 10px;
+        border: 1px solid var(--border);
+        background: var(--card);
+        color: var(--muted);
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 18px;
+        cursor: grab;
+        touch-action: none;
+      }
+      .day-option.dragging { opacity: 0.72; border-color: color-mix(in srgb, var(--accent) 55%, var(--border)); }
+      .day-sheet-subtitle { color: var(--muted); font-size: 13px; margin: -4px 0 10px; }
       .today-shell { display: flex; flex-direction: column; gap: 14px; transition: opacity 0.18s ease, transform 0.18s ease; }
       .today-shell.switching { opacity: 0.3; transform: translateY(6px); }
       .exercise-row { display: flex; flex-direction: column; gap: 10px; }
@@ -2606,6 +2623,7 @@
     <div class="sheet">
       <div class="sheet-handle"></div>
       <div class="day-sheet-title">Выбери тренировочный день</div>
+      <div class="day-sheet-subtitle">Потяни ☰, чтобы поменять порядок дней.</div>
       <div id="dayOptions" class="card-list"></div>
     </div>
   </div>
@@ -2866,6 +2884,7 @@
     <div class="sheet">
       <div class="sheet-handle"></div>
       <div class="day-sheet-title">Выбери тренировочный день</div>
+      <div class="day-sheet-subtitle">Потяни ☰, чтобы поменять порядок дней.</div>
       <div id="manageDayOptions" class="card-list"></div>
     </div>
   </div>
@@ -9357,36 +9376,133 @@
       return DURATION_PATTERNS.some((p) => lower.includes(p));
     }
 
+    function buildDayOptionElement(day, selected, onPick) {
+      const option = document.createElement('div');
+      option.className = 'day-option' + (Number(day.day_index) === Number(selected) ? ' active' : '');
+      option.dataset.dayIndex = String(day.day_index);
+      const labels = document.createElement('div');
+      labels.className = 'labels';
+      const title = document.createElement('div');
+      title.className = 'title';
+      title.textContent = `${day.day_index}. ${day.label}`;
+      labels.appendChild(title);
+      if (day.subtitle) {
+        const subtitle = document.createElement('div');
+        subtitle.className = 'subtitle';
+        subtitle.textContent = day.subtitle;
+        labels.appendChild(subtitle);
+      }
+      const right = document.createElement('div');
+      right.className = 'day-option-right';
+      const badge = document.createElement('div');
+      badge.className = 'pill';
+      badge.textContent = state.completedDays.has(Number(day.day_index)) ? 'Завершён' : 'Активный';
+      const handle = document.createElement('button');
+      handle.type = 'button';
+      handle.className = 'day-drag-handle';
+      handle.title = 'Перетащить день';
+      handle.textContent = '☰';
+      right.append(badge, handle);
+      option.append(labels, right);
+      option.addEventListener('click', (ev) => {
+        if (option.dataset.dragging === '1') return;
+        if (ev.target?.closest('.day-drag-handle')) return;
+        onPick?.();
+      });
+      return { option, handle };
+    }
+
+    async function reorderDaysByIndexes(nextOrder, context = {}) {
+      const response = await apiFetch('/gymapi/settings/days/reorder', {
+        method: 'POST',
+        body: JSON.stringify({ order: nextOrder }),
+      });
+      const mapping = response?.day_mapping || {};
+      const remap = (value) => {
+        const key = String(Number(value || 0));
+        const mapped = Number(mapping[key]);
+        return Number.isFinite(mapped) && mapped > 0 ? mapped : Number(value || 0);
+      };
+      state.activeDays = response?.days || state.activeDays;
+      state.dayIndex = remap(context.currentDayIndex || state.dayIndex);
+      state.manage.add.dayIndex = remap(context.manageDayIndex || state.manage.add.dayIndex || state.dayIndex);
+      renderDayOptions(state.dayIndex);
+      renderManageDayOptions();
+      renderManageDay();
+      await loadSheet(state.dayIndex);
+      toast('Порядок дней обновлён ✅');
+    }
+
+    function enableDayReorder(container, onReorder) {
+      if (!container) return;
+      let dragState = null;
+      const pointerMove = (event) => {
+        if (!dragState || event.pointerId !== dragState.pointerId) return;
+        event.preventDefault();
+        const options = Array.from(container.querySelectorAll('.day-option'));
+        const target = document.elementFromPoint(event.clientX, event.clientY)?.closest('.day-option');
+        if (!target || !container.contains(target) || target === dragState.optionEl) return;
+        const targetRect = target.getBoundingClientRect();
+        const placeBefore = event.clientY < (targetRect.top + targetRect.height / 2);
+        if (placeBefore) container.insertBefore(dragState.optionEl, target);
+        else container.insertBefore(dragState.optionEl, target.nextElementSibling);
+      };
+      const finish = async (event) => {
+        if (!dragState || event.pointerId !== dragState.pointerId) return;
+        document.removeEventListener('pointermove', pointerMove);
+        document.removeEventListener('pointerup', finish);
+        document.removeEventListener('pointercancel', finish);
+        dragState.optionEl.classList.remove('dragging');
+        dragState.optionEl.dataset.dragging = '0';
+        const nextOrder = Array.from(container.querySelectorAll('.day-option')).map((el) => Number(el.dataset.dayIndex));
+        const changed = nextOrder.length === dragState.originalOrder.length
+          && nextOrder.some((day, idx) => Number(day) !== Number(dragState.originalOrder[idx]));
+        if (changed) {
+          try {
+            await onReorder(nextOrder);
+          } catch (_) {
+            toast('Не удалось изменить порядок дней');
+          }
+        }
+        dragState = null;
+      };
+      container.querySelectorAll('.day-option').forEach((optionEl) => {
+        const handle = optionEl.querySelector('.day-drag-handle');
+        if (!handle) return;
+        handle.onpointerdown = (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          if (dragState) return;
+          dragState = {
+            pointerId: event.pointerId,
+            optionEl,
+            originalOrder: Array.from(container.querySelectorAll('.day-option')).map((el) => Number(el.dataset.dayIndex)),
+          };
+          optionEl.classList.add('dragging');
+          optionEl.dataset.dragging = '1';
+          triggerHaptic('medium');
+          document.addEventListener('pointermove', pointerMove, { passive: false });
+          document.addEventListener('pointerup', finish);
+          document.addEventListener('pointercancel', finish);
+        };
+      });
+    }
+
     function renderDayOptions(selected) {
       const container = document.getElementById('dayOptions');
       container.innerHTML = '';
       state.dayIndex = selected;
       state.activeDays.forEach((d) => {
-        const option = document.createElement('button');
-        option.type = 'button';
-        option.className = 'day-option' + (d.day_index === selected ? ' active' : '');
-        const labels = document.createElement('div');
-        labels.className = 'labels';
-        const title = document.createElement('div');
-        title.className = 'title';
-        title.textContent = `${d.day_index}. ${d.label}`;
-        labels.appendChild(title);
-        if (d.subtitle) {
-          const subtitle = document.createElement('div');
-          subtitle.className = 'subtitle';
-          subtitle.textContent = d.subtitle;
-          labels.appendChild(subtitle);
-        }
-        const badge = document.createElement('div');
-        badge.className = 'pill';
-        badge.textContent = state.completedDays.has(Number(d.day_index)) ? 'Завершён' : 'Активный';
-        option.append(labels, badge);
-        option.addEventListener('click', () => {
+        const { option } = buildDayOptionElement(d, selected, () => {
           closeDayPicker();
           if (d.day_index !== state.dayIndex) runUiAction('Не удалось открыть выбранный день', () => loadSheet(d.day_index));
         });
         container.appendChild(option);
       });
+      enableDayReorder(container, (nextOrder) => runUiAction('Не удалось изменить порядок дней', () => reorderDaysByIndexes(nextOrder, {
+        currentDayIndex: state.dayIndex,
+        manageDayIndex: state.manage.add.dayIndex,
+      })));
     }
 
     function openDayPicker() {
@@ -9930,6 +10046,13 @@
       });
     }
 
+    async function flushInlineNumberInput() {
+      const input = document.querySelector('input.inline-num-input');
+      if (!input) return;
+      input.blur();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+
     function renderWorkoutControls(container, exercise) {
       const ueId = exercise.user_exercise_id;
       const draft = ensureDraft(ueId);
@@ -10219,6 +10342,7 @@
     }
 
     async function handleExerciseDone(ueId) {
+      await flushInlineNumberInput();
       if (!state.dayIndex) return;
       const exercise = state.exercises.get(ueId);
       if (exercise && !isRunningExercise(exercise) && (exercise.sets?.length || 0) === 0) {
@@ -10278,6 +10402,7 @@
     }
 
     async function handleWorkoutAdd(exercise) {
+      await flushInlineNumberInput();
       const ueId = exercise.user_exercise_id;
       const draft = ensureDraft(ueId);
       const isDuration = isTimeBasedExercise(exercise);
@@ -11337,25 +11462,7 @@
       if (!container) return;
       container.innerHTML = '';
       (state.activeDays || []).forEach((d) => {
-        const option = document.createElement('div');
-        option.className = 'day-option' + (Number(d.day_index) === Number(state.manage.add.dayIndex) ? ' active' : '');
-        const labels = document.createElement('div');
-        labels.className = 'labels';
-        const title = document.createElement('div');
-        title.className = 'title';
-        title.textContent = `${d.day_index}. ${d.label}`;
-        labels.appendChild(title);
-        if (d.subtitle) {
-          const subtitle = document.createElement('div');
-          subtitle.className = 'subtitle';
-          subtitle.textContent = d.subtitle;
-          labels.appendChild(subtitle);
-        }
-        const badge = document.createElement('div');
-        badge.className = 'pill';
-        badge.textContent = state.completedDays.has(Number(d.day_index)) ? 'Завершён' : 'Активный';
-        option.append(labels, badge);
-        option.addEventListener('click', () => {
+        const { option } = buildDayOptionElement(d, state.manage.add.dayIndex, () => {
           state.manage.add.dayIndex = d.day_index;
           closeManageDayPicker();
           renderManageDay();
@@ -11363,6 +11470,10 @@
         });
         container.appendChild(option);
       });
+      enableDayReorder(container, (nextOrder) => runUiAction('Не удалось изменить порядок дней', () => reorderDaysByIndexes(nextOrder, {
+        currentDayIndex: state.dayIndex,
+        manageDayIndex: state.manage.add.dayIndex,
+      })));
     }
 
     function shiftManageDay(step) {
@@ -13339,7 +13450,10 @@
         runUiAction('Не удалось загрузить таблицу команд', () => loadTeamLeaderboard());
       });
       document.getElementById('editorClose').addEventListener('click', closeEditor);
-      document.getElementById('editorAddSet').addEventListener('click', () => queueExerciseAction(state.editor.ueId, () => addSet(state.editor.ueId, { toastOnSave: true })));
+      document.getElementById('editorAddSet').addEventListener('click', async () => {
+        await flushInlineNumberInput();
+        queueExerciseAction(state.editor.ueId, () => addSet(state.editor.ueId, { toastOnSave: true }));
+      });
       document.getElementById('editorRemoveSet').addEventListener('click', () => queueExerciseAction(state.editor.ueId, () => removeSet(state.editor.ueId)));
       document.getElementById('sheet').addEventListener('click', (e) => { if (e.target.id === 'sheet') closeEditor(); });
       document.querySelectorAll('.sheet-handle').forEach((handle) => {
