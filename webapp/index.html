@@ -9357,14 +9357,45 @@
         { title: 'Добро пожаловать', text: 'Это быстрый мастер-проход по ключевым функциям. Подсказки можно листать кнопками «Назад / Дальше» или пропустить в любой момент.', selector: '#headerTitle' },
         { title: 'Главное меню', text: 'Слева сверху кнопка меню. Здесь вкладки: Сегодня, замеры, статистика, команды, подписка и настройки.', selector: '#menuBtn' },
         { title: 'Тренировочные системы', text: 'Кнопка «Система» открывает выбор системы: можно создать новую, переключить активную, переименовать и изменить цвет.', selector: '#systemOpenBtn' },
-        { title: 'Плюс/минус упражнения', text: 'Кнопка ± открывает режимы: добавить упражнение, удалить, таймер и ИИ-помощника.', selector: '#manageExerciseBtn' },
+        {
+          title: 'Плюс/минус упражнения',
+          text: 'Кнопка ± открывает меню действий:<br>• <b>Добавить упражнение</b> — выбираете группу мышц, затем упражнение, и добавляете его в текущий день.<br>• <b>Удалить упражнение</b> — переход в отдельный режим удаления, где упражнения убираются по одному.<br>• <b>Таймер</b> — быстрый запуск таймера отдыха между подходами.<br>• <b>Прогрессируем вместе с ИИ</b> (<b>доступно в Premium</b>) — ИИ помогает улучшать план, корректировать нагрузку и разбирать ошибки.',
+          selector: '#manageExerciseBtn'
+        },
         { title: 'Быстрое добавление', text: 'Когда включён режим добавления, появляется кнопка «+» внизу. Через неё добавляются упражнения в текущий день.', selector: '#addExerciseBtn', prepare: () => setManageMode('add') },
         { title: 'Завершение дня', text: 'Кнопка с флажком завершает тренировочный день и фиксирует суммарный объём за сегодня.', selector: '#finishFab' },
         { title: 'Список дней', text: 'По центру заголовка выбирается день. Можно быстро переключаться стрелками или открыть полный список.', selector: '#dayCenter' },
         { title: 'Перетаскивание дней', text: 'В списке дней тяните за ☰, чтобы поменять порядок тренировочных дней местами.', selector: '#dayOptions .day-option .day-drag-handle', prepare: () => openDayPicker(), cleanup: () => closeDayPicker() },
         { title: 'Навигация по разделам', text: 'Откроем меню снова: отсюда можно перейти в «Команды», «Настройки» и остальные разделы приложения.', selector: '#drawerOverlay .drawer-menu', prepare: () => setDrawer(true), cleanup: () => closeDrawer() },
-        { title: 'Команды и роли', text: 'Раздел «Команды» — для взаимодействия с тренером и подопечными: вступление, заявки, роли и управление составом.', selector: '#drawerTeamsBtn', prepare: () => setDrawer(true), cleanup: () => closeDrawer() },
-        { title: 'Настройки приложения', text: 'Через «Настройки» можно менять дни, внешний вид, уведомления, тренерский режим и сервисные действия.', selector: '.menu-item[data-route=\"settings\"]', prepare: () => setDrawer(true), cleanup: () => closeDrawer() },
+        {
+          title: 'Команды и командный зачёт',
+          text: 'Раздел «Команды» — это именно командный режим: вступление и создание команд, командный зачёт и рейтинг, заявки, роли участников, а также стили и эмблемы команды.',
+          selector: '#drawerTeamsBtn',
+          prepare: () => setDrawer(true),
+          cleanup: () => closeDrawer()
+        },
+        {
+          title: 'Настройки приложения',
+          text: 'Через «Настройки» можно менять дни, внешний вид, уведомления и сервисные действия. Отдельно здесь включается режим «Тренер / подопечный».',
+          selector: '.menu-item[data-route=\"settings\"]',
+          prepare: () => setDrawer(true),
+          cleanup: () => closeDrawer()
+        },
+        {
+          title: 'Режим тренер / подопечный',
+          text: 'Режим «Тренер / подопечный» настраивается в «Настройки → Тренер / подопечный». Здесь можно включить режим тренера, получать код для подключения, принимать заявки и управлять подопечными отдельно от раздела «Команды».',
+          selector: '.settings-menu-item[data-section=\"trainer\"]',
+          prepare: async () => {
+            closeDrawer();
+            navigateTo('settings');
+            state.settings.view = 'menu';
+            renderSettings();
+          },
+          cleanup: () => {
+            state.settings.view = 'menu';
+            renderSettings();
+          }
+        },
         { title: 'Финал', text: 'Готово! Если забудете, как что работает, откройте «Настройки → Сервисные действия → Повторить обучение».', selector: '#menuBtn', cleanup: () => closeDrawer() },
       ];
     }
@@ -9433,13 +9464,9 @@
       backdrop.style.width = `${Math.min(window.innerWidth - 16, rect.width + pad * 2)}px`;
       backdrop.style.height = `${Math.min(window.innerHeight - 16, rect.height + pad * 2)}px`;
       const isLast = idx === total - 1;
-      const topSpace = rect.top;
-      const placeBelow = topSpace < 240;
-      const cardTop = placeBelow
-        ? Math.min(window.innerHeight - 220, rect.bottom + 14)
-        : Math.max(10, rect.top - 198);
-      const cardLeft = Math.max(12, Math.min(window.innerWidth - (Math.min(360, window.innerWidth - 28)) - 12, rect.left));
-      card.style.top = `${cardTop}px`;
+      const cardWidth = Math.min(360, Math.max(240, window.innerWidth - 28));
+      card.style.width = `${cardWidth}px`;
+      const cardLeft = Math.max(12, Math.min(window.innerWidth - cardWidth - 12, rect.left));
       card.style.left = `${cardLeft}px`;
       card.innerHTML = `
         <div class="tour-head">
@@ -9453,6 +9480,27 @@
           <button class="btn primary" data-tour-action="${isLast ? 'close' : 'next'}">${isLast ? 'Закрыть' : 'Дальше'}</button>
         </div>
       `;
+      const cardHeight = Math.max(150, card.offsetHeight || 210);
+      const gap = 14;
+      const minTop = 10;
+      const maxTop = Math.max(minTop, window.innerHeight - cardHeight - 10);
+      const canPlaceBelow = rect.bottom + gap + cardHeight <= window.innerHeight - 10;
+      const canPlaceAbove = rect.top - gap - cardHeight >= 10;
+      let cardTop;
+      if (canPlaceBelow && !canPlaceAbove) cardTop = rect.bottom + gap;
+      else if (canPlaceAbove && !canPlaceBelow) cardTop = rect.top - cardHeight - gap;
+      else if (canPlaceAbove && canPlaceBelow) {
+        const spaceBelow = window.innerHeight - rect.bottom;
+        const spaceAbove = rect.top;
+        cardTop = spaceBelow >= spaceAbove ? rect.bottom + gap : rect.top - cardHeight - gap;
+      } else {
+        const belowTop = Math.min(maxTop, rect.bottom + gap);
+        const aboveTop = Math.max(minTop, rect.top - cardHeight - gap);
+        const overlapBelow = Math.max(0, (belowTop + cardHeight + gap) - rect.top);
+        const overlapAbove = Math.max(0, (rect.bottom + gap) - aboveTop);
+        cardTop = overlapBelow <= overlapAbove ? belowTop : aboveTop;
+      }
+      card.style.top = `${Math.max(minTop, Math.min(maxTop, cardTop))}px`;
     }
 
     async function moveTour(direction) {
