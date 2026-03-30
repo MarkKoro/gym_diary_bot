@@ -1090,6 +1090,51 @@
     .onboarding-pill { padding: 8px 12px; border-radius: 999px; background: var(--bg); border: 1px solid var(--border); font-size: 13px; color: var(--muted); }
     .onboarding-reminder-row { display: grid; gap: 10px; }
     .onboarding-active .finish-fab-wrap { display: none; }
+    body.tour-active { overflow: hidden; }
+    .tour-overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 2500;
+      display: none;
+      pointer-events: auto;
+    }
+    .tour-overlay.show { display: block; }
+    .tour-backdrop {
+      position: absolute;
+      border-radius: 18px;
+      border: 2px solid color-mix(in srgb, var(--accent) 65%, #fff);
+      box-shadow: 0 0 0 200vmax rgba(4, 9, 20, 0.78);
+      transition: all 220ms ease;
+    }
+    .tour-backdrop::after {
+      content: '';
+      position: absolute;
+      inset: -8px;
+      border-radius: 22px;
+      border: 1px dashed color-mix(in srgb, var(--accent) 55%, #fff);
+      opacity: 0.7;
+    }
+    .tour-card {
+      position: absolute;
+      width: min(360px, calc(100vw - 28px));
+      border-radius: 16px;
+      background: var(--card);
+      border: 1px solid var(--border);
+      box-shadow: 0 18px 34px rgba(2, 6, 23, 0.35);
+      padding: 14px;
+      color: var(--text);
+      pointer-events: auto;
+      transition: all 220ms ease;
+      display: grid;
+      gap: 10px;
+    }
+    .tour-head { display: flex; gap: 10px; align-items: flex-start; justify-content: space-between; }
+    .tour-step-badge { font-size: 12px; padding: 4px 8px; border-radius: 999px; color: var(--accent); border: 1px solid color-mix(in srgb, var(--accent) 46%, var(--border)); background: color-mix(in srgb, var(--accent) 10%, var(--card)); }
+    .tour-skip { border: none; background: transparent; color: var(--muted); font-size: 13px; font-weight: 700; cursor: pointer; }
+    .tour-title { font-size: 17px; font-weight: 800; }
+    .tour-text { font-size: 14px; line-height: 1.45; color: var(--muted); }
+    .tour-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+    .tour-actions .btn { min-width: 0; }
     .section-title { font-size: 17px; font-weight: 800; letter-spacing: -0.01em; }
     .subtext { color: var(--muted); font-size: 14px; }
     .legend-card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 12px; box-shadow: var(--shadow); display: grid; gap: 8px; }
@@ -2421,6 +2466,10 @@
   <div id="onboarding" class="onboarding">
     <div class="onboarding-card" id="onboardingCard"></div>
   </div>
+  <div id="tourOverlay" class="tour-overlay" aria-live="polite">
+    <div id="tourBackdrop" class="tour-backdrop"></div>
+    <div id="tourCard" class="tour-card"></div>
+  </div>
   <div id="app" class="app" style="display:none">
     <div id="trainingTint" class="training-tint">
       <div class="training-tint-layer training-tint-top"></div>
@@ -3283,6 +3332,11 @@
         timezone: '',
         reminders: [],
         days: [],
+      },
+      tour: {
+        active: false,
+        index: 0,
+        completed: false,
       },
       acting: {
         userId: null,
@@ -7563,6 +7617,7 @@
             </div>
             <div class="settings-actions">
               <button class="btn danger" data-action="clear-completions">Убрать галочки</button>
+              <button class="btn" data-action="restart-tour">Повторить обучение</button>
             </div>
             <div class="settings-row settings-panel inline" style="margin-top: 10px;">
               <div>
@@ -8234,6 +8289,13 @@
             runUiAction('Не удалось открыть выбор системы', () => openSystemSheet());
             return;
           }
+          if (action === 'restart-tour') {
+            state.settings.view = 'menu';
+            renderSettings();
+            navigateTo('today');
+            await startTour({ force: true });
+            return;
+          }
           if (action === 'system-select') {
             await handleSystemAction('system-select', target);
             return;
@@ -8846,6 +8908,7 @@
     }
 
     function handleBackAction() {
+      if (state.tour.active) { stopTour({ completed: true }); return; }
       const timerSheetOpen = document.getElementById('timerSheet')?.classList.contains('show');
       if (timerSheetOpen) { closeTimerSheet(); return; }
       const paywallOpen = document.getElementById('paywallSheet')?.classList.contains('show');
@@ -9166,6 +9229,7 @@
         console.error(error);
       }
       runUiAction('Не удалось загрузить экран настроек', () => ensureSettingsOverviewLoaded({ refreshExercises: true }));
+      setTimeout(() => { startTour().catch(() => {}); }, 200);
       try {
         await apiFetch('/gymapi/onboarding/finish', { method: 'POST', silent: true });
       } catch (error) {
@@ -9284,6 +9348,137 @@
           await finalizeOnboarding();
         }
       });
+    }
+
+    const TOUR_STORAGE_KEY = 'gym_diary_tour_completed_v2';
+
+    function tourSteps() {
+      return [
+        { title: 'Добро пожаловать', text: 'Это быстрый мастер-проход по ключевым функциям. Подсказки можно листать кнопками «Назад / Дальше» или пропустить в любой момент.', selector: '#headerTitle' },
+        { title: 'Главное меню', text: 'Слева сверху кнопка меню. Здесь вкладки: Сегодня, замеры, статистика, команды, подписка и настройки.', selector: '#menuBtn' },
+        { title: 'Тренировочные системы', text: 'Кнопка «Система» открывает выбор системы: можно создать новую, переключить активную, переименовать и изменить цвет.', selector: '#systemOpenBtn' },
+        { title: 'Плюс/минус упражнения', text: 'Кнопка ± открывает режимы: добавить упражнение, удалить, таймер и ИИ-помощника.', selector: '#manageExerciseBtn' },
+        { title: 'Быстрое добавление', text: 'Когда включён режим добавления, появляется кнопка «+» внизу. Через неё добавляются упражнения в текущий день.', selector: '#addExerciseBtn', prepare: () => setManageMode('add') },
+        { title: 'Завершение дня', text: 'Кнопка с флажком завершает тренировочный день и фиксирует суммарный объём за сегодня.', selector: '#finishFab' },
+        { title: 'Список дней', text: 'По центру заголовка выбирается день. Можно быстро переключаться стрелками или открыть полный список.', selector: '#dayCenter' },
+        { title: 'Перетаскивание дней', text: 'В списке дней тяните за ☰, чтобы поменять порядок тренировочных дней местами.', selector: '#dayOptions .day-option .day-drag-handle', prepare: () => openDayPicker(), cleanup: () => closeDayPicker() },
+        { title: 'Навигация по разделам', text: 'Откроем меню снова: отсюда можно перейти в «Команды», «Настройки» и остальные разделы приложения.', selector: '#drawerOverlay .drawer-menu', prepare: () => setDrawer(true), cleanup: () => closeDrawer() },
+        { title: 'Команды и роли', text: 'Раздел «Команды» — для взаимодействия с тренером и подопечными: вступление, заявки, роли и управление составом.', selector: '#drawerTeamsBtn', prepare: () => setDrawer(true), cleanup: () => closeDrawer() },
+        { title: 'Настройки приложения', text: 'Через «Настройки» можно менять дни, внешний вид, уведомления, тренерский режим и сервисные действия.', selector: '.menu-item[data-route=\"settings\"]', prepare: () => setDrawer(true), cleanup: () => closeDrawer() },
+        { title: 'Финал', text: 'Готово! Если забудете, как что работает, откройте «Настройки → Сервисные действия → Повторить обучение».', selector: '#menuBtn', cleanup: () => closeDrawer() },
+      ];
+    }
+
+    function readTourCompleted() {
+      try { return localStorage.getItem(TOUR_STORAGE_KEY) === '1'; } catch (_) { return false; }
+    }
+
+    function saveTourCompleted(done = true) {
+      try { localStorage.setItem(TOUR_STORAGE_KEY, done ? '1' : '0'); } catch (_) {}
+      state.tour.completed = done;
+    }
+
+    async function startTour({ force = false } = {}) {
+      if (state.onboarding.active) return;
+      if (state.tour.active) return;
+      if (!force && readTourCompleted()) return;
+      state.tour.active = true;
+      state.tour.index = 0;
+      document.body.classList.add('tour-active');
+      await renderTourStep();
+    }
+
+    function stopTour({ completed = false } = {}) {
+      const overlay = document.getElementById('tourOverlay');
+      const card = document.getElementById('tourCard');
+      state.tour.active = false;
+      state.tour.index = 0;
+      document.body.classList.remove('tour-active');
+      if (overlay) overlay.classList.remove('show');
+      if (card) card.innerHTML = '';
+      closeDayPicker();
+      closeDrawer();
+      setManageMode('normal');
+      if (completed) saveTourCompleted(true);
+    }
+
+    function getTourTargetRect(step) {
+      if (!step?.selector) return null;
+      const el = document.querySelector(step.selector);
+      if (!el || !el.getBoundingClientRect) return null;
+      const rect = el.getBoundingClientRect();
+      if (!rect || rect.width <= 0 || rect.height <= 0) return null;
+      return rect;
+    }
+
+    async function renderTourStep() {
+      if (!state.tour.active) return;
+      const steps = tourSteps();
+      const total = steps.length;
+      const idx = Math.max(0, Math.min(state.tour.index, total - 1));
+      state.tour.index = idx;
+      const step = steps[idx];
+      if (typeof step.prepare === 'function') {
+        await Promise.resolve(step.prepare());
+      }
+      const overlay = document.getElementById('tourOverlay');
+      const backdrop = document.getElementById('tourBackdrop');
+      const card = document.getElementById('tourCard');
+      if (!overlay || !backdrop || !card) return;
+      overlay.classList.add('show');
+      const rect = getTourTargetRect(step) || { left: window.innerWidth / 2 - 45, top: 96, width: 90, height: 50 };
+      const pad = 8;
+      backdrop.style.left = `${Math.max(8, rect.left - pad)}px`;
+      backdrop.style.top = `${Math.max(8, rect.top - pad)}px`;
+      backdrop.style.width = `${Math.min(window.innerWidth - 16, rect.width + pad * 2)}px`;
+      backdrop.style.height = `${Math.min(window.innerHeight - 16, rect.height + pad * 2)}px`;
+      const isLast = idx === total - 1;
+      const topSpace = rect.top;
+      const placeBelow = topSpace < 240;
+      const cardTop = placeBelow
+        ? Math.min(window.innerHeight - 220, rect.bottom + 14)
+        : Math.max(10, rect.top - 198);
+      const cardLeft = Math.max(12, Math.min(window.innerWidth - (Math.min(360, window.innerWidth - 28)) - 12, rect.left));
+      card.style.top = `${cardTop}px`;
+      card.style.left = `${cardLeft}px`;
+      card.innerHTML = `
+        <div class="tour-head">
+          <span class="tour-step-badge">${idx + 1} / ${total}</span>
+          <button class="tour-skip" data-tour-action="skip">Пропустить</button>
+        </div>
+        <div class="tour-title">${step.title}</div>
+        <div class="tour-text">${step.text}</div>
+        <div class="tour-actions">
+          <button class="btn" data-tour-action="prev" ${idx === 0 ? 'disabled' : ''}>Назад</button>
+          <button class="btn primary" data-tour-action="${isLast ? 'close' : 'next'}">${isLast ? 'Закрыть' : 'Дальше'}</button>
+        </div>
+      `;
+    }
+
+    async function moveTour(direction) {
+      if (!state.tour.active) return;
+      const steps = tourSteps();
+      const current = steps[state.tour.index];
+      if (typeof current?.cleanup === 'function') {
+        await Promise.resolve(current.cleanup());
+      }
+      state.tour.index += direction;
+      await renderTourStep();
+    }
+
+    function setupTourHandlers() {
+      const overlay = document.getElementById('tourOverlay');
+      if (!overlay) return;
+      overlay.addEventListener('click', async (event) => {
+        const target = event.target.closest('[data-tour-action]');
+        if (!target) return;
+        const action = target.dataset.tourAction;
+        if (action === 'skip') { stopTour({ completed: true }); return; }
+        if (action === 'prev') { await moveTour(-1); return; }
+        if (action === 'next') { await moveTour(1); return; }
+        if (action === 'close') { stopTour({ completed: true }); }
+      });
+      window.addEventListener('resize', () => { if (state.tour.active) renderTourStep(); });
     }
 
 
@@ -14129,11 +14324,13 @@
     }
 
     async function init() {
+      state.tour.completed = readTourCompleted();
       loadUiPreferences();
       computeProductivityScore();
       renderProductivityHub();
       setupNavigation();
       setupOnboardingHandlers();
+      setupTourHandlers();
       setupSettingsHandlers();
       setupMeasurementsHandlers();
       setupMeasurementSheetHandlers();
@@ -14158,6 +14355,7 @@
         await loadToday();
         scheduleDeferredAction(() => refreshProductivitySummary());
         runUiAction('Не удалось загрузить экран настроек', () => ensureSettingsOverviewLoaded({ refreshExercises: true }));
+        setTimeout(() => { startTour().catch(() => {}); }, 260);
       }
     }
 
