@@ -2590,6 +2590,10 @@
             <span class="day-total" id="dayLastCompletedTotal"></span>
           </div>
         </div>
+        <div id="status" class="status booting" aria-live="polite" aria-atomic="true">
+          <span class="dot" aria-hidden="true"></span>
+          <span class="status-text">загрузка</span>
+        </div>
         <div class="day-actions hidden" id="dayActions">
           <button id="headerAddBtn" class="icon-btn small hidden" aria-label="Добавить упражнение">＋</button>
         </div>
@@ -13279,7 +13283,7 @@
         }
         if (action === 'team-requests-refresh') {
           const teams = state.settings.productivity.teams;
-          teams.requests.q = document.getElementById('teamReqSearch')?.value || '';
+          teams.requests.q = document.getElementById('teamReqSearchManage')?.value || document.getElementById('teamReqSearch')?.value || '';
           teams.requests.offset = 0;
           runUiAction('Не удалось загрузить заявки команды', () => loadTeamRequests());
           return;
@@ -13370,9 +13374,9 @@
         if (action === 'team-style-save') {
           const teams = state.settings.productivity.teams;
           teams.style.selected = {
-            frame_code: ((document.getElementById('teamStyleFrame')?.value ?? '').trim() || null),
-            bg_code: ((document.getElementById('teamStyleBg')?.value ?? '').trim() || null),
-            emblem_code: ((document.getElementById('teamStyleEmblem')?.value ?? '').trim() || null),
+            frame_code: ((document.getElementById('teamStyleFrameManage')?.value ?? document.getElementById('teamStyleFrame')?.value ?? '').trim() || null),
+            bg_code: ((document.getElementById('teamStyleBgManage')?.value ?? document.getElementById('teamStyleBg')?.value ?? '').trim() || null),
+            emblem_code: ((document.getElementById('teamStyleEmblemManage')?.value ?? document.getElementById('teamStyleEmblem')?.value ?? '').trim() || null),
           };
           runUiAction('Не удалось сохранить стиль команды', () => saveTeamStyleSelected().then(() => scrollToTeamPanel('teamStylePanel')));
           return;
@@ -13418,14 +13422,18 @@
       });
       document.getElementById('productivitySheet').addEventListener('change', (e) => {
         const target = e.target;
-        if (target && (target.id === 'teamStyleFrame' || target.id === 'teamStyleBg' || target.id === 'teamStyleEmblem')) {
+        if (target && (
+          target.id === 'teamStyleFrame' || target.id === 'teamStyleBg' || target.id === 'teamStyleEmblem' ||
+          target.id === 'teamStyleFrameManage' || target.id === 'teamStyleBgManage' || target.id === 'teamStyleEmblemManage'
+        )) {
           const teams = state.settings.productivity.teams;
           teams.style.selected = {
-            frame_code: ((document.getElementById('teamStyleFrame')?.value ?? '').trim() || null),
-            bg_code: ((document.getElementById('teamStyleBg')?.value ?? '').trim() || null),
-            emblem_code: ((document.getElementById('teamStyleEmblem')?.value ?? '').trim() || null),
+            frame_code: ((document.getElementById('teamStyleFrameManage')?.value ?? document.getElementById('teamStyleFrame')?.value ?? '').trim() || null),
+            bg_code: ((document.getElementById('teamStyleBgManage')?.value ?? document.getElementById('teamStyleBg')?.value ?? '').trim() || null),
+            emblem_code: ((document.getElementById('teamStyleEmblemManage')?.value ?? document.getElementById('teamStyleEmblem')?.value ?? '').trim() || null),
           };
-          renderTeamsSection();
+          if (state.currentRoute === 'teams') renderTeamsManageRoute();
+          else renderTeamsSection();
         }
       });
       document.getElementById('productivitySheet').addEventListener('input', (e) => {
@@ -13433,7 +13441,7 @@
         if (target && (target.id === 'teamCreateName' || target.id === 'teamCreateNameManage')) {
           state.settings.productivity.teams.create.name = String(target.value || '');
         }
-        if (target && target.id === 'teamReqSearch') {
+        if (target && (target.id === 'teamReqSearch' || target.id === 'teamReqSearchManage')) {
           const teams = state.settings.productivity.teams;
           teams.requests.q = String(target.value || '').trim();
           debouncedLoadTeamRequests();
@@ -13674,6 +13682,36 @@
           const systemId = Number(target.dataset.systemId || 0) || null;
           if (userId > 0) runUiAction('Не удалось открыть профиль лидера', () => openLeaderProfile(userId, systemId));
           return;
+        }
+      });
+      document.getElementById('screen-teams')?.addEventListener('input', (e) => {
+        const target = e.target;
+        if (!(target instanceof HTMLElement)) return;
+        if (target.id === 'teamCreateNameManage') {
+          state.settings.productivity.teams.create.name = String(target.value || '');
+          return;
+        }
+        if (target.id === 'teamReqSearchManage') {
+          const teams = state.settings.productivity.teams;
+          teams.requests.q = String(target.value || '').trim();
+          debouncedLoadTeamRequests();
+        }
+      });
+      document.getElementById('screen-teams')?.addEventListener('change', (e) => {
+        const target = e.target;
+        if (!(target instanceof HTMLElement)) return;
+        if (target.id === 'teamCreateVisibilityManage') {
+          state.settings.productivity.teams.create.isOpen = String(target.value || 'closed') === 'open';
+          return;
+        }
+        if (target.id === 'teamStyleFrameManage' || target.id === 'teamStyleBgManage' || target.id === 'teamStyleEmblemManage') {
+          const teams = state.settings.productivity.teams;
+          teams.style.selected = {
+            frame_code: ((document.getElementById('teamStyleFrameManage')?.value ?? '').trim() || null),
+            bg_code: ((document.getElementById('teamStyleBgManage')?.value ?? '').trim() || null),
+            emblem_code: ((document.getElementById('teamStyleEmblemManage')?.value ?? '').trim() || null),
+          };
+          renderTeamsManageRoute();
         }
       });
 
