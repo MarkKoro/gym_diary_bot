@@ -630,6 +630,7 @@
       .finish-flag { font-size: 18px; filter: drop-shadow(0 4px 10px rgba(52,199,89,0.35)); }
       .exercise-card:not(.is-done) .finish-flag { display: none; }
       .exercise-summary { font-size: 14px; color: var(--muted); display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+      :root:not([data-theme="dark"]) .exercise-summary.strength-summary { color: color-mix(in srgb, var(--text) 85%, var(--muted)); }
       .workout-body { display: none; border-top: 1px dashed var(--border); padding-top: 10px; gap: 12px; }
       .exercise-card.expanded .workout-body { display: grid; gap: 12px; }
       .workout-actions { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px,1fr)); gap: 8px; align-items: center; }
@@ -637,6 +638,7 @@
       .card-header { display: flex; justify-content: space-between; gap: 8px; align-items: center; }
       .card-title { font-size: 16px; font-weight: 800; letter-spacing: -0.01em; }
     .pill { font-size: 12px; color: var(--muted); background: rgba(0,0,0,0.04); padding: 4px 8px; border-radius: 999px; }
+    :root:not([data-theme="dark"]) .exercise-sets-pill { color: var(--text); }
     [data-theme="dark"] .pill { background: rgba(255,255,255,0.05); }
     .muscle-pill {
       color: #f8fafc;
@@ -10916,6 +10918,7 @@
 
       const summary = document.createElement('div');
       summary.className = 'exercise-summary';
+      if (!isRunningExercise(exercise)) summary.classList.add('strength-summary');
       summary.textContent = buildExerciseSummary(exercise);
       if (!isRunningExercise(exercise) && (exercise.sets?.length || 0) === 0) {
         summary.classList.add('empty');
