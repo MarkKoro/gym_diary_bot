@@ -368,7 +368,7 @@ async def _create_telegram_subscription_invoice_link(
     return payload, confirmation_url, plan
 
 
-UNSCHEDULED_COMPLETION_EXPIRY_DAYS = 5
+DAY_COMPLETION_RETENTION_DAYS = 2
 SCHEDULED_COMPLETION_EXPIRY_DAYS = 5
 
 # Статика (пока заглушка)
@@ -1641,11 +1641,6 @@ def normalize_reminder_time(hour: int, minute: int) -> tuple[int, int]:
     return hour, minute
 
 
-def _training_week_start(local_dt: datetime, first_dow: int):
-    offset = (local_dt.weekday() - first_dow) % 7
-    return local_dt.date() - timedelta(days=offset)
-
-
 def _parse_completion_rows(rows: list[tuple[int, str | None]]):
     parsed = []
     latest = None
@@ -1832,49 +1827,40 @@ async def _build_running_state(
     }
 
 
-async def _get_primary_training_weekday(user_id: int) -> int | None:
-    reminders = await list_user_reminders(user_id)
-    first_configured = None
-    for day_no, dow, _, _ in reminders:
-        if dow is None:
-            continue
-        dow_value = int(dow)
-        if day_no == 1:
-            return dow_value
-        if first_configured is None:
-            first_configured = dow_value
-    return first_configured
-
-
-async def _should_clear_day_completions(user_id: int, latest: datetime | None) -> bool:
-    if latest is None:
-        return False
-    now = datetime.now(UTC)
+async def _prune_expired_day_completions(
+    user_id: int, active_system_id: int, parsed: list[tuple[int, datetime]]
+) -> list[tuple[int, datetime]]:
+    if not parsed:
+        return parsed
     tz_name = await get_user_timezone(user_id)
     zone = resolve_user_zone(tz_name)
-    latest_local = latest.astimezone(zone)
-    now_local = now.astimezone(zone)
+    now_local_date = datetime.now(UTC).astimezone(zone).date()
 
-    first_dow = await _get_primary_training_weekday(user_id)
-    if first_dow is not None:
-        latest_week_start = _training_week_start(latest_local, first_dow)
-        current_week_start = _training_week_start(now_local, first_dow)
-        if current_week_start > latest_week_start:
-            return True
-        return False
+    fresh: list[tuple[int, datetime]] = []
+    stale_days: list[int] = []
+    for day, completed_at in parsed:
+        completed_local_date = completed_at.astimezone(zone).date()
+        age_days = (now_local_date - completed_local_date).days
+        if age_days >= DAY_COMPLETION_RETENTION_DAYS:
+            stale_days.append(int(day))
+            continue
+        fresh.append((int(day), completed_at))
 
-    expiration_date = latest_local.date() + timedelta(days=UNSCHEDULED_COMPLETION_EXPIRY_DAYS)
-    expiration_local = datetime.combine(expiration_date, time(12, tzinfo=zone))
-    return now_local >= expiration_local
+    if stale_days:
+        async with db.connect_db() as conn:
+            await conn.executemany(
+                "DELETE FROM day_completions WHERE user_id=? AND system_id=? AND day_index=?",
+                [(user_id, active_system_id, day) for day in stale_days],
+            )
+            await conn.commit()
+    return fresh
 
 
 async def get_active_day_completions(user_id: int) -> set[int]:
     active_system_id = await get_active_training_system_id(user_id)
     rows = await list_day_completions(user_id, active_system_id)
-    parsed, latest = _parse_completion_rows(rows)
-    if await _should_clear_day_completions(user_id, latest):
-        await clear_day_completions(user_id, active_system_id)
-        return set()
+    parsed, _ = _parse_completion_rows(rows)
+    parsed = await _prune_expired_day_completions(user_id, active_system_id, parsed)
     return {day for day, _ in parsed}
 
 
