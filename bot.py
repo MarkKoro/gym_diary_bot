@@ -360,7 +360,7 @@ SUBSCRIPTION_PLANS = {
     },
 }
 
-UNSCHEDULED_COMPLETION_EXPIRY_DAYS = 5
+DAY_COMPLETION_RETENTION_DAYS = 2
 ORDINAL_WORDS = {
     1: "первая",
     2: "вторая",
@@ -501,25 +501,6 @@ def _parse_completion_rows(
     return parsed, latest
 
 
-def _training_week_start(local_dt: datetime, first_dow: int):
-    offset = (local_dt.weekday() - first_dow) % 7
-    return local_dt.date() - timedelta(days=offset)
-
-
-async def _get_primary_training_weekday(user_id: int) -> int | None:
-    reminders = await list_user_reminders(user_id)
-    first_configured: int | None = None
-    for day_no, dow, _, _ in reminders:
-        if dow is None:
-            continue
-        dow_value = int(dow)
-        if day_no == 1:
-            return dow_value
-        if first_configured is None:
-            first_configured = dow_value
-    return first_configured
-
-
 async def _active_system_id(user_id: int) -> int:
     try:
         sid = await get_active_training_system_id(user_id)
@@ -528,54 +509,50 @@ async def _active_system_id(user_id: int) -> int:
         return 0
 
 
-async def _should_clear_day_completions(
-    user_id: int, latest: datetime | None
-) -> bool:
-    if latest is None:
-        return False
-    now = datetime.now(UTC)
+async def _prune_expired_day_completions(
+    user_id: int, system_id: int, parsed: list[tuple[int, datetime]]
+) -> list[tuple[int, datetime]]:
+    if not parsed:
+        return parsed
     tz_name = await get_user_timezone(user_id)
     zone = resolve_user_zone(tz_name)
-    latest_local = latest.astimezone(zone)
-    now_local = now.astimezone(zone)
-    first_dow = await _get_primary_training_weekday(user_id)
-    if first_dow is not None:
-        latest_week_start = _training_week_start(latest_local, first_dow)
-        current_week_start = _training_week_start(now_local, first_dow)
-        if current_week_start > latest_week_start:
-            return True
-        return False
-    expiration_date = latest_local.date() + timedelta(
-        days=UNSCHEDULED_COMPLETION_EXPIRY_DAYS
-    )
-    expiration_local = datetime.combine(
-        expiration_date,
-        time(12, tzinfo=zone),
-    )
-    return now_local >= expiration_local
+    now_local_date = datetime.now(UTC).astimezone(zone).date()
+
+    fresh: list[tuple[int, datetime]] = []
+    stale_days: list[int] = []
+    for day, completed_at in parsed:
+        completed_local_date = completed_at.astimezone(zone).date()
+        age_days = (now_local_date - completed_local_date).days
+        if age_days >= DAY_COMPLETION_RETENTION_DAYS:
+            stale_days.append(int(day))
+            continue
+        fresh.append((int(day), completed_at))
+
+    if stale_days:
+        async with connect_db() as conn:
+            await conn.executemany(
+                "DELETE FROM day_completions WHERE user_id=? AND system_id=? AND day_index=?",
+                [(user_id, system_id, day) for day in stale_days],
+            )
+            await conn.commit()
+    return fresh
 
 
 async def get_active_day_completions(user_id: int) -> set[int]:
     system_id = await _active_system_id(user_id)
     rows = await list_day_completions(user_id, system_id=system_id)
-    parsed, latest = _parse_completion_rows(rows)
-    if await _should_clear_day_completions(user_id, latest):
-        await clear_day_completions(user_id, system_id=system_id)
-        return set()
+    parsed, _ = _parse_completion_rows(rows)
+    parsed = await _prune_expired_day_completions(user_id, system_id, parsed)
     return {day for day, _ in parsed}
 
 
 async def record_day_completion(user_id: int, day_index: int) -> tuple[set[int], bool]:
     system_id = await _active_system_id(user_id)
     rows = await list_day_completions(user_id, system_id=system_id)
-    parsed, latest = _parse_completion_rows(rows)
+    parsed, _ = _parse_completion_rows(rows)
+    parsed = await _prune_expired_day_completions(user_id, system_id, parsed)
     now = datetime.now(UTC)
-    if await _should_clear_day_completions(user_id, latest):
-        await clear_day_completions(user_id, system_id=system_id)
-        parsed = []
-        already_tracked = False
-    else:
-        already_tracked = any(day == day_index for day, _ in parsed)
+    already_tracked = any(day == day_index for day, _ in parsed)
     await mark_day_completed(user_id, day_index, now.isoformat(), system_id=system_id)
     current = {day for day, _ in parsed}
     current.add(day_index)
