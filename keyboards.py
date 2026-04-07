@@ -174,6 +174,8 @@ def settings_kb(
     include_notifications: bool = True,
     include_subscription: bool = True,
     trainer_link_active: bool = False,
+    show_referral: bool = True,
+    show_referral_admin: bool = False,
     support_url: str | None = None,
     instruction_url: str | None = None,
     context=None,
@@ -266,6 +268,10 @@ def settings_kb(
             )
         ]
     )
+    if show_referral:
+        rows.append([InlineKeyboardButton("🎁 Реферальная программа", callback_data="settings:referral")])
+    if show_referral_admin:
+        rows.append([InlineKeyboardButton("🛠 Управление рефералками", callback_data="settings:refadmin")])
     if instruction_url:
         rows.append([InlineKeyboardButton("📖 Инструкция", url=instruction_url)])
     if support_url:

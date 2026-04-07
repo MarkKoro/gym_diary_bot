@@ -257,6 +257,12 @@ from db import (
     reset_ai_coach_quota,
     list_all_teams,
     delete_team,
+    create_or_update_referral_profile,
+    get_referral_profile,
+    get_referrer_by_slug,
+    assign_referral_attribution,
+    get_referral_stats,
+    list_referral_profiles,
 )
 from text_utils import normalize_whitespace
 from ui_texts import t, e, ONBOARDING_TIPS
@@ -402,6 +408,9 @@ TRAINER_TRAINEE_SETTINGS_MESSAGE_KEY = "trainer_trainee_settings_message"
 TRAINER_LIST_LIMIT = 5
 TRAINER_MAX_TRAINEES_FREE = 5
 TRAINER_MAX_TRAINEES_SUB: int | None = None
+REFERRAL_NAME_INPUT_KEY = "awaiting_referral_name"
+REFERRAL_ADMIN_SEARCH_KEY = "awaiting_referral_admin_search"
+REFERRAL_ADMIN_PAGE_SIZE = 8
 
 
 async def get_trainer_max_trainees(
@@ -2546,10 +2555,133 @@ async def build_settings_keyboard_for_user(
         include_notifications=not acting_mode,
         include_subscription=not acting_mode,
         trainer_link_active=link_active,
+        show_referral=not acting_mode,
+        show_referral_admin=(not acting_mode and bool(context.user_data.get("is_admin_actor"))),
         support_url=SUPPORT_DEEPLINK,
         instruction_url=INSTRUCTION_URL,
         context=context,
     )
+
+
+def _build_referral_link(slug: str) -> str:
+    bot_link = (BOT_PUBLIC_LINK or "").strip()
+    if bot_link.startswith("https://t.me/"):
+        return f"{bot_link}?start=ref_{slug}"
+    return f"https://t.me/{bot_link.lstrip('@')}?start=ref_{slug}"
+
+
+def _referral_rate_for_invites(invited_total: int) -> float:
+    if invited_total >= 10000:
+        return 0.30
+    if invited_total >= 1000:
+        return 0.25
+    if invited_total >= 100:
+        return 0.20
+    return 0.15
+
+
+def _format_referral_payout(stats: dict) -> tuple[str, float, float, int, int]:
+    invited_total = int(stats.get("invited_total", 0) or 0)
+    rate = _referral_rate_for_invites(invited_total)
+    percent = int(round(rate * 100))
+    month_rub = float(stats.get("revenue_rub_month", 0.0) or 0.0)
+    month_stars = int(stats.get("revenue_stars_month", 0) or 0)
+    payout_rub = month_rub * rate
+    payout_stars = int(round(month_stars * rate))
+    summary = (
+        f"🏷 Текущий процент: {percent}%\n"
+        f"💰 Оборот за месяц: {month_rub:.2f} ₽ + {month_stars} ⭐\n"
+        f"🧾 К выплате за месяц: {payout_rub:.2f} ₽ + {payout_stars} ⭐"
+    )
+    return summary, rate, payout_rub, payout_stars, percent
+
+
+async def build_referral_screen(user_id: int) -> tuple[str, InlineKeyboardMarkup]:
+    profile = await get_referral_profile(user_id)
+    rows: list[list[InlineKeyboardButton]] = []
+    if not profile:
+        text = (
+            "Реферальная программа\n\n"
+            "Приглашайте людей в бота и смотрите статистику оплат.\n"
+            "Напишите ваш псевдоним/имя — по нему создадим персональную ссылку."
+        )
+        rows.append([InlineKeyboardButton("✍️ Указать имя", callback_data="settings:referral:create")])
+        rows.append([InlineKeyboardButton("ℹ️ Информация", callback_data="settings:referral:info")])
+    else:
+        stats = await get_referral_stats(user_id)
+        link = _build_referral_link(profile["slug"])
+        payout_text, _rate, _rub, _stars, percent = _format_referral_payout(stats)
+        month_start = stats.get("month_start") or "—"
+        month_end = stats.get("month_end") or "—"
+        text = (
+            "Реферальная программа\n\n"
+            f"Имя в ссылке: {profile['display_name']}\n"
+            f"<code>{link}</code>\n\n"
+            f"👥 Пришло пользователей: всего {stats['invited_total']}, за месяц {stats['invited_month']}\n"
+            f"💳 Оплатили: всего {stats['paid_users_total']}, за месяц {stats['paid_users_month']}\n"
+            f"📆 Куплено дней подписки: всего {stats['paid_days_total']}, за месяц {stats['paid_days_month']}\n\n"
+            f"Период расчёта выплат: {month_start} — {month_end}\n"
+            f"{payout_text}"
+        )
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    "📋 Скопировать ссылку",
+                    copy_text=CopyTextButton(link),
+                )
+            ]
+        )
+        rows.append([InlineKeyboardButton("ℹ️ Информация", callback_data="settings:referral:info")])
+        rows.append([InlineKeyboardButton("✏️ Изменить имя", callback_data="settings:referral:create")])
+    rows.append([InlineKeyboardButton(BACK_BTN, callback_data="menu:settings")])
+    return text, InlineKeyboardMarkup(rows)
+
+
+def build_referral_info_screen() -> tuple[str, InlineKeyboardMarkup]:
+    text = (
+        "ℹ️ Как работает реферальная программа\n\n"
+        "1) Создаёте персональную ссылку и отправляете её людям.\n"
+        "2) Мы фиксируем переход, когда человек заходит по ссылке и нажимает /start.\n"
+        "3) В статистику оплат попадают только успешные платежи (не pending/не отменённые).\n"
+        "4) Расчёт выплаты идёт за текущий месяц: с 1-го по последнее число.\n\n"
+        "Проценты:\n"
+        "• до 100 приглашённых — 15%\n"
+        "• от 100 до 1000 — 20%\n"
+        "• от 1000 до 10000 — 25%\n"
+        "• более 10000 — 30%\n\n"
+        "Выплата считается отдельно по ₽ и ⭐ исходя из успешных оплат по вашей реферальной базе."
+    )
+    kb = InlineKeyboardMarkup(
+        [[InlineKeyboardButton(BACK_BTN, callback_data="settings:referral")]]
+    )
+    return text, kb
+
+
+async def build_referral_admin_screen(page: int = 0, search: str | None = None) -> tuple[str, InlineKeyboardMarkup]:
+    total, rows = await list_referral_profiles(search=search, limit=REFERRAL_ADMIN_PAGE_SIZE, offset=page * REFERRAL_ADMIN_PAGE_SIZE)
+    caption = f"Управление рефералками\n\nВсего ссылок: {total}."
+    if search:
+        caption += f"\nФильтр: {search}"
+    buttons: list[list[InlineKeyboardButton]] = []
+    for row in rows:
+        buttons.append(
+            [
+                InlineKeyboardButton(
+                    f"👤 {row['display_name']} · {row.get('invited_total', 0)}",
+                    callback_data=f"settings:refadmin:user:{row['user_id']}",
+                )
+            ]
+        )
+    nav: list[InlineKeyboardButton] = []
+    if page > 0:
+        nav.append(InlineKeyboardButton("⬅️", callback_data=f"settings:refadmin:page:{page-1}"))
+    if (page + 1) * REFERRAL_ADMIN_PAGE_SIZE < total:
+        nav.append(InlineKeyboardButton("➡️", callback_data=f"settings:refadmin:page:{page+1}"))
+    if nav:
+        buttons.append(nav)
+    buttons.append([InlineKeyboardButton("🔎 Поиск", callback_data="settings:refadmin:search")])
+    buttons.append([InlineKeyboardButton(BACK_BTN, callback_data="menu:settings")])
+    return caption, InlineKeyboardMarkup(buttons)
 
 
 async def _get_trainer_link_by_id(link_id: int):
@@ -7623,6 +7755,18 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     u = update.effective_user
     user_id = await get_or_create_user(u.id, u.username)
+    start_payload = ""
+    if getattr(context, "args", None):
+        start_payload = " ".join(context.args).strip()
+    elif update.message and update.message.text:
+        parts = (update.message.text or "").split(maxsplit=1)
+        if len(parts) > 1:
+            start_payload = parts[1].strip()
+    if start_payload.startswith("ref_"):
+        slug = start_payload[4:].strip().lower()
+        referrer = await get_referrer_by_slug(slug)
+        if referrer:
+            await assign_referral_attribution(user_id, int(referrer["user_id"]), slug)
     settings = await fetch_user_settings(user_id)
     prefs = await load_ui_preferences(user_id)
     if not settings or not settings[1]:
@@ -9778,6 +9922,62 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             target if isinstance(target, tuple) else None,
         )
         return
+    referral_name_state = context.user_data.get(REFERRAL_NAME_INPUT_KEY)
+    if referral_name_state:
+        if not update.message or update.message.text is None:
+            return
+        name = normalize_whitespace(update.message.text or "")
+        if not name:
+            await update.message.reply_text("Имя не должно быть пустым.")
+            return
+        target_user_id = referral_name_state.get("target_user_id")
+        try:
+            target_user_id = int(target_user_id)
+        except (TypeError, ValueError):
+            target_user_id = user_id
+        if target_user_id != user_id:
+            context.user_data.pop(REFERRAL_NAME_INPUT_KEY, None)
+            return
+        await create_or_update_referral_profile(target_user_id, name)
+        await try_delete(update.message)
+        chat_id = referral_name_state.get("chat_id")
+        msg_id = referral_name_state.get("message_id")
+        context.user_data.pop(REFERRAL_NAME_INPUT_KEY, None)
+        if chat_id and msg_id:
+            text, kb = await build_referral_screen(target_user_id)
+            await context.bot.edit_message_text(
+                text,
+                chat_id=chat_id,
+                message_id=msg_id,
+                reply_markup=kb,
+                parse_mode=ParseMode.HTML,
+            )
+            remember_message(chat_id, msg_id)
+        return
+    referral_search_state = context.user_data.get(REFERRAL_ADMIN_SEARCH_KEY)
+    if referral_search_state:
+        if not update.message or update.message.text is None:
+            return
+        if update.effective_user.id not in ADMIN_IDS:
+            context.user_data.pop(REFERRAL_ADMIN_SEARCH_KEY, None)
+            return
+        query = normalize_whitespace(update.message.text or "")
+        await try_delete(update.message)
+        context.user_data.pop(REFERRAL_ADMIN_SEARCH_KEY, None)
+        context.user_data["refadmin_query"] = query or None
+        context.user_data["refadmin_page"] = 0
+        chat_id = referral_search_state.get("chat_id")
+        msg_id = referral_search_state.get("message_id")
+        if chat_id and msg_id:
+            text, kb = await build_referral_admin_screen(page=0, search=query or None)
+            await context.bot.edit_message_text(
+                text,
+                chat_id=chat_id,
+                message_id=msg_id,
+                reply_markup=kb,
+            )
+            remember_message(chat_id, msg_id)
+        return
     for_time_state = context.user_data.get(FOR_TIME_INPUT_KEY)
     if for_time_state:
         if not await ensure_can_edit_from_message(context, update):
@@ -10400,6 +10600,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if user is None:
             return
         actor_user_id = await get_or_create_user(user.id, user.username)
+        context.user_data["is_admin_actor"] = bool(user.id in ADMIN_IDS)
         target_user_id = await resolve_target_user_id(context, actor_user_id)
         if data == MAIL_RETURN_CALLBACK:
             chat = getattr(q, "message", None)
@@ -11094,7 +11295,16 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "✅ Убрать галочки — сбросить отметки выполненных дней, не затрагивая записанные подходы.",
                 "",
                 "📤 Поделиться результатом — сгенерировать короткий текст с вашим прогрессом, чтобы отправить его друзьям.",
+                "",
+                "🎁 Реферальная программа — создайте свою ссылку, приглашайте людей и смотрите оплаты по вашей рекомендации.",
             ]
+            if update.effective_user and update.effective_user.id in ADMIN_IDS:
+                text_lines.extend(
+                    [
+                        "",
+                        "🛠 Управление рефералками — админ-панель со списком и поиском всех рефералов.",
+                    ]
+                )
             active_sub = await get_active_subscription(target_user_id)
             if active_sub and active_sub.get("expires_at"):
                 zone = resolve_user_zone(tz)
@@ -11203,6 +11413,116 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 SHARE_RESULTS_PRIMARY_MSG_ID_KEY: primary_msg_id,
             }
             await q.answer("Обновил упражнения")
+            return
+
+        if data == "settings:referral":
+            text, kb = await build_referral_screen(target_user_id)
+            await show_screen(q, context, text, kb, target_user_id, parse_mode=ParseMode.HTML)
+            return
+
+        if data == "settings:referral:info":
+            text, kb = build_referral_info_screen()
+            await show_screen(q, context, text, kb, target_user_id)
+            return
+
+        if data == "settings:referral:create":
+            context.user_data[REFERRAL_NAME_INPUT_KEY] = {
+                "chat_id": q.message.chat_id,
+                "message_id": q.message.message_id,
+                "target_user_id": target_user_id,
+            }
+            kb = InlineKeyboardMarkup(
+                [[InlineKeyboardButton(BACK_BTN, callback_data="settings:referral")]]
+            )
+            await show_screen(
+                q,
+                context,
+                "Напиши имя/псевдоним для реферальной ссылки.",
+                kb,
+                target_user_id,
+            )
+            return
+
+        if data == "settings:refadmin":
+            if update.effective_user.id not in ADMIN_IDS:
+                await q.answer("Доступно только администратору.", show_alert=True)
+                return
+            context.user_data.pop(REFERRAL_ADMIN_SEARCH_KEY, None)
+            context.user_data["refadmin_page"] = 0
+            context.user_data["refadmin_query"] = None
+            text, kb = await build_referral_admin_screen(page=0)
+            await show_screen(q, context, text, kb, target_user_id)
+            return
+
+        if data.startswith("settings:refadmin:page:"):
+            if update.effective_user.id not in ADMIN_IDS:
+                await q.answer("Доступно только администратору.", show_alert=True)
+                return
+            try:
+                page = max(0, int(data.rsplit(":", 1)[-1]))
+            except ValueError:
+                page = 0
+            context.user_data["refadmin_page"] = page
+            query = context.user_data.get("refadmin_query")
+            text, kb = await build_referral_admin_screen(page=page, search=query)
+            await show_screen(q, context, text, kb, target_user_id)
+            return
+
+        if data == "settings:refadmin:search":
+            if update.effective_user.id not in ADMIN_IDS:
+                await q.answer("Доступно только администратору.", show_alert=True)
+                return
+            context.user_data[REFERRAL_ADMIN_SEARCH_KEY] = {
+                "chat_id": q.message.chat_id,
+                "message_id": q.message.message_id,
+            }
+            kb = InlineKeyboardMarkup(
+                [[InlineKeyboardButton(BACK_BTN, callback_data="settings:refadmin")]]
+            )
+            await show_screen(
+                q,
+                context,
+                "Введите имя/часть имени для поиска реферала.",
+                kb,
+                target_user_id,
+            )
+            return
+
+        if data.startswith("settings:refadmin:user:"):
+            if update.effective_user.id not in ADMIN_IDS:
+                await q.answer("Доступно только администратору.", show_alert=True)
+                return
+            try:
+                ref_user_id = int(data.rsplit(":", 1)[-1])
+            except ValueError:
+                await q.answer()
+                return
+            profile = await get_referral_profile(ref_user_id)
+            if not profile:
+                await q.answer("Профиль не найден.", show_alert=True)
+                return
+            stats = await get_referral_stats(ref_user_id)
+            payout_text, _rate, _payout_rub, _payout_stars, _percent = _format_referral_payout(stats)
+            text = (
+                f"Реферал: {profile['display_name']}\n"
+                f"Slug: {profile['slug']}\n\n"
+                f"👥 Пришло пользователей: всего {stats['invited_total']}, за месяц {stats['invited_month']}\n"
+                f"💳 Оплатили: всего {stats['paid_users_total']}, за месяц {stats['paid_users_month']}\n"
+                f"📆 Куплено дней подписки: всего {stats['paid_days_total']}, за месяц {stats['paid_days_month']}\n\n"
+                f"{payout_text}"
+            )
+            kb = InlineKeyboardMarkup(
+                [
+                    [
+                        InlineKeyboardButton(
+                            "Открыть ссылку",
+                            url=_build_referral_link(profile["slug"]),
+                        )
+                    ],
+                    [InlineKeyboardButton(BACK_BTN, callback_data="settings:refadmin")],
+                ]
+            )
+            await show_screen(q, context, text, kb, target_user_id)
             return
 
         if data.startswith("measure:"):
