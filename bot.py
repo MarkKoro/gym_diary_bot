@@ -261,6 +261,7 @@ from db import (
     get_referral_profile,
     get_referrer_by_slug,
     assign_referral_attribution,
+    mark_referral_first_seen,
     get_referral_stats,
     list_referral_profiles,
 )
@@ -2652,6 +2653,7 @@ def build_referral_info_screen() -> tuple[str, InlineKeyboardMarkup]:
         "ℹ️ Как работает реферальная программа\n\n"
         "1) Создаёте персональную ссылку и отправляете её людям.\n"
         "2) Мы фиксируем переход, когда человек заходит по ссылке и нажимает /start.\n"
+        "   Привязка к рефереру одноразовая и закрепляется за Telegram ID пользователя.\n"
         "3) В статистику оплат попадают только успешные платежи (не pending/не отменённые).\n"
         "4) Расчёт выплаты идёт за текущий месяц: с 1-го по последнее число.\n\n"
         "Проценты:\n"
@@ -7777,6 +7779,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         referrer = await get_referrer_by_slug(slug)
         if referrer:
             await assign_referral_attribution(user_id, int(referrer["user_id"]), slug)
+    await mark_referral_first_seen(user_id)
     settings = await fetch_user_settings(user_id)
     prefs = await load_ui_preferences(user_id)
     if not settings or not settings[1]:
