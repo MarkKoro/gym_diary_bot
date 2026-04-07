@@ -1127,6 +1127,11 @@ async def init_db():
             created_at TEXT NOT NULL
         );
 
+        CREATE TABLE IF NOT EXISTS referral_first_seen(
+            user_id INTEGER PRIMARY KEY,
+            created_at TEXT NOT NULL
+        );
+
         CREATE TABLE IF NOT EXISTS trainer_links(
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             trainer_user_id INTEGER NOT NULL,
@@ -1407,6 +1412,9 @@ async def init_db():
         )
         await db.execute(
             "CREATE TABLE IF NOT EXISTS referral_attributions(user_id INTEGER PRIMARY KEY, referrer_user_id INTEGER NOT NULL, source_slug TEXT NOT NULL, created_at TEXT NOT NULL)"
+        )
+        await db.execute(
+            "CREATE TABLE IF NOT EXISTS referral_first_seen(user_id INTEGER PRIMARY KEY, created_at TEXT NOT NULL)"
         )
         await db.execute(
             "CREATE INDEX IF NOT EXISTS idx_referral_profiles_name ON referral_profiles(display_name)"
@@ -3224,8 +3232,6 @@ async def wipe_user(user_id: int):
             await db.execute("DELETE FROM subscriptions WHERE user_id=?", (user_id,))
             await db.execute("DELETE FROM payments WHERE user_id=?", (user_id,))
             await db.execute("DELETE FROM referral_profiles WHERE user_id=?", (user_id,))
-            await db.execute("DELETE FROM referral_attributions WHERE user_id=?", (user_id,))
-            await db.execute("DELETE FROM referral_attributions WHERE referrer_user_id=?", (user_id,))
             await db.execute("DELETE FROM trainer_links WHERE trainee_user_id=? OR trainer_user_id=?", (user_id, user_id))
             await db.execute("DELETE FROM user_days WHERE user_id=?", (user_id,))
             await db.execute("DELETE FROM user_exercises WHERE user_id=?", (user_id,))
@@ -3362,6 +3368,12 @@ async def assign_referral_attribution(user_id: int, referrer_user_id: int, sourc
         return False
     now_iso = datetime.now(UTC).isoformat()
     async with connect_db() as db:
+        first_seen_cur = await db.execute(
+            "SELECT user_id FROM referral_first_seen WHERE user_id=? LIMIT 1",
+            (user_id,),
+        )
+        if await first_seen_cur.fetchone():
+            return False
         cur = await db.execute(
             "SELECT referrer_user_id FROM referral_attributions WHERE user_id=? LIMIT 1",
             (user_id,),
@@ -3376,8 +3388,24 @@ async def assign_referral_attribution(user_id: int, referrer_user_id: int, sourc
             """,
             (user_id, referrer_user_id, (source_slug or "").strip().lower(), now_iso),
         )
+        await db.execute(
+            "INSERT OR IGNORE INTO referral_first_seen(user_id, created_at) VALUES(?,?)",
+            (user_id, now_iso),
+        )
         await db.commit()
         return True
+
+
+async def mark_referral_first_seen(user_id: int) -> None:
+    if user_id <= 0:
+        return
+    now_iso = datetime.now(UTC).isoformat()
+    async with connect_db() as db:
+        await db.execute(
+            "INSERT OR IGNORE INTO referral_first_seen(user_id, created_at) VALUES(?,?)",
+            (user_id, now_iso),
+        )
+        await db.commit()
 
 
 async def get_referral_stats(referrer_user_id: int) -> dict:
