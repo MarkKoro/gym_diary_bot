@@ -1112,6 +1112,21 @@ async def init_db():
             finalization_source TEXT
         );
 
+        CREATE TABLE IF NOT EXISTS referral_profiles(
+            user_id INTEGER PRIMARY KEY,
+            slug TEXT UNIQUE NOT NULL,
+            display_name TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS referral_attributions(
+            user_id INTEGER PRIMARY KEY,
+            referrer_user_id INTEGER NOT NULL,
+            source_slug TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+
         CREATE TABLE IF NOT EXISTS trainer_links(
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             trainer_user_id INTEGER NOT NULL,
@@ -1387,6 +1402,18 @@ async def init_db():
             await db.execute("ALTER TABLE users ADD COLUMN active_system_id INTEGER")
         if not await _column_exists(db, "users", "systems_limit_prompted_at"):
             await db.execute("ALTER TABLE users ADD COLUMN systems_limit_prompted_at TEXT")
+        await db.execute(
+            "CREATE TABLE IF NOT EXISTS referral_profiles(user_id INTEGER PRIMARY KEY, slug TEXT UNIQUE NOT NULL, display_name TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)"
+        )
+        await db.execute(
+            "CREATE TABLE IF NOT EXISTS referral_attributions(user_id INTEGER PRIMARY KEY, referrer_user_id INTEGER NOT NULL, source_slug TEXT NOT NULL, created_at TEXT NOT NULL)"
+        )
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_referral_profiles_name ON referral_profiles(display_name)"
+        )
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_referral_attributions_referrer ON referral_attributions(referrer_user_id, created_at)"
+        )
         await db.execute(
             "CREATE TABLE IF NOT EXISTS ai_coach_requests(id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, mode TEXT NOT NULL, created_at TEXT NOT NULL)"
         )
@@ -3196,6 +3223,9 @@ async def wipe_user(user_id: int):
             await db.execute("DELETE FROM user_prefs WHERE user_id=?", (user_id,))
             await db.execute("DELETE FROM subscriptions WHERE user_id=?", (user_id,))
             await db.execute("DELETE FROM payments WHERE user_id=?", (user_id,))
+            await db.execute("DELETE FROM referral_profiles WHERE user_id=?", (user_id,))
+            await db.execute("DELETE FROM referral_attributions WHERE user_id=?", (user_id,))
+            await db.execute("DELETE FROM referral_attributions WHERE referrer_user_id=?", (user_id,))
             await db.execute("DELETE FROM trainer_links WHERE trainee_user_id=? OR trainer_user_id=?", (user_id, user_id))
             await db.execute("DELETE FROM user_days WHERE user_id=?", (user_id,))
             await db.execute("DELETE FROM user_exercises WHERE user_id=?", (user_id,))
@@ -3243,6 +3273,256 @@ async def list_all_user_tg_ids():
         cur = await db.execute("SELECT tg_id FROM users WHERE tg_id IS NOT NULL")
         rows = await cur.fetchall()
         return [row[0] for row in rows]
+
+
+def _normalize_referral_slug(name: str) -> str:
+    normalized = "".join(ch.lower() if ch.isalnum() else "-" for ch in (name or "").strip())
+    normalized = "-".join(part for part in normalized.split("-") if part)
+    return normalized[:40]
+
+
+async def create_or_update_referral_profile(user_id: int, display_name: str) -> dict | None:
+    cleaned_name = (display_name or "").strip()
+    if not cleaned_name:
+        return None
+    base_slug = _normalize_referral_slug(cleaned_name)
+    if not base_slug:
+        base_slug = f"user-{user_id}"
+    now_iso = datetime.now(UTC).isoformat()
+    async with connect_db() as db:
+        cur = await db.execute(
+            "SELECT slug FROM referral_profiles WHERE user_id=?",
+            (user_id,),
+        )
+        existing = await cur.fetchone()
+        if existing and existing[0]:
+            slug = str(existing[0])
+            await db.execute(
+                "UPDATE referral_profiles SET display_name=?, updated_at=? WHERE user_id=?",
+                (cleaned_name[:80], now_iso, user_id),
+            )
+            await db.commit()
+            return {"user_id": user_id, "display_name": cleaned_name[:80], "slug": slug}
+        slug = base_slug
+        counter = 2
+        while True:
+            exists_cur = await db.execute(
+                "SELECT user_id FROM referral_profiles WHERE slug=? LIMIT 1",
+                (slug,),
+            )
+            found = await exists_cur.fetchone()
+            if not found:
+                break
+            suffix = f"-{counter}"
+            slug = f"{base_slug[: max(1, 40 - len(suffix))]}{suffix}"
+            counter += 1
+        await db.execute(
+            """
+            INSERT INTO referral_profiles(user_id, slug, display_name, created_at, updated_at)
+            VALUES(?,?,?,?,?)
+            """,
+            (user_id, slug, cleaned_name[:80], now_iso, now_iso),
+        )
+        await db.commit()
+        return {"user_id": user_id, "display_name": cleaned_name[:80], "slug": slug}
+
+
+async def get_referral_profile(user_id: int) -> dict | None:
+    async with connect_db() as db:
+        cur = await db.execute(
+            "SELECT user_id, slug, display_name, created_at, updated_at FROM referral_profiles WHERE user_id=? LIMIT 1",
+            (user_id,),
+        )
+        row = await cur.fetchone()
+        if not row:
+            return None
+        return {
+            "user_id": int(row[0]),
+            "slug": str(row[1]),
+            "display_name": str(row[2]),
+            "created_at": row[3],
+            "updated_at": row[4],
+        }
+
+
+async def get_referrer_by_slug(slug: str) -> dict | None:
+    async with connect_db() as db:
+        cur = await db.execute(
+            "SELECT user_id, slug, display_name FROM referral_profiles WHERE slug=? LIMIT 1",
+            ((slug or "").strip().lower(),),
+        )
+        row = await cur.fetchone()
+        if not row:
+            return None
+        return {"user_id": int(row[0]), "slug": str(row[1]), "display_name": str(row[2])}
+
+
+async def assign_referral_attribution(user_id: int, referrer_user_id: int, source_slug: str) -> bool:
+    if user_id <= 0 or referrer_user_id <= 0 or user_id == referrer_user_id:
+        return False
+    now_iso = datetime.now(UTC).isoformat()
+    async with connect_db() as db:
+        cur = await db.execute(
+            "SELECT referrer_user_id FROM referral_attributions WHERE user_id=? LIMIT 1",
+            (user_id,),
+        )
+        existing = await cur.fetchone()
+        if existing:
+            return False
+        await db.execute(
+            """
+            INSERT INTO referral_attributions(user_id, referrer_user_id, source_slug, created_at)
+            VALUES(?,?,?,?)
+            """,
+            (user_id, referrer_user_id, (source_slug or "").strip().lower(), now_iso),
+        )
+        await db.commit()
+        return True
+
+
+async def get_referral_stats(referrer_user_id: int) -> dict:
+    now = datetime.now(UTC)
+    month_start_dt = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    if month_start_dt.month == 12:
+        month_end_dt = month_start_dt.replace(year=month_start_dt.year + 1, month=1)
+    else:
+        month_end_dt = month_start_dt.replace(month=month_start_dt.month + 1)
+    month_start = month_start_dt.isoformat()
+    month_end = month_end_dt.isoformat()
+    async with connect_db() as db:
+        cur_total = await db.execute(
+            "SELECT COUNT(*) FROM referral_attributions WHERE referrer_user_id=?",
+            (referrer_user_id,),
+        )
+        total_invited = int((await cur_total.fetchone() or [0])[0] or 0)
+        cur_month = await db.execute(
+            "SELECT COUNT(*) FROM referral_attributions WHERE referrer_user_id=? AND created_at >= ?",
+            (referrer_user_id, month_start),
+        )
+        month_invited = int((await cur_month.fetchone() or [0])[0] or 0)
+        cur_paid_total = await db.execute(
+            """
+            SELECT COUNT(DISTINCT s.user_id), COALESCE(SUM(julianday(s.expires_at) - julianday(s.started_at)), 0)
+            FROM subscriptions s
+            JOIN referral_attributions ra ON ra.user_id = s.user_id
+            WHERE ra.referrer_user_id=?
+            """,
+            (referrer_user_id,),
+        )
+        paid_total_row = await cur_paid_total.fetchone()
+        total_paid_users = int((paid_total_row or [0, 0])[0] or 0)
+        total_paid_days = int(round(float((paid_total_row or [0, 0])[1] or 0)))
+        cur_paid_month = await db.execute(
+            """
+            SELECT COUNT(DISTINCT s.user_id), COALESCE(SUM(julianday(s.expires_at) - julianday(s.started_at)), 0)
+            FROM subscriptions s
+            JOIN referral_attributions ra ON ra.user_id = s.user_id
+            WHERE ra.referrer_user_id=? AND s.started_at >= ?
+            """,
+            (referrer_user_id, month_start),
+        )
+        paid_month_row = await cur_paid_month.fetchone()
+        month_paid_users = int((paid_month_row or [0, 0])[0] or 0)
+        month_paid_days = int(round(float((paid_month_row or [0, 0])[1] or 0)))
+        cur_money = await db.execute(
+            """
+            SELECT
+                COALESCE(SUM(CASE WHEN UPPER(COALESCE(p.currency, '')) = 'RUB' THEN p.amount ELSE 0 END), 0) AS rub_minor_total,
+                COALESCE(SUM(CASE WHEN UPPER(COALESCE(p.currency, '')) IN ('XTR', 'STAR', 'STARS') THEN p.amount ELSE 0 END), 0) AS stars_total,
+                COALESCE(SUM(
+                    CASE
+                        WHEN UPPER(COALESCE(p.currency, '')) = 'RUB'
+                         AND COALESCE(p.finalized_at, p.created_at) >= ?
+                         AND COALESCE(p.finalized_at, p.created_at) < ?
+                        THEN p.amount ELSE 0
+                    END
+                ), 0) AS rub_minor_month,
+                COALESCE(SUM(
+                    CASE
+                        WHEN UPPER(COALESCE(p.currency, '')) IN ('XTR', 'STAR', 'STARS')
+                         AND COALESCE(p.finalized_at, p.created_at) >= ?
+                         AND COALESCE(p.finalized_at, p.created_at) < ?
+                        THEN p.amount ELSE 0
+                    END
+                ), 0) AS stars_month
+            FROM payments p
+            JOIN referral_attributions ra ON ra.user_id = p.user_id
+            WHERE ra.referrer_user_id=?
+              AND (
+                    LOWER(COALESCE(p.status, '')) = 'paid'
+                    OR (
+                        LOWER(COALESCE(p.status, '')) = 'succeeded'
+                        AND p.finalized_at IS NOT NULL
+                    )
+              )
+            """,
+            (month_start, month_end, month_start, month_end, referrer_user_id),
+        )
+        money_row = await cur_money.fetchone()
+        rub_minor_total = int((money_row or [0, 0, 0, 0])[0] or 0)
+        stars_total = int((money_row or [0, 0, 0, 0])[1] or 0)
+        rub_minor_month = int((money_row or [0, 0, 0, 0])[2] or 0)
+        stars_month = int((money_row or [0, 0, 0, 0])[3] or 0)
+        return {
+            "invited_total": total_invited,
+            "invited_month": month_invited,
+            "paid_users_total": total_paid_users,
+            "paid_users_month": month_paid_users,
+            "paid_days_total": max(0, total_paid_days),
+            "paid_days_month": max(0, month_paid_days),
+            "revenue_rub_total": rub_minor_total / 100.0,
+            "revenue_rub_month": rub_minor_month / 100.0,
+            "revenue_stars_total": max(0, stars_total),
+            "revenue_stars_month": max(0, stars_month),
+            "month_start": month_start_dt.date().isoformat(),
+            "month_end": (month_end_dt - timedelta(days=1)).date().isoformat(),
+        }
+
+
+async def list_referral_profiles(*, search: str | None = None, limit: int = 8, offset: int = 0) -> tuple[int, list[dict]]:
+    safe_limit = max(1, min(30, int(limit)))
+    safe_offset = max(0, int(offset))
+    search_query = (search or "").strip().lower()
+    where = ""
+    params: list[object] = []
+    if search_query:
+        where = "WHERE LOWER(rp.display_name) LIKE ? OR LOWER(rp.slug) LIKE ?"
+        params.extend([f"%{search_query}%", f"%{search_query}%"])
+    async with connect_db() as db:
+        cur_total = await db.execute(
+            f"SELECT COUNT(*) FROM referral_profiles rp {where}",
+            tuple(params),
+        )
+        total = int((await cur_total.fetchone() or [0])[0] or 0)
+        cur = await db.execute(
+            f"""
+            SELECT
+                rp.user_id,
+                rp.slug,
+                rp.display_name,
+                COALESCE(cnt.invited_total, 0) AS invited_total
+            FROM referral_profiles rp
+            LEFT JOIN (
+                SELECT referrer_user_id, COUNT(*) AS invited_total
+                FROM referral_attributions
+                GROUP BY referrer_user_id
+            ) cnt ON cnt.referrer_user_id = rp.user_id
+            {where}
+            ORDER BY COALESCE(cnt.invited_total, 0) DESC, rp.updated_at DESC
+            LIMIT ? OFFSET ?
+            """,
+            (*params, safe_limit, safe_offset),
+        )
+        rows = await cur.fetchall()
+    return total, [
+        {
+            "user_id": int(row[0]),
+            "slug": str(row[1]),
+            "display_name": str(row[2]),
+            "invited_total": int(row[3] or 0),
+        }
+        for row in rows
+    ]
 
 
 async def count_active_subscriptions() -> int:
