@@ -2564,10 +2564,19 @@ async def build_settings_keyboard_for_user(
 
 
 def _build_referral_link(slug: str) -> str:
+    payload = f"ref_{slug}"
     bot_link = (BOT_PUBLIC_LINK or "").strip()
-    if bot_link.startswith("https://t.me/"):
-        return f"{bot_link}?start=ref_{slug}"
-    return f"https://t.me/{bot_link.lstrip('@')}?start=ref_{slug}"
+    candidate = bot_link or "https://t.me/progresor_bot"
+    username = ""
+    if candidate.startswith("http://") or candidate.startswith("https://"):
+        parsed = urlparse(candidate)
+        username = (parsed.path or "").strip("/").split("/", 1)[0]
+    else:
+        username = candidate.strip("/").split("/", 1)[0]
+    username = username.lstrip("@")
+    if not username:
+        username = "progresor_bot"
+    return f"https://t.me/{username}?start={payload}"
 
 
 def _referral_rate_for_invites(invited_total: int) -> float:
@@ -2616,6 +2625,7 @@ async def build_referral_screen(user_id: int) -> tuple[str, InlineKeyboardMarkup
         text = (
             "Реферальная программа\n\n"
             f"Имя в ссылке: {profile['display_name']}\n"
+            "Скопируйте ссылку ниже и отправьте её другу в Telegram.\n"
             f"<code>{link}</code>\n\n"
             f"👥 Пришло пользователей: всего {stats['invited_total']}, за месяц {stats['invited_month']}\n"
             f"💳 Оплатили: всего {stats['paid_users_total']}, за месяц {stats['paid_users_month']}\n"
