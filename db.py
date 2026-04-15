@@ -155,18 +155,18 @@ def _duration_name_params() -> tuple[str, ...]:
 async def _seed_exercises(db, exercises: Sequence[tuple[str, str]], update_group: bool = True):
     for name, mg in exercises:
         cur = await db.execute(
-            "SELECT muscle_group FROM exercises WHERE name=?",
+            "SELECT muscle_group FROM exercises WHERE name=? AND created_by_user_id=0",
             (name,),
         )
         row = await cur.fetchone()
         if not row:
             await db.execute(
-                "INSERT INTO exercises(name, muscle_group) VALUES(?,?)",
+                "INSERT INTO exercises(name, muscle_group, created_by_user_id) VALUES(?,?,0)",
                 (name, mg),
             )
         elif row[0] != mg and update_group:
             await db.execute(
-                "UPDATE exercises SET muscle_group=? WHERE name=?",
+                "UPDATE exercises SET muscle_group=? WHERE name=? AND created_by_user_id=0",
                 (mg, name),
             )
 
@@ -253,7 +253,7 @@ async def _ensure_achievements_schema(db):
     )
 
 
-async def search_catalog_exercises(query: str | None, limit: int = 50):
+async def search_catalog_exercises(user_id: int, query: str | None, limit: int = 50):
     pattern = f"%{(query or '').strip().lower()}%"
     async with connect_db() as db:
         base_query = (
@@ -270,26 +270,47 @@ async def search_catalog_exercises(query: str | None, limit: int = 50):
             LIMIT ?
             """
         )
+        visibility = "(e.created_by_user_id=0 OR e.created_by_user_id=?)"
         if query and query.strip():
-            cur = await db.execute(base_query.format(where_clause="WHERE LOWER(e.name) LIKE ?"), (pattern, limit))
+            cur = await db.execute(
+                base_query.format(where_clause=f"WHERE {visibility} AND LOWER(e.name) LIKE ?"),
+                (user_id, pattern, limit),
+            )
         else:
-            cur = await db.execute(base_query.format(where_clause=""), (limit,))
+            cur = await db.execute(base_query.format(where_clause=f"WHERE {visibility}"), (user_id, limit))
         rows = await cur.fetchall()
         return [(int(r[0]), r[1], r[2]) for r in rows if r]
 
 
-async def create_catalog_exercise(name: str, muscle_group: str | None = None) -> int:
+async def create_catalog_exercise(user_id: int, name: str, muscle_group: str | None = None) -> int:
+    normalized_name = (name or "").strip()
+    if not normalized_name:
+        raise ValueError("Название упражнения обязательно")
     normalized_mg = muscle_group.strip().lower() if muscle_group else None
     async with connect_db() as db:
+        # Если упражнение уже есть в базовом общем каталоге, переиспользуем его.
         cur = await db.execute(
-            "INSERT OR IGNORE INTO exercises(name, muscle_group) VALUES(?, ?)",
-            (name, normalized_mg),
+            "SELECT id FROM exercises WHERE LOWER(name)=LOWER(?) AND created_by_user_id=0 LIMIT 1",
+            (normalized_name,),
         )
-        if cur.rowcount == 0:
-            cur = await db.execute("SELECT id FROM exercises WHERE name=?", (name,))
-            row = await cur.fetchone()
-        else:
-            row = (cur.lastrowid,)
+        global_row = await cur.fetchone()
+        if global_row:
+            return int(global_row[0])
+
+        # Иначе пытаемся найти/создать пользовательское.
+        cur = await db.execute(
+            "SELECT id FROM exercises WHERE LOWER(name)=LOWER(?) AND created_by_user_id=? LIMIT 1",
+            (normalized_name, int(user_id)),
+        )
+        existing_row = await cur.fetchone()
+        if existing_row:
+            return int(existing_row[0])
+
+        cur = await db.execute(
+            "INSERT INTO exercises(name, muscle_group, created_by_user_id) VALUES(?, ?, ?)",
+            (normalized_name, normalized_mg, int(user_id)),
+        )
+        row = (cur.lastrowid,)
         await db.commit()
         if not row:
             raise ValueError("Не удалось создать упражнение")
@@ -328,7 +349,7 @@ async def _seed_exercise_muscles_defaults(db):
 
     rows_to_insert: list[tuple[int, str, int]] = []
     for name, muscles in mapping.items():
-        cur = await db.execute("SELECT id FROM exercises WHERE name=?", (name,))
+        cur = await db.execute("SELECT id FROM exercises WHERE name=? AND created_by_user_id=0", (name,))
         row = await cur.fetchone()
         if not row:
             continue
@@ -815,12 +836,40 @@ async def _ensure_sessions_unique_by_day_and_system(db) -> None:
             """
         )
         await db.execute("DROP TABLE sessions_old")
-        await db.commit()
     except Exception:
-        await db.rollback()
+        await db.execute("ROLLBACK")
         raise
+    else:
+        await db.execute("COMMIT")
     finally:
         await db.execute("PRAGMA foreign_keys=ON")
+
+
+async def _ensure_exercises_user_scope(db) -> None:
+    has_scope = await _column_exists(db, "exercises", "created_by_user_id")
+    if not has_scope:
+        await db.execute("ALTER TABLE exercises RENAME TO exercises_old")
+        await db.execute(
+            """
+            CREATE TABLE exercises(
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT,
+                muscle_group TEXT,
+                created_by_user_id INTEGER NOT NULL DEFAULT 0,
+                UNIQUE(name, created_by_user_id)
+            )
+            """
+        )
+        await db.execute(
+            """
+            INSERT INTO exercises(id, name, muscle_group, created_by_user_id)
+            SELECT id, name, muscle_group, 0
+            FROM exercises_old
+            """
+        )
+        await db.execute("DROP TABLE exercises_old")
+    else:
+        await db.execute("UPDATE exercises SET created_by_user_id=0 WHERE created_by_user_id IS NULL")
 
 
 async def _migrate_duration_metrics(db) -> None:
@@ -901,8 +950,10 @@ async def init_db():
 
         CREATE TABLE IF NOT EXISTS exercises(
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT UNIQUE,
-            muscle_group TEXT
+            name TEXT,
+            muscle_group TEXT,
+            created_by_user_id INTEGER NOT NULL DEFAULT 0,
+            UNIQUE(name, created_by_user_id)
         );
 
         CREATE TABLE IF NOT EXISTS user_exercises(
@@ -1541,6 +1592,7 @@ async def init_db():
         await db.commit()
         await _ensure_sessions_unique_by_day_and_system(db)
         await _ensure_day_completions_system_scope(db)
+        await _ensure_exercises_user_scope(db)
         await _migrate_duration_metrics(db)
         await _ensure_achievements_schema(db)
         await db.commit()
@@ -1617,14 +1669,20 @@ async def ensure_default_plan(user_id: int):
         # вставим упражнения в каталог (если их нет)
         for name, mg in default:
             try:
-                await db.execute("INSERT INTO exercises(name, muscle_group) VALUES(?,?)", (name, mg))
+                await db.execute(
+                    "INSERT INTO exercises(name, muscle_group, created_by_user_id) VALUES(?,?,0)",
+                    (name, mg),
+                )
             except Exception:
                 pass
         await db.commit()
 
         # привяжем к пользователю на day_index=1
         for name, _ in default:
-            cur = await db.execute("SELECT id FROM exercises WHERE name=?", (name,))
+            cur = await db.execute(
+                "SELECT id FROM exercises WHERE name=? AND created_by_user_id=0",
+                (name,),
+            )
             ex = await cur.fetchone()
             ex_id = ex[0]
             try:
@@ -2443,28 +2501,29 @@ async def set_workouts_per_week(user_id: int, n: int) -> list[tuple[int, int, in
             await db.commit()
         return removed
 
-async def list_exercises_by_group(group: str):
+async def list_exercises_by_group(group: str, user_id: int):
     async with connect_db() as db:
         if group == "metcon" and METCON_SHARED_NAMES:
             placeholders = ",".join("?" for _ in METCON_SHARED_NAMES)
             query = (
                 "SELECT id, name FROM exercises "
-                "WHERE muscle_group=? OR name IN (" + placeholders + ") "
+                "WHERE (muscle_group=? OR name IN (" + placeholders + ")) "
+                "AND (created_by_user_id=0 OR created_by_user_id=?) "
                 "ORDER BY name"
             )
-            params: tuple = (group, *METCON_SHARED_NAMES)
+            params: tuple = (group, *METCON_SHARED_NAMES, int(user_id))
             cur = await db.execute(query, params)
         else:
             cur = await db.execute(
-                "SELECT id, name FROM exercises WHERE muscle_group=? ORDER BY name",
-                (group,),
+                "SELECT id, name FROM exercises WHERE muscle_group=? AND (created_by_user_id=0 OR created_by_user_id=?) ORDER BY name",
+                (group, int(user_id)),
             )
         return await cur.fetchall()
 
 async def get_exercise_details(exercise_id: int):
     async with connect_db() as db:
         cur = await db.execute(
-            "SELECT name, muscle_group FROM exercises WHERE id=?",
+            "SELECT name, muscle_group, created_by_user_id FROM exercises WHERE id=?",
             (exercise_id,),
         )
         return await cur.fetchone()
@@ -2532,50 +2591,27 @@ async def remove_user_muscle_group(user_id: int, code: str) -> bool:
         if not await cur.fetchone():
             return False
         cur = await db.execute(
-            "SELECT id FROM exercises WHERE muscle_group=?",
-            (code,),
+            "SELECT id FROM exercises WHERE muscle_group=? AND created_by_user_id=?",
+            (code, int(user_id)),
         )
         exercise_ids = [int(r[0]) for r in await cur.fetchall() if r and r[0] is not None]
         if exercise_ids:
             placeholders = ",".join("?" for _ in exercise_ids)
-            cur = await db.execute(
-                f"SELECT id FROM user_exercises WHERE exercise_id IN ({placeholders})",
-                tuple(exercise_ids),
-            )
-            ue_ids = [int(r[0]) for r in await cur.fetchall() if r and r[0] is not None]
-            if ue_ids:
-                ue_placeholders = ",".join("?" for _ in ue_ids)
-                await db.execute(
-                    f"DELETE FROM running_entries WHERE user_exercise_id IN ({ue_placeholders})",
-                    tuple(ue_ids),
-                )
-                await db.execute(
-                    f"DELETE FROM sets WHERE user_exercise_id IN ({ue_placeholders})",
-                    tuple(ue_ids),
-                )
-                await db.execute(
-                    f"DELETE FROM session_exercises WHERE user_exercise_id IN ({ue_placeholders})",
-                    tuple(ue_ids),
-                )
             await db.execute(
-                f"DELETE FROM exercise_baseline WHERE exercise_id IN ({placeholders})",
-                tuple(exercise_ids),
+                f"UPDATE user_exercises SET is_archived=1 WHERE user_id=? AND exercise_id IN ({placeholders})",
+                (int(user_id), *exercise_ids),
             )
             await db.execute(
-                f"DELETE FROM user_exercise_muscles WHERE exercise_id IN ({placeholders})",
-                tuple(exercise_ids),
+                f"DELETE FROM exercise_baseline WHERE user_id=? AND exercise_id IN ({placeholders})",
+                (int(user_id), *exercise_ids),
             )
             await db.execute(
-                f"DELETE FROM exercise_muscles WHERE exercise_id IN ({placeholders})",
-                tuple(exercise_ids),
+                f"DELETE FROM user_exercise_muscles WHERE user_id=? AND exercise_id IN ({placeholders})",
+                (int(user_id), *exercise_ids),
             )
             await db.execute(
-                f"DELETE FROM user_exercises WHERE exercise_id IN ({placeholders})",
-                tuple(exercise_ids),
-            )
-            await db.execute(
-                f"DELETE FROM exercises WHERE id IN ({placeholders})",
-                tuple(exercise_ids),
+                f"UPDATE exercises SET muscle_group='other' WHERE created_by_user_id=? AND id IN ({placeholders})",
+                (int(user_id), *exercise_ids),
             )
         cur = await db.execute(
             "DELETE FROM user_muscle_groups WHERE id=? AND user_id=?",
@@ -3000,18 +3036,27 @@ async def list_exercise_day_links(user_id: int, exercise_id: int):
         rows = await cur.fetchall()
         return [(day_idx, label or "") for day_idx, label in rows]
 
-async def get_or_create_exercise(name: str, muscle_group: str):
+async def get_or_create_exercise(name: str, muscle_group: str, user_id: int | None = None):
+    owner_id = int(user_id or 0)
     async with connect_db() as db:
+        if owner_id > 0:
+            cur = await db.execute(
+                "SELECT id FROM exercises WHERE LOWER(name)=LOWER(?) AND created_by_user_id=0 LIMIT 1",
+                (name,),
+            )
+            global_row = await cur.fetchone()
+            if global_row:
+                return int(global_row[0])
         cur = await db.execute(
-            "SELECT id FROM exercises WHERE LOWER(name)=LOWER(?)",
-            (name,),
+            "SELECT id FROM exercises WHERE LOWER(name)=LOWER(?) AND created_by_user_id=?",
+            (name, owner_id),
         )
         row = await cur.fetchone()
         if row:
             return row[0]
         await db.execute(
-            "INSERT INTO exercises(name, muscle_group) VALUES(?,?)",
-            (name, muscle_group),
+            "INSERT INTO exercises(name, muscle_group, created_by_user_id) VALUES(?,?,?)",
+            (name, muscle_group, owner_id),
         )
         await db.commit()
         cur = await db.execute("SELECT last_insert_rowid()")
@@ -4564,6 +4609,16 @@ async def mark_exercise_done(session_id: int, ue_id: int):
 
 async def set_exercise_note(session_id: int, ue_id: int, note: str | None):
     async with connect_db() as db:
+        note_value = (note or "").strip() or None
+        await db.execute(
+            """
+            INSERT INTO session_exercises(session_id, user_exercise_id, note)
+            VALUES(?,?,?)
+            ON CONFLICT(session_id, user_exercise_id)
+            DO UPDATE SET note=excluded.note
+            """,
+            (session_id, ue_id, note_value),
+        )
         cur = await db.execute(
             """
             SELECT s.user_id, ue.exercise_id
@@ -4576,7 +4631,8 @@ async def set_exercise_note(session_id: int, ue_id: int, note: str | None):
         row = await cur.fetchone()
         if not row:
             return
-        await set_exercise_persistent_note(int(row[0]), int(row[1]), note, db=db)
+        await set_exercise_persistent_note(int(row[0]), int(row[1]), note_value, db=db)
+        await db.commit()
 
 
 async def set_exercise_persistent_note(
@@ -7601,14 +7657,17 @@ async def copy_training_plan_from_user(source_user_id: int, target_user_id: int)
                 norm = (name or "").strip()
                 if not norm:
                     continue
-                ex_id_cur = await db.execute("SELECT id FROM exercises WHERE name=?", (norm,))
+                ex_id_cur = await db.execute(
+                    "SELECT id FROM exercises WHERE name=? AND created_by_user_id=?",
+                    (norm, int(target_user_id)),
+                )
                 row = await ex_id_cur.fetchone()
                 if row:
                     ex_id = int(row[0])
                 else:
                     cur = await db.execute(
-                        "INSERT INTO exercises(name, muscle_group) VALUES(?, ?)",
-                        (norm, "other"),
+                        "INSERT INTO exercises(name, muscle_group, created_by_user_id) VALUES(?, ?, ?)",
+                        (norm, "other", int(target_user_id)),
                     )
                     ex_id = int(cur.lastrowid)
                 await db.execute(
@@ -7663,12 +7722,23 @@ async def copy_training_system_from_user(source_user_id: int, target_user_id: in
                     ex_name = (ex.get("name") or "").strip()
                     if not ex_name:
                         continue
-                    ex_cur = await db.execute("SELECT id FROM exercises WHERE LOWER(name)=LOWER(?) LIMIT 1", (ex_name,))
+                    ex_cur = await db.execute(
+                        """
+                        SELECT id
+                        FROM exercises
+                        WHERE LOWER(name)=LOWER(?) AND created_by_user_id=?
+                        LIMIT 1
+                        """,
+                        (ex_name, int(target_user_id)),
+                    )
                     ex_row = await ex_cur.fetchone()
                     if ex_row:
                         ex_id = int(ex_row[0])
                     else:
-                        created_ex = await db.execute("INSERT INTO exercises(name, muscle_group) VALUES(?,?)", (ex_name, "other"))
+                        created_ex = await db.execute(
+                            "INSERT INTO exercises(name, muscle_group, created_by_user_id) VALUES(?,?,?)",
+                            (ex_name, "other", int(target_user_id)),
+                        )
                         ex_id = int(created_ex.lastrowid)
                     await db.execute(
                         "INSERT OR IGNORE INTO training_system_exercises(system_id, day_index, exercise_id) VALUES(?,?,?)",
@@ -7721,7 +7791,7 @@ async def copy_training_system_from_user(source_user_id: int, target_user_id: in
 
         ex_cur = await db.execute(
             """
-            SELECT tse.day_index, e.name, e.muscle_group, tse.exercise_id
+            SELECT tse.day_index, e.name, e.muscle_group, tse.exercise_id, e.created_by_user_id
             FROM training_system_exercises tse
             JOIN exercises e ON e.id=tse.exercise_id
             WHERE tse.system_id=?
@@ -7880,18 +7950,68 @@ async def copy_training_system_from_user(source_user_id: int, target_user_id: in
             source_snapshot_cache[ex_id] = snapshot
             return snapshot
 
-        exercise_cache: dict[tuple[str, str], int] = {}
+        exercise_cache: dict[tuple[str, str, int], int] = {}
 
-        async def ensure_target_exercise(ex_name: str, muscle_group: str | None) -> int:
+        async def ensure_target_exercise(
+            ex_name: str,
+            muscle_group: str | None,
+            *,
+            source_exercise_id: int = 0,
+            source_owner_user_id: int = 0,
+        ) -> int:
             normalized_name = (ex_name or "").strip()
             normalized_group = (muscle_group or "other").strip().lower() or "other"
-            key = (normalized_name.casefold(), normalized_group)
+            source_owner = int(source_owner_user_id or 0)
+            key = (normalized_name.casefold(), normalized_group, source_owner)
             cached = exercise_cache.get(key)
             if cached:
                 return int(cached)
+            if source_owner <= 0:
+                cur_find = await db.execute(
+                    """
+                    SELECT id, COALESCE(muscle_group,'')
+                    FROM exercises
+                    WHERE LOWER(name)=LOWER(?) AND created_by_user_id=0
+                    LIMIT 1
+                    """,
+                    (normalized_name,),
+                )
+                row_find = await cur_find.fetchone()
+                if row_find:
+                    ex_id = int(row_find[0])
+                    existing_group = (row_find[1] or "").strip().lower()
+                    if normalized_group != existing_group and existing_group in {"", "other"}:
+                        await db.execute(
+                            "UPDATE exercises SET muscle_group=? WHERE id=?",
+                            (normalized_group, ex_id),
+                        )
+                    exercise_cache[key] = ex_id
+                    return ex_id
+                cur_new = await db.execute(
+                    "INSERT OR IGNORE INTO exercises(name, muscle_group, created_by_user_id) VALUES(?, ?, 0)",
+                    (normalized_name, normalized_group),
+                )
+                ex_id = int(cur_new.lastrowid or 0)
+                if ex_id <= 0:
+                    cur_retry = await db.execute(
+                        "SELECT id FROM exercises WHERE LOWER(name)=LOWER(?) AND created_by_user_id=0 LIMIT 1",
+                        (normalized_name,),
+                    )
+                    row_retry = await cur_retry.fetchone()
+                    if not row_retry:
+                        raise RuntimeError(f"Не удалось создать упражнение: {normalized_name}")
+                    ex_id = int(row_retry[0])
+                exercise_cache[key] = ex_id
+                return ex_id
+
             cur_find = await db.execute(
-                "SELECT id, COALESCE(muscle_group,'') FROM exercises WHERE LOWER(name)=LOWER(?) LIMIT 1",
-                (normalized_name,),
+                """
+                SELECT id, COALESCE(muscle_group,'')
+                FROM exercises
+                WHERE LOWER(name)=LOWER(?) AND created_by_user_id=?
+                LIMIT 1
+                """,
+                (normalized_name, int(target_user_id)),
             )
             row_find = await cur_find.fetchone()
             if row_find:
@@ -7905,14 +8025,19 @@ async def copy_training_system_from_user(source_user_id: int, target_user_id: in
                 exercise_cache[key] = ex_id
                 return ex_id
             cur_new = await db.execute(
-                "INSERT OR IGNORE INTO exercises(name, muscle_group) VALUES(?, ?)",
-                (normalized_name, normalized_group),
+                "INSERT OR IGNORE INTO exercises(name, muscle_group, created_by_user_id) VALUES(?, ?, ?)",
+                (normalized_name, normalized_group, int(target_user_id)),
             )
             ex_id = int(cur_new.lastrowid or 0)
             if ex_id <= 0:
                 cur_retry = await db.execute(
-                    "SELECT id FROM exercises WHERE LOWER(name)=LOWER(?) LIMIT 1",
-                    (normalized_name,),
+                    """
+                    SELECT id
+                    FROM exercises
+                    WHERE LOWER(name)=LOWER(?) AND created_by_user_id=?
+                    LIMIT 1
+                    """,
+                    (normalized_name, int(target_user_id)),
                 )
                 row_retry = await cur_retry.fetchone()
                 if not row_retry:
@@ -7935,7 +8060,7 @@ async def copy_training_system_from_user(source_user_id: int, target_user_id: in
 
         ex_count = 0
         copied_exercise_ids: set[int] = set()
-        for day_index, ex_name, muscle_group, source_exercise_id in source_exercises:
+        for day_index, ex_name, muscle_group, source_exercise_id, source_owner_user_id in source_exercises:
             day_no = int(day_index or 0)
             if day_no <= 0:
                 continue
@@ -7943,7 +8068,12 @@ async def copy_training_system_from_user(source_user_id: int, target_user_id: in
             if not name_raw:
                 continue
             target_group = await ensure_target_custom_group(muscle_group)
-            exercise_id = await ensure_target_exercise(name_raw, target_group)
+            exercise_id = await ensure_target_exercise(
+                name_raw,
+                target_group,
+                source_exercise_id=int(source_exercise_id or 0),
+                source_owner_user_id=int(source_owner_user_id or 0),
+            )
             await db.execute(
                 "INSERT OR IGNORE INTO training_system_exercises(system_id, day_index, exercise_id) VALUES(?,?,?)",
                 (new_system_id, day_no, exercise_id),

@@ -3798,7 +3798,7 @@ async def start_instant_baseline(
     row = await get_exercise_details(exercise_id)
     if not row:
         return False
-    name, default_group = row
+    name, default_group, _owner_user_id = row
     if not group:
         group = default_group
     resolved_group = resolve_group(name, group)
@@ -8830,7 +8830,7 @@ async def show_exercises(
     context,
     page: int | None = None,
 ):
-    ex_rows = await list_exercises_by_group(group)
+    ex_rows = await list_exercises_by_group(group, user_id)
     selected_ids = set(await list_user_exercise_ids(user_id, day, group))
     custom = context.user_data.get("custom_groups", {})
     requested_page = page if page is not None else get_kb_page(context, "wiz", group, day)
@@ -8854,7 +8854,7 @@ async def show_day_add_exercises_view(
     context,
     page: int | None = None,
 ):
-    ex_rows = await list_exercises_by_group(group)
+    ex_rows = await list_exercises_by_group(group, user_id)
     selected_ids = set(await list_user_exercise_ids(user_id, day, group))
     custom = context.user_data.get("custom_groups", {})
     requested_page = page if page is not None else get_kb_page(context, "day", group, day)
@@ -8906,7 +8906,7 @@ async def show_library_add_exercises_view(
     page: int | None = None,
 ):
     context.user_data.pop(LIBRARY_CUSTOM_KEY, None)
-    ex_rows = await list_exercises_by_group(group)
+    ex_rows = await list_exercises_by_group(group, user_id)
     selected = set(await list_user_exercise_ids(user_id, 0, group))
     requested_page = page if page is not None else get_kb_page(context, "lib", group)
     kb, actual_page, _ = library_add_exercises_kb(
@@ -10444,9 +10444,9 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await try_delete(update.message)
         exists = await user_has_library_exercise(target_user_id, name)
         if not exists:
-            ex_id = await get_or_create_exercise(name, group)
+            ex_id = await get_or_create_exercise(name, group, target_user_id)
             await add_user_exercise(target_user_id, 0, ex_id)
-        ex_rows = await list_exercises_by_group(group)
+        ex_rows = await list_exercises_by_group(group, target_user_id)
         selected = set(await list_user_exercise_ids(target_user_id, 0, group))
         requested_page = get_kb_page(context, "lib", group)
         kb, page_value, _ = library_add_exercises_kb(
@@ -10487,7 +10487,7 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             remember_message(chat_id, msg_id)
         elif mode == "library":
             context.user_data["lib_return"] = ("group", code)
-            ex_rows = await list_exercises_by_group(code)
+            ex_rows = await list_exercises_by_group(code, target_user_id)
             selected_ids = set(await list_user_exercise_ids(target_user_id, 0, code))
             requested_page = get_kb_page(context, "lib", code)
             kb, page_value, _ = library_add_exercises_kb(
@@ -10503,7 +10503,7 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             remember_message(chat_id, msg_id)
         else:
             context.user_data["add_group"] = (day, code)
-            ex_rows = await list_exercises_by_group(code)
+            ex_rows = await list_exercises_by_group(code, target_user_id)
             selected_ids = set(await list_user_exercise_ids(target_user_id, day, code))
             requested_page = get_kb_page(context, "day", code, day)
             kb, page_value, _ = day_add_exercises_kb(
@@ -10543,7 +10543,7 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("Название не должно быть пустым.")
             return
         await try_delete(update.message)
-        ex_id = await get_or_create_exercise(name, group)
+        ex_id = await get_or_create_exercise(name, group, user_id)
         selected_ids = set(await list_user_exercise_ids(user_id, day, group))
         existed = ex_id in selected_ids
         await add_user_exercise(user_id, day, ex_id)
@@ -10571,7 +10571,7 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if started:
                 return
 
-        ex_rows = await list_exercises_by_group(group)
+        ex_rows = await list_exercises_by_group(group, user_id)
         custom = context.user_data.get("custom_groups", {})
         if source == "day":
             requested_page = get_kb_page(context, "day", group, day)
@@ -13525,7 +13525,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         if not group:
                             details = await get_exercise_details(ex_id)
                             if details:
-                                _, detected_group = details
+                                _, detected_group, _owner_user_id = details
                                 group = detected_group
                                 context.user_data["add_group"] = (day, group)
 

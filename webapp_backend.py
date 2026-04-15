@@ -527,7 +527,7 @@ async def _build_ai_catalog_lookup(user_id: int, day_snapshots: list[dict], *, p
 
     by_id: dict[int, dict] = dict(direct_exercises)
     for group in sorted(groups):
-        rows = await db.list_exercises_by_group(group)
+        rows = await db.list_exercises_by_group(group, user_id)
         for row in rows[:per_group_limit]:
             if not row:
                 continue
@@ -1954,11 +1954,15 @@ async def _resolve_user_exercise_id(user_id: int, ue_id: int, day_index: int) ->
     return int(row[0])
 
 
-async def _require_catalog_exercise(exercise_id: int) -> tuple[str, str | None]:
+async def _require_catalog_exercise(user_id: int, exercise_id: int) -> tuple[str, str | None]:
     info = await db.get_exercise_details(exercise_id)
     if not info:
         raise HTTPException(status_code=404, detail="Упражнение не найдено")
-    return info
+    name, muscle_group, owner_user_id = info
+    owner = int(owner_user_id or 0)
+    if owner not in (0, int(user_id)):
+        raise HTTPException(status_code=404, detail="Упражнение не найдено")
+    return name, muscle_group
 
 
 def _compute_muscle_load(
@@ -2234,8 +2238,8 @@ async def day_sheet(
 
 @app.get("/catalog/search")
 async def search_catalog(query: str | None = None, ctx: AuthCtx = Depends(get_auth_ctx)):
-    _ = ctx.user_id  # auth only
-    rows = await db.search_catalog_exercises(query, limit=50)
+    user_id = ctx.user_id
+    rows = await db.search_catalog_exercises(user_id, query, limit=50)
     return {
         "ok": True,
         "items": [
@@ -2272,7 +2276,7 @@ async def list_catalog_group_exercises(
         raise HTTPException(status_code=400, detail="Группа не указана")
     if day_index is not None:
         await _validate_day(user_id, int(day_index))
-    rows = await db.list_exercises_by_group(normalized_code)
+    rows = await db.list_exercises_by_group(normalized_code, user_id)
     added = set()
     if day_index is not None:
         added = set(await db.list_user_exercise_ids(user_id, int(day_index), normalized_code))
@@ -2316,7 +2320,7 @@ async def add_day_exercise(
         ex_id = int(ex_id_raw)
     except Exception:
         raise HTTPException(status_code=400, detail="Некорректный идентификатор упражнения")
-    await _require_catalog_exercise(ex_id)
+    await _require_catalog_exercise(user_id, ex_id)
     await db.add_user_exercise(user_id, day_index, ex_id)
     return {"ok": True}
 
@@ -2335,7 +2339,11 @@ async def create_catalog_exercise(
     if day_index is None:
         raise HTTPException(status_code=400, detail="День обязателен")
     await _validate_day(user_id, int(day_index))
-    exercise_id = await db.create_catalog_exercise(str(name_raw).strip(), muscle_raw if isinstance(muscle_raw, str) else None)
+    exercise_id = await db.create_catalog_exercise(
+        user_id,
+        str(name_raw).strip(),
+        muscle_raw if isinstance(muscle_raw, str) else None,
+    )
     await db.add_user_exercise(user_id, int(day_index), exercise_id)
     await sync_current_plan_to_system(user_id, await get_active_training_system_id(user_id))
     return {"ok": True, "exercise_id": exercise_id}
@@ -2349,7 +2357,7 @@ async def toggle_day_exercise(
 ):
     user_id = ctx.user_id
     await _validate_day(user_id, day_index)
-    await _require_catalog_exercise(exercise_id)
+    await _require_catalog_exercise(user_id, exercise_id)
     enabled = await db.toggle_user_exercise(user_id, day_index, exercise_id)
     return {"ok": True, "enabled": bool(enabled)}
 
@@ -2363,7 +2371,7 @@ async def set_day_exercise_baseline(
 ):
     user_id = ctx.user_id
     await _validate_day(user_id, day_index)
-    await _require_catalog_exercise(exercise_id)
+    await _require_catalog_exercise(user_id, exercise_id)
 
     sets = int(payload.get("sets") or 3)
     reps = int(payload.get("reps") or 10)
@@ -2389,7 +2397,7 @@ async def set_ai_meta_for_exercise(
 ):
     user_id = ctx.user_id
     await _validate_day(user_id, day_index)
-    await _require_catalog_exercise(exercise_id)
+    await _require_catalog_exercise(user_id, exercise_id)
     system_id = await get_active_training_system_id(user_id)
 
     sp = {
