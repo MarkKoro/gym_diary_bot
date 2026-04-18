@@ -3398,6 +3398,7 @@ async def measurements_overview(ctx: AuthCtx = Depends(get_auth_ctx)):
                     "delta": delta,
                 }
             )
+        category_items.sort(key=lambda item: 0 if item.get("latest") else 1)
         rendered_categories.append(
             {
                 "code": code,
