@@ -2423,11 +2423,11 @@
     .btn.secondary { background: var(--tg-theme-secondary-bg-color, #f2f2f2); }
 
     .all-ex-shell { display: grid; gap: 14px; }
-    .all-ex-card { overflow: visible; padding: 14px; background: linear-gradient(180deg, color-mix(in srgb, var(--card) 96%, var(--bg)), color-mix(in srgb, var(--card) 88%, var(--accent) 4%)); }
+    .all-ex-card { overflow: visible; padding: 14px 0 0; background: transparent; border: 0; box-shadow: none; }
     .all-ex-hero { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; margin-bottom: 10px; }
     .all-ex-title { font-size: 18px; font-weight: 850; letter-spacing: -0.02em; }
     .all-ex-subtitle { color: var(--muted); font-size: 13px; line-height: 1.35; margin-top: 3px; }
-    .all-ex-stage { position: relative; min-height: calc(100vh - 250px); border-radius: 0; border: 0; background: radial-gradient(circle at center, color-mix(in srgb, var(--accent) 10%, transparent), transparent 58%); overflow: auto; isolation: isolate; -webkit-overflow-scrolling: touch; }
+    .all-ex-stage { position: relative; min-height: calc(100vh - 250px); border-radius: 0; border: 0; background: radial-gradient(circle at center, color-mix(in srgb, var(--accent) 10%, transparent), transparent 58%); overflow: auto; isolation: isolate; -webkit-overflow-scrolling: touch; margin: 0 -16px; padding: 0 8px; }
     .all-ex-petals { position: relative; width: max(100%, 1220px); height: max(100%, 1220px); min-height: 760px; display: block; transition: opacity .22s ease, transform .28s ease; margin: 0 auto; }
     .all-ex-petals.animating-out { opacity: 0; transform: scale(.86) rotate(-7deg); }
     .all-ex-petal { position: absolute; left: 50%; top: 50%; width: 132px; min-height: 82px; margin-left: -66px; margin-top: -41px; border: 0; border-radius: 999px 999px 999px 28px; padding: 12px; color: white; text-align: left; box-shadow: 0 14px 28px rgba(15,23,42,.18); transform: rotate(var(--angle)) translate(var(--radius)) rotate(calc(-1 * var(--angle))); transition: transform .34s cubic-bezier(.2,.8,.2,1), opacity .22s ease, filter .2s ease; animation: petalIn .34s cubic-bezier(.2,.8,.2,1) both; animation-delay: var(--delay); }
@@ -2449,6 +2449,7 @@
     .all-ex-controls .control-block { padding: 8px; }
     .all-ex-controls .control-head { font-size: 11px; }
     .all-ex-note { min-height: 68px; }
+    .all-ex-center.fullscreen { position: fixed; inset: 0; width: 100vw; max-height: 100dvh; height: 100dvh; transform: none; border-radius: 0; z-index: 120; padding: 16px 14px calc(24px + env(safe-area-inset-bottom)); }
     .all-ex-finish-day { font-size: 12px; padding: 8px 10px; border-radius: 999px; border: 1px solid var(--border); background: color-mix(in srgb, var(--card) 92%, var(--bg)); color: var(--muted); }
     @keyframes petalIn { from { opacity: 0; transform: rotate(var(--angle)) translate(calc(var(--radius) * .55)) rotate(calc(-1 * var(--angle))) scale(.88); } to { opacity: 1; } }
     @media (max-width: 420px) {
@@ -3277,6 +3278,7 @@
         workoutsPerWeek: 0,
         days: [],
         customGroups: [],
+        customExercises: [],
         reminders: [],
         notificationsEnabled: true,
         leaderboardVisible: true,
@@ -6551,6 +6553,7 @@
           <div class="all-ex-toolbar">
             ${st.view !== 'groups' ? '<button class="all-ex-back" data-action="all-ex-back">← Назад</button>' : ''}
             ${st.view === 'groups' ? '<button class="all-ex-back" data-action="all-ex-add-group">＋ Группа</button>' : '<button class="all-ex-back" data-action="all-ex-add-exercise">＋ Упражнение</button>'}
+            ${st.view === 'exercises' ? '<button class="all-ex-finish-day" data-action="all-ex-open-unfinished">Незавершённые</button>' : ''}
             <button class="all-ex-finish-day" data-action="all-ex-finish-day">Завершить день</button>
           </div>
         </div>
@@ -6560,6 +6563,7 @@
       root.querySelector('[data-action="all-ex-add-group"]')?.addEventListener('click', promptAllExercisesGroup);
       root.querySelector('[data-action="all-ex-add-exercise"]')?.addEventListener('click', promptAllExerciseCreate);
       root.querySelector('[data-action="all-ex-finish-day"]')?.addEventListener('click', () => runUiAction('Не удалось завершить день', () => finishAllExercisesDay()));
+      root.querySelector('[data-action="all-ex-open-unfinished"]')?.addEventListener('click', () => toast('Открой нужное упражнение из группы — незавершённые подходы уже сохранены'));
       const stage = document.getElementById('allExercisesStage');
       if (!stage) return;
       const center = document.createElement('div');
@@ -6602,7 +6606,7 @@
     function renderAllExerciseCenter(center) {
       const st = allExercisesState();
       const ex = st.exercise;
-      center.className = 'all-ex-center';
+      center.className = `all-ex-center ${st.view === 'exercise' ? 'fullscreen' : ''}`;
       if (!ex) { center.innerHTML = '<div class="all-ex-center-title">Загрузка…</div>'; return; }
       const sets = ex.sets || [];
       const previous = summarizePreviousSets(ex.previous_sets || []);
@@ -6617,6 +6621,7 @@
           <button class="btn primary" data-action="all-ex-add-set">Добавить подход</button>
           <button class="btn" data-action="all-ex-remove-set">Удалить</button>
           <button class="btn" data-action="all-ex-history">История</button>
+          <button class="btn" data-action="all-ex-hide">Скрыть</button>
           <button class="btn primary" data-action="all-ex-done">Готово</button>
         </div>
         <textarea class="note-area all-ex-note" id="allExerciseNote" placeholder="Заметка к упражнению…">${escapeHtml(ex.current_note || '')}</textarea>
@@ -6629,6 +6634,7 @@
       center.querySelector('[data-action="all-ex-add-set"]')?.addEventListener('click', () => runUiAction('Не удалось добавить подход', () => allExerciseAddSet()));
       center.querySelector('[data-action="all-ex-remove-set"]')?.addEventListener('click', () => runUiAction('Не удалось удалить подход', () => allExerciseRemoveSet()));
       center.querySelector('[data-action="all-ex-done"]')?.addEventListener('click', () => runUiAction('Не удалось завершить упражнение', () => allExerciseDone()));
+      center.querySelector('[data-action="all-ex-hide"]')?.addEventListener('click', () => goBackAllExercises());
       center.querySelector('[data-action="all-ex-history"]')?.addEventListener('click', () => { state.library.currentExerciseId = ex.exercise_id; state.library.currentExerciseName = ex.name; state.library.currentExerciseMuscleGroup = ex.muscle_group; state.library.view = 'details'; navigateTo('library'); });
       const note = center.querySelector('#allExerciseNote');
       note?.addEventListener('input', () => scheduleAllExerciseNoteSave(note.value));
@@ -7801,6 +7807,23 @@
           `
         )
         .join('');
+      const customExerciseHtml = (s.customExercises || [])
+        .map((ex) => `
+          <div class="list-row">
+            <div class="list-text">
+              <div class="label">${escapeHtml(ex.name)}</div>
+              <div class="list-subtitle">Группа: ${escapeHtml(allExercisesGroupName(ex.muscle_group || 'none'))}</div>
+            </div>
+            <div class="settings-row" style="grid-template-columns: 1fr auto; gap: 8px;">
+              <select class="settings-select" data-custom-exercise-move="${Number(ex.exercise_id)}">
+                ${(state.settings.customGroups || []).map((g) => `<option value="${g.code}" ${(g.code === ex.muscle_group) ? 'selected' : ''}>${escapeHtml(g.name)}</option>`).join('')}
+                <option value="other" ${ex.muscle_group === 'other' ? 'selected' : ''}>Другое</option>
+                <option value="none" ${ex.muscle_group === 'none' ? 'selected' : ''}>Не указано</option>
+              </select>
+              <button class="btn small-btn danger" data-action="delete-custom-exercise" data-exercise-id="${Number(ex.exercise_id)}">Удалить</button>
+            </div>
+          </div>
+        `).join('');
 
       const reminderMap = getReminderMap();
       const remindersHtml = Array.from({ length: workoutsPerWeek }, (_, i) => i + 1)
@@ -7857,6 +7880,10 @@
           <div class="card">
             <div class="card-title">Мои группы мышц</div>
             <div class="settings-list">${groupHtml || '<div class="muted-inline">Пользовательских групп нет.</div>'}</div>
+          </div>
+          <div class="card">
+            <div class="card-title">Мои упражнения</div>
+            <div class="settings-list">${customExerciseHtml || '<div class="muted-inline">Пользовательских упражнений нет.</div>'}</div>
           </div>
         `,
         widgets: `
@@ -8030,6 +8057,7 @@
         state.settings.workoutsPerWeek = data.workouts_per_week || 0;
         state.settings.days = mergeDayLabels(previousDays, data.days || []);
         state.settings.customGroups = data.custom_groups || [];
+        state.settings.customExercises = data.custom_exercises || [];
         state.settings.reminders = data.reminders || [];
         state.settings.notificationsEnabled = data.notifications_enabled !== false;
         state.settings.leaderboardVisible = data.leaderboard_visible !== false;
@@ -8655,6 +8683,15 @@
             await performDelete();
             return;
           }
+          if (action === 'delete-custom-exercise') {
+            const exerciseId = Number(target.dataset.exerciseId || 0);
+            if (!exerciseId) return;
+            await apiFetch(`/gymapi/settings/custom_exercises/${exerciseId}`, { method: 'DELETE' });
+            await loadSettingsOverview();
+            if (state.currentRoute === 'allExercises') runUiAction('Не удалось обновить все упражнения', () => loadAllExercisesGroups());
+            toast('Упражнение удалено');
+            return;
+          }
           if (action === 'open-system-hub') {
             runUiAction('Не удалось открыть выбор системы', () => openSystemSheet());
             return;
@@ -8849,6 +8886,22 @@
           }
         } catch (err) {
           toast('Ошибка связи. Попробуй ещё раз.');
+        }
+      });
+      container.addEventListener('change', async (event) => {
+        const target = event.target;
+        if (!(target instanceof HTMLSelectElement)) return;
+        const exerciseId = Number(target.dataset.customExerciseMove || 0);
+        if (!exerciseId) return;
+        const muscleGroup = (target.value || '').trim();
+        if (!muscleGroup) return;
+        try {
+          await apiFetch(`/gymapi/library/exercise/${exerciseId}/muscle`, { method: 'PUT', body: JSON.stringify({ muscle_group: muscleGroup }) });
+          await loadSettingsOverview();
+          if (state.currentRoute === 'allExercises') runUiAction('Не удалось обновить все упражнения', () => loadAllExercisesGroups());
+          toast('Упражнение перенесено');
+        } catch (err) {
+          reportActionError('Не удалось перенести упражнение', err);
         }
       });
       container.addEventListener('change', async (event) => {

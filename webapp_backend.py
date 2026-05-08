@@ -108,6 +108,7 @@ from db import (
     create_training_system,
     rename_training_system,
     set_training_system_color,
+    hard_delete_user_owned_exercise,
     delete_training_system,
     sync_current_plan_to_system,
     sync_reminders_to_system,
@@ -4738,6 +4739,17 @@ async def settings_overview(ctx: AuthCtx = Depends(get_auth_ctx)):
     notifications_enabled = await get_user_notifications_enabled(user_id)
     leaderboard_visible = await get_user_leaderboard_visible(user_id)
     timezone = await get_user_timezone(user_id)
+    async with db.connect_db() as conn:
+        cur = await conn.execute(
+            """
+            SELECT e.id, e.name, COALESCE(NULLIF(TRIM(e.muscle_group), ''), 'none') AS muscle_group
+            FROM exercises e
+            WHERE e.created_by_user_id=?
+            ORDER BY e.name COLLATE NOCASE
+            """,
+            (int(user_id),),
+        )
+        custom_exercises_rows = await cur.fetchall()
     return {
         "ok": True,
         "workouts_per_week": wpw,
@@ -4753,7 +4765,19 @@ async def settings_overview(ctx: AuthCtx = Depends(get_auth_ctx)):
         "notifications_enabled": bool(notifications_enabled),
         "leaderboard_visible": bool(leaderboard_visible),
         "timezone": timezone,
+        "custom_exercises": [
+            {"exercise_id": int(row[0]), "name": str(row[1] or ""), "muscle_group": _normalize_group(row[2])}
+            for row in (custom_exercises_rows or [])
+        ],
     }
+
+
+@app.delete("/settings/custom_exercises/{exercise_id}")
+async def delete_custom_exercise(exercise_id: int, ctx: AuthCtx = Depends(get_auth_ctx)):
+    removed = await hard_delete_user_owned_exercise(ctx.user_id, int(exercise_id))
+    if not removed:
+        raise HTTPException(status_code=404, detail="exercise_not_found_or_forbidden")
+    return {"ok": True, "removed": True}
 
 
 
