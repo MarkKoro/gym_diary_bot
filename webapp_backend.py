@@ -4961,8 +4961,30 @@ async def settings_custom_group_delete(
     ctx: AuthCtx = Depends(get_auth_ctx),
 ):
     user_id = ctx.user_id
-    removed = await remove_user_muscle_group(user_id, code)
-    return {"ok": True, "removed": removed}
+    normalized = str(code or "").strip().lower()
+    removed = await remove_user_muscle_group(user_id, normalized)
+    affected_exercises = 0
+    if removed and normalized:
+        async with db.connect_db() as conn:
+            cur = await conn.execute(
+                """
+                UPDATE exercises
+                SET muscle_group='none'
+                WHERE LOWER(COALESCE(muscle_group, ''))=?
+                  AND (
+                    created_by_user_id=?
+                    OR EXISTS (
+                      SELECT 1
+                      FROM user_exercises ue
+                      WHERE ue.exercise_id=exercises.id AND ue.user_id=?
+                    )
+                  )
+                """,
+                (normalized, int(user_id), int(user_id)),
+            )
+            affected_exercises = int(cur.rowcount or 0)
+            await conn.commit()
+    return {"ok": True, "removed": removed, "affected_exercises": affected_exercises}
 
 
 @app.post("/settings/reminders")
