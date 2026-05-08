@@ -2449,7 +2449,11 @@
     .all-ex-controls .control-block { padding: 8px; }
     .all-ex-controls .control-head { font-size: 11px; }
     .all-ex-note { min-height: 68px; }
-    .all-ex-center.fullscreen { position: fixed; inset: 0; width: 100vw; max-height: 100dvh; height: 100dvh; transform: none; border-radius: 0; z-index: 120; padding: 16px 14px calc(24px + env(safe-area-inset-bottom)); }
+    .all-ex-center-wrap { position: fixed; inset: 0; z-index: 120; display: grid; grid-template-rows: minmax(48px, 1fr) auto minmax(82px, 1fr); background: rgba(3, 7, 18, .44); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); }
+    .all-ex-center-wrap .all-ex-center-blur { background: transparent; border: 0; }
+    .all-ex-center-wrap .all-ex-center-blur.bottom { display: grid; place-items: end center; padding: 10px 16px calc(16px + env(safe-area-inset-bottom)); }
+    .all-ex-center.fullscreen { position: relative; width: min(94vw, 560px); max-height: min(74vh, 720px); height: auto; transform: none; border-radius: 24px; z-index: 121; margin: 0 auto; padding: 14px; }
+    .all-ex-hide-bottom { width: min(94vw, 560px); }
     .all-ex-finish-day { font-size: 12px; padding: 8px 10px; border-radius: 999px; border: 1px solid var(--border); background: color-mix(in srgb, var(--card) 92%, var(--bg)); color: var(--muted); }
     @keyframes petalIn { from { opacity: 0; transform: rotate(var(--angle)) translate(calc(var(--radius) * .55)) rotate(calc(-1 * var(--angle))) scale(.88); } to { opacity: 1; } }
     @media (max-width: 420px) {
@@ -2492,9 +2496,9 @@
       </div>
       <nav class="drawer-menu">
         <button class="menu-item active" data-route="today">Сегодня</button>
+        <button class="menu-item" data-route="allExercises">Все упражнения</button>
         <button class="menu-item" data-route="measurements">Мои замеры</button>
         <button class="menu-item" data-route="library">Статистика упражнений</button>
-        <button class="menu-item" data-route="allExercises">Все упражнения</button>
         <button class="menu-item with-badge" data-route="achievements" id="drawerAchievementsBtn">Достижения <span id="drawerAchievementsBadge" class="menu-item-badge hidden">0</span></button>
         <button class="menu-item with-badge" data-action="open-teams" id="drawerTeamsBtn">Команды <span id="drawerTeamsBadge" class="menu-item-badge hidden">0</span></button>
         <button class="menu-item" data-route="subscription" id="drawerSubscriptionBtn">Подписка · неактивно</button>
@@ -6598,7 +6602,21 @@
         const petals = (st.exercises || []).map((ex) => ({ exercise_id: ex.exercise_id, title: ex.name, meta: `последний раз: ${formatAllExerciseLast(ex)}`, done: ex.is_done_today || Number(ex.exercise_id) === Number(st.selectedExerciseId), color: getMuscleColor(st.selectedGroup || ex.muscle_group) }));
         if (petals.length) stage.appendChild(renderAllExercisesPetals(petals, 'exercise'));
         renderAllExerciseCenter(center);
-        stage.appendChild(center);
+        const wrapper = document.createElement('div');
+        wrapper.className = 'all-ex-center-wrap';
+        const topBlur = document.createElement('button');
+        topBlur.type = 'button';
+        topBlur.className = 'all-ex-center-blur top';
+        topBlur.setAttribute('aria-label', 'Скрыть упражнение');
+        topBlur.addEventListener('click', () => goBackAllExercises());
+        const bottomBlur = document.createElement('button');
+        bottomBlur.type = 'button';
+        bottomBlur.className = 'all-ex-center-blur bottom';
+        bottomBlur.setAttribute('aria-label', 'Скрыть упражнение');
+        bottomBlur.innerHTML = '<span class="btn all-ex-hide-bottom">Скрыть</span>';
+        bottomBlur.addEventListener('click', () => goBackAllExercises());
+        wrapper.append(topBlur, center, bottomBlur);
+        stage.appendChild(wrapper);
         requestAnimationFrame(() => centerAllExercisesStage(stage));
       }
     }
@@ -7794,8 +7812,11 @@
         )
         .join('');
 
-      const groupHtml = (s.customGroups || [])
-        .map(
+      const customGroupCodes = new Set((s.customGroups || []).map((g) => String(g.code || '').trim().toLowerCase()).filter(Boolean));
+      const orphanExerciseGroups = Array.from(new Set((s.customExercises || []).map((ex) => String(ex.muscle_group || '').trim().toLowerCase()).filter((code) => code && !customGroupCodes.has(code))));
+      const visibleBuiltinCodes = orphanExerciseGroups.filter((code) => code === 'other' || code === 'none');
+      const groupHtml = [
+        ...(s.customGroups || []).map(
           (group) => `
             <div class="list-row">
               <div class="list-text">
@@ -7805,8 +7826,17 @@
               <button class="btn small-btn danger" data-action="delete-group" data-code="${group.code}">Удалить</button>
             </div>
           `
-        )
-        .join('');
+        ),
+        ...visibleBuiltinCodes.map((code) => `
+            <div class="list-row">
+              <div class="list-text">
+                <div class="label">${escapeHtml(allExercisesGroupName(code))}</div>
+                <div class="list-subtitle">Системная группа · есть пользовательские упражнения</div>
+              </div>
+              <span class="settings-badge">Нельзя удалить группу</span>
+            </div>
+          `),
+      ].join('');
       const customExerciseHtml = (s.customExercises || [])
         .map((ex) => `
           <div class="list-row">
@@ -9787,7 +9817,14 @@
     function tourSteps() {
       return [
         { title: 'Добро пожаловать', text: 'Это быстрый мастер-проход по ключевым функциям. Подсказки можно листать кнопками «Назад / Дальше» или пропустить в любой момент.', selector: '#headerTitle' },
-        { title: 'Главное меню', text: 'Слева сверху кнопка меню. Здесь вкладки: Сегодня, замеры, статистика, команды, подписка и настройки.', selector: '#menuBtn' },
+        { title: 'Главное меню', text: 'Слева сверху кнопка меню. Здесь вкладки: Сегодня, Все упражнения, замеры, статистика, команды, подписка и настройки.', selector: '#menuBtn' },
+        {
+          title: 'Модуль «Все упражнения»',
+          text: 'Раздел «Все упражнения» расположен сразу под «Сегодня». Это свободная тренировка вне базового плана: здесь можно добавлять свои упражнения, отмечать подходы и завершать выполнение — всё сохраняется в общей истории и отображается в «Сегодня».',
+          selector: '.menu-item[data-route=\"allExercises\"]',
+          prepare: () => setDrawer(true),
+          cleanup: () => closeDrawer()
+        },
         { title: 'Тренировочные системы', text: 'Кнопка «Система» открывает выбор системы: можно создать новую, переключить активную, переименовать и изменить цвет.', selector: '#systemOpenBtn' },
         {
           title: 'Плюс/минус упражнения',
