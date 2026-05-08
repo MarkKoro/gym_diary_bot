@@ -2831,6 +2831,310 @@ async def update_exercise_note(
     return {"ok": True, "current_note": note_value}
 
 
+
+
+async def _ensure_all_exercise(user_id: int, exercise_id: int) -> int:
+    await _require_catalog_exercise(user_id, exercise_id)
+    await db.add_user_exercise(user_id, 0, exercise_id)
+    async with db.connect_db() as conn:
+        cur = await conn.execute(
+            """
+            SELECT id
+            FROM user_exercises
+            WHERE user_id=? AND exercise_id=? AND day_index=0 AND is_archived=0
+            LIMIT 1
+            """,
+            (int(user_id), int(exercise_id)),
+        )
+        row = await cur.fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Упражнение не найдено")
+    return int(row[0])
+
+
+async def _all_exercises_groups_payload(user_id: int, iso_date: str) -> dict:
+    custom = await db.list_user_muscle_groups(user_id)
+    group_names = {code: name for code, name in MG_NAMES.items()}
+    group_names.update({code: name for code, name in custom})
+    async with db.connect_db() as conn:
+        cur = await conn.execute(
+            """
+            SELECT COALESCE(NULLIF(TRIM(e.muscle_group), ''), 'none') AS code,
+                   COUNT(DISTINCT e.id) AS exercise_count,
+                   COUNT(DISTINCT CASE WHEN se.is_done=1 THEN e.id END) AS done_count
+            FROM exercises e
+            LEFT JOIN user_exercises ue0
+              ON ue0.user_id=? AND ue0.exercise_id=e.id AND ue0.day_index=0 AND ue0.is_archived=0
+            LEFT JOIN sessions s
+              ON s.user_id=? AND s.date=? AND s.day_index=0
+            LEFT JOIN session_exercises se
+              ON se.session_id=s.id AND se.user_exercise_id=ue0.id
+            WHERE e.created_by_user_id IN (0, ?)
+               OR EXISTS (
+                    SELECT 1 FROM user_exercises uex
+                    WHERE uex.user_id=? AND uex.exercise_id=e.id
+               )
+            GROUP BY code
+            """,
+            (int(user_id), int(user_id), iso_date, int(user_id), int(user_id)),
+        )
+        rows = await cur.fetchall()
+    stats = {str(code or "none"): (int(count or 0), int(done or 0)) for code, count, done in rows}
+    for code in group_names:
+        stats.setdefault(code, (0, 0))
+    items = []
+    for code, (count, done) in stats.items():
+        items.append({
+            "code": code,
+            "name": group_names.get(code) or MUSCLE_NAME_MAP.get(code) or code,
+            "count": int(count or 0),
+            "done_count": int(done or 0),
+            "is_custom": code not in MG_NAMES,
+        })
+    def key_fn(item: dict):
+        code = item.get("code") or "none"
+        try:
+            base = LIBRARY_GROUP_ORDER.index(code)
+        except ValueError:
+            base = len(LIBRARY_GROUP_ORDER)
+        return (base, str(item.get("name") or code).lower())
+    return {"ok": True, "date": iso_date, "groups": sorted(items, key=key_fn)}
+
+
+async def _all_exercises_group_items(user_id: int, code: str, iso_date: str) -> list[dict]:
+    normalized_code = (code or "none").strip().lower() or "none"
+    rows = await db.list_exercises_by_group(normalized_code, user_id)
+    items: list[dict] = []
+    async with db.connect_db() as conn:
+        for ex_id, name, muscle in rows:
+            exercise_id = int(ex_id)
+            cur = await conn.execute(
+                """
+                SELECT ue.id, IFNULL(se.is_done, 0)
+                FROM user_exercises ue
+                LEFT JOIN sessions s ON s.user_id=ue.user_id AND s.date=? AND s.day_index=0
+                LEFT JOIN session_exercises se ON se.session_id=s.id AND se.user_exercise_id=ue.id
+                WHERE ue.user_id=? AND ue.exercise_id=? AND ue.day_index=0 AND ue.is_archived=0
+                LIMIT 1
+                """,
+                (iso_date, int(user_id), exercise_id),
+            )
+            day0 = await cur.fetchone()
+            cur = await conn.execute(
+                """
+                SELECT s.date, st.set_no, st.reps, st.seconds, st.weight_kg
+                FROM sessions s
+                JOIN sets st ON st.session_id=s.id
+                JOIN user_exercises ue ON ue.id=st.user_exercise_id
+                WHERE s.user_id=? AND ue.exercise_id=?
+                ORDER BY s.date DESC, s.id DESC, st.set_no DESC
+                LIMIT 1
+                """,
+                (int(user_id), exercise_id),
+            )
+            last = await cur.fetchone()
+            items.append({
+                "exercise_id": exercise_id,
+                "user_exercise_id": int(day0[0]) if day0 else None,
+                "name": name,
+                "muscle_group": muscle or normalized_code,
+                "is_done_today": bool(day0 and day0[1]),
+                "last_date": last[0] if last else None,
+                "last_set": {
+                    "set_no": int(last[1]),
+                    "reps": int(last[2] or 0),
+                    "seconds": int(last[3] or 0),
+                    "weight_kg": float(last[4] or 0.0),
+                } if last else None,
+            })
+    return items
+
+
+@app.get("/all_exercises/groups")
+async def all_exercises_groups(date: str | None = None, ctx: AuthCtx = Depends(get_auth_ctx)):
+    if ctx.is_acting:
+        raise HTTPException(status_code=403, detail="Раздел доступен только для личного дневника")
+    iso_date = _iso_date(_parse_date_param(date))
+    return await _all_exercises_groups_payload(ctx.user_id, iso_date)
+
+
+@app.get("/all_exercises/group/{code}")
+async def all_exercises_group(code: str, date: str | None = None, ctx: AuthCtx = Depends(get_auth_ctx)):
+    if ctx.is_acting:
+        raise HTTPException(status_code=403, detail="Раздел доступен только для личного дневника")
+    iso_date = _iso_date(_parse_date_param(date))
+    return {"ok": True, "date": iso_date, "items": await _all_exercises_group_items(ctx.user_id, code, iso_date)}
+
+
+@app.post("/all_exercises/catalog/exercise")
+async def create_all_exercises_catalog_exercise(payload: dict = Body(...), ctx: AuthCtx = Depends(get_auth_ctx)):
+    if ctx.is_acting:
+        raise HTTPException(status_code=403, detail="Раздел доступен только для личного дневника")
+    name_raw = (payload or {}).get("name") if isinstance(payload, dict) else None
+    muscle_raw = (payload or {}).get("muscle_group") if isinstance(payload, dict) else None
+    if not name_raw or not str(name_raw).strip():
+        raise HTTPException(status_code=400, detail="Название обязательно")
+    exercise_id = await db.create_catalog_exercise(
+        ctx.user_id,
+        str(name_raw).strip(),
+        muscle_raw if isinstance(muscle_raw, str) else None,
+    )
+    ue_id = await _ensure_all_exercise(ctx.user_id, exercise_id)
+    return {"ok": True, "exercise_id": exercise_id, "user_exercise_id": ue_id}
+
+
+@app.get("/all_exercises/exercise/{exercise_id}/session")
+async def all_exercise_session(exercise_id: int, date: str | None = None, ctx: AuthCtx = Depends(get_auth_ctx)):
+    if ctx.is_acting:
+        raise HTTPException(status_code=403, detail="Раздел доступен только для личного дневника")
+    user_id = ctx.user_id
+    name, muscle_group = await _require_catalog_exercise(user_id, exercise_id)
+    ue_id = await _ensure_all_exercise(user_id, exercise_id)
+    target_date = _parse_date_param(date)
+    iso_date = _iso_date(target_date)
+    session_id = await db.get_or_create_today_session(user_id, iso_date, 0, await get_active_training_system_id(user_id))
+    sets_rows = await db.fetch_exercise_sets(session_id, ue_id)
+    current_note = await db.get_exercise_persistent_note(user_id, exercise_id)
+    previous_sets_rows = await db.fetch_last_session_sets(user_id, 0, ue_id, iso_date, None)
+    previous_summary = _format_prev_summary(await db.get_last_session_summary(user_id, 0, ue_id, iso_date, None))
+    previous_date = await _get_previous_done_date(user_id, exercise_id, session_id)
+    async with db.connect_db() as conn:
+        completed_count = await db.count_completed_sessions_for_exercise(conn, user_id, exercise_id)
+        cur = await conn.execute(
+            "SELECT IFNULL(is_done,0) FROM session_exercises WHERE session_id=? AND user_exercise_id=?",
+            (session_id, ue_id),
+        )
+        done_row = await cur.fetchone()
+    return {
+        "ok": True,
+        "date": iso_date,
+        "session_id": session_id,
+        "day_index": 0,
+        "user_exercise_id": ue_id,
+        "exercise_id": exercise_id,
+        "name": name,
+        "muscle_group": muscle_group,
+        "is_done": bool(done_row and done_row[0]),
+        "sets": _serialize_sets(sets_rows),
+        "previous_sets": _serialize_sets(previous_sets_rows),
+        "previous_summary": previous_summary,
+        "previous_date": previous_date,
+        "current_note": current_note,
+        "completed_count": completed_count,
+    }
+
+
+@app.post("/all_exercises/exercise/{exercise_id}/set/add")
+async def all_exercise_add_set(exercise_id: int, payload: dict | None = Body(default=None), date: str | None = None, ctx: AuthCtx = Depends(get_auth_ctx)):
+    if ctx.is_acting:
+        raise HTTPException(status_code=403, detail="Раздел доступен только для личного дневника")
+    user_id = ctx.user_id
+    ue_id = await _ensure_all_exercise(user_id, exercise_id)
+    iso_date = _iso_date(_parse_date_param(date))
+    session_id = await db.get_or_create_today_session(user_id, iso_date, 0, await get_active_training_system_id(user_id))
+    sets_rows = await db.fetch_exercise_sets(session_id, ue_id)
+    last = sets_rows[-1] if sets_rows else None
+    if not last:
+        latest_any = await db.get_latest_set_values_for_exercise(user_id, ue_id, exclude_session_id=session_id)
+        if latest_any:
+            last = (0, int(latest_any[0]), int(latest_any[1]), float(latest_any[2]), 0)
+    reps = (payload or {}).get("reps") if payload else None
+    seconds = (payload or {}).get("seconds") if payload else None
+    weight = (payload or {}).get("weight_kg") if payload else None
+    if reps is None:
+        reps = int(last[1]) if last else 0
+    if seconds is None:
+        seconds = int(last[2]) if last else 0
+    if weight is None:
+        weight = float(last[3]) if last else 0.0
+    await db.add_set(session_id, ue_id, int(reps), int(seconds), float(weight), False)
+    return {"ok": True, "sets": _serialize_sets(await db.fetch_exercise_sets(session_id, ue_id)), "user_exercise_id": ue_id}
+
+
+@app.post("/all_exercises/exercise/{exercise_id}/set/remove_last")
+async def all_exercise_remove_last(exercise_id: int, date: str | None = None, ctx: AuthCtx = Depends(get_auth_ctx)):
+    if ctx.is_acting:
+        raise HTTPException(status_code=403, detail="Раздел доступен только для личного дневника")
+    user_id = ctx.user_id
+    ue_id = await _ensure_all_exercise(user_id, exercise_id)
+    iso_date = _iso_date(_parse_date_param(date))
+    session_id = await db.get_or_create_today_session(user_id, iso_date, 0, await get_active_training_system_id(user_id))
+    await db.remove_last_set(ue_id, session_id)
+    return {"ok": True, "sets": _serialize_sets(await db.fetch_exercise_sets(session_id, ue_id)), "user_exercise_id": ue_id}
+
+
+@app.post("/all_exercises/exercise/{exercise_id}/set/inc_last")
+async def all_exercise_inc_set(exercise_id: int, payload: dict = Body(...), date: str | None = None, ctx: AuthCtx = Depends(get_auth_ctx)):
+    if ctx.is_acting:
+        raise HTTPException(status_code=403, detail="Раздел доступен только для личного дневника")
+    user_id = ctx.user_id
+    ue_id = await _ensure_all_exercise(user_id, exercise_id)
+    field = (payload or {}).get("field")
+    delta = (payload or {}).get("delta")
+    set_no = (payload or {}).get("set_no")
+    field_map = {"kg": "weight_kg", "reps": "reps", "sec": "seconds"}
+    db_field = field_map.get(field)
+    if db_field is None or delta is None:
+        raise HTTPException(status_code=400, detail="Нужно передать поле и изменение")
+    iso_date = _iso_date(_parse_date_param(date))
+    session_id = await db.get_or_create_today_session(user_id, iso_date, 0, await get_active_training_system_id(user_id))
+    if set_no is not None:
+        await db.inc_specific_set(ue_id, session_id, int(set_no), db_field, float(delta))
+    else:
+        await db.inc_last_set(ue_id, session_id, db_field, float(delta))
+    return {"ok": True, "sets": _serialize_sets(await db.fetch_exercise_sets(session_id, ue_id)), "user_exercise_id": ue_id}
+
+
+@app.put("/all_exercises/exercise/{exercise_id}/note")
+async def all_exercise_note(exercise_id: int, payload: dict = Body(...), ctx: AuthCtx = Depends(get_auth_ctx)):
+    if ctx.is_acting:
+        raise HTTPException(status_code=403, detail="Раздел доступен только для личного дневника")
+    await _require_catalog_exercise(ctx.user_id, exercise_id)
+    note_raw = (payload or {}).get("note", "")
+    note_clean = note_raw.strip() if isinstance(note_raw, str) else ""
+    note_value = note_clean if note_clean else None
+    await db.set_exercise_persistent_note(ctx.user_id, exercise_id, note_value)
+    return {"ok": True, "current_note": note_value}
+
+
+@app.post("/all_exercises/exercise/{exercise_id}/done")
+async def all_exercise_done(exercise_id: int, date: str | None = None, ctx: AuthCtx = Depends(get_auth_ctx)):
+    if ctx.is_acting:
+        raise HTTPException(status_code=403, detail="Раздел доступен только для личного дневника")
+    user_id = ctx.user_id
+    ue_id = await _ensure_all_exercise(user_id, exercise_id)
+    iso_date = _iso_date(_parse_date_param(date))
+    session_id = await db.get_or_create_today_session(user_id, iso_date, 0, await get_active_training_system_id(user_id))
+    sets_rows = await db.fetch_exercise_sets(session_id, ue_id)
+    if not sets_rows:
+        defaults = await db.get_latest_set_values_for_exercise(user_id, ue_id, exclude_session_id=session_id)
+        if defaults:
+            await db.add_set(session_id, ue_id, int(defaults[0] or 0), int(defaults[1] or 0), float(defaults[2] or 0.0), False)
+    await mark_exercise_done(session_id, ue_id)
+    await _evaluate_achievements(user_id)
+    groups = await _all_exercises_groups_payload(user_id, iso_date)
+    return {"ok": True, "user_exercise_id": ue_id, "exercise_id": exercise_id, "groups": groups.get("groups", [])}
+
+
+
+
+@app.post("/all_exercises/reset_day")
+async def all_exercises_reset_day(date: str | None = None, ctx: AuthCtx = Depends(get_auth_ctx)):
+    if ctx.is_acting:
+        raise HTTPException(status_code=403, detail="Раздел доступен только для личного дневника")
+    user_id = ctx.user_id
+    iso_date = _iso_date(_parse_date_param(date))
+    system_id = await get_active_training_system_id(user_id)
+    session_id = await db.get_or_create_today_session(user_id, iso_date, 0, system_id)
+    async with db.connect_db() as conn:
+        await conn.execute(
+            "UPDATE session_exercises SET is_done=0, done_at=NULL WHERE session_id=?",
+            (int(session_id),),
+        )
+        await conn.commit()
+    groups = await _all_exercises_groups_payload(user_id, iso_date)
+    return {"ok": True, "groups": groups.get("groups", [])}
+
 @app.get("/muscles")
 async def list_muscles(ctx: AuthCtx = Depends(get_auth_ctx)):
     _ = ctx
