@@ -3301,8 +3301,8 @@ async def update_exercise_muscle_group(
     if not exists_row:
         raise HTTPException(status_code=404, detail="Упражнение не найдено")
 
-    await db.set_exercise_muscle_group(exercise_id, mg_value)
-    return {"ok": True, "id": exercise_id, "muscle_group": mg_value}
+    updated_exercise_id = await db.set_exercise_muscle_group_for_user(user_id, exercise_id, mg_value)
+    return {"ok": True, "id": int(updated_exercise_id), "muscle_group": mg_value}
 
 
 async def _require_user_exercise(user_id: int, exercise_id: int, include_archived: bool = False) -> tuple[str, str | None]:

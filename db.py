@@ -7197,6 +7197,44 @@ async def set_exercise_muscle_group(exercise_id: int, muscle_group: str | None):
         )
         await db.commit()
 
+async def set_exercise_muscle_group_for_user(user_id: int, exercise_id: int, muscle_group: str | None) -> int:
+    async with connect_db() as db:
+        cur = await db.execute(
+            "SELECT name, created_by_user_id FROM exercises WHERE id=? LIMIT 1",
+            (int(exercise_id),),
+        )
+        row = await cur.fetchone()
+        if not row:
+            raise ValueError("exercise_not_found")
+        ex_name = str(row[0] or "").strip()
+        owner_id = int(row[1] or 0)
+
+        if owner_id == int(user_id):
+            await db.execute("UPDATE exercises SET muscle_group=? WHERE id=?", (muscle_group, int(exercise_id)))
+            await db.commit()
+            return int(exercise_id)
+
+        # Shared/base exercise: clone for this user only and relink only this user's rows.
+        cur = await db.execute(
+            "INSERT INTO exercises(name, muscle_group, created_by_user_id) VALUES(?,?,?)",
+            (ex_name, muscle_group, int(user_id)),
+        )
+        new_exercise_id = int(cur.lastrowid)
+        await db.execute(
+            "UPDATE user_exercises SET exercise_id=? WHERE user_id=? AND exercise_id=?",
+            (new_exercise_id, int(user_id), int(exercise_id)),
+        )
+        await db.execute(
+            "UPDATE exercise_notes SET exercise_id=? WHERE user_id=? AND exercise_id=?",
+            (new_exercise_id, int(user_id), int(exercise_id)),
+        )
+        await db.execute(
+            "UPDATE user_exercise_muscles SET exercise_id=? WHERE user_id=? AND exercise_id=?",
+            (new_exercise_id, int(user_id), int(exercise_id)),
+        )
+        await db.commit()
+        return new_exercise_id
+
 async def hard_delete_user_owned_exercise(user_id: int, exercise_id: int) -> bool:
     async with aiosqlite.connect(DB_PATH) as db:
         owner_row = await (await db.execute(
