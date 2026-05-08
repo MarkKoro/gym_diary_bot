@@ -2423,12 +2423,12 @@
     .btn.secondary { background: var(--tg-theme-secondary-bg-color, #f2f2f2); }
 
     .all-ex-shell { display: grid; gap: 14px; }
-    .all-ex-card { overflow: hidden; padding: 14px; background: linear-gradient(180deg, color-mix(in srgb, var(--card) 96%, var(--bg)), color-mix(in srgb, var(--card) 88%, var(--accent) 4%)); }
+    .all-ex-card { overflow: visible; padding: 14px; background: linear-gradient(180deg, color-mix(in srgb, var(--card) 96%, var(--bg)), color-mix(in srgb, var(--card) 88%, var(--accent) 4%)); }
     .all-ex-hero { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; margin-bottom: 10px; }
     .all-ex-title { font-size: 18px; font-weight: 850; letter-spacing: -0.02em; }
     .all-ex-subtitle { color: var(--muted); font-size: 13px; line-height: 1.35; margin-top: 3px; }
-    .all-ex-stage { position: relative; min-height: 420px; border-radius: 26px; border: 1px solid var(--border); background: radial-gradient(circle at center, color-mix(in srgb, var(--accent) 10%, transparent), transparent 58%); overflow: hidden; isolation: isolate; }
-    .all-ex-petals { position: absolute; inset: 0; display: block; transition: opacity .22s ease, transform .28s ease; }
+    .all-ex-stage { position: relative; min-height: calc(100vh - 250px); border-radius: 26px; border: 1px solid var(--border); background: radial-gradient(circle at center, color-mix(in srgb, var(--accent) 10%, transparent), transparent 58%); overflow: auto; isolation: isolate; -webkit-overflow-scrolling: touch; }
+    .all-ex-petals { position: relative; width: max(100%, 980px); height: max(100%, 980px); min-height: 520px; display: block; transition: opacity .22s ease, transform .28s ease; margin: 0 auto; }
     .all-ex-petals.animating-out { opacity: 0; transform: scale(.86) rotate(-7deg); }
     .all-ex-petal { position: absolute; left: 50%; top: 50%; width: 132px; min-height: 82px; margin-left: -66px; margin-top: -41px; border: 0; border-radius: 999px 999px 999px 28px; padding: 12px; color: white; text-align: left; box-shadow: 0 14px 28px rgba(15,23,42,.18); transform: rotate(var(--angle)) translate(var(--radius)) rotate(calc(-1 * var(--angle))); transition: transform .34s cubic-bezier(.2,.8,.2,1), opacity .22s ease, filter .2s ease; animation: petalIn .34s cubic-bezier(.2,.8,.2,1) both; animation-delay: var(--delay); }
     .all-ex-petal:active { transform: rotate(var(--angle)) translate(var(--radius)) rotate(calc(-1 * var(--angle))) scale(.96); filter: brightness(.94); }
@@ -6566,8 +6566,7 @@
         const groups = (st.groups || []).filter((g) => Number(g.count || 0) > 0 || !g.is_custom);
         const petals = groups.map((g) => ({ code: g.code, title: g.name || allExercisesGroupName(g.code), meta: `${Number(g.count || 0)} упр. · выполнено ${Number(g.done_count || 0)}`, done: Number(g.done_count || 0) > 0, color: getMuscleColor(g.code) }));
         stage.appendChild(renderAllExercisesPetals(petals, 'group'));
-        renderAllExercisesDoneCenter(center);
-        stage.appendChild(center);
+        
         return;
       }
       if (st.view === 'exercises') {
@@ -6579,9 +6578,6 @@
           empty.innerHTML = '<div class="all-ex-center-title">Пока пусто</div><div class="all-ex-empty">Добавь упражнение в эту группу — оно сразу появится лепестком.</div>';
           stage.appendChild(empty);
         }
-        center.className = 'all-ex-center empty';
-        center.innerHTML = '';
-        stage.appendChild(center);
         return;
       }
       if (st.view === 'exercise') {
