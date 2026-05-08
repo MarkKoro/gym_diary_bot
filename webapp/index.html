@@ -2427,7 +2427,7 @@
     .all-ex-hero { display: grid; grid-template-columns: auto 1fr auto; gap: 10px; align-items: center; margin-bottom: 10px; }
     .all-ex-title { font-size: 24px; font-weight: 850; letter-spacing: -0.02em; text-align:center; }
     .all-ex-subtitle { color: var(--muted); font-size: 13px; line-height: 1.35; margin-top: 3px; text-align:center; }
-    .all-ex-stage { position: relative; min-height: calc(100vh - 250px); border-radius: 0; border: 0; background: radial-gradient(circle at center, color-mix(in srgb, var(--accent) 10%, transparent), transparent 58%); overflow: auto; isolation: isolate; -webkit-overflow-scrolling: touch; margin: 0 -16px; padding: 0 8px; touch-action:none; }
+    .all-ex-stage { position: relative; min-height: calc(100vh - 250px); border-radius: 0; border: 0; background: radial-gradient(circle at center, color-mix(in srgb, var(--accent) 10%, transparent), transparent 58%); overflow: auto; isolation: isolate; -webkit-overflow-scrolling: touch; margin: 0 -16px; padding: 0 8px; touch-action:pan-x pan-y; }
     .all-ex-petals { position: relative; width: max(100%, 1220px); height: max(100%, 1220px); min-height: 760px; display: block; transition: opacity .22s ease, transform .28s ease; margin: 0 auto; }
     .all-ex-petals.animating-out { opacity: 0; transform: scale(.86) rotate(-7deg); }
     .all-ex-petal { position: absolute; left: 50%; top: 50%; width: 132px; min-height: 82px; margin-left: -66px; margin-top: -41px; border: 0; border-radius: 999px 999px 999px 28px; padding: 12px; color: white; text-align: left; box-shadow: 0 14px 28px rgba(15,23,42,.18); transform: rotate(var(--angle)) translate(var(--radius)) rotate(calc(-1 * var(--angle))); transition: transform .34s cubic-bezier(.2,.8,.2,1), opacity .22s ease, filter .2s ease; animation: petalIn .34s cubic-bezier(.2,.8,.2,1) both; animation-delay: var(--delay); }
@@ -2449,7 +2449,7 @@
     .all-ex-controls .control-block { padding: 8px; }
     .all-ex-controls .control-head { font-size: 11px; }
     .all-ex-note { min-height: 68px; }
-    .all-ex-center-wrap { position: fixed; inset: 0; z-index: 120; display: grid; grid-template-rows: minmax(48px, 1fr) auto minmax(82px, 1fr); background: rgba(3, 7, 18, .44); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); }
+    .all-ex-center-wrap { position: fixed; inset: 0; z-index: 120; display: grid; grid-template-rows: minmax(48px, 1fr) auto minmax(82px, 1fr); background: rgba(3, 7, 18, .44); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); padding-inline: 10px; }
     .all-ex-center-wrap .all-ex-center-blur { background: transparent; border: 0; }
     .all-ex-center-wrap .all-ex-center-blur.bottom { display: grid; place-items: end center; padding: 10px 16px calc(16px + env(safe-area-inset-bottom)); }
     .all-ex-center.fullscreen { position: relative; width: min(94vw, 560px); max-height: min(74vh, 720px); height: auto; transform: none; border-radius: 24px; z-index: 121; margin: 0 auto; padding: 14px; }
@@ -6502,7 +6502,7 @@
     function centerAllExercisesStage(stage) {
       if (!stage) return;
       const targetLeft = Math.max(0, (stage.scrollWidth - stage.clientWidth) / 2);
-      const targetTop = Math.max(0, (stage.scrollHeight - stage.clientHeight) / 2);
+      const targetTop = Math.max(0, (stage.scrollHeight - stage.clientHeight) * 0.62);
       stage.scrollTo({ left: targetLeft, top: targetTop, behavior: 'auto' });
     }
 
@@ -6575,6 +6575,7 @@
         if (!pointers.has(e.pointerId)) return;
         pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
         if (pointers.size === 2) {
+          e.preventDefault();
           const pts = Array.from(pointers.values());
           const dist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
           if (!stage._zoomState.startDist) { stage._zoomState.startDist = dist; stage._zoomState.startScale = stage._zoomState.scale; }
@@ -6597,11 +6598,11 @@
           <div class="all-ex-top-left">${st.view !== 'groups' ? '<button class="all-ex-back" data-action="all-ex-back">← Назад</button>' : ''}</div>
           <div>
             <div class="all-ex-title">${st.view === 'exercises' ? escapeHtml(selectedGroupName) : 'Все упражнения'}</div>
-            <div class="all-ex-subtitle">Свободная тренировка без привязки к плану дня. Подходы сохраняются в общей истории и подтянутся в «Сегодня».</div>
+            ${st.view === 'groups' ? '<div class="all-ex-subtitle">Свободная тренировка без привязки к плану дня. Подходы сохраняются в общей истории и подтянутся в «Сегодня».</div>' : ''}
           </div>
           <div class="all-ex-toolbar">
             ${st.view === 'groups' ? '<button class="all-ex-back" data-action="all-ex-add-group">＋ Группа</button>' : '<button class="all-ex-back" data-action="all-ex-add-exercise">＋ Упражнение</button>'}
-            <button class="all-ex-finish-day all-ex-unfinished-top" data-action="all-ex-open-unfinished">Незавершённые</button>
+            ${st.view === 'groups' ? '<button class="all-ex-finish-day all-ex-unfinished-top" data-action="all-ex-open-unfinished">Незавершённые</button>' : ''}
             <button class="all-ex-finish-day" data-action="all-ex-finish-day">Завершить день</button>
           </div>
         </div>
@@ -6611,7 +6612,7 @@
       root.querySelector('[data-action="all-ex-add-group"]')?.addEventListener('click', promptAllExercisesGroup);
       root.querySelector('[data-action="all-ex-add-exercise"]')?.addEventListener('click', promptAllExerciseCreate);
       root.querySelector('[data-action="all-ex-finish-day"]')?.addEventListener('click', () => runUiAction('Не удалось завершить день', () => finishAllExercisesDay()));
-      root.querySelector('[data-action="all-ex-open-unfinished"]')?.addEventListener('click', () => toast('Незавершённые уже доступны в группах/упражнениях: открой нужный лепесток.'));
+      root.querySelector('[data-action="all-ex-open-unfinished"]')?.addEventListener('click', () => toast('Открой группу и упражнение с незавершёнными подходами.'));
       const stage = document.getElementById('allExercisesStage');
       if (!stage) return;
       const center = document.createElement('div');

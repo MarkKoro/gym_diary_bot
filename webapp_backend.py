@@ -4742,9 +4742,11 @@ async def settings_overview(ctx: AuthCtx = Depends(get_auth_ctx)):
     async with db.connect_db() as conn:
         cur = await conn.execute(
             """
-            SELECT e.id, e.name, COALESCE(NULLIF(TRIM(e.muscle_group), ''), 'none') AS muscle_group
-            FROM exercises e
-            WHERE e.created_by_user_id=?
+            SELECT DISTINCT e.id, e.name, COALESCE(NULLIF(TRIM(e.muscle_group), ''), 'none') AS muscle_group
+            FROM user_exercises ue
+            JOIN exercises e ON e.id = ue.exercise_id
+            WHERE ue.user_id=?
+              AND ue.is_archived=0
             ORDER BY e.name COLLATE NOCASE
             """,
             (int(user_id),),
