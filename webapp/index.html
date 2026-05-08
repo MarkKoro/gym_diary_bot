@@ -2427,15 +2427,15 @@
     .all-ex-hero { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; margin-bottom: 10px; }
     .all-ex-title { font-size: 18px; font-weight: 850; letter-spacing: -0.02em; }
     .all-ex-subtitle { color: var(--muted); font-size: 13px; line-height: 1.35; margin-top: 3px; }
-    .all-ex-stage { position: relative; min-height: calc(100vh - 250px); border-radius: 26px; border: 1px solid var(--border); background: radial-gradient(circle at center, color-mix(in srgb, var(--accent) 10%, transparent), transparent 58%); overflow: auto; isolation: isolate; -webkit-overflow-scrolling: touch; }
-    .all-ex-petals { position: relative; width: max(100%, 980px); height: max(100%, 980px); min-height: 520px; display: block; transition: opacity .22s ease, transform .28s ease; margin: 0 auto; }
+    .all-ex-stage { position: relative; min-height: calc(100vh - 250px); border-radius: 0; border: 0; background: radial-gradient(circle at center, color-mix(in srgb, var(--accent) 10%, transparent), transparent 58%); overflow: auto; isolation: isolate; -webkit-overflow-scrolling: touch; }
+    .all-ex-petals { position: relative; width: max(100%, 1220px); height: max(100%, 1220px); min-height: 760px; display: block; transition: opacity .22s ease, transform .28s ease; margin: 0 auto; }
     .all-ex-petals.animating-out { opacity: 0; transform: scale(.86) rotate(-7deg); }
     .all-ex-petal { position: absolute; left: 50%; top: 50%; width: 132px; min-height: 82px; margin-left: -66px; margin-top: -41px; border: 0; border-radius: 999px 999px 999px 28px; padding: 12px; color: white; text-align: left; box-shadow: 0 14px 28px rgba(15,23,42,.18); transform: rotate(var(--angle)) translate(var(--radius)) rotate(calc(-1 * var(--angle))); transition: transform .34s cubic-bezier(.2,.8,.2,1), opacity .22s ease, filter .2s ease; animation: petalIn .34s cubic-bezier(.2,.8,.2,1) both; animation-delay: var(--delay); }
     .all-ex-petal:active { transform: rotate(var(--angle)) translate(var(--radius)) rotate(calc(-1 * var(--angle))) scale(.96); filter: brightness(.94); }
     .all-ex-petal.done { background: linear-gradient(135deg, #22c55e, #16a34a) !important; }
     .all-ex-petal-title { font-size: 13px; font-weight: 850; line-height: 1.12; }
     .all-ex-petal-meta { font-size: 11px; opacity: .88; line-height: 1.25; margin-top: 5px; }
-    .all-ex-center { position: absolute; left: 50%; top: 50%; width: min(78vw, 268px); max-height: 370px; transform: translate(-50%, -50%); border-radius: 26px; border: 1px solid color-mix(in srgb, var(--text) 10%, transparent); background: color-mix(in srgb, var(--card) 92%, transparent); box-shadow: var(--shadow); padding: 14px; display: grid; gap: 10px; overflow: auto; -webkit-overflow-scrolling: touch; z-index: 3; }
+    .all-ex-center { position: absolute; left: 50%; top: 50%; width: min(92vw, 430px); max-height: min(78vh, 620px); transform: translate(-50%, -50%); border-radius: 26px; border: 1px solid color-mix(in srgb, var(--text) 10%, transparent); background: color-mix(in srgb, var(--card) 94%, transparent); box-shadow: var(--shadow); padding: 16px; display: grid; gap: 12px; overflow: auto; -webkit-overflow-scrolling: touch; z-index: 3; }
     .all-ex-center.empty { opacity: .72; background: transparent; border-color: transparent; box-shadow: none; }
     .all-ex-center-title { font-size: 15px; font-weight: 850; }
     .all-ex-done-list { display: grid; gap: 6px; font-size: 12px; color: var(--muted); }
@@ -2453,10 +2453,10 @@
     @keyframes petalIn { from { opacity: 0; transform: rotate(var(--angle)) translate(calc(var(--radius) * .55)) rotate(calc(-1 * var(--angle))) scale(.88); } to { opacity: 1; } }
     @media (max-width: 420px) {
       .all-ex-stage { min-height: 390px; }
-      .all-ex-petal { width: 112px; min-height: 76px; margin-left: -56px; margin-top: -38px; padding: 10px; }
+      .all-ex-petal { width: 118px; min-height: 80px; margin-left: -59px; margin-top: -40px; padding: 10px; }
       .all-ex-petal-title { font-size: 12px; }
       .all-ex-petal-meta { font-size: 10px; }
-      .all-ex-center { width: min(80vw, 236px); max-height: 340px; padding: 12px; }
+      .all-ex-center { width: min(92vw, 390px); max-height: min(74vh, 540px); padding: 14px; }
     }
   </style>
 </head>
@@ -6483,8 +6483,15 @@
     function allExercisePetalStyle(index, total, color) {
       const safeTotal = Math.max(1, total || 1);
       const angle = -90 + (360 / safeTotal) * index;
-      const radius = safeTotal <= 6 ? 128 : (safeTotal <= 10 ? 142 : 154);
+      const radius = safeTotal <= 6 ? 196 : (safeTotal <= 10 ? 232 : (safeTotal <= 16 ? 274 : 318));
       return `--angle:${angle}deg; --radius:${radius}px; --delay:${Math.min(index * 32, 360)}ms; background:linear-gradient(135deg, ${color}, color-mix(in srgb, ${color} 72%, #111827));`;
+    }
+
+    function centerAllExercisesStage(stage) {
+      if (!stage) return;
+      const targetLeft = Math.max(0, (stage.scrollWidth - stage.clientWidth) / 2);
+      const targetTop = Math.max(0, (stage.scrollHeight - stage.clientHeight) / 2);
+      stage.scrollTo({ left: targetLeft, top: targetTop, behavior: 'auto' });
     }
 
     function formatAllExerciseLast(item) {
@@ -6566,12 +6573,15 @@
         const groups = (st.groups || []).filter((g) => Number(g.count || 0) > 0 || !g.is_custom);
         const petals = groups.map((g) => ({ code: g.code, title: g.name || allExercisesGroupName(g.code), meta: `${Number(g.count || 0)} упр. · выполнено ${Number(g.done_count || 0)}`, done: Number(g.done_count || 0) > 0, color: getMuscleColor(g.code) }));
         stage.appendChild(renderAllExercisesPetals(petals, 'group'));
-        
+        requestAnimationFrame(() => centerAllExercisesStage(stage));
         return;
       }
       if (st.view === 'exercises') {
         const petals = (st.exercises || []).map((ex) => ({ exercise_id: ex.exercise_id, title: ex.name, meta: `последний раз: ${formatAllExerciseLast(ex)}`, done: ex.is_done_today, color: getMuscleColor(st.selectedGroup || ex.muscle_group) }));
-        if (petals.length) stage.appendChild(renderAllExercisesPetals(petals, 'exercise'));
+        if (petals.length) {
+          stage.appendChild(renderAllExercisesPetals(petals, 'exercise'));
+          requestAnimationFrame(() => centerAllExercisesStage(stage));
+        }
         else {
           const empty = document.createElement('div');
           empty.className = 'all-ex-center';
@@ -6585,6 +6595,7 @@
         if (petals.length) stage.appendChild(renderAllExercisesPetals(petals, 'exercise'));
         renderAllExerciseCenter(center);
         stage.appendChild(center);
+        requestAnimationFrame(() => centerAllExercisesStage(stage));
       }
     }
 
