@@ -2906,7 +2906,12 @@ async def _all_exercises_group_items(user_id: int, code: str, iso_date: str) -> 
     rows = await db.list_exercises_by_group(normalized_code, user_id)
     items: list[dict] = []
     async with db.connect_db() as conn:
-        for ex_id, name, muscle in rows:
+        for row in rows:
+            if not row:
+                continue
+            ex_id = row[0]
+            name = row[1] if len(row) > 1 else ""
+            muscle = row[2] if len(row) > 2 else normalized_code
             exercise_id = int(ex_id)
             cur = await conn.execute(
                 """
@@ -4727,6 +4732,8 @@ async def settings_overview(ctx: AuthCtx = Depends(get_auth_ctx)):
     user_id = ctx.user_id
     wpw, active_days = await _load_user_settings(user_id)
     custom_groups = await list_user_muscle_groups(user_id)
+    custom_map = {str(code).strip().lower(): str(name or '').strip() for code, name in custom_groups}
+    orphan_codes = [code for code in await _list_user_orphan_group_codes(user_id) if code not in custom_map]
     reminders = await list_user_reminders(user_id)
     notifications_enabled = await get_user_notifications_enabled(user_id)
     leaderboard_visible = await get_user_leaderboard_visible(user_id)
@@ -4735,7 +4742,10 @@ async def settings_overview(ctx: AuthCtx = Depends(get_auth_ctx)):
         "ok": True,
         "workouts_per_week": wpw,
         "days": [{"day_index": int(d), "label": label} for d, label in active_days],
-        "custom_groups": [{"code": code, "name": name} for code, name in custom_groups],
+        "custom_groups": [
+            *[{"code": code, "name": name} for code, name in custom_groups],
+            *[{"code": code, "name": code.upper()} for code in orphan_codes],
+        ],
         "reminders": [
             {"day_no": int(day_no), "dow": int(dow), "hour": int(hour), "minute": int(minute)}
             for day_no, dow, hour, minute in reminders
@@ -4745,6 +4755,26 @@ async def settings_overview(ctx: AuthCtx = Depends(get_auth_ctx)):
         "timezone": timezone,
     }
 
+
+
+
+async def _list_user_orphan_group_codes(user_id: int) -> list[str]:
+    async with db.connect_db() as conn:
+        cur = await conn.execute(
+            """
+            SELECT DISTINCT LOWER(TRIM(e.muscle_group)) AS code
+            FROM exercises e
+            WHERE (e.created_by_user_id=0 OR e.created_by_user_id=?)
+              AND EXISTS (
+                  SELECT 1 FROM user_exercises ue
+                  WHERE ue.user_id=? AND ue.exercise_id=e.id AND COALESCE(ue.is_archived,0)=0
+              )
+              AND LOWER(TRIM(e.muscle_group)) LIKE 'u%'
+            """,
+            (int(user_id), int(user_id)),
+        )
+        rows = await cur.fetchall()
+    return [str(r[0]).strip().lower() for r in rows if r and str(r[0]).strip()]
 
 async def _has_onboarding_activity(user_id: int) -> bool:
     async with db.connect_db() as conn:

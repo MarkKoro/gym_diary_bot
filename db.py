@@ -2588,8 +2588,7 @@ async def remove_user_muscle_group(user_id: int, code: str) -> bool:
             "SELECT 1 FROM user_muscle_groups WHERE id=? AND user_id=?",
             (group_id, user_id),
         )
-        if not await cur.fetchone():
-            return False
+        group_exists = bool(await cur.fetchone())
         cur = await db.execute(
             "SELECT id FROM exercises WHERE muscle_group=? AND created_by_user_id=?",
             (code, int(user_id)),
@@ -2618,8 +2617,14 @@ async def remove_user_muscle_group(user_id: int, code: str) -> bool:
             (group_id, user_id),
         )
         removed = cur.rowcount > 0
+        if not removed:
+            cur = await db.execute(
+                "SELECT 1 FROM exercises WHERE muscle_group=? AND (created_by_user_id=0 OR created_by_user_id=?) LIMIT 1",
+                (code, int(user_id)),
+            )
+            removed = bool(await cur.fetchone())
         await db.commit()
-        return removed
+        return removed or group_exists
 
 async def add_user_exercise(user_id: int, day_index: int, exercise_id: int):
     async with connect_db() as db:
