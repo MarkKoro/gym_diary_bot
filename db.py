@@ -7358,6 +7358,74 @@ async def clear_group_exercises_for_user(user_id: int, group_code: str) -> int:
     return removed
 
 
+async def clear_non_base_group_exercises_for_user(user_id: int) -> int:
+    base_groups = {"chest", "back", "legs", "shoulders", "core", "biceps", "triceps", "cardio"}
+    removed = 0
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            """
+            SELECT DISTINCT e.id, IFNULL(e.created_by_user_id, 0) AS owner_id
+            FROM user_exercises ue
+            JOIN exercises e ON e.id=ue.exercise_id
+            WHERE ue.user_id=?
+              AND ue.is_archived=0
+            """,
+            (int(user_id),),
+        )
+        rows = await cur.fetchall()
+        candidates: list[tuple[int, int]] = []
+        for row in rows or []:
+            ex_id = int(row[0] or 0)
+            owner_id = int(row[1] or 0)
+            if ex_id <= 0:
+                continue
+            gcur = await db.execute("SELECT COALESCE(NULLIF(LOWER(TRIM(muscle_group)), ''), 'none') FROM exercises WHERE id=?", (ex_id,))
+            grow = await gcur.fetchone()
+            group_code = str(grow[0] or "none").strip().lower() if grow else "none"
+            if group_code not in base_groups:
+                candidates.append((ex_id, owner_id))
+
+        if not candidates:
+            return 0
+
+        deletable_ids = [ex_id for ex_id, owner_id in candidates if owner_id != 0]
+        owned_ids = [ex_id for ex_id, owner_id in candidates if owner_id == int(user_id)]
+        if not deletable_ids:
+            return 0
+        placeholders = ",".join("?" for _ in deletable_ids)
+        ue_cur = await db.execute(
+            f"SELECT id FROM user_exercises WHERE user_id=? AND exercise_id IN ({placeholders})",
+            (int(user_id), *deletable_ids),
+        )
+        ue_rows = await ue_cur.fetchall()
+        ue_ids = [int(row[0]) for row in (ue_rows or []) if row and row[0] is not None]
+        if ue_ids:
+            ue_ph = ",".join("?" for _ in ue_ids)
+            await db.execute(f"DELETE FROM sets WHERE user_exercise_id IN ({ue_ph})", tuple(ue_ids))
+            await db.execute(f"DELETE FROM session_exercises WHERE user_exercise_id IN ({ue_ph})", tuple(ue_ids))
+            await db.execute(f"DELETE FROM running_entries WHERE user_exercise_id IN ({ue_ph})", tuple(ue_ids))
+            await db.execute(f"DELETE FROM user_exercises WHERE id IN ({ue_ph})", tuple(ue_ids))
+            removed += len(ue_ids)
+
+        await db.execute(
+            f"DELETE FROM exercise_notes WHERE user_id=? AND exercise_id IN ({placeholders})",
+            (int(user_id), *deletable_ids),
+        )
+        await db.execute(
+            f"DELETE FROM user_exercise_muscles WHERE user_id=? AND exercise_id IN ({placeholders})",
+            (int(user_id), *deletable_ids),
+        )
+        for ex_id in owned_ids:
+            ref_cur = await db.execute("SELECT 1 FROM user_exercises WHERE exercise_id=? LIMIT 1", (int(ex_id),))
+            ref = await ref_cur.fetchone()
+            if ref:
+                continue
+            await db.execute("DELETE FROM exercises WHERE id=? AND created_by_user_id=?", (int(ex_id), int(user_id)))
+            removed += 1
+        await db.commit()
+    return removed
+
+
 async def resolve_exercise_muscles(user_id: int, exercise_ids: Sequence[int]):
     if not exercise_ids:
         return {}
