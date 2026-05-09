@@ -6750,10 +6750,17 @@
       const val = document.createElement('div'); val.className = 'control-value'; val.textContent = value; val.tabIndex = 0; val.setAttribute('role', 'button');
       const plus = document.createElement('button'); plus.type = 'button'; plus.className = 'circle-btn'; plus.textContent = '+';
       const step = field === 'weight_kg' ? 1 : 1;
-      const adjust = (delta) => { const st = allExercisesState(); st.draft = { ...(st.draft || {}), [field]: Math.max(0, Number(st.draft?.[field] || 0) + delta) }; renderAllExercises(); };
+      const formatValue = (next) => (field === 'weight_kg' ? String(Number(next).toFixed(1)).replace(/\.0$/, '') : String(Math.round(Number(next) || 0)));
+      const syncValue = (next) => { val.textContent = formatValue(next); };
+      const adjust = (delta) => {
+        const st = allExercisesState();
+        const next = Math.max(0, Number(st.draft?.[field] || 0) + delta);
+        st.draft = { ...(st.draft || {}), [field]: next };
+        syncValue(next);
+      };
       minus.addEventListener('click', () => adjust(-step));
       plus.addEventListener('click', () => adjust(step));
-      attachInlineNumberHandler(val, () => ({ value: Number(allExercisesState().draft?.[field] || 0), min: 0, max: field === 'weight_kg' ? 500 : 3600, step: 1, decimals: field === 'weight_kg' ? 1 : 0, inputMode: field === 'weight_kg' ? 'decimal' : 'numeric', onCommit: (next) => { allExercisesState().draft = { ...(allExercisesState().draft || {}), [field]: next }; renderAllExercises(); } }));
+      attachInlineNumberHandler(val, () => ({ value: Number(allExercisesState().draft?.[field] || 0), min: 0, max: field === 'weight_kg' ? 500 : 3600, step: 1, decimals: field === 'weight_kg' ? 1 : 0, inputMode: field === 'weight_kg' ? 'decimal' : 'numeric', onCommit: (next) => { allExercisesState().draft = { ...(allExercisesState().draft || {}), [field]: next }; syncValue(next); } }));
       actions.append(minus, val, plus); block.append(head, actions); return block;
     }
 
@@ -9023,8 +9030,15 @@
         const muscleGroup = (target.value || '').trim();
         if (!muscleGroup) return;
         try {
-          await apiFetch(`/gymapi/library/exercise/${exerciseId}/muscle`, { method: 'PUT', body: JSON.stringify({ muscle_group: muscleGroup }) });
-          await loadSettingsOverview();
+          const resp = await apiFetch(`/gymapi/library/exercise/${exerciseId}/muscle`, { method: 'PUT', body: JSON.stringify({ muscle_group: muscleGroup }) });
+          const oldId = Number(exerciseId);
+          const newId = Number(resp?.id || oldId);
+          const list = state.settings.customExercises || [];
+          const item = list.find((ex) => Number(ex.exercise_id) === oldId);
+          if (item) {
+            item.exercise_id = newId;
+            item.muscle_group = muscleGroup;
+          }
           if (state.currentRoute === 'allExercises') runUiAction('Не удалось обновить все упражнения', () => loadAllExercisesGroups());
           toast('Упражнение перенесено');
         } catch (err) {
