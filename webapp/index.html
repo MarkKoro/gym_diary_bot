@@ -6622,6 +6622,7 @@
     }
 
     function renderAllExercises() {
+      document.getElementById('allExerciseFloatingModal')?.remove();
       const root = document.getElementById('allExercisesContent');
       if (!root) return;
       const st = allExercisesState();
@@ -6699,8 +6700,9 @@
         bottomBlur.setAttribute('aria-label', 'Скрыть упражнение');
         bottomBlur.innerHTML = '<span class="btn all-ex-hide-bottom">Скрыть</span>';
         bottomBlur.addEventListener('click', () => goBackAllExercises());
+        wrapper.id = 'allExerciseFloatingModal';
         wrapper.append(topBlur, center, bottomBlur);
-        stage.appendChild(wrapper);
+        document.body.appendChild(wrapper);
         requestAnimationFrame(() => centerAllExercisesStage(stage));
       }
     }
@@ -7923,7 +7925,7 @@
                 <div class="label">${escapeHtml(allExercisesGroupName(code))}</div>
                 <div class="list-subtitle">Системная группа · есть пользовательские упражнения</div>
               </div>
-              <span class="settings-badge">Нельзя удалить группу</span>
+              <button class="btn small-btn danger" data-action="clear-system-group" data-code="${code}">Очистить</button>
             </div>
           `),
       ].join('');
@@ -8824,6 +8826,15 @@
             await loadSettingsOverview();
             if (state.currentRoute === 'allExercises') runUiAction('Не удалось обновить все упражнения', () => loadAllExercisesGroups());
             toast('Упражнение удалено');
+            return;
+          }
+          if (action === 'clear-system-group') {
+            const code = String(target.dataset.code || '').trim().toLowerCase();
+            if (!code) return;
+            await apiFetch(`/gymapi/settings/system_groups/${encodeURIComponent(code)}/clear`, { method: 'POST', body: JSON.stringify({}) });
+            await loadSettingsOverview();
+            if (state.currentRoute === 'allExercises') runUiAction('Не удалось обновить все упражнения', () => loadAllExercisesGroups());
+            toast('Группа очищена');
             return;
           }
           if (action === 'open-system-hub') {

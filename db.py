@@ -7216,10 +7216,22 @@ async def set_exercise_muscle_group_for_user(user_id: int, exercise_id: int, mus
 
         # Shared/base exercise: clone for this user only and relink only this user's rows.
         cur = await db.execute(
-            "INSERT INTO exercises(name, muscle_group, created_by_user_id) VALUES(?,?,?)",
-            (ex_name, muscle_group, int(user_id)),
+            "SELECT id FROM exercises WHERE created_by_user_id=? AND name=? LIMIT 1",
+            (int(user_id), ex_name),
         )
-        new_exercise_id = int(cur.lastrowid)
+        existing = await cur.fetchone()
+        if existing:
+            new_exercise_id = int(existing[0])
+            await db.execute(
+                "UPDATE exercises SET muscle_group=? WHERE id=?",
+                (muscle_group, new_exercise_id),
+            )
+        else:
+            cur = await db.execute(
+                "INSERT INTO exercises(name, muscle_group, created_by_user_id) VALUES(?,?,?)",
+                (ex_name, muscle_group, int(user_id)),
+            )
+            new_exercise_id = int(cur.lastrowid)
         await db.execute(
             "UPDATE user_exercises SET exercise_id=? WHERE user_id=? AND exercise_id=?",
             (new_exercise_id, int(user_id), int(exercise_id)),
@@ -7260,6 +7272,30 @@ async def hard_delete_user_owned_exercise(user_id: int, exercise_id: int) -> boo
         await db.execute("DELETE FROM user_exercise_muscles WHERE user_id=? AND exercise_id=?", (user_id, exercise_id))
         await db.commit()
         return True
+
+
+async def clear_group_exercises_for_user(user_id: int, group_code: str) -> int:
+    normalized = str(group_code or "").strip().lower() or "none"
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            """
+            SELECT DISTINCT ue.exercise_id
+            FROM user_exercises ue
+            JOIN exercises e ON e.id=ue.exercise_id
+            WHERE ue.user_id=?
+              AND ue.is_archived=0
+              AND LOWER(COALESCE(NULLIF(TRIM(e.muscle_group), ''), 'none'))=?
+            """,
+            (int(user_id), normalized),
+        )
+        rows = await cur.fetchall()
+    removed = 0
+    for row in (rows or []):
+        if not row:
+            continue
+        if await hard_delete_user_owned_exercise(int(user_id), int(row[0])):
+            removed += 1
+    return removed
 
 
 async def resolve_exercise_muscles(user_id: int, exercise_ids: Sequence[int]):

@@ -2953,7 +2953,25 @@ async def _all_exercises_group_items(user_id: int, code: str, iso_date: str) -> 
                     "weight_kg": float(last[4] or 0.0),
                 } if last else None,
             })
+    def _sort_key(item: dict) -> tuple[int, str, int]:
+        last_date = str(item.get("last_date") or "").strip()
+        has_last = 1 if last_date else 0
+        # with has_last=1 first, date desc, then name asc
+        return (-has_last, last_date, -int(item.get("exercise_id") or 0))
+    items.sort(key=_sort_key, reverse=True)
     return items
+
+
+@app.post("/settings/system_groups/{code}/clear")
+async def settings_system_group_clear(
+    code: str,
+    ctx: AuthCtx = Depends(get_auth_ctx),
+):
+    normalized = str(code or "").strip().lower()
+    if normalized not in {"none", "other"}:
+        raise HTTPException(status_code=400, detail="unsupported_group")
+    removed = await db.clear_group_exercises_for_user(ctx.user_id, normalized)
+    return {"ok": True, "removed": int(removed)}
 
 
 @app.get("/all_exercises/groups")
