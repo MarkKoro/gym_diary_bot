@@ -3128,7 +3128,6 @@
       workout: 'Воркаут',
       run: 'Бег',
       other: 'Другое',
-      none: 'Не указано',
     };
 
     const MUSCLE_COLORS = {
@@ -3144,7 +3143,6 @@
       workout: '#6366f1',
       run: '#10b981',
       other: '#94a3b8',
-      none: '#cbd5e1',
     };
 
     const MUSCLE_COLOR_POOL = ['#f97316', '#22d3ee', '#f472b6', '#a3e635', '#c084fc', '#fb7185', '#7dd3fc', '#84cc16', '#fbbf24', '#d946ef', '#4ade80', '#e879f9'];
@@ -3619,7 +3617,7 @@
 
     function normalizeMuscleKey(value) {
       const key = (value || '').toString().trim().toLowerCase();
-      if (!key) return 'none';
+      if (!key) return 'other';
       if (MUSCLE_NAMES[key]) return key;
       return 'other';
     }
@@ -3767,7 +3765,7 @@
     }
 
     function getMuscleColor(value) {
-      const rawKey = (value ?? '').toString().trim().toLowerCase() || 'none';
+      const rawKey = (value ?? '').toString().trim().toLowerCase() || 'other';
       const normalized = normalizeMuscleKey(value);
       const colorKey = normalized === 'other' ? rawKey : normalized;
       if (muscleColorAssignments.has(colorKey)) return muscleColorAssignments.get(colorKey);
@@ -6629,6 +6627,7 @@
 
     function renderAllExercises() {
       document.getElementById('allExerciseFloatingModal')?.remove();
+      document.body.classList.remove('all-ex-modal-open');
       const root = document.getElementById('allExercisesContent');
       if (!root) return;
       const st = allExercisesState();
@@ -6652,7 +6651,7 @@
       root.querySelector('[data-action="all-ex-add-group"]')?.addEventListener('click', promptAllExercisesGroup);
       root.querySelector('[data-action="all-ex-add-exercise"]')?.addEventListener('click', promptAllExerciseCreate);
       root.querySelector('[data-action="all-ex-finish-day"]')?.addEventListener('click', () => runUiAction('Не удалось завершить день', () => finishAllExercisesDay()));
-      root.querySelector('[data-action="all-ex-open-unfinished"]')?.addEventListener('click', () => toast('Открой группу и упражнение с незавершёнными подходами.'));
+      root.querySelector('[data-action="all-ex-open-unfinished"]')?.addEventListener('click', () => runUiAction('Не удалось загрузить незавершённые', () => loadAllExercisesUnfinished()));
       const stage = document.getElementById('allExercisesStage');
       if (!stage) return;
       const center = document.createElement('div');
@@ -6689,18 +6688,17 @@
         }
         return;
       }
-      if (st.view === 'exercise') {
-        const petals = (st.exercises || []).map((ex) => ({ exercise_id: ex.exercise_id, title: ex.name, meta: `последний раз: ${formatAllExerciseLast(ex)}`, done: ex.is_done_today || Number(ex.exercise_id) === Number(st.selectedExerciseId), last_ts: Date.parse(ex.last_date || '') || 0, color: getMuscleColor(st.selectedGroup || ex.muscle_group) }));
+      if (st.view === 'unfinished') {
+        const petals = (st.unfinished || []).map((ex) => ({ exercise_id: ex.exercise_id, title: ex.name, meta: `${Number(ex.sets_count || 0)} подх.`, done: false, color: getMuscleColor(ex.muscle_group) }));
         if (petals.length) stage.appendChild(renderAllExercisesColumnPetals(petals));
-        renderAllExerciseCenter(center);
-        const wrapper = document.createElement('div');
-        wrapper.className = 'all-ex-center-wrap';
-        wrapper.id = 'allExerciseFloatingModal';
-        wrapper.addEventListener('click', (ev) => { if (ev.target === wrapper) goBackAllExercises(); });
-        wrapper.append(center);
-        document.body.appendChild(wrapper);
-        requestAnimationFrame(() => centerAllExercisesStage(stage));
+        else {
+          const empty = document.createElement('div');
+          empty.className = 'all-ex-center';
+          empty.innerHTML = '<div class="all-ex-center-title">Нет незавершённых</div>';
+          stage.appendChild(empty);
+        }
       }
+      if (st.view === 'exercise') renderAllExerciseModal();
     }
 
     function renderAllExerciseCenter(center) {
@@ -6781,6 +6779,7 @@
 
     async function openAllExercise(exerciseId) {
       const st = allExercisesState();
+      st.previousView = st.view === 'unfinished' ? 'unfinished' : 'exercises';
       st.view = 'exercise'; st.selectedExerciseId = Number(exerciseId); st.exercise = null; st.loading = true; renderAllExercises();
       try {
         const data = await apiFetch(`/gymapi/all_exercises/exercise/${Number(exerciseId)}/session`, { silent: true });
@@ -6814,8 +6813,9 @@
       if (st.exercise && !(st.exercise.sets || []).length) await allExerciseAddSet();
       const data = await apiFetch(`/gymapi/all_exercises/exercise/${id}/done`, { method: 'POST', body: JSON.stringify({}) });
       st.groups = data.groups || st.groups;
-      if (st.selectedGroup) await openAllExercisesGroup(st.selectedGroup);
-      st.view = 'exercises'; st.exercise = null; st.selectedExerciseId = null;
+      if (st.previousView === 'unfinished') await loadAllExercisesUnfinished(true);
+      else if (st.selectedGroup) await openAllExercisesGroup(st.selectedGroup);
+      st.view = st.previousView || 'exercises'; st.exercise = null; st.selectedExerciseId = null;
       renderAllExercises(); markAllExercisesActivity(); toast('Упражнение выполнено ✅');
       runUiAction('Не удалось обновить достижения', () => loadAchievementsOverview());
     }
@@ -6833,8 +6833,36 @@
 
     function goBackAllExercises() {
       const st = allExercisesState();
-      if (st.view === 'exercise') { st.view = 'exercises'; st.exercise = null; st.selectedExerciseId = null; renderAllExercises(); return; }
+      if (st.view === 'exercise') { st.view = st.previousView || 'exercises'; st.exercise = null; st.selectedExerciseId = null; renderAllExercises(); return; }
       if (st.view === 'exercises') { st.view = 'groups'; st.selectedGroup = null; st.exercises = []; renderAllExercises(); runUiAction('Не удалось обновить группы', () => loadAllExercisesGroups()); }
+    }
+
+    async function loadAllExercisesUnfinished(silentSwitch = false) {
+      const st = allExercisesState();
+      st.loading = true;
+      if (!silentSwitch) st.view = 'unfinished';
+      renderAllExercises();
+      try {
+        const date = encodeURIComponent(getTodayIsoLocal());
+        const data = await apiFetch(`/gymapi/all_exercises/unfinished?date=${date}`, { silent: true });
+        st.unfinished = data.items || [];
+      } finally {
+        st.loading = false;
+        renderAllExercises();
+      }
+    }
+
+    function renderAllExerciseModal() {
+      document.body.classList.add('all-ex-modal-open');
+      const center = document.createElement('div');
+      renderAllExerciseCenter(center);
+      const wrapper = document.createElement('div');
+      wrapper.className = 'all-ex-center-wrap';
+      wrapper.id = 'allExerciseFloatingModal';
+      wrapper.addEventListener('click', (ev) => { if (ev.target === wrapper) goBackAllExercises(); });
+      center.addEventListener('click', (ev) => ev.stopPropagation());
+      wrapper.append(center);
+      document.body.appendChild(wrapper);
     }
 
     function promptAllExercisesGroup() {
@@ -7926,7 +7954,6 @@
           `),
       ].join('');
       const moveTargetOptions = [
-        { code: 'none', name: allExercisesGroupName('none') },
         { code: 'other', name: allExercisesGroupName('other') },
         ...Object.entries(MUSCLE_NAMES)
           .filter(([code]) => !['none', 'other', 'all'].includes(code))
@@ -7941,18 +7968,19 @@
         seenMoveTargets.add(code);
         uniqueMoveTargets.push({ code, name: String(opt.name || code) });
       });
-      const customExerciseHtml = (s.customExercises || [])
+      const manageable = s.manageableExercises || s.customExercises || [];
+      const customExerciseHtml = (manageable || [])
         .map((ex) => `
           <div class="list-row">
             <div class="list-text">
               <div class="label">${escapeHtml(ex.name)}</div>
-              <div class="list-subtitle">Группа: ${escapeHtml(allExercisesGroupName(ex.muscle_group || 'none'))}</div>
+              <div class="list-subtitle">Группа: ${escapeHtml(allExercisesGroupName(ex.muscle_group || 'other'))}</div>
             </div>
             <div class="settings-row" style="grid-template-columns: 1fr auto; gap: 8px;">
               <select class="settings-select" data-custom-exercise-move="${Number(ex.exercise_id)}">
                 ${uniqueMoveTargets.map((g) => `<option value="${g.code}" ${(g.code === ex.muscle_group) ? 'selected' : ''}>${escapeHtml(g.name)}</option>`).join('')}
               </select>
-              <button class="btn small-btn danger" data-action="delete-custom-exercise" data-exercise-id="${Number(ex.exercise_id)}">Удалить</button>
+              <button class="btn small-btn danger" data-action="${ex.can_hard_delete ? 'delete-custom-exercise' : 'unlink-exercise'}" data-exercise-id="${Number(ex.exercise_id)}">${ex.can_hard_delete ? 'Удалить навсегда' : 'Убрать из моего списка'}</button>
             </div>
           </div>
         `).join('');
@@ -8191,6 +8219,7 @@
         state.settings.days = mergeDayLabels(previousDays, data.days || []);
         state.settings.customGroups = data.custom_groups || [];
         state.settings.customExercises = data.custom_exercises || [];
+        state.settings.manageableExercises = data.manageable_exercises || data.custom_exercises || [];
         state.settings.reminders = data.reminders || [];
         state.settings.notificationsEnabled = data.notifications_enabled !== false;
         state.settings.leaderboardVisible = data.leaderboard_visible !== false;
@@ -8825,13 +8854,22 @@
             toast('Упражнение удалено');
             return;
           }
+          if (action === 'unlink-exercise') {
+            const exerciseId = Number(target.dataset.exerciseId || 0);
+            if (!exerciseId) return;
+            await apiFetch(`/gymapi/settings/exercises/${exerciseId}/unlink`, { method: 'DELETE' });
+            await loadSettingsOverview();
+            if (state.currentRoute === 'allExercises') runUiAction('Не удалось обновить все упражнения', () => loadAllExercisesGroups());
+            toast('Упражнение убрано');
+            return;
+          }
           if (action === 'clear-system-group') {
             const code = String(target.dataset.code || '').trim().toLowerCase();
             if (!code) return;
-            await apiFetch(`/gymapi/settings/system_groups/${encodeURIComponent(code)}/clear`, { method: 'POST', body: JSON.stringify({}) });
+            const resp = await apiFetch(`/gymapi/settings/system_groups/${encodeURIComponent(code)}/clear`, { method: 'POST', body: JSON.stringify({}) });
             await loadSettingsOverview();
             if (state.currentRoute === 'allExercises') runUiAction('Не удалось обновить все упражнения', () => loadAllExercisesGroups());
-            toast('Группа очищена');
+            toast(`Очищено: ${Number(resp.removed_links || 0)} упражнений`);
             return;
           }
           if (action === 'open-system-hub') {
@@ -9048,7 +9086,7 @@
         const muscleGroup = (target.value || '').trim();
         if (!muscleGroup) return;
         try {
-          const resp = await apiFetch(`/gymapi/library/exercise/${exerciseId}/muscle`, { method: 'PUT', body: JSON.stringify({ muscle_group: muscleGroup }) });
+          const resp = await apiFetch(`/gymapi/settings/exercises/${exerciseId}/move`, { method: 'POST', body: JSON.stringify({ muscle_group: muscleGroup }) });
           const oldId = Number(exerciseId);
           const newId = Number(resp?.id || oldId);
           const list = state.settings.customExercises || [];

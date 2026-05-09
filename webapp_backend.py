@@ -1664,6 +1664,13 @@ def _normalize_group(value: str | None) -> str:
     return (value or "").strip().lower()
 
 
+def normalize_exercise_group_for_ui(value: str | None) -> str:
+    raw = str(value or "").strip().lower()
+    if not raw or raw == "none":
+        return "other"
+    return raw
+
+
 def _format_duration_value(seconds: int) -> str:
     total = max(int(seconds or 0), 0)
     hours, remainder = divmod(total, 3600)
@@ -2880,7 +2887,11 @@ async def _all_exercises_groups_payload(user_id: int, iso_date: str) -> dict:
             (int(user_id), int(user_id), iso_date, int(user_id), int(user_id)),
         )
         rows = await cur.fetchall()
-    stats = {str(code or "none"): (int(count or 0), int(done or 0)) for code, count, done in rows}
+    stats: dict[str, tuple[int, int]] = {}
+    for code, count, done in rows:
+        normalized = normalize_exercise_group_for_ui(str(code or "none"))
+        prev = stats.get(normalized, (0, 0))
+        stats[normalized] = (prev[0] + int(count or 0), prev[1] + int(done or 0))
     for code in group_names:
         stats.setdefault(code, (0, 0))
     items = []
@@ -2893,7 +2904,7 @@ async def _all_exercises_groups_payload(user_id: int, iso_date: str) -> dict:
             "is_custom": code not in MG_NAMES,
         })
     def key_fn(item: dict):
-        code = item.get("code") or "none"
+        code = normalize_exercise_group_for_ui(item.get("code"))
         try:
             base = LIBRARY_GROUP_ORDER.index(code)
         except ValueError:
@@ -2903,7 +2914,7 @@ async def _all_exercises_groups_payload(user_id: int, iso_date: str) -> dict:
 
 
 async def _all_exercises_group_items(user_id: int, code: str, iso_date: str) -> list[dict]:
-    normalized_code = (code or "none").strip().lower() or "none"
+    normalized_code = normalize_exercise_group_for_ui(code)
     rows = await db.list_exercises_by_group(normalized_code, user_id, include_catalog=True)
     items: list[dict] = []
     async with db.connect_db() as conn:
@@ -2943,7 +2954,7 @@ async def _all_exercises_group_items(user_id: int, code: str, iso_date: str) -> 
                 "exercise_id": exercise_id,
                 "user_exercise_id": int(day0[0]) if day0 else None,
                 "name": name,
-                "muscle_group": muscle or normalized_code,
+                "muscle_group": normalize_exercise_group_for_ui(muscle or normalized_code),
                 "is_done_today": bool(day0 and day0[1]),
                 "last_date": last[0] if last else None,
                 "last_set": {
@@ -2969,10 +2980,24 @@ async def settings_system_group_clear(
     ctx: AuthCtx = Depends(get_auth_ctx),
 ):
     normalized = str(code or "").strip().lower()
-    if normalized not in {"none", "other"}:
+    normalized = normalize_exercise_group_for_ui(normalized)
+    if normalized != "other":
         raise HTTPException(status_code=400, detail="unsupported_group")
-    removed = await db.clear_group_exercises_for_user(ctx.user_id, normalized)
-    return {"ok": True, "removed": int(removed)}
+    removed_links, removed_owned_exercises = await db.clear_group_exercises_for_user(ctx.user_id, normalized)
+    return {"ok": True, "removed_links": int(removed_links), "removed_owned_exercises": int(removed_owned_exercises)}
+
+
+@app.post("/settings/exercises/{exercise_id}/move")
+async def settings_move_exercise(exercise_id: int, payload: dict = Body(...), ctx: AuthCtx = Depends(get_auth_ctx)):
+    muscle_group = normalize_exercise_group_for_ui((payload or {}).get("muscle_group"))
+    updated_exercise_id = await db.set_exercise_muscle_group_for_user(ctx.user_id, int(exercise_id), muscle_group)
+    return {"ok": True, "exercise_id": int(updated_exercise_id), "muscle_group": muscle_group}
+
+
+@app.delete("/settings/exercises/{exercise_id}/unlink")
+async def settings_unlink_exercise(exercise_id: int, ctx: AuthCtx = Depends(get_auth_ctx)):
+    removed = await db.unlink_exercise_for_user(ctx.user_id, int(exercise_id))
+    return {"ok": True, "removed_links": int(removed)}
 
 
 @app.post("/settings/clear_non_base_exercises")
@@ -2995,6 +3020,34 @@ async def all_exercises_group(code: str, date: str | None = None, ctx: AuthCtx =
         raise HTTPException(status_code=403, detail="Раздел доступен только для личного дневника")
     iso_date = _iso_date(_parse_date_param(date))
     return {"ok": True, "date": iso_date, "items": await _all_exercises_group_items(ctx.user_id, code, iso_date)}
+
+
+@app.get("/all_exercises/unfinished")
+async def all_exercises_unfinished(date: str | None = None, ctx: AuthCtx = Depends(get_auth_ctx)):
+    if ctx.is_acting:
+        raise HTTPException(status_code=403, detail="Раздел доступен только для личного дневника")
+    iso_date = _iso_date(_parse_date_param(date))
+    async with db.connect_db() as conn:
+        cur = await conn.execute(
+            """
+            SELECT e.id, ue.id, e.name, COALESCE(NULLIF(TRIM(e.muscle_group), ''), 'none') AS muscle_group,
+                   COUNT(st.id) AS sets_count
+            FROM sessions s
+            JOIN user_exercises ue ON ue.user_id=s.user_id AND ue.day_index=0 AND ue.is_archived=0
+            JOIN exercises e ON e.id=ue.exercise_id
+            LEFT JOIN session_exercises se ON se.session_id=s.id AND se.user_exercise_id=ue.id
+            JOIN sets st ON st.session_id=s.id AND st.user_exercise_id=ue.id
+            WHERE s.user_id=? AND s.date=? AND s.day_index=0 AND IFNULL(se.is_done,0) != 1
+            GROUP BY e.id, ue.id, e.name, muscle_group
+            ORDER BY sets_count DESC, e.name COLLATE NOCASE
+            """,
+            (int(ctx.user_id), iso_date),
+        )
+        rows = await cur.fetchall()
+    return {"ok": True, "date": iso_date, "items": [{
+        "exercise_id": int(r[0]), "user_exercise_id": int(r[1]), "name": str(r[2] or ""),
+        "muscle_group": normalize_exercise_group_for_ui(r[3]), "sets_count": int(r[4] or 0)
+    } for r in (rows or [])]}
 
 
 @app.post("/all_exercises/catalog/exercise")
@@ -4767,12 +4820,11 @@ async def settings_overview(ctx: AuthCtx = Depends(get_auth_ctx)):
     async with db.connect_db() as conn:
         cur = await conn.execute(
             """
-            SELECT DISTINCT e.id, e.name, COALESCE(NULLIF(TRIM(e.muscle_group), ''), 'none') AS muscle_group
+            SELECT DISTINCT e.id, e.name, COALESCE(NULLIF(TRIM(e.muscle_group), ''), 'none') AS muscle_group, IFNULL(e.created_by_user_id, 0) AS owner_id
             FROM user_exercises ue
             JOIN exercises e ON e.id = ue.exercise_id
             WHERE ue.user_id=?
               AND ue.is_archived=0
-              AND IFNULL(e.created_by_user_id, 0) != 0
             ORDER BY e.name COLLATE NOCASE
             """,
             (int(user_id),),
@@ -4794,8 +4846,22 @@ async def settings_overview(ctx: AuthCtx = Depends(get_auth_ctx)):
         "leaderboard_visible": bool(leaderboard_visible),
         "timezone": timezone,
         "custom_exercises": [
-            {"exercise_id": int(row[0]), "name": str(row[1] or ""), "muscle_group": _normalize_group(row[2])}
+            {"exercise_id": int(row[0]), "name": str(row[1] or ""), "muscle_group": normalize_exercise_group_for_ui(row[2])}
             for row in (custom_exercises_rows or [])
+        ],
+        "manageable_exercises": [
+            {
+                "exercise_id": int(row[0]),
+                "name": str(row[1] or ""),
+                "muscle_group": normalize_exercise_group_for_ui(row[2]),
+                "is_base": int(row[3] or 0) == 0,
+                "can_hard_delete": int(row[3] or 0) == int(user_id),
+                "can_unlink": True,
+            }
+            for row in (custom_exercises_rows or [])
+            if normalize_exercise_group_for_ui(row[2]) == "other"
+            or normalize_exercise_group_for_ui(row[2]).startswith("u")
+            or int(row[3] or 0) == int(user_id)
         ],
     }
 
