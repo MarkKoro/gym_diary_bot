@@ -2429,10 +2429,13 @@
     .all-ex-subtitle { color: var(--muted); font-size: 13px; line-height: 1.35; margin-top: 3px; text-align:center; }
     .all-ex-stage { position: relative; min-height: calc(100vh - 250px); border-radius: 0; border: 0; background: radial-gradient(circle at center, color-mix(in srgb, var(--accent) 10%, transparent), transparent 58%); overflow: auto; isolation: isolate; -webkit-overflow-scrolling: touch; margin: 0 -16px; padding: 0 8px; touch-action:pan-x pan-y; }
     .all-ex-petals { position: relative; width: max(100%, 1220px); height: max(100%, 1220px); min-height: 760px; display: block; transition: opacity .22s ease, transform .28s ease; margin: 0 auto; }
+    .all-ex-petals.columns { width: 100%; min-height: 0; height: auto; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px 10px; padding: 10px 8px 20px; }
     .all-ex-petals.animating-out { opacity: 0; transform: scale(.86) rotate(-7deg); }
     .all-ex-petal { position: absolute; left: 50%; top: 50%; width: 132px; min-height: 82px; margin-left: -66px; margin-top: -41px; border: 0; border-radius: 999px 999px 999px 28px; padding: 12px; color: white; text-align: left; box-shadow: 0 14px 28px rgba(15,23,42,.18); transform: rotate(var(--angle)) translate(var(--radius)) rotate(calc(-1 * var(--angle))); transition: transform .34s cubic-bezier(.2,.8,.2,1), opacity .22s ease, filter .2s ease; animation: petalIn .34s cubic-bezier(.2,.8,.2,1) both; animation-delay: var(--delay); }
     .all-ex-petal:active { transform: rotate(var(--angle)) translate(var(--radius)) rotate(calc(-1 * var(--angle))) scale(.96); filter: brightness(.94); }
     .all-ex-petal.done { background: linear-gradient(135deg, #22c55e, #16a34a) !important; }
+    .all-ex-petals.columns .all-ex-petal { position: relative; left: auto; top: auto; width: 100%; min-height: 88px; margin: 0; border-radius: 24px; transform: none !important; animation: none; }
+    .all-ex-petals.columns .all-ex-petal:active { transform: scale(.98) !important; }
     .all-ex-petal-title { font-size: 13px; font-weight: 850; line-height: 1.12; }
     .all-ex-petal-meta { font-size: 11px; opacity: .88; line-height: 1.25; margin-top: 5px; }
     .all-ex-center { position: absolute; left: 50%; top: 50%; width: min(92vw, 430px); max-height: min(78vh, 620px); transform: translate(-50%, -50%); border-radius: 26px; border: 1px solid color-mix(in srgb, var(--text) 10%, transparent); background: color-mix(in srgb, var(--card) 94%, transparent); box-shadow: var(--shadow); padding: 16px; display: grid; gap: 12px; overflow: auto; -webkit-overflow-scrolling: touch; z-index: 3; }
@@ -2468,6 +2471,7 @@
       .all-ex-petal-title { font-size: 12px; }
       .all-ex-petal-meta { font-size: 10px; }
       .all-ex-center { width: min(92vw, 390px); max-height: min(74vh, 540px); padding: 14px; }
+      .all-ex-petals.columns { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     }
   </style>
 </head>
@@ -6548,6 +6552,34 @@
       });
       return wrap;
     }
+    function buildSnakeOrder(items, columns = 3) {
+      const rows = Math.ceil(items.length / columns);
+      const ordered = [];
+      for (let row = 0; row < rows; row += 1) {
+        for (let col = 0; col < columns; col += 1) {
+          const idx = row * columns + col;
+          if (idx < items.length) ordered.push(items[idx]);
+        }
+      }
+      return ordered;
+    }
+
+    function renderAllExercisesColumnPetals(items) {
+      const wrap = document.createElement('div');
+      wrap.className = 'all-ex-petals columns';
+      const sorted = [...items].sort((a, b) => Number(b.done) - Number(a.done) || String(a.title || '').localeCompare(String(b.title || ''), 'ru'));
+      buildSnakeOrder(sorted, 3).forEach((item) => {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = `all-ex-petal ${item.done ? 'done' : ''}`;
+        const color = item.color || getMuscleColor(item.code || item.muscle_group || 'other');
+        btn.style.background = `linear-gradient(135deg, ${color}, color-mix(in srgb, ${color} 72%, #111827))`;
+        btn.innerHTML = `<div class="all-ex-petal-title">${escapeHtml(item.title)}</div><div class="all-ex-petal-meta">${escapeHtml(item.meta || '')}</div>`;
+        btn.addEventListener('click', () => openAllExercise(item.exercise_id));
+        wrap.appendChild(btn);
+      });
+      return wrap;
+    }
 
     function renderAllExercisesSummaryOverlay(stage) {
       const st = allExercisesState();
@@ -6566,6 +6598,7 @@
     function initAllExercisesPinchZoom(stage) {
       const content = stage.querySelector('.all-ex-petals');
       if (!content) return;
+      if (content.classList.contains('columns')) return;
       if (!stage._zoomState) stage._zoomState = { scale: 0.82, startDist: 0, startScale: 0.82 };
       content.style.transformOrigin = '50% 50%';
       content.style.transform = `scale(${stage._zoomState.scale})`;
@@ -6623,7 +6656,12 @@
         return;
       }
       if (st.view === 'groups') {
-        const groups = (st.groups || []).filter((g) => Number(g.count || 0) > 0 || !g.is_custom);
+        const groups = (st.groups || [])
+          .filter((g) => Number(g.count || 0) > 0 || !g.is_custom)
+          .sort((a, b) => {
+            const rank = (code) => (code === 'none' ? 0 : (code === 'other' ? 1 : 2));
+            return rank(a.code) - rank(b.code) || String(a.name || '').localeCompare(String(b.name || ''), 'ru');
+          });
         const petals = groups.map((g) => ({ code: g.code, title: g.name || allExercisesGroupName(g.code), meta: `${Number(g.count || 0)} упр. · выполнено ${Number(g.done_count || 0)}`, done: Number(g.done_count || 0) > 0, color: getMuscleColor(g.code) }));
         stage.appendChild(renderAllExercisesPetals(petals, 'group'));
         renderAllExercisesSummaryOverlay(stage);
@@ -6633,7 +6671,7 @@
       if (st.view === 'exercises') {
         const petals = (st.exercises || []).map((ex) => ({ exercise_id: ex.exercise_id, title: ex.name, meta: `последний раз: ${formatAllExerciseLast(ex)}`, done: ex.is_done_today, color: getMuscleColor(st.selectedGroup || ex.muscle_group) }));
         if (petals.length) {
-          stage.appendChild(renderAllExercisesPetals(petals, 'exercise'));
+          stage.appendChild(renderAllExercisesColumnPetals(petals));
           requestAnimationFrame(() => { centerAllExercisesStage(stage); initAllExercisesPinchZoom(stage); });
         }
         else {
@@ -6646,7 +6684,7 @@
       }
       if (st.view === 'exercise') {
         const petals = (st.exercises || []).map((ex) => ({ exercise_id: ex.exercise_id, title: ex.name, meta: `последний раз: ${formatAllExerciseLast(ex)}`, done: ex.is_done_today || Number(ex.exercise_id) === Number(st.selectedExerciseId), color: getMuscleColor(st.selectedGroup || ex.muscle_group) }));
-        if (petals.length) stage.appendChild(renderAllExercisesPetals(petals, 'exercise'));
+        if (petals.length) stage.appendChild(renderAllExercisesColumnPetals(petals));
         renderAllExerciseCenter(center);
         const wrapper = document.createElement('div');
         wrapper.className = 'all-ex-center-wrap';
@@ -6712,10 +6750,17 @@
       const val = document.createElement('div'); val.className = 'control-value'; val.textContent = value; val.tabIndex = 0; val.setAttribute('role', 'button');
       const plus = document.createElement('button'); plus.type = 'button'; plus.className = 'circle-btn'; plus.textContent = '+';
       const step = field === 'weight_kg' ? 1 : 1;
-      const adjust = (delta) => { const st = allExercisesState(); st.draft = { ...(st.draft || {}), [field]: Math.max(0, Number(st.draft?.[field] || 0) + delta) }; renderAllExercises(); };
+      const formatValue = (next) => (field === 'weight_kg' ? String(Number(next).toFixed(1)).replace(/\.0$/, '') : String(Math.round(Number(next) || 0)));
+      const syncValue = (next) => { val.textContent = formatValue(next); };
+      const adjust = (delta) => {
+        const st = allExercisesState();
+        const next = Math.max(0, Number(st.draft?.[field] || 0) + delta);
+        st.draft = { ...(st.draft || {}), [field]: next };
+        syncValue(next);
+      };
       minus.addEventListener('click', () => adjust(-step));
       plus.addEventListener('click', () => adjust(step));
-      attachInlineNumberHandler(val, () => ({ value: Number(allExercisesState().draft?.[field] || 0), min: 0, max: field === 'weight_kg' ? 500 : 3600, step: 1, decimals: field === 'weight_kg' ? 1 : 0, inputMode: field === 'weight_kg' ? 'decimal' : 'numeric', onCommit: (next) => { allExercisesState().draft = { ...(allExercisesState().draft || {}), [field]: next }; renderAllExercises(); } }));
+      attachInlineNumberHandler(val, () => ({ value: Number(allExercisesState().draft?.[field] || 0), min: 0, max: field === 'weight_kg' ? 500 : 3600, step: 1, decimals: field === 'weight_kg' ? 1 : 0, inputMode: field === 'weight_kg' ? 'decimal' : 'numeric', onCommit: (next) => { allExercisesState().draft = { ...(allExercisesState().draft || {}), [field]: next }; syncValue(next); } }));
       actions.append(minus, val, plus); block.append(head, actions); return block;
     }
 
@@ -7882,6 +7927,22 @@
             </div>
           `),
       ].join('');
+      const moveTargetOptions = [
+        { code: 'none', name: allExercisesGroupName('none') },
+        { code: 'other', name: allExercisesGroupName('other') },
+        ...Object.entries(MUSCLE_NAMES)
+          .filter(([code]) => !['none', 'other', 'all'].includes(code))
+          .map(([code, name]) => ({ code, name })),
+        ...((state.settings.customGroups || []).map((g) => ({ code: g.code, name: g.name }))),
+      ];
+      const uniqueMoveTargets = [];
+      const seenMoveTargets = new Set();
+      moveTargetOptions.forEach((opt) => {
+        const code = String(opt.code || '').trim();
+        if (!code || seenMoveTargets.has(code)) return;
+        seenMoveTargets.add(code);
+        uniqueMoveTargets.push({ code, name: String(opt.name || code) });
+      });
       const customExerciseHtml = (s.customExercises || [])
         .map((ex) => `
           <div class="list-row">
@@ -7891,9 +7952,7 @@
             </div>
             <div class="settings-row" style="grid-template-columns: 1fr auto; gap: 8px;">
               <select class="settings-select" data-custom-exercise-move="${Number(ex.exercise_id)}">
-                ${(state.settings.customGroups || []).map((g) => `<option value="${g.code}" ${(g.code === ex.muscle_group) ? 'selected' : ''}>${escapeHtml(g.name)}</option>`).join('')}
-                <option value="other" ${ex.muscle_group === 'other' ? 'selected' : ''}>Другое</option>
-                <option value="none" ${ex.muscle_group === 'none' ? 'selected' : ''}>Не указано</option>
+                ${uniqueMoveTargets.map((g) => `<option value="${g.code}" ${(g.code === ex.muscle_group) ? 'selected' : ''}>${escapeHtml(g.name)}</option>`).join('')}
               </select>
               <button class="btn small-btn danger" data-action="delete-custom-exercise" data-exercise-id="${Number(ex.exercise_id)}">Удалить</button>
             </div>
@@ -8971,8 +9030,15 @@
         const muscleGroup = (target.value || '').trim();
         if (!muscleGroup) return;
         try {
-          await apiFetch(`/gymapi/library/exercise/${exerciseId}/muscle`, { method: 'PUT', body: JSON.stringify({ muscle_group: muscleGroup }) });
-          await loadSettingsOverview();
+          const resp = await apiFetch(`/gymapi/library/exercise/${exerciseId}/muscle`, { method: 'PUT', body: JSON.stringify({ muscle_group: muscleGroup }) });
+          const oldId = Number(exerciseId);
+          const newId = Number(resp?.id || oldId);
+          const list = state.settings.customExercises || [];
+          const item = list.find((ex) => Number(ex.exercise_id) === oldId);
+          if (item) {
+            item.exercise_id = newId;
+            item.muscle_group = muscleGroup;
+          }
           if (state.currentRoute === 'allExercises') runUiAction('Не удалось обновить все упражнения', () => loadAllExercisesGroups());
           toast('Упражнение перенесено');
         } catch (err) {
