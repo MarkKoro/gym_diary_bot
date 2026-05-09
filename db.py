@@ -2506,17 +2506,27 @@ async def list_exercises_by_group(group: str, user_id: int):
         if group == "metcon" and METCON_SHARED_NAMES:
             placeholders = ",".join("?" for _ in METCON_SHARED_NAMES)
             query = (
-                "SELECT id, name FROM exercises "
-                "WHERE (muscle_group=? OR name IN (" + placeholders + ")) "
-                "AND (created_by_user_id=0 OR created_by_user_id=?) "
-                "ORDER BY name"
+                "SELECT DISTINCT e.id, e.name FROM exercises e "
+                "JOIN user_exercises ue ON ue.exercise_id=e.id "
+                "WHERE ue.user_id=? AND ue.is_archived=0 "
+                "AND (e.muscle_group=? OR e.name IN (" + placeholders + ")) "
+                "AND (e.created_by_user_id=0 OR e.created_by_user_id=?) "
+                "ORDER BY e.name"
             )
-            params: tuple = (group, *METCON_SHARED_NAMES, int(user_id))
+            params: tuple = (int(user_id), group, *METCON_SHARED_NAMES, int(user_id))
             cur = await db.execute(query, params)
         else:
             cur = await db.execute(
-                "SELECT id, name FROM exercises WHERE muscle_group=? AND (created_by_user_id=0 OR created_by_user_id=?) ORDER BY name",
-                (group, int(user_id)),
+                """
+                SELECT DISTINCT e.id, e.name
+                FROM exercises e
+                JOIN user_exercises ue ON ue.exercise_id=e.id
+                WHERE ue.user_id=? AND ue.is_archived=0
+                  AND e.muscle_group=?
+                  AND (e.created_by_user_id=0 OR e.created_by_user_id=?)
+                ORDER BY e.name
+                """,
+                (int(user_id), group, int(user_id)),
             )
         return await cur.fetchall()
 
@@ -7255,6 +7265,10 @@ async def hard_delete_user_owned_exercise(user_id: int, exercise_id: int) -> boo
         )).fetchone()
         if not owner_row:
             return False
+        owner_id = int(owner_row[0] or 0)
+        # Base/system exercises are not deletable: user can only delete non-base exercises.
+        if owner_id == 0:
+            return False
         ue_rows = await (await db.execute(
             "SELECT id FROM user_exercises WHERE user_id=? AND exercise_id=?",
             (user_id, exercise_id),
@@ -7270,6 +7284,16 @@ async def hard_delete_user_owned_exercise(user_id: int, exercise_id: int) -> boo
             await db.execute(f"DELETE FROM user_exercises WHERE id IN ({placeholders})", tuple(ue_ids))
         await db.execute("DELETE FROM exercise_notes WHERE user_id=? AND exercise_id=?", (user_id, exercise_id))
         await db.execute("DELETE FROM user_exercise_muscles WHERE user_id=? AND exercise_id=?", (user_id, exercise_id))
+        if owner_id == int(user_id):
+            ref_row = await (await db.execute(
+                "SELECT 1 FROM user_exercises WHERE exercise_id=? LIMIT 1",
+                (int(exercise_id),),
+            )).fetchone()
+            if not ref_row:
+                await db.execute(
+                    "DELETE FROM exercises WHERE id=? AND created_by_user_id=?",
+                    (int(exercise_id), int(user_id)),
+                )
         await db.commit()
         return True
 
@@ -7291,14 +7315,16 @@ async def clear_group_exercises_for_user(user_id: int, group_code: str) -> int:
         )
         rows = await cur.fetchall()
         exercise_ids = [int(row[0]) for row in (rows or []) if row and row[0] is not None]
+        # Only non-base exercises are deletable by clear action.
+        deletable_ids = [int(row[0]) for row in (rows or []) if row and int(row[1] or 0) != 0]
         owned_ids = [int(row[0]) for row in (rows or []) if row and int(row[1] or 0) == int(user_id)]
-        if not exercise_ids:
+        if not deletable_ids:
             return 0
 
-        placeholders = ",".join("?" for _ in exercise_ids)
+        placeholders = ",".join("?" for _ in deletable_ids)
         ue_cur = await db.execute(
             f"SELECT id FROM user_exercises WHERE user_id=? AND exercise_id IN ({placeholders})",
-            (int(user_id), *exercise_ids),
+            (int(user_id), *deletable_ids),
         )
         ue_rows = await ue_cur.fetchall()
         ue_ids = [int(row[0]) for row in (ue_rows or []) if row and row[0] is not None]
@@ -7309,14 +7335,15 @@ async def clear_group_exercises_for_user(user_id: int, group_code: str) -> int:
             await db.execute(f"DELETE FROM session_exercises WHERE user_exercise_id IN ({ue_ph})", tuple(ue_ids))
             await db.execute(f"DELETE FROM running_entries WHERE user_exercise_id IN ({ue_ph})", tuple(ue_ids))
             await db.execute(f"DELETE FROM user_exercises WHERE id IN ({ue_ph})", tuple(ue_ids))
+            removed += len(ue_ids)
 
         await db.execute(
             f"DELETE FROM exercise_notes WHERE user_id=? AND exercise_id IN ({placeholders})",
-            (int(user_id), *exercise_ids),
+            (int(user_id), *deletable_ids),
         )
         await db.execute(
             f"DELETE FROM user_exercise_muscles WHERE user_id=? AND exercise_id IN ({placeholders})",
-            (int(user_id), *exercise_ids),
+            (int(user_id), *deletable_ids),
         )
 
         for ex_id in owned_ids:

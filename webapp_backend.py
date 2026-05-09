@@ -4766,6 +4766,7 @@ async def settings_overview(ctx: AuthCtx = Depends(get_auth_ctx)):
             JOIN exercises e ON e.id = ue.exercise_id
             WHERE ue.user_id=?
               AND ue.is_archived=0
+              AND IFNULL(e.created_by_user_id, 0) != 0
             ORDER BY e.name COLLATE NOCASE
             """,
             (int(user_id),),
@@ -4797,7 +4798,7 @@ async def settings_overview(ctx: AuthCtx = Depends(get_auth_ctx)):
 async def delete_custom_exercise(exercise_id: int, ctx: AuthCtx = Depends(get_auth_ctx)):
     removed = await hard_delete_user_owned_exercise(ctx.user_id, int(exercise_id))
     if not removed:
-        raise HTTPException(status_code=404, detail="exercise_not_found_or_forbidden")
+        raise HTTPException(status_code=404, detail="exercise_not_found_or_base")
     return {"ok": True, "removed": True}
 
 
