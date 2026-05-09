@@ -2975,6 +2975,12 @@ async def settings_system_group_clear(
     return {"ok": True, "removed": int(removed)}
 
 
+@app.post("/settings/clear_non_base_exercises")
+async def settings_clear_non_base_exercises(ctx: AuthCtx = Depends(get_auth_ctx)):
+    removed = await db.clear_non_base_group_exercises_for_user(ctx.user_id)
+    return {"ok": True, "removed": int(removed)}
+
+
 @app.get("/all_exercises/groups")
 async def all_exercises_groups(date: str | None = None, ctx: AuthCtx = Depends(get_auth_ctx)):
     if ctx.is_acting:

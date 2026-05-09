@@ -8145,6 +8145,7 @@
             </div>
             <div class="settings-actions">
               <button class="btn danger" data-action="clear-completions">Убрать галочки</button>
+              <button class="btn danger" data-action="clear-non-base-exercises">Очистить небазовые упражнения</button>
               <button class="btn" data-action="restart-tour">Повторить обучение</button>
             </div>
             <div class="settings-row settings-panel inline" style="margin-top: 10px;">
@@ -8917,6 +8918,16 @@
           if (action === 'clear-completions') {
             await apiFetch('/gymapi/settings/clear_completions', { method: 'POST', body: JSON.stringify({}) });
             toast('Галочки сброшены');
+            return;
+          }
+          if (action === 'clear-non-base-exercises') {
+            await apiFetch('/gymapi/settings/clear_non_base_exercises', { method: 'POST', body: JSON.stringify({}) });
+            await loadSettingsOverview();
+            if (state.currentRoute === 'allExercises') runUiAction('Не удалось обновить все упражнения', () => loadAllExercisesGroups());
+            if (state.currentRoute === 'today' && state.dayIndex) {
+              runUiAction('Не удалось обновить экран дня', () => refreshTodayData({ keepDay: true }));
+            }
+            toast('Небазовые упражнения очищены');
             return;
           }
           if (action === 'share-copy') {
