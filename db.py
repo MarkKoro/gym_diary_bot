@@ -2501,8 +2501,49 @@ async def set_workouts_per_week(user_id: int, n: int) -> list[tuple[int, int, in
             await db.commit()
         return removed
 
-async def list_exercises_by_group(group: str, user_id: int):
+async def list_exercises_by_group(group: str, user_id: int, include_catalog: bool = False):
     async with connect_db() as db:
+        if include_catalog:
+            normalized = str(group or "none").strip().lower() or "none"
+            if normalized == "metcon" and METCON_SHARED_NAMES:
+                placeholders = ",".join("?" for _ in METCON_SHARED_NAMES)
+                cur = await db.execute(
+                    """
+                    SELECT DISTINCT e.id, e.name, e.muscle_group
+                    FROM exercises e
+                    WHERE (LOWER(COALESCE(NULLIF(TRIM(e.muscle_group), ''), 'none'))=? OR e.name IN (""" + placeholders + """))
+                      AND (
+                        e.created_by_user_id IN (0, ?)
+                        OR EXISTS (
+                            SELECT 1
+                            FROM user_exercises ue
+                            WHERE ue.user_id=? AND ue.exercise_id=e.id
+                        )
+                      )
+                    ORDER BY e.name
+                    """,
+                    (normalized, *METCON_SHARED_NAMES, int(user_id), int(user_id)),
+                )
+            else:
+                cur = await db.execute(
+                    """
+                    SELECT DISTINCT e.id, e.name, e.muscle_group
+                    FROM exercises e
+                    WHERE LOWER(COALESCE(NULLIF(TRIM(e.muscle_group), ''), 'none'))=?
+                      AND (
+                        e.created_by_user_id IN (0, ?)
+                        OR EXISTS (
+                            SELECT 1
+                            FROM user_exercises ue
+                            WHERE ue.user_id=? AND ue.exercise_id=e.id
+                        )
+                      )
+                    ORDER BY e.name
+                    """,
+                    (normalized, int(user_id), int(user_id)),
+                )
+            return await cur.fetchall()
+
         if group == "metcon" and METCON_SHARED_NAMES:
             placeholders = ",".join("?" for _ in METCON_SHARED_NAMES)
             query = (
@@ -7364,64 +7405,43 @@ async def clear_non_base_group_exercises_for_user(user_id: int) -> int:
     async with aiosqlite.connect(DB_PATH) as db:
         cur = await db.execute(
             """
-            SELECT DISTINCT e.id, IFNULL(e.created_by_user_id, 0) AS owner_id
-            FROM user_exercises ue
-            JOIN exercises e ON e.id=ue.exercise_id
-            WHERE ue.user_id=?
-              AND ue.is_archived=0
-            """,
-            (int(user_id),),
+            SELECT e.id
+            FROM exercises e
+            WHERE IFNULL(e.created_by_user_id, 0)=?
+              AND LOWER(COALESCE(NULLIF(TRIM(e.muscle_group), ''), 'none')) NOT IN ({})
+            """.format(",".join("?" for _ in base_groups)),
+            (int(user_id), *sorted(base_groups)),
         )
-        rows = await cur.fetchall()
-        candidates: list[tuple[int, int]] = []
-        for row in rows or []:
-            ex_id = int(row[0] or 0)
-            owner_id = int(row[1] or 0)
-            if ex_id <= 0:
-                continue
-            gcur = await db.execute("SELECT COALESCE(NULLIF(LOWER(TRIM(muscle_group)), ''), 'none') FROM exercises WHERE id=?", (ex_id,))
-            grow = await gcur.fetchone()
-            group_code = str(grow[0] or "none").strip().lower() if grow else "none"
-            if group_code not in base_groups:
-                candidates.append((ex_id, owner_id))
-
-        if not candidates:
+        custom_ids = [int(row[0]) for row in await cur.fetchall() if row and row[0] is not None]
+        if not custom_ids:
             return 0
 
-        deletable_ids = [ex_id for ex_id, owner_id in candidates if owner_id != 0]
-        owned_ids = [ex_id for ex_id, owner_id in candidates if owner_id == int(user_id)]
-        if not deletable_ids:
-            return 0
-        placeholders = ",".join("?" for _ in deletable_ids)
+        placeholders = ",".join("?" for _ in custom_ids)
         ue_cur = await db.execute(
-            f"SELECT id FROM user_exercises WHERE user_id=? AND exercise_id IN ({placeholders})",
-            (int(user_id), *deletable_ids),
+            f"SELECT id FROM user_exercises WHERE exercise_id IN ({placeholders})",
+            tuple(custom_ids),
         )
-        ue_rows = await ue_cur.fetchall()
-        ue_ids = [int(row[0]) for row in (ue_rows or []) if row and row[0] is not None]
+        ue_ids = [int(row[0]) for row in await ue_cur.fetchall() if row and row[0] is not None]
         if ue_ids:
             ue_ph = ",".join("?" for _ in ue_ids)
             await db.execute(f"DELETE FROM sets WHERE user_exercise_id IN ({ue_ph})", tuple(ue_ids))
             await db.execute(f"DELETE FROM session_exercises WHERE user_exercise_id IN ({ue_ph})", tuple(ue_ids))
             await db.execute(f"DELETE FROM running_entries WHERE user_exercise_id IN ({ue_ph})", tuple(ue_ids))
             await db.execute(f"DELETE FROM user_exercises WHERE id IN ({ue_ph})", tuple(ue_ids))
-            removed += len(ue_ids)
 
         await db.execute(
-            f"DELETE FROM exercise_notes WHERE user_id=? AND exercise_id IN ({placeholders})",
-            (int(user_id), *deletable_ids),
+            f"DELETE FROM exercise_notes WHERE exercise_id IN ({placeholders})",
+            tuple(custom_ids),
         )
         await db.execute(
-            f"DELETE FROM user_exercise_muscles WHERE user_id=? AND exercise_id IN ({placeholders})",
-            (int(user_id), *deletable_ids),
+            f"DELETE FROM user_exercise_muscles WHERE exercise_id IN ({placeholders})",
+            tuple(custom_ids),
         )
-        for ex_id in owned_ids:
-            ref_cur = await db.execute("SELECT 1 FROM user_exercises WHERE exercise_id=? LIMIT 1", (int(ex_id),))
-            ref = await ref_cur.fetchone()
-            if ref:
-                continue
-            await db.execute("DELETE FROM exercises WHERE id=? AND created_by_user_id=?", (int(ex_id), int(user_id)))
-            removed += 1
+        await db.execute(
+            f"DELETE FROM exercises WHERE created_by_user_id=? AND id IN ({placeholders})",
+            (int(user_id), *custom_ids),
+        )
+        removed = len(custom_ids)
         await db.commit()
     return removed
 

@@ -2277,7 +2277,7 @@ async def list_catalog_group_exercises(
         raise HTTPException(status_code=400, detail="Группа не указана")
     if day_index is not None:
         await _validate_day(user_id, int(day_index))
-    rows = await db.list_exercises_by_group(normalized_code, user_id)
+    rows = await db.list_exercises_by_group(normalized_code, user_id, include_catalog=True)
     added = set()
     if day_index is not None:
         added = set(await db.list_user_exercise_ids(user_id, int(day_index), normalized_code))
@@ -2904,7 +2904,7 @@ async def _all_exercises_groups_payload(user_id: int, iso_date: str) -> dict:
 
 async def _all_exercises_group_items(user_id: int, code: str, iso_date: str) -> list[dict]:
     normalized_code = (code or "none").strip().lower() or "none"
-    rows = await db.list_exercises_by_group(normalized_code, user_id)
+    rows = await db.list_exercises_by_group(normalized_code, user_id, include_catalog=True)
     items: list[dict] = []
     async with db.connect_db() as conn:
         for row in rows:
