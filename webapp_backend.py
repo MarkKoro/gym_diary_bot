@@ -2953,11 +2953,12 @@ async def _all_exercises_group_items(user_id: int, code: str, iso_date: str) -> 
                     "weight_kg": float(last[4] or 0.0),
                 } if last else None,
             })
-    def _sort_key(item: dict) -> tuple[int, str, int]:
+    def _sort_key(item: dict) -> tuple[int, str, str]:
         last_date = str(item.get("last_date") or "").strip()
         has_last = 1 if last_date else 0
-        # with has_last=1 first, date desc, then name asc
-        return (-has_last, last_date, -int(item.get("exercise_id") or 0))
+        name = str(item.get("name") or "").lower()
+        # Сначала упражнения с историей, затем по самой свежей дате, затем по имени.
+        return (has_last, last_date, name)
     items.sort(key=_sort_key, reverse=True)
     return items
 
