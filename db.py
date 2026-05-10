@@ -3831,6 +3831,49 @@ async def create_payment_record(
     provider: str,
     amount: int,
     currency: str,
+    status: str,
+    payload: dict | None = None,
+    external_id: str | None = None,
+    provider_charge_id: str | None = None,
+    project_key: str | None = None,
+) -> int:
+    payload_json = json.dumps(payload or {}, ensure_ascii=False)
+    async with connect_db() as db:
+        await db.execute(
+            """
+            INSERT INTO payments(
+                user_id,
+                provider,
+                amount,
+                currency,
+                created_at,
+                status,
+                payload_json,
+                external_id,
+                provider_charge_id,
+                project_key
+            )
+            VALUES(?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                user_id,
+                provider,
+                amount,
+                currency,
+                datetime.now(UTC).isoformat(),
+                status,
+                payload_json,
+                external_id,
+                provider_charge_id,
+                project_key,
+            ),
+        )
+        await db.commit()
+        cur = await db.execute("SELECT last_insert_rowid()")
+        row = await cur.fetchone()
+        return int(row[0]) if row and row[0] is not None else 0
+
+
 async def gift_code_stats() -> dict:
     async with connect_db() as db:
         cur = await db.execute(
@@ -3874,49 +3917,6 @@ async def delete_gift_code(code_id: int) -> bool:
         )
         await db.commit()
         return (cur.rowcount or 0) > 0
-
-
-    status: str,
-    payload: dict | None = None,
-    external_id: str | None = None,
-    provider_charge_id: str | None = None,
-    project_key: str | None = None,
-) -> int:
-    payload_json = json.dumps(payload or {}, ensure_ascii=False)
-    async with connect_db() as db:
-        await db.execute(
-            """
-            INSERT INTO payments(
-                user_id,
-                provider,
-                amount,
-                currency,
-                created_at,
-                status,
-                payload_json,
-                external_id,
-                provider_charge_id,
-                project_key
-            )
-            VALUES(?,?,?,?,?,?,?,?,?,?)
-            """,
-            (
-                user_id,
-                provider,
-                amount,
-                currency,
-                datetime.now(UTC).isoformat(),
-                status,
-                payload_json,
-                external_id,
-                provider_charge_id,
-                project_key,
-            ),
-        )
-        await db.commit()
-        cur = await db.execute("SELECT last_insert_rowid()")
-        row = await cur.fetchone()
-        return int(row[0]) if row and row[0] is not None else 0
 
 
 async def update_payment_status(
