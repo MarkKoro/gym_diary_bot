@@ -787,10 +787,10 @@ def _sanitize_ai_action(action: dict, *, max_day_index: int) -> dict | None:
     return None
 
 
-def _sanitize_ai_action_plan(plan: dict | None, mode: str, *, workouts_per_week: int, active_day_count: int, requested_days: int | None = None) -> tuple[dict, list[str]]:
-    warnings: list[str] = []
+def _sanitize_ai_action_plan(plan: dict | None, mode: str, *, workouts_per_week: int, active_day_count: int, requested_days: int | None = None) -> tuple[dict, list[dict]]:
+    warnings: list[dict] = []
     if not isinstance(plan, dict):
-        return {"actions": []}, ["Пустой или невалидный JSON action_plan от AI."]
+        return {"actions": []}, [{"code": "invalid_action_plan", "detail": "Пустой или невалидный JSON action_plan от AI."}]
 
     raw_actions = plan.get("actions") if isinstance(plan.get("actions"), list) else []
     max_day_index = active_day_count if int(active_day_count or 0) > 0 else 7
@@ -800,7 +800,7 @@ def _sanitize_ai_action_plan(plan: dict | None, mode: str, *, workouts_per_week:
     for a in raw_actions:
         clean = _sanitize_ai_action(a, max_day_index=max_day_index)
         if not clean:
-            warnings.append("Одно из действий AI было отброшено как невалидное.")
+            warnings.append({"code": "invalid_action", "detail": "Одно из действий AI было отброшено как невалидное."})
             continue
         clean_actions.append(clean)
 
@@ -811,7 +811,7 @@ def _sanitize_ai_action_plan(plan: dict | None, mode: str, *, workouts_per_week:
     if mode == "new_system":
         create_actions = [a for a in clean_actions if a.get("type") == "create_system"]
         if not create_actions:
-            return {"actions": []}, ["Для режима new_system не найдено валидного create_system действия."]
+            return {"actions": []}, [{"code": "missing_create_system", "detail": "Для режима new_system не найдено валидного create_system действия."}]
         picked = create_actions[0]
 
         # доп. нормализация количества дней
@@ -821,19 +821,19 @@ def _sanitize_ai_action_plan(plan: dict | None, mode: str, *, workouts_per_week:
         days = [d for d in days if isinstance(d, dict) and isinstance(d.get("exercises"), list) and d.get("exercises")]
         days.sort(key=lambda x: int(x.get("day_index") or 0))
         if len(days) > 7:
-            warnings.append(f"AI вернул {len(days)} дней, ограничено до 7.")
+            warnings.append({"code": "days_truncated", "detail": f"AI вернул {len(days)} дней, ограничено до 7.", "actual": len(days), "max": 7})
             days = days[:7]
         if len(days) < 2:
-            warnings.append("AI вернул слишком мало дней новой системы; рекомендуется минимум 2.")
+            warnings.append({"code": "too_few_days", "detail": "AI вернул слишком мало дней новой системы; рекомендуется минимум 2."})
         if expected_days > 0 and len(days) != expected_days:
-            return {"actions": []}, [f"AI вернул {len(days)} дней вместо {expected_days}."]
+            return {"actions": []}, [{"code": "days_count_mismatch", "detail": f"ИИ вернул {len(days)} день(дней) вместо {expected_days}.", "expected": expected_days, "actual": len(days)}]
         picked["days"] = days
         return {"actions": [picked]}, warnings
 
     if mode == "adjust_sets":
         upd = [a for a in clean_actions if a.get("type") == "update_sets"]
         if not upd:
-            return {"actions": []}, ["Для режима adjust_sets не найдено валидных update_sets действий."]
+            return {"actions": []}, [{"code": "missing_update_sets", "detail": "Для режима adjust_sets не найдено валидных update_sets действий."}]
         # ограничим размер
         return {"actions": upd[:40]}, warnings
 
@@ -2927,41 +2927,45 @@ async def _all_exercises_groups_payload(user_id: int, iso_date: str) -> dict:
         })
     groups.sort(key=lambda item: (LIBRARY_GROUP_ORDER.index(item["code"]) if item["code"] in LIBRARY_GROUP_ORDER else len(LIBRARY_GROUP_ORDER), str(item.get("name") or "").lower()))
     done_today = await db.list_all_exercises_done_today(user_id, iso_date)
-    return {"ok": True, "date": iso_date, "groups": groups, "done_today": done_today}
+    return {"ok": True, "date": iso_date, "groups": groups, "done_today": done_today, "unfinished_count": await db.count_all_exercises_unfinished(user_id, iso_date)}
 
 
 async def _all_exercises_group_items(user_id: int, code: str, iso_date: str) -> list[dict]:
-    items = await db.list_all_exercises_in_group_for_user(user_id, code, iso_date)
+    items = await db.list_all_exercises_in_group_for_user_with_last_sets(user_id, code, iso_date)
     out = []
     for it in items:
         last_set = None
         last_summary = None
-        previous_sets_rows = await db.fetch_last_session_sets(user_id, 0, await _ensure_all_exercise(user_id, int(it["exercise_id"])), iso_date, None)
-        if previous_sets_rows:
-            raw = previous_sets_rows[-1]
-            last_set = {"set_no": int(raw[0] or 0), "reps": int(raw[1] or 0), "seconds": int(raw[2] or 0), "weight_kg": float(raw[3] or 0)}
-            w = float(last_set["weight_kg"] or 0)
-            r = int(last_set["reps"] or 0)
-            s = int(last_set["seconds"] or 0)
+        last_date = it.get("last_done_at")
+        if it.get("last_set_no") is not None:
+            last_set = {
+                "set_no": int(it.get("last_set_no") or 0),
+                "reps": int(it.get("last_reps") or 0),
+                "seconds": int(it.get("last_seconds") or 0),
+                "weight_kg": float(it.get("last_weight_kg") or 0),
+            }
             parts = []
-            if w > 0: parts.append(f"{_format_num(w)} кг")
-            if r > 0: parts.append(f"{r} повт")
-            if s > 0: parts.append(f"{s} сек")
+            if last_set["weight_kg"] > 0:
+                parts.append(f"{_format_num(last_set['weight_kg'])} кг")
+            if last_set["reps"] > 0:
+                parts.append(f"{last_set['reps']} повт")
+            if last_set["seconds"] > 0:
+                parts.append(f"{last_set['seconds']} сек")
             last_summary = " · ".join(parts) if parts else None
         out.append({
-        "exercise_id": int(it["exercise_id"]),
-        "user_exercise_id": None,
-        "name": it["name"],
-        "muscle_group": it["effective_group"],
-        "is_done_today": False,
-        "last_date": it.get("last_done_at"),
-        "last_set": last_set,
-        "last_summary": last_summary,
-        "has_history": bool(it.get("has_history")),
-        "unfinished_today": bool(it.get("unfinished_today")),
-        "can_hard_delete": bool(it.get("can_hard_delete")),
-        "can_unlink": bool(it.get("can_unlink")),
-    })
+            "exercise_id": int(it["exercise_id"]),
+            "user_exercise_id": None,
+            "name": it["name"],
+            "muscle_group": it["effective_group"],
+            "is_done_today": bool(it.get("last_done_at") == iso_date and not it.get("unfinished_today")),
+            "last_date": last_date,
+            "last_set": last_set,
+            "last_summary": last_summary,
+            "has_history": bool(it.get("has_history")),
+            "unfinished_today": bool(it.get("unfinished_today")),
+            "can_hard_delete": bool(it.get("can_hard_delete")),
+            "can_unlink": bool(it.get("can_unlink")),
+        })
     return out
 
 
@@ -3213,6 +3217,33 @@ async def all_exercise_done(exercise_id: int, date: str | None = None, ctx: Auth
     return {"ok": True, "user_exercise_id": ue_id, "exercise_id": exercise_id, "groups": groups.get("groups", [])}
 
 
+@app.post("/all_exercises/exercise/{exercise_id}/running")
+async def all_exercise_running_save(exercise_id: int, payload: dict = Body(...), date: str | None = None, ctx: AuthCtx = Depends(get_auth_ctx)):
+    if ctx.is_acting:
+        raise HTTPException(status_code=403, detail="Раздел доступен только для личного дневника")
+    user_id = ctx.user_id
+    ue_id = await _get_or_create_free_user_exercise(user_id, exercise_id)
+    iso_date = _iso_date(_parse_date_param(date))
+    session_id = await db.get_or_create_today_session(user_id, iso_date, 0, await get_active_training_system_id(user_id))
+    await db.update_running_entry(user_id, ue_id, exercise_id, session_id, 0, payload or {})
+    state = await _build_running_state(user_id, 0, ue_id, _parse_date_param(date), exercise_id=exercise_id, history_limit=20)
+    return {"ok": True, "exercise_id": int(exercise_id), "user_exercise_id": int(ue_id), "running": state.get("running"), "running_history": state.get("running_history"), "previous_running": state.get("previous_running")}
+
+
+@app.post("/all_exercises/exercise/{exercise_id}/running/done")
+async def all_exercise_running_done(exercise_id: int, payload: dict = Body(default_factory=dict), date: str | None = None, ctx: AuthCtx = Depends(get_auth_ctx)):
+    if ctx.is_acting:
+        raise HTTPException(status_code=403, detail="Раздел доступен только для личного дневника")
+    user_id = ctx.user_id
+    ue_id = await _get_or_create_free_user_exercise(user_id, exercise_id)
+    iso_date = _iso_date(_parse_date_param(date))
+    session_id = await db.get_or_create_today_session(user_id, iso_date, 0, await get_active_training_system_id(user_id))
+    if payload:
+        await db.update_running_entry(user_id, ue_id, exercise_id, session_id, 0, payload)
+    await db.mark_running_entry_done(user_id, ue_id, session_id)
+    await mark_exercise_done(session_id, ue_id)
+    state = await _build_running_state(user_id, 0, ue_id, _parse_date_param(date), exercise_id=exercise_id, history_limit=20)
+    return {"ok": True, "exercise_id": int(exercise_id), "user_exercise_id": int(ue_id), "running": state.get("running"), "running_history": state.get("running_history"), "previous_running": state.get("previous_running")}
 
 
 @app.post("/all_exercises/finish_day")
@@ -6519,7 +6550,7 @@ async def ai_coach_query(payload: dict = Body(default_factory=dict), ctx: AuthCt
         requested_days=requested_days,
     )
     if mode == "new_system" and requested_days and not (sanitized_plan.get("actions") if isinstance(sanitized_plan, dict) else []):
-        if any("вместо" in str(w) for w in plan_warnings):
+        if any(isinstance(w, dict) and w.get("code") == "days_count_mismatch" for w in plan_warnings):
             retry_prompt = user_prompt + f"\n\nВНИМАНИЕ: Ты вернул неверное число дней. Верни строго {requested_days} дней в create_system.days."
             retry_result = await _call_openai_chat(system_prompt, retry_prompt, mode=mode, requested_days=requested_days)
             retry_root = retry_result.get("parsed") if isinstance(retry_result, dict) else {}
@@ -6530,6 +6561,8 @@ async def ai_coach_query(payload: dict = Body(default_factory=dict), ctx: AuthCt
                 active_day_count=len(context_payload.get("day_snapshots") or []),
                 requested_days=requested_days,
             )
+            if (sanitized_plan.get("actions") if isinstance(sanitized_plan, dict) else []):
+                parsed_root = retry_root if isinstance(retry_root, dict) else parsed_root
 
     summary = str(parsed_root.get("summary") or "").strip()
     rationale = parsed_root.get("rationale")
@@ -6550,6 +6583,16 @@ async def ai_coach_query(payload: dict = Body(default_factory=dict), ctx: AuthCt
     answer_text = ""
     if isinstance(result, dict):
         answer_text = str(result.get("text") or "").strip()
+    if mode == "new_system" and requested_days and not (sanitized_plan.get("actions") if isinstance(sanitized_plan, dict) else []):
+        mismatch = next((w for w in (plan_warnings or []) if isinstance(w, dict) and w.get("code") == "days_count_mismatch"), None)
+        if mismatch:
+            return {
+                "ok": False,
+                "code": "AI_DAYS_COUNT_MISMATCH",
+                "detail": f"ИИ вернул {mismatch.get('actual')} день(дней) вместо {mismatch.get('expected')}. Система не применена.",
+                "expected_days": requested_days,
+                "action_plan_warnings": plan_warnings,
+            }
 
     return {
         "ok": True,

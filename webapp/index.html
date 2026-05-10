@@ -3269,7 +3269,7 @@
         unseenCodes: new Set(),
         lastSeenAt: '',
       },
-      allExercises: { view: 'groups', loading: false, groups: [], exercises: [], unfinished: [], unfinishedCount: 0, selectedGroup: null, selectedExerciseId: null, exercise: null, draft: {}, noteTimer: null, animating: false, lastResetAt: 0, finishedAt: 0 },
+      allExercises: { view: 'groups', loading: false, groups: [], exercises: [], unfinished: [], unfinishedCount: 0, selectedGroup: null, selectedExerciseId: null, exercise: null, draft: {}, noteTimer: null, animating: false, lastResetAt: 0, finishedAt: 0, sheetOpen: false, metaRefreshTimer: null, metaRefreshInFlight: false, metaRefreshQueued: false, groupRequestSeq: 0, exerciseRequestSeq: 0 },
       library: {
         view: 'groups',
         loading: false,
@@ -6619,6 +6619,8 @@
     }
 
     function closeAllExerciseSheet() {
+      const st = allExercisesState();
+      st.sheetOpen = false;
       document.getElementById('allExerciseFloatingModal')?.remove();
       document.body.classList.remove('all-ex-modal-open');
     }
@@ -6626,6 +6628,8 @@
     function openAllExerciseSheet(ex) {
       if (!ex?.user_exercise_id) return;
       closeAllExerciseSheet();
+      const st = allExercisesState();
+      st.sheetOpen = true;
       const wrap = document.createElement('div');
       wrap.id = 'allExerciseFloatingModal';
       wrap.className = 'all-ex-sheet';
@@ -6715,7 +6719,6 @@
         const petals = (st.exercises || []).map((ex) => ({ exercise_id: ex.exercise_id, title: ex.name, meta: `последний раз: ${formatAllExerciseLast(ex)}`, done: ex.is_done_today, last_ts: Date.parse(ex.last_date || '') || 0, color: getMuscleColor(st.selectedGroup || ex.muscle_group) }));
         if (petals.length) {
           stage.appendChild(renderAllExercisesColumnPetals(petals));
-          requestAnimationFrame(() => { centerAllExercisesStage(stage); initAllExercisesPinchZoom(stage); });
         }
         else {
           const empty = document.createElement('div');
@@ -6744,30 +6747,31 @@
     async function loadAllExercisesGroups() {
       const st = allExercisesState(); st.loading = true; renderAllExercises();
       try {
-        const [groupsData, unfinishedData] = await Promise.all([
-          apiFetch('/gymapi/all_exercises/groups', { silent: true }),
-          apiFetch(`/gymapi/all_exercises/unfinished?date=${encodeURIComponent(getTodayIsoLocal())}`, { silent: true }),
-        ]);
+        const groupsData = await apiFetch(`/gymapi/all_exercises/groups?date=${encodeURIComponent(getTodayIsoLocal())}`, { silent: true });
         st.groups = groupsData.groups || [];
         st.doneToday = groupsData.done_today || [];
-        st.unfinishedCount = Array.isArray(unfinishedData.items) ? unfinishedData.items.length : 0;
+        st.unfinishedCount = Number(groupsData.unfinished_count || 0);
       } finally { st.loading = false; renderAllExercises(); }
     }
 
     async function openAllExercisesGroup(code) {
       const st = allExercisesState();
+      const seq = ++st.groupRequestSeq;
       st.view = 'exercises'; st.selectedGroup = code; st.selectedExerciseId = null; st.exercise = null; st.loading = true; renderAllExercises();
       try {
         const data = await apiFetch(`/gymapi/all_exercises/group/${encodeURIComponent(code)}`, { silent: true });
+        if (seq !== st.groupRequestSeq) return;
         st.exercises = data.items || [];
       } finally { st.loading = false; renderAllExercises(); }
     }
 
     async function openAllExercise(exerciseId) {
       const st = allExercisesState();
+      const seq = ++st.exerciseRequestSeq;
       st.previousView = st.view === 'unfinished' ? 'unfinished' : 'exercises';
       st.selectedExerciseId = Number(exerciseId);
       const data = await apiFetch(`/gymapi/all_exercises/exercise/${Number(exerciseId)}/session`, { silent: true });
+      if (seq !== st.exerciseRequestSeq) return;
       st.exercise = data;
       st.draft = deriveAllExerciseDraft(data);
       const ueId = Number(data.user_exercise_id || 0);
@@ -6789,18 +6793,32 @@
 
     async function refreshAllExerciseSession() { if (allExercisesState().selectedExerciseId) await openAllExercise(allExercisesState().selectedExerciseId); }
 
-    async function refreshAllExercisesMeta() {
+    async function refreshAllExercisesMeta({ render = false } = {}) {
+      const st = allExercisesState();
+      if (st.metaRefreshInFlight) { st.metaRefreshQueued = true; return; }
+      st.metaRefreshInFlight = true;
       try {
-        const [groupsData, unfinishedData] = await Promise.all([
-          apiFetch('/gymapi/all_exercises/groups', { silent: true }),
-          apiFetch(`/gymapi/all_exercises/unfinished?date=${encodeURIComponent(getTodayIsoLocal())}`, { silent: true }),
-        ]);
-        const st = allExercisesState();
-        st.groups = groupsData.groups || [];
-        st.doneToday = groupsData.done_today || [];
-        st.unfinishedCount = Array.isArray(unfinishedData.items) ? unfinishedData.items.length : 0;
-      } catch (_) {}
+        const data = await apiFetch(`/gymapi/all_exercises/groups?date=${encodeURIComponent(getTodayIsoLocal())}`, { silent: true });
+        st.groups = data.groups || [];
+        st.doneToday = data.done_today || [];
+        st.unfinishedCount = Number(data.unfinished_count || 0);
+      } catch (_) {
+      } finally {
+        st.metaRefreshInFlight = false;
+      }
+      updateAllExercisesHeaderCountersOnly();
+      if (render && state.currentRoute === 'allExercises' && !st.sheetOpen) renderAllExercises();
+      if (st.metaRefreshQueued) { st.metaRefreshQueued = false; refreshAllExercisesMeta({ render }); }
+    }
+
+    function updateAllExercisesHeaderCountersOnly() {
       if (state.currentRoute === 'allExercises' && !allExercisesState().sheetOpen) renderAllExercises();
+    }
+
+    function scheduleAllExercisesMetaRefresh() {
+      const st = allExercisesState();
+      clearTimeout(st.metaRefreshTimer);
+      st.metaRefreshTimer = setTimeout(() => refreshAllExercisesMeta({ render: false }), 350);
     }
 
     function goBackAllExercises() {
@@ -8788,7 +8806,11 @@
               state.library.exercises = [];
               state.library.view = 'groups';
               if (state.currentRoute === 'library') runUiAction('Не удалось загрузить библиотеку упражнений', () => loadLibraryGroups());
-      if (state.currentRoute === 'allExercises') runUiAction('Не удалось обновить все упражнения', () => loadAllExercisesGroups());
+      if (state.currentRoute === 'allExercises') {
+        const st = allExercisesState();
+        if (!st.sheetOpen) runUiAction('Не удалось обновить все упражнения', () => loadAllExercisesGroups());
+        else runUiAction('Не удалось обновить все упражнения', () => refreshAllExercisesMeta({ render: false }));
+      }
               if (state.currentRoute === 'today' && state.dayIndex) {
                 runUiAction('Не удалось обновить экран дня', () => refreshTodayData({ keepDay: true }));
               }
@@ -8810,7 +8832,11 @@
             if (!exerciseId) return;
             await apiFetch(`/gymapi/settings/custom_exercises/${exerciseId}`, { method: 'DELETE' });
             await loadSettingsOverview();
-            if (state.currentRoute === 'allExercises') runUiAction('Не удалось обновить все упражнения', () => loadAllExercisesGroups());
+            if (state.currentRoute === 'allExercises') {
+        const st = allExercisesState();
+        if (!st.sheetOpen) runUiAction('Не удалось обновить все упражнения', () => loadAllExercisesGroups());
+        else runUiAction('Не удалось обновить все упражнения', () => refreshAllExercisesMeta({ render: false }));
+      }
             toast('Упражнение удалено');
             return;
           }
@@ -8836,7 +8862,11 @@
             if (!code) return;
             const resp = await apiFetch(`/gymapi/settings/system_groups/${encodeURIComponent(code)}/clear`, { method: 'POST', body: JSON.stringify({}) });
             await loadSettingsOverview();
-            if (state.currentRoute === 'allExercises') runUiAction('Не удалось обновить все упражнения', () => loadAllExercisesGroups());
+            if (state.currentRoute === 'allExercises') {
+        const st = allExercisesState();
+        if (!st.sheetOpen) runUiAction('Не удалось обновить все упражнения', () => loadAllExercisesGroups());
+        else runUiAction('Не удалось обновить все упражнения', () => refreshAllExercisesMeta({ render: false }));
+      }
             toast(`Очищено: ${Number(resp.removed_links || 0)} упражнений`);
             return;
           }
@@ -8930,7 +8960,11 @@
             const perform = async () => {
               await apiFetch('/gymapi/settings/clear_non_base_exercises', { method: 'POST', body: JSON.stringify({}) });
               await loadSettingsOverview();
-              if (state.currentRoute === 'allExercises') runUiAction('Не удалось обновить все упражнения', () => loadAllExercisesGroups());
+              if (state.currentRoute === 'allExercises') {
+        const st = allExercisesState();
+        if (!st.sheetOpen) runUiAction('Не удалось обновить все упражнения', () => loadAllExercisesGroups());
+        else runUiAction('Не удалось обновить все упражнения', () => refreshAllExercisesMeta({ render: false }));
+      }
               if (state.currentRoute === 'today' && state.dayIndex) runUiAction('Не удалось обновить экран дня', () => refreshTodayData({ keepDay: true }));
               toast('Небазовые упражнения очищены');
             };
@@ -9064,7 +9098,11 @@
             item.exercise_id = newId;
             item.muscle_group = muscleGroup;
           }
-          if (state.currentRoute === 'allExercises') runUiAction('Не удалось обновить все упражнения', () => loadAllExercisesGroups());
+          if (state.currentRoute === 'allExercises') {
+        const st = allExercisesState();
+        if (!st.sheetOpen) runUiAction('Не удалось обновить все упражнения', () => loadAllExercisesGroups());
+        else runUiAction('Не удалось обновить все упражнения', () => refreshAllExercisesMeta({ render: false }));
+      }
           toast('Упражнение перенесено');
         } catch (err) {
           reportActionError('Не удалось перенести упражнение', err);
@@ -10973,7 +11011,7 @@
       const doneBtn = document.createElement('button'); doneBtn.type = 'button'; doneBtn.className = 'outline-btn done-btn'; doneBtn.textContent = '✅ Готово';
       doneBtn.addEventListener('click', (ev) => { ev.stopPropagation(); runUiAction('Не удалось отметить упражнение выполненным', () => handleExerciseDone(ueId)); });
       const detailsBtn = document.createElement('button'); detailsBtn.type = 'button'; detailsBtn.className = 'outline-btn'; detailsBtn.textContent = 'ℹ️ Детали';
-      detailsBtn.addEventListener('click', (ev) => { ev.stopPropagation(); openEditor(exercise.user_exercise_id, isAllExercisesEditorContext() ? 'all_exercises' : 'today'); });
+      detailsBtn.addEventListener('click', (ev) => { ev.stopPropagation(); openEditor(exercise.user_exercise_id, getExerciseActionSource(exercise.user_exercise_id)); });
       actionsRow.append(addBtn, removeBtn, detailsBtn, doneBtn);
       container.appendChild(actionsRow);
     }
@@ -11135,7 +11173,7 @@
       const actionsRow = document.createElement('div');
       actionsRow.className = 'workout-actions';
       const historyBtn = document.createElement('button'); historyBtn.type = 'button'; historyBtn.className = 'btn'; historyBtn.textContent = 'История';
-      historyBtn.addEventListener('click', (ev) => { ev.stopPropagation(); openEditor(exercise.user_exercise_id, isAllExercisesEditorContext() ? 'all_exercises' : 'today'); });
+      historyBtn.addEventListener('click', (ev) => { ev.stopPropagation(); openEditor(exercise.user_exercise_id, getExerciseActionSource(exercise.user_exercise_id)); });
       const doneBtn = document.createElement('button'); doneBtn.type = 'button'; doneBtn.className = 'outline-btn done-btn'; doneBtn.textContent = '✅ Готово';
       doneBtn.addEventListener('click', (ev) => { ev.stopPropagation(); runUiAction('Не удалось сохранить завершение пробежки', () => handleRunningDone(exercise)); });
       actionsRow.append(historyBtn, doneBtn);
@@ -11204,7 +11242,8 @@
 
     async function handleExerciseDone(ueId) {
       await flushInlineNumberInput();
-      if (!state.dayIndex && !isAllExercisesEditorContext()) return;
+      const source = getExerciseActionSource(ueId);
+      if (source !== 'all_exercises' && !state.dayIndex) return;
       const exercise = state.exercises.get(ueId);
       if (exercise && !isRunningExercise(exercise) && (exercise.sets?.length || 0) === 0) {
         const draft = ensureDraft(ueId);
@@ -11304,7 +11343,7 @@
       await queueExerciseAction(ueId, async () => {
         try {
           const url = getExerciseActionSource(ueId) === 'all_exercises'
-            ? getEditorActionUrl(ueId, 'session', getIsoDate())
+            ? getEditorActionUrl(ueId, 'running', getIsoDate())
             : `/gymapi/day/${state.dayIndex}/exercise/${ueId}/running${state.dateIso ? `?date=${state.dateIso}` : ''}`;
           const data = await apiFetch(url, {
             method: 'POST',
@@ -11332,7 +11371,7 @@
       await queueExerciseAction(ueId, async () => {
         try {
           const url = getExerciseActionSource(ueId) === 'all_exercises'
-            ? getEditorActionUrl(ueId, 'done', getIsoDate())
+            ? getEditorActionUrl(ueId, 'running/done', getIsoDate())
             : `/gymapi/day/${state.dayIndex}/exercise/${ueId}/running/done${state.dateIso ? `?date=${state.dateIso}` : ''}`;
           const data = await apiFetch(url, {
             method: 'POST',
@@ -11357,7 +11396,7 @@
             updateFinishButton();
           }
           if (data?.last_completed_at) updateLastCompleted(data.last_completed_at);
-          if (getExerciseActionSource(ueId) === 'all_exercises') refreshAllExercisesMeta();
+          if (getExerciseActionSource(ueId) === 'all_exercises') scheduleAllExercisesMetaRefresh();
           toast('Забег сохранён ✅');
         } catch (err) {
           const msg = String(err?.message || '').toLowerCase();
@@ -11765,7 +11804,7 @@
           state.editor.scrollTarget = last.set_no;
           setFlashSet(last.set_no);
         }
-        if (getExerciseActionSource(ueId) === 'all_exercises') refreshAllExercisesMeta();
+        if (getExerciseActionSource(ueId) === 'all_exercises') scheduleAllExercisesMetaRefresh();
         if (opts.toastOnSave) toast('Сохранено');
         return data;
       } catch (e) {
@@ -11780,7 +11819,7 @@
       applySetsUpdate(ueId, data.sets);
       const last = data.sets[data.sets.length - 1];
       if (state.editor.ueId === ueId) state.editor.selectedSet = last?.set_no || null;
-      if (getExerciseActionSource(ueId) === 'all_exercises') refreshAllExercisesMeta();
+      if (getExerciseActionSource(ueId) === 'all_exercises') scheduleAllExercisesMetaRefresh();
       if (opts.toastOnSave !== false) toast('Сохранено');
       return data;
     }
@@ -11812,7 +11851,7 @@
         body: JSON.stringify({ field, delta, set_no: targetSet }),
       });
       applySetsUpdate(ueId, data.sets);
-      if (getExerciseActionSource(ueId) === 'all_exercises') refreshAllExercisesMeta();
+      if (getExerciseActionSource(ueId) === 'all_exercises') scheduleAllExercisesMetaRefresh();
       toast('Сохранено');
     }
 
@@ -11975,7 +12014,11 @@
       if (!state.settings.loading) runUiAction('Не удалось загрузить настройки', () => loadSettingsOverview());
       if (!state.settings.trainer.loading) runUiAction('Не удалось загрузить данные тренерского режима', () => loadTrainerOverview());
       if (state.currentRoute === 'library') runUiAction('Не удалось загрузить библиотеку упражнений', () => loadLibraryGroups());
-      if (state.currentRoute === 'allExercises') runUiAction('Не удалось обновить все упражнения', () => loadAllExercisesGroups());
+      if (state.currentRoute === 'allExercises') {
+        const st = allExercisesState();
+        if (!st.sheetOpen) runUiAction('Не удалось обновить все упражнения', () => loadAllExercisesGroups());
+        else runUiAction('Не удалось обновить все упражнения', () => refreshAllExercisesMeta({ render: false }));
+      }
       if (state.currentRoute === 'today' && !state.editor.open && !state.manage.add.open) {
         runUiAction('Не удалось обновить экран дня', () => refreshTodayData({ keepDay: true }));
       }
@@ -15031,7 +15074,7 @@
       if (
         state.currentRoute === 'allExercises' &&
         ex &&
-        Number(ex.day_index || 0) === 0
+        (Number(ex.day_index || 0) === 0 || ex.source === 'all_exercises' || ex.free_workout)
       ) return 'all_exercises';
       return 'today';
     }
@@ -15055,7 +15098,7 @@
       const source = getExerciseActionSource(ueId);
       if (source === 'all_exercises') {
         const exerciseId = getEditorExerciseId(ueId);
-        const withDate = ['session', 'note', 'done', 'set/add', 'set/remove_last', 'set/inc_last'].includes(action);
+        const withDate = ['session', 'note', 'done', 'running', 'running/done', 'set/add', 'set/remove_last', 'set/inc_last'].includes(action);
         return `/gymapi/all_exercises/exercise/${exerciseId}/${action}${withDate ? `?date=${isoDate}` : ''}`;
       }
       return `/gymapi/day/${state.dayIndex}/exercise/${Number(ueId)}/${action}?date=${isoDate}`;

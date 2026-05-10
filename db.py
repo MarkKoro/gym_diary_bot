@@ -1158,6 +1158,20 @@ async def init_db():
             ON user_measurement_custom(user_id, created_at DESC);
         CREATE INDEX IF NOT EXISTS idx_user_measurement_categories_user
             ON user_measurement_categories(user_id, created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_user_exercises_user_exercise_day_archived
+            ON user_exercises(user_id, exercise_id, day_index, is_archived);
+        CREATE INDEX IF NOT EXISTS idx_user_exercises_user_day_archived
+            ON user_exercises(user_id, day_index, is_archived);
+        CREATE INDEX IF NOT EXISTS idx_sets_session_user_warmup_setno
+            ON sets(session_id, user_exercise_id, is_warmup, set_no);
+        CREATE INDEX IF NOT EXISTS idx_sets_user_session_warmup
+            ON sets(user_exercise_id, session_id, is_warmup);
+        CREATE INDEX IF NOT EXISTS idx_session_exercises_session_user_done
+            ON session_exercises(session_id, user_exercise_id, is_done);
+        CREATE INDEX IF NOT EXISTS idx_sessions_user_date_day
+            ON sessions(user_id, date, day_index);
+        CREATE INDEX IF NOT EXISTS idx_exercises_owner_group_name
+            ON exercises(created_by_user_id, muscle_group, name);
 
         CREATE TABLE IF NOT EXISTS user_muscle_groups(
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -7599,6 +7613,67 @@ async def list_all_exercises_in_group_for_user(user_id: int, group_code: str, is
     items = await build_effective_exercise_index_for_user(user_id, iso_date)
     return [it for it in items if it['effective_group']==normalized]
 
+
+
+
+async def list_all_exercises_in_group_for_user_with_last_sets(user_id: int, group_code: str, iso_date: str) -> list[dict]:
+    normalized = normalize_exercise_group_for_ui(group_code)
+    items = await build_effective_exercise_index_for_user(user_id, iso_date)
+    selected = [it for it in items if it['effective_group'] == normalized]
+    exercise_ids = [int(it['exercise_id']) for it in selected]
+    if not exercise_ids:
+        return []
+    ph = ','.join('?' for _ in exercise_ids)
+    async with connect_db() as db:
+        cur = await db.execute(f"""
+            WITH last_rows AS (
+                SELECT ue.exercise_id,
+                       st.set_no,
+                       st.reps,
+                       st.seconds,
+                       st.weight_kg,
+                       s.date,
+                       ROW_NUMBER() OVER (PARTITION BY ue.exercise_id ORDER BY s.date DESC, s.id DESC, st.set_no DESC) AS rn
+                FROM sessions s
+                JOIN sets st ON st.session_id=s.id
+                JOIN user_exercises ue ON ue.id=st.user_exercise_id
+                WHERE s.user_id=? AND ue.user_id=? AND ue.day_index=0 AND ue.is_archived=0 AND ue.exercise_id IN ({ph})
+            )
+            SELECT exercise_id, set_no, reps, seconds, weight_kg, date
+            FROM last_rows WHERE rn=1
+        """, (int(user_id), int(user_id), *exercise_ids))
+        rows = await cur.fetchall()
+    by_ex = {int(r[0]): r for r in (rows or [])}
+    out = []
+    for it in selected:
+        r = by_ex.get(int(it['exercise_id']))
+        merged = dict(it)
+        merged['last_set_no'] = int(r[1]) if r else None
+        merged['last_reps'] = int(r[2]) if r else None
+        merged['last_seconds'] = int(r[3]) if r else None
+        merged['last_weight_kg'] = float(r[4]) if r else None
+        if r and not merged.get('last_done_at'):
+            merged['last_done_at'] = r[5]
+        out.append(merged)
+    out.sort(key=lambda it: (0 if it.get('unfinished_today') else 1, 0 if it.get('has_history') else 1, -(int(str(it.get('last_done_at') or '0').replace('-',''))), 0 if it.get('created_by_user') else 1, str(it.get('name') or '').lower()))
+    return out
+
+
+async def count_all_exercises_unfinished(user_id: int, iso_date: str) -> int:
+    async with connect_db() as db:
+        cur = await db.execute(
+            """
+            SELECT COUNT(DISTINCT ue.exercise_id)
+            FROM sessions s
+            JOIN user_exercises ue ON ue.user_id=s.user_id AND ue.day_index=0 AND ue.is_archived=0
+            JOIN sets st ON st.session_id=s.id AND st.user_exercise_id=ue.id
+            LEFT JOIN session_exercises se ON se.session_id=s.id AND se.user_exercise_id=ue.id
+            WHERE s.user_id=? AND s.date=? AND s.day_index=0 AND IFNULL(se.is_done,0) != 1
+            """,
+            (int(user_id), iso_date),
+        )
+        row = await cur.fetchone()
+    return int((row or [0])[0] or 0)
 
 async def list_all_exercises_done_today(user_id: int, iso_date: str):
     async with connect_db() as db:
