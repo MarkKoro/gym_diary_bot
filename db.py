@@ -2530,7 +2530,7 @@ async def list_exercises_by_group(group: str, user_id: int, include_catalog: boo
                     FROM exercises e
                     WHERE (LOWER(COALESCE(NULLIF(TRIM(e.muscle_group), ''), 'none'))=? OR e.name IN (""" + placeholders + """))
                       AND (
-                        e.created_by_user_id IN (0, ?)
+                        COALESCE(e.created_by_user_id, 0) IN (0, ?)
                         OR EXISTS (
                             SELECT 1
                             FROM user_exercises ue
@@ -2548,7 +2548,7 @@ async def list_exercises_by_group(group: str, user_id: int, include_catalog: boo
                     FROM exercises e
                     WHERE LOWER(COALESCE(NULLIF(TRIM(e.muscle_group), ''), 'none'))=?
                       AND (
-                        e.created_by_user_id IN (0, ?)
+                        COALESCE(e.created_by_user_id, 0) IN (0, ?)
                         OR EXISTS (
                             SELECT 1
                             FROM user_exercises ue
@@ -2568,7 +2568,7 @@ async def list_exercises_by_group(group: str, user_id: int, include_catalog: boo
                 "JOIN user_exercises ue ON ue.exercise_id=e.id "
                 "WHERE ue.user_id=? AND ue.is_archived=0 "
                 "AND (e.muscle_group=? OR e.name IN (" + placeholders + ")) "
-                "AND (e.created_by_user_id=0 OR e.created_by_user_id=?) "
+                "AND (COALESCE(e.created_by_user_id,0)=0 OR e.created_by_user_id=?) "
                 "ORDER BY e.name"
             )
             params: tuple = (int(user_id), group, *METCON_SHARED_NAMES, int(user_id))
@@ -2581,7 +2581,7 @@ async def list_exercises_by_group(group: str, user_id: int, include_catalog: boo
                 JOIN user_exercises ue ON ue.exercise_id=e.id
                 WHERE ue.user_id=? AND ue.is_archived=0
                   AND e.muscle_group=?
-                  AND (e.created_by_user_id=0 OR e.created_by_user_id=?)
+                  AND (COALESCE(e.created_by_user_id,0)=0 OR e.created_by_user_id=?)
                 ORDER BY e.name
                 """,
                 (int(user_id), group, int(user_id)),
