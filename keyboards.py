@@ -268,6 +268,7 @@ def settings_kb(
             )
         ]
     )
+    rows.append([InlineKeyboardButton("🎟 Подарочный код", callback_data="settings:gift_code")])
     if show_referral:
         rows.append([InlineKeyboardButton("🎁 Реферальная программа", callback_data="settings:referral")])
     if show_referral_admin:

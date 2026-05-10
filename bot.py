@@ -261,6 +261,7 @@ from db import (
     gift_code_stats,
     list_active_gift_codes,
     delete_gift_code,
+    create_gift_code,
     get_referral_profile,
     get_referrer_by_slug,
     assign_referral_attribution,
@@ -414,6 +415,7 @@ TRAINER_MAX_TRAINEES_FREE = 5
 TRAINER_MAX_TRAINEES_SUB: int | None = None
 REFERRAL_NAME_INPUT_KEY = "awaiting_referral_name"
 REFERRAL_ADMIN_SEARCH_KEY = "awaiting_referral_admin_search"
+GIFT_CODE_DAYS_INPUT_KEY = "awaiting_gift_code_days"
 REFERRAL_ADMIN_PAGE_SIZE = 8
 
 
@@ -9994,6 +9996,58 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             remember_message(chat_id, msg_id)
         return
+    gift_days_state = context.user_data.get(GIFT_CODE_DAYS_INPUT_KEY)
+    if gift_days_state:
+        if not update.message or update.message.text is None:
+            return
+        if update.effective_user.id not in ADMIN_IDS:
+            context.user_data.pop(GIFT_CODE_DAYS_INPUT_KEY, None)
+            return
+        target_user_id = gift_days_state.get("target_user_id")
+        try:
+            target_user_id = int(target_user_id)
+        except (TypeError, ValueError):
+            target_user_id = user_id
+        if target_user_id != user_id:
+            context.user_data.pop(GIFT_CODE_DAYS_INPUT_KEY, None)
+            return
+        text_input = normalize_whitespace(update.message.text or "")
+        if not text_input.isdigit():
+            await update.message.reply_text("Введи число дней, например: 30")
+            return
+        days = int(text_input)
+        if days <= 0 or days > 3650:
+            await update.message.reply_text("Укажи количество дней от 1 до 3650.")
+            return
+        code = f"GIFT-{''.join(random.choices('ABCDEFGHJKLMNPQRSTUVWXYZ23456789', k=8))}"
+        await create_gift_code(code, days, update.effective_user.id)
+        await try_delete(update.message)
+        chat_id = gift_days_state.get("chat_id")
+        msg_id = gift_days_state.get("message_id")
+        context.user_data.pop(GIFT_CODE_DAYS_INPUT_KEY, None)
+        if chat_id and msg_id:
+            result_text = (
+                "✅ Подарочный код создан\n\n"
+                f"Код: <code>{code}</code>\n"
+                f"Срок: {days} дн.\n\n"
+                "Передай его пользователю для активации в подписке."
+            )
+            kb = InlineKeyboardMarkup(
+                [
+                    [InlineKeyboardButton("➕ Создать код", callback_data="settings:gift_code:create")],
+                    [InlineKeyboardButton("📊 Коды", callback_data="settings:gift_code:codes")],
+                    [InlineKeyboardButton(BACK_BTN, callback_data="settings:gift_code")],
+                ]
+            )
+            await context.bot.edit_message_text(
+                result_text,
+                chat_id=chat_id,
+                message_id=msg_id,
+                reply_markup=kb,
+                parse_mode=ParseMode.HTML,
+            )
+            remember_message(chat_id, msg_id)
+        return
     for_time_state = context.user_data.get(FOR_TIME_INPUT_KEY)
     if for_time_state:
         if not await ensure_can_edit_from_message(context, update):
@@ -11470,6 +11524,70 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await show_screen(q, context, text, kb, target_user_id)
             return
 
+        if data == "settings:gift_code":
+            is_admin = bool(update.effective_user and update.effective_user.id in ADMIN_IDS)
+            text = (
+                "🎟 Подарочный код\n\n"
+                "Здесь можно активировать подарочный код для подписки."
+            )
+            rows = [[InlineKeyboardButton("✅ Активировать код", callback_data="menu:subscription")]]
+            if is_admin:
+                text += "\n\nКак администратор, ты также можешь создавать новые коды."
+                rows.insert(0, [InlineKeyboardButton("➕ Создать код", callback_data="settings:gift_code:create")])
+                rows.insert(2, [InlineKeyboardButton("📊 Коды", callback_data="settings:gift_code:codes")])
+            rows.append([InlineKeyboardButton(BACK_BTN, callback_data="menu:settings")])
+            await show_screen(q, context, text, InlineKeyboardMarkup(rows), target_user_id)
+            return
+
+        if data == "settings:gift_code:create":
+            if update.effective_user.id not in ADMIN_IDS:
+                await q.answer("Только для админа", show_alert=True)
+                return
+            context.user_data[GIFT_CODE_DAYS_INPUT_KEY] = {
+                "chat_id": q.message.chat_id,
+                "message_id": q.message.message_id,
+                "target_user_id": target_user_id,
+            }
+            kb = InlineKeyboardMarkup(
+                [[InlineKeyboardButton(BACK_BTN, callback_data="settings:gift_code")]]
+            )
+            await show_screen(
+                q,
+                context,
+                "Введи количеством дней одним сообщением.\n\nНапример: 30",
+                kb,
+                target_user_id,
+            )
+            return
+
+        if data.startswith("settings:gift_code:new:"):
+            if update.effective_user.id not in ADMIN_IDS:
+                await q.answer("Только для админа", show_alert=True)
+                return
+            try:
+                days = max(1, int(data.rsplit(":", 1)[-1]))
+            except ValueError:
+                await q.answer("Некорректное количество дней", show_alert=True)
+                return
+            code = f"GIFT-{''.join(random.choices('ABCDEFGHJKLMNPQRSTUVWXYZ23456789', k=8))}"
+            await create_gift_code(code, days, update.effective_user.id)
+            await q.answer("Код создан")
+            text = (
+                "✅ Подарочный код создан\n\n"
+                f"Код: <code>{code}</code>\n"
+                f"Срок: {days} дн.\n\n"
+                "Передай его пользователю для активации в подписке."
+            )
+            kb = InlineKeyboardMarkup(
+                [
+                    [InlineKeyboardButton("➕ Создать код", callback_data="settings:gift_code:create")],
+                    [InlineKeyboardButton("📊 Коды", callback_data="settings:gift_code:codes")],
+                    [InlineKeyboardButton(BACK_BTN, callback_data="settings:gift_code")],
+                ]
+            )
+            await show_screen(q, context, text, kb, target_user_id, parse_mode=ParseMode.HTML)
+            return
+
         if data.startswith("settings:refadmin:page:"):
             if update.effective_user.id not in ADMIN_IDS:
                 await q.answer("Доступно только администратору.", show_alert=True)
@@ -11478,7 +11596,11 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 page = max(0, int(data.rsplit(":", 1)[-1]))
             except ValueError:
                 page = 0
-                rows.insert(1, [InlineKeyboardButton("📊 Коды", callback_data="settings:gift_code:codes")])
+            context.user_data["refadmin_page"] = page
+            query = context.user_data.get("refadmin_query")
+            text, kb = await build_referral_admin_screen(page=page, search=query)
+            await show_screen(q, context, text, kb, target_user_id)
+            return
         if data == "settings:gift_code:codes":
             if update.effective_user.id not in ADMIN_IDS:
                 await q.answer("Только для админа", show_alert=True)
@@ -11541,11 +11663,6 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             rows = [[InlineKeyboardButton(f"🗑 {it['code']} ({it['days']}д)", callback_data=f"settings:gift_code:del:{it['id']}:{page}")] for it in items]
             rows.append([InlineKeyboardButton(BACK_BTN, callback_data="settings:gift_code:codes")])
             await show_screen(q, context, "\n".join(lines), InlineKeyboardMarkup(rows), target_user_id)
-            return
-            context.user_data["refadmin_page"] = page
-            query = context.user_data.get("refadmin_query")
-            text, kb = await build_referral_admin_screen(page=page, search=query)
-            await show_screen(q, context, text, kb, target_user_id)
             return
 
         if data == "settings:refadmin:search":

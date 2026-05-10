@@ -3919,6 +3919,26 @@ async def delete_gift_code(code_id: int) -> bool:
         return (cur.rowcount or 0) > 0
 
 
+async def create_gift_code(code: str, days: int, created_by_user_id: int | None = None) -> int:
+    async with connect_db() as db:
+        await db.execute(
+            """
+            INSERT INTO gift_codes(code, days, created_at, created_by_user_id)
+            VALUES(?,?,?,?)
+            """,
+            (
+                str(code).strip().upper(),
+                max(1, int(days)),
+                datetime.now(UTC).isoformat(),
+                int(created_by_user_id) if created_by_user_id is not None else None,
+            ),
+        )
+        await db.commit()
+        cur = await db.execute("SELECT last_insert_rowid()")
+        row = await cur.fetchone()
+        return int(row[0]) if row and row[0] is not None else 0
+
+
 async def update_payment_status(
     external_id: str,
     status: str,
