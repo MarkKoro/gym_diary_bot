@@ -2917,19 +2917,37 @@ async def _all_exercises_groups_payload(user_id: int, iso_date: str) -> dict:
 
 async def _all_exercises_group_items(user_id: int, code: str, iso_date: str) -> list[dict]:
     items = await db.list_all_exercises_in_group_for_user(user_id, code, iso_date)
-    return [{
+    out = []
+    for it in items:
+        last_set = None
+        last_summary = None
+        previous_sets_rows = await db.fetch_last_session_sets(user_id, 0, await _ensure_all_exercise(user_id, int(it["exercise_id"])), iso_date, None)
+        if previous_sets_rows:
+            raw = previous_sets_rows[-1]
+            last_set = {"set_no": int(raw[0] or 0), "reps": int(raw[1] or 0), "seconds": int(raw[2] or 0), "weight_kg": float(raw[3] or 0)}
+            w = float(last_set["weight_kg"] or 0)
+            r = int(last_set["reps"] or 0)
+            s = int(last_set["seconds"] or 0)
+            parts = []
+            if w > 0: parts.append(f"{_format_num(w)} кг")
+            if r > 0: parts.append(f"{r} повт")
+            if s > 0: parts.append(f"{s} сек")
+            last_summary = " · ".join(parts) if parts else None
+        out.append({
         "exercise_id": int(it["exercise_id"]),
         "user_exercise_id": None,
         "name": it["name"],
         "muscle_group": it["effective_group"],
         "is_done_today": False,
         "last_date": it.get("last_done_at"),
-        "last_set": None,
+        "last_set": last_set,
+        "last_summary": last_summary,
         "has_history": bool(it.get("has_history")),
         "unfinished_today": bool(it.get("unfinished_today")),
         "can_hard_delete": bool(it.get("can_hard_delete")),
         "can_unlink": bool(it.get("can_unlink")),
-    } for it in items]
+    })
+    return out
 
 
 @app.post("/settings/system_groups/{code}/clear")
@@ -2954,16 +2972,19 @@ async def settings_move_exercise(exercise_id: int, payload: dict = Body(...), ct
     return {"ok": True, "exercise_id": int(updated_exercise_id), "muscle_group": muscle_group}
 
 
+@app.delete("/settings/exercises/{exercise_id}/remove_for_user")
+async def settings_remove_for_user(exercise_id: int, ctx: AuthCtx = Depends(get_auth_ctx)):
+    return await db.remove_exercise_for_user(ctx.user_id, int(exercise_id))
+
+
 @app.delete("/settings/exercises/{exercise_id}/unlink")
 async def settings_unlink_exercise(exercise_id: int, ctx: AuthCtx = Depends(get_auth_ctx)):
-    removed = await db.unlink_exercise_for_user(ctx.user_id, int(exercise_id))
-    return {"ok": True, "removed_links": int(removed)}
+    return await db.remove_exercise_for_user(ctx.user_id, int(exercise_id))
 
 
 @app.post("/settings/clear_non_base_exercises")
 async def settings_clear_non_base_exercises(ctx: AuthCtx = Depends(get_auth_ctx)):
-    removed = await db.clear_non_base_group_exercises_for_user(ctx.user_id)
-    return {"ok": True, "removed": int(removed)}
+    return await db.clear_non_base_group_exercises_for_user(ctx.user_id)
 
 
 @app.get("/all_exercises/groups")

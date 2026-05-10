@@ -6509,9 +6509,10 @@
     }
 
     function formatAllExerciseLast(item) {
-      if (!item?.last_set) return 'ещё не делал';
-      const detail = formatSetDetail(item.last_set) || '—';
-      return `${item.last_date || 'прошлый раз'} · ${detail}`;
+      if (item?.last_summary) return `${item.last_date || 'прошлый раз'} · ${item.last_summary}`;
+      if (item?.last_set) return `${item.last_date || 'прошлый раз'} · ${formatSetDetail(item.last_set) || '—'}`;
+      if (item?.has_history) return item?.last_date ? `${item.last_date}` : 'есть история';
+      return 'ещё не делал';
     }
 
     function deriveAllExerciseDraft(exercise) {
@@ -6729,10 +6730,17 @@
       `;
       const flags = ex.display || {};
       const controls = center.querySelector('#allExerciseControls');
-      if (flags.is_running) { controls.innerHTML = '<div class="all-ex-empty">Для бега используйте карточку Running в разделе Сегодня (спец. режим).</div>'; }
-      else if (flags.is_for_time) { controls.innerHTML = '<div class="all-ex-empty">For Time: отдельный flow по образцу Сегодня.</div>'; }
-      else if (flags.is_amrap) { controls.innerHTML = '<div class="all-ex-empty">AMRAP: отдельный flow по образцу Сегодня.</div>'; }
-      else {
+      if (flags.is_running) {
+        controls.appendChild(buildAllExerciseControl('Дистанция (км×10)', 'reps', Number(draft.reps || 0)));
+        controls.appendChild(buildAllExerciseControl('Время (сек)', 'seconds', Number(draft.seconds || 0)));
+        controls.appendChild(buildAllExerciseControl('Калории', 'weight_kg', Number(draft.weight_kg || 0)));
+      } else if (flags.is_for_time) {
+        controls.appendChild(buildAllExerciseControl('Время (сек)', 'seconds', Number(draft.seconds || 0)));
+        controls.appendChild(buildAllExerciseControl('Раунды / повторы', 'reps', Number(draft.reps || 0)));
+      } else if (flags.is_amrap) {
+        controls.appendChild(buildAllExerciseControl('Минуты', 'seconds', Number(draft.seconds || 0)));
+        controls.appendChild(buildAllExerciseControl('Итог повт.', 'reps', Number(draft.reps || 0)));
+      } else {
         const topFields = [];
         if (flags.show_weight) topFields.push(['Вес','weight_kg']);
         if (flags.show_reps) topFields.push(['Повторы','reps']);
@@ -8873,10 +8881,18 @@
           if (action === 'unlink-exercise') {
             const exerciseId = Number(target.dataset.exerciseId || 0);
             if (!exerciseId) return;
-            await apiFetch(`/gymapi/settings/exercises/${exerciseId}/unlink`, { method: 'DELETE' });
-            await loadSettingsOverview();
-            if (state.currentRoute === 'allExercises') runUiAction('Не удалось обновить все упражнения', () => loadAllExercisesGroups());
-            toast('Упражнение убрано');
+            const perform = async () => {
+              await apiFetch(`/gymapi/settings/exercises/${exerciseId}/remove_for_user`, { method: 'DELETE' });
+              await loadSettingsOverview();
+              if (state.currentRoute === 'allExercises') {
+                await loadAllExercisesGroups();
+                const st = allExercisesState();
+                if (st.selectedGroup) await openAllExercisesGroup(st.selectedGroup);
+                if (Number(st.selectedExerciseId || 0) === exerciseId) goBackAllExercises();
+              }
+              toast('Упражнение убрано');
+            };
+            openConfirmModal(() => runUiAction('Не удалось убрать упражнение', () => perform()), 'Убрать упражнение из моего списка?', 'Для вас упражнение будет полностью удалено из видимости и из ваших данных. Продолжить?');
             return;
           }
           if (action === 'clear-system-group') {
@@ -8975,13 +8991,14 @@
             return;
           }
           if (action === 'clear-non-base-exercises') {
-            await apiFetch('/gymapi/settings/clear_non_base_exercises', { method: 'POST', body: JSON.stringify({}) });
-            await loadSettingsOverview();
-            if (state.currentRoute === 'allExercises') runUiAction('Не удалось обновить все упражнения', () => loadAllExercisesGroups());
-            if (state.currentRoute === 'today' && state.dayIndex) {
-              runUiAction('Не удалось обновить экран дня', () => refreshTodayData({ keepDay: true }));
-            }
-            toast('Небазовые упражнения очищены');
+            const perform = async () => {
+              await apiFetch('/gymapi/settings/clear_non_base_exercises', { method: 'POST', body: JSON.stringify({}) });
+              await loadSettingsOverview();
+              if (state.currentRoute === 'allExercises') runUiAction('Не удалось обновить все упражнения', () => loadAllExercisesGroups());
+              if (state.currentRoute === 'today' && state.dayIndex) runUiAction('Не удалось обновить экран дня', () => refreshTodayData({ keepDay: true }));
+              toast('Небазовые упражнения очищены');
+            };
+            openConfirmModal(() => runUiAction('Не удалось очистить небазовые упражнения', () => perform()), 'Удалить небазовые упражнения?', 'Пользовательские упражнения будут удалены, а скрытые для вас — убраны из видимости. Продолжить?');
             return;
           }
           if (action === 'share-copy') {
