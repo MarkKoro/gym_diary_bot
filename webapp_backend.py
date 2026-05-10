@@ -2860,6 +2860,43 @@ async def _ensure_all_exercise(user_id: int, exercise_id: int) -> int:
     return int(row[0])
 
 
+def _all_exercise_display_flags(name: str | None, muscle_group: str | None) -> dict:
+    raw_name = str(name or "").strip().lower()
+    mg = normalize_exercise_group_for_ui(muscle_group)
+    is_running = mg == "run"
+    is_amrap = "amrap" in raw_name
+    is_for_time = ("for time" in raw_name) or ("на время" in raw_name)
+    is_duration = any(token in raw_name for token in ("планка", "удержан", "вис", "duration"))
+    kind = "strength"
+    show_weight = True
+    show_reps = True
+    show_seconds = False
+    with_weight = True
+    if is_running:
+        kind = "running"
+        show_weight = show_reps = with_weight = False
+    elif is_amrap:
+        kind = "amrap"
+        show_weight = show_reps = with_weight = False
+    elif is_for_time:
+        kind = "for_time"
+        show_weight = show_reps = with_weight = False
+    elif is_duration or mg == "cardio":
+        kind = "duration"
+        show_weight = show_reps = with_weight = False
+        show_seconds = True
+    return {
+        "kind": kind,
+        "with_weight": with_weight,
+        "show_weight": show_weight,
+        "show_reps": show_reps,
+        "show_seconds": show_seconds,
+        "is_running": is_running,
+        "is_amrap": is_amrap,
+        "is_for_time": is_for_time,
+    }
+
+
 async def _all_exercises_groups_payload(user_id: int, iso_date: str) -> dict:
     custom = await db.list_user_muscle_groups(user_id)
     group_names = {code: name for code, name in MG_NAMES.items()}
@@ -3028,6 +3065,7 @@ async def all_exercise_session(exercise_id: int, date: str | None = None, ctx: A
         "previous_date": previous_date,
         "current_note": current_note,
         "completed_count": completed_count,
+        "display": _all_exercise_display_flags(name, muscle_group),
     }
 
 
