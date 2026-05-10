@@ -3263,7 +3263,7 @@
         unseenCodes: new Set(),
         lastSeenAt: '',
       },
-      allExercises: { view: 'groups', loading: false, groups: [], exercises: [], selectedGroup: null, selectedExerciseId: null, exercise: null, draft: {}, noteTimer: null, animating: false, lastResetAt: 0, finishedAt: 0 },
+      allExercises: { view: 'groups', loading: false, groups: [], exercises: [], unfinished: [], unfinishedCount: 0, selectedGroup: null, selectedExerciseId: null, exercise: null, draft: {}, noteTimer: null, animating: false, lastResetAt: 0, finishedAt: 0 },
       library: {
         view: 'groups',
         loading: false,
@@ -6646,7 +6646,7 @@
           </div>
           <div class="all-ex-toolbar">
             ${st.view === 'groups' ? '<button class="all-ex-back" data-action="all-ex-add-group">＋ Группа</button>' : '<button class="all-ex-back" data-action="all-ex-add-exercise">＋ Упражнение</button>'}
-            ${st.view === 'groups' ? '<button class="all-ex-finish-day all-ex-unfinished-top" data-action="all-ex-open-unfinished">Незавершённые</button>' : ''}
+            ${st.view === 'groups' ? `<button class="all-ex-finish-day all-ex-unfinished-top ${Number(st.unfinishedCount||0)>0?'active':''}" data-action="all-ex-open-unfinished">Незавершённые${Number(st.unfinishedCount||0)>0?` (${Number(st.unfinishedCount||0)})`:''}</button>` : ''}
             <button class="all-ex-finish-day" data-action="all-ex-finish-day">Завершить день</button>
           </div>
         </div>
@@ -6668,7 +6668,6 @@
       }
       if (st.view === 'groups') {
         const groups = (st.groups || [])
-          .filter((g) => Number(g.count || 0) > 0 || !g.is_custom)
           .sort((a, b) => {
             const rank = (code) => (code === 'none' ? 0 : (code === 'other' ? 1 : 2));
             return rank(a.code) - rank(b.code) || String(a.name || '').localeCompare(String(b.name || ''), 'ru');
@@ -6703,13 +6702,26 @@
           stage.appendChild(empty);
         }
       }
+      if (st.exercise?.user_exercise_id) {
+        const wrap = document.createElement('div');
+        wrap.style.marginTop = '12px';
+        wrap.id = 'cards';
+        stage.appendChild(wrap);
+        const ex = state.exercises.get(Number(st.exercise.user_exercise_id));
+        if (ex) wrap.appendChild(renderExerciseCard(ex));
+        syncExpandedCards();
+      }
     }
 
     async function loadAllExercisesGroups() {
       const st = allExercisesState(); st.loading = true; renderAllExercises();
       try {
-        const data = await apiFetch('/gymapi/all_exercises/groups', { silent: true });
-        st.groups = data.groups || [];
+        const [groupsData, unfinishedData] = await Promise.all([
+          apiFetch('/gymapi/all_exercises/groups', { silent: true }),
+          apiFetch(`/gymapi/all_exercises/unfinished?date=${encodeURIComponent(getTodayIsoLocal())}`, { silent: true }),
+        ]);
+        st.groups = groupsData.groups || [];
+        st.unfinishedCount = Array.isArray(unfinishedData.items) ? unfinishedData.items.length : 0;
       } finally { st.loading = false; renderAllExercises(); }
     }
 
@@ -6738,13 +6750,15 @@
         is_done: Boolean(data.is_done),
       };
       state.exercises.set(ueId, normalizedExercise);
-      openEditor(ueId, "all_exercises");
+      state.workout.expanded = ueId;
+      renderAllExercises();
     }
 
     async function refreshAllExerciseSession() { if (allExercisesState().selectedExerciseId) await openAllExercise(allExercisesState().selectedExerciseId); }
 
     function goBackAllExercises() {
       const st = allExercisesState();
+      if (st.view === 'unfinished') { st.view = 'groups'; renderAllExercises(); return; }
       if (st.view === 'exercises') { st.view = 'groups'; st.selectedGroup = null; st.exercises = []; renderAllExercises(); runUiAction('Не удалось обновить группы', () => loadAllExercisesGroups()); }
     }
 
@@ -6757,6 +6771,7 @@
         const date = encodeURIComponent(getTodayIsoLocal());
         const data = await apiFetch(`/gymapi/all_exercises/unfinished?date=${date}`, { silent: true });
         st.unfinished = data.items || [];
+        st.unfinishedCount = st.unfinished.length;
       } finally {
         st.loading = false;
         renderAllExercises();
@@ -10911,7 +10926,7 @@
       const doneBtn = document.createElement('button'); doneBtn.type = 'button'; doneBtn.className = 'outline-btn done-btn'; doneBtn.textContent = '✅ Готово';
       doneBtn.addEventListener('click', (ev) => { ev.stopPropagation(); runUiAction('Не удалось отметить упражнение выполненным', () => handleExerciseDone(ueId)); });
       const detailsBtn = document.createElement('button'); detailsBtn.type = 'button'; detailsBtn.className = 'outline-btn'; detailsBtn.textContent = 'ℹ️ Детали';
-      detailsBtn.addEventListener('click', (ev) => { ev.stopPropagation(); openEditor(exercise.user_exercise_id); });
+      detailsBtn.addEventListener('click', (ev) => { ev.stopPropagation(); openEditor(exercise.user_exercise_id, isAllExercisesEditorContext() ? 'all_exercises' : 'today'); });
       actionsRow.append(addBtn, removeBtn, detailsBtn, doneBtn);
       container.appendChild(actionsRow);
     }
@@ -11073,7 +11088,7 @@
       const actionsRow = document.createElement('div');
       actionsRow.className = 'workout-actions';
       const historyBtn = document.createElement('button'); historyBtn.type = 'button'; historyBtn.className = 'btn'; historyBtn.textContent = 'История';
-      historyBtn.addEventListener('click', (ev) => { ev.stopPropagation(); openEditor(exercise.user_exercise_id); });
+      historyBtn.addEventListener('click', (ev) => { ev.stopPropagation(); openEditor(exercise.user_exercise_id, isAllExercisesEditorContext() ? 'all_exercises' : 'today'); });
       const doneBtn = document.createElement('button'); doneBtn.type = 'button'; doneBtn.className = 'outline-btn done-btn'; doneBtn.textContent = '✅ Готово';
       doneBtn.addEventListener('click', (ev) => { ev.stopPropagation(); runUiAction('Не удалось сохранить завершение пробежки', () => handleRunningDone(exercise)); });
       actionsRow.append(historyBtn, doneBtn);
