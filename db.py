@@ -253,6 +253,25 @@ async def _ensure_achievements_schema(db):
     )
 
 
+async def _ensure_gift_codes_schema(db):
+    await db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS gift_codes(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            code TEXT NOT NULL UNIQUE,
+            days INTEGER NOT NULL,
+            created_at TEXT NOT NULL,
+            created_by_user_id INTEGER,
+            used_at TEXT,
+            used_by_user_id INTEGER
+        )
+        """
+    )
+    await db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_gift_codes_active ON gift_codes(used_by_user_id, created_at DESC)"
+    )
+
+
 async def search_catalog_exercises(user_id: int, query: str | None, limit: int = 50):
     pattern = f"%{(query or '').strip().lower()}%"
     async with connect_db() as db:
@@ -1612,6 +1631,7 @@ async def init_db():
         await _ensure_exercises_user_scope(db)
         await _migrate_duration_metrics(db)
         await _ensure_achievements_schema(db)
+        await _ensure_gift_codes_schema(db)
         await db.commit()
 
         await _seed_exercises(db, DEFAULT_EXERCISES)
@@ -3921,6 +3941,7 @@ async def delete_gift_code(code_id: int) -> bool:
 
 async def create_gift_code(code: str, days: int, created_by_user_id: int | None = None) -> int:
     async with connect_db() as db:
+        await _ensure_gift_codes_schema(db)
         await db.execute(
             """
             INSERT INTO gift_codes(code, days, created_at, created_by_user_id)
