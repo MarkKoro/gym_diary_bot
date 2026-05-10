@@ -7369,13 +7369,13 @@ async def build_effective_exercise_index_for_user(user_id: int, iso_date: str):
         cur = await db.execute(
             """
             SELECT ue.exercise_id,
-                   COUNT(DISTINCT st.id) AS total_sets_count,
+                   COUNT(st.id) AS total_sets_count,
                    MAX(s.date) AS last_done_at,
-                   MAX(CASE WHEN s.date=? AND IFNULL(se.is_done,0) != 1 AND st.id IS NOT NULL THEN 1 ELSE 0 END) AS unfinished_today,
+                   MAX(CASE WHEN s.date=? AND s.day_index=0 AND IFNULL(se.is_done,0) != 1 AND st.id IS NOT NULL THEN 1 ELSE 0 END) AS unfinished_today,
                    MAX(CASE WHEN ue.user_id IS NOT NULL THEN 1 ELSE 0 END) AS has_user_link
             FROM user_exercises ue
-            LEFT JOIN sessions s ON s.user_id=ue.user_id AND s.day_index=0
-            LEFT JOIN sets st ON st.session_id=s.id AND st.user_exercise_id=ue.id
+            LEFT JOIN sets st ON st.user_exercise_id=ue.id
+            LEFT JOIN sessions s ON s.id=st.session_id AND s.user_id=ue.user_id
             LEFT JOIN session_exercises se ON se.session_id=s.id AND se.user_exercise_id=ue.id
             WHERE ue.user_id=? AND ue.is_archived=0
             GROUP BY ue.exercise_id

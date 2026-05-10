@@ -2448,7 +2448,8 @@
     .all-ex-empty { color: var(--muted); font-size: 13px; line-height: 1.35; padding: 10px; border-radius: 16px; background: color-mix(in srgb, var(--bg) 72%, transparent); }
     .all-ex-sets { display: grid; gap: 6px; font-size: 12px; }
     .all-ex-set { display: flex; justify-content: space-between; gap: 8px; padding: 7px 8px; border-radius: 12px; background: color-mix(in srgb, var(--bg) 70%, transparent); }
-    .all-ex-controls { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+    .all-ex-controls { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+    .all-ex-controls.seconds-row { grid-template-columns: 1fr; }
     .all-ex-controls .control-block { padding: 8px; }
     .all-ex-controls .control-head { font-size: 11px; }
     .all-ex-note { min-height: 68px; }
@@ -6726,11 +6727,23 @@
         </div>
         <textarea class="note-area all-ex-note" id="allExerciseNote" placeholder="Заметка к упражнению…">${escapeHtml(ex.current_note || '')}</textarea>
       `;
+      const flags = ex.display || {};
       const controls = center.querySelector('#allExerciseControls');
-      ['weight_kg', 'reps', 'seconds'].forEach((field) => {
-        const label = field === 'weight_kg' ? 'Вес' : (field === 'reps' ? 'Повторы' : 'Сек');
-        controls.appendChild(buildAllExerciseControl(label, field, Number(draft[field] || 0)));
-      });
+      if (flags.is_running) { controls.innerHTML = '<div class="all-ex-empty">Для бега используйте карточку Running в разделе Сегодня (спец. режим).</div>'; }
+      else if (flags.is_for_time) { controls.innerHTML = '<div class="all-ex-empty">For Time: отдельный flow по образцу Сегодня.</div>'; }
+      else if (flags.is_amrap) { controls.innerHTML = '<div class="all-ex-empty">AMRAP: отдельный flow по образцу Сегодня.</div>'; }
+      else {
+        const topFields = [];
+        if (flags.show_weight) topFields.push(['Вес','weight_kg']);
+        if (flags.show_reps) topFields.push(['Повторы','reps']);
+        topFields.forEach(([label,field]) => controls.appendChild(buildAllExerciseControl(label, field, Number(draft[field] || 0))));
+        if (flags.show_seconds) {
+          const secondRow = document.createElement('div');
+          secondRow.className = 'all-ex-controls seconds-row';
+          secondRow.appendChild(buildAllExerciseControl('Сек', 'seconds', Number(draft.seconds || 0)));
+          controls.parentElement.insertBefore(secondRow, controls.nextSibling);
+        }
+      }
       center.querySelector('[data-action="all-ex-add-set"]')?.addEventListener('click', () => runUiAction('Не удалось добавить подход', () => allExerciseAddSet()));
       center.querySelector('[data-action="all-ex-remove-set"]')?.addEventListener('click', () => runUiAction('Не удалось удалить подход', () => allExerciseRemoveSet()));
       center.querySelector('[data-action="all-ex-done"]')?.addEventListener('click', () => runUiAction('Не удалось завершить упражнение', () => allExerciseDone()));
