@@ -825,8 +825,8 @@ def _sanitize_ai_action_plan(plan: dict | None, mode: str, *, workouts_per_week:
             days = days[:7]
         if len(days) < 2:
             warnings.append("AI вернул слишком мало дней новой системы; рекомендуется минимум 2.")
-        if len(days) and len(days) != expected_days:
-            warnings.append(f"AI предложил {len(days)} дней вместо нормы {expected_days}; это допустимо, но проверь логику сплита.")
+        if expected_days > 0 and len(days) != expected_days:
+            return {"actions": []}, [f"AI вернул {len(days)} дней вместо {expected_days}."]
         picked["days"] = days
         return {"actions": [picked]}, warnings
 
@@ -1221,7 +1221,7 @@ muscle_group:
 """).strip()
 
     if mode == 'new_system':
-        requested_days_hint = f"\n- Явный запрос пользователя сейчас: {requested_days} дня(ей). Это приоритет при формировании days." if requested_days else ""
+        requested_days_hint = f"\n- Пользователь явно запросил {requested_days} тренировочных дней. Верни РОВНО {requested_days} объектов в create_system.days с day_index 1..{requested_days}. Меньше или больше запрещено." if requested_days else ""
         return (common + """
 Ты — AI Coach. Твоя задача: создать НОВУЮ тренировочную систему (create_system) под запрос пользователя и под контекст (user_profile + history_summary). Ты должен выдать одну структуру create_system с днями и упражнениями.
 
@@ -1292,7 +1292,7 @@ muscle_group:
 """).strip()
 
 
-async def _call_openai_chat(system_prompt: str, user_prompt: str, *, mode: str) -> dict:
+async def _call_openai_chat(system_prompt: str, user_prompt: str, *, mode: str, requested_days: int | None = None) -> dict:
     openai_api_key = get_openai_api_key()
     if not openai_api_key:
         raise HTTPException(status_code=503, detail='OPENAI_API_KEY не задан')
@@ -1301,7 +1301,7 @@ async def _call_openai_chat(system_prompt: str, user_prompt: str, *, mode: str) 
         raise HTTPException(status_code=503, detail='OPENAI_MODEL не задан')
 
     limits = _ai_limits_for_mode(mode)
-    response_format = _ai_response_format_for_mode(mode)
+    response_format = _ai_response_format_for_mode(mode, requested_days=requested_days)
 
     payload = {
         'model': openai_model,
@@ -1473,7 +1473,7 @@ def _ai_schema_base() -> dict:
     }
 
 
-def _ai_response_format_for_mode(mode: str) -> dict:
+def _ai_response_format_for_mode(mode: str, requested_days: int | None = None) -> dict:
     base = _ai_schema_base()
     defs = base['defs']
     root = defs['root']
@@ -1483,6 +1483,11 @@ def _ai_response_format_for_mode(mode: str) -> dict:
         root['properties']['action_plan']['properties']['actions'] = {'type': 'array', 'maxItems': 0}
     elif mode == 'new_system':
         root = json.loads(json.dumps(root, ensure_ascii=False))
+        rd = int(requested_days or 0)
+        min_days = rd if 1 <= rd <= 7 else 1
+        max_days = rd if 1 <= rd <= 7 else 7
+        defs['create_system']['properties']['days']['minItems'] = min_days
+        defs['create_system']['properties']['days']['maxItems'] = max_days
         root['properties']['action_plan']['properties']['actions'] = {
             'type': 'array',
             'minItems': 1,
@@ -1941,12 +1946,16 @@ async def _validate_day(user_id: int, day_index: int) -> tuple[int, list[tuple[i
     return wpw, active_days
 
 
-async def _ensure_user_exercise(user_id: int, ue_id: int, day_index: int) -> None:
+async def _ensure_user_exercise(user_id: int, ue_id: int, day_index: int, *, request_path: str | None = None) -> None:
     info = await db.get_user_exercise_info(ue_id)
     if not info:
         raise HTTPException(status_code=404, detail="Упражнение не найдено")
     owner_id, ue_day_index = info
     if owner_id != user_id or ue_day_index != day_index:
+        logger.warning(
+            "user_exercise_day_mismatch user_id=%s day_index=%s user_exercise_id=%s owner_id=%s ue_day_index=%s path=%s",
+            int(user_id), int(day_index), int(ue_id), int(owner_id or 0), int(ue_day_index or 0), str(request_path or ""),
+        )
         raise HTTPException(status_code=404, detail="Упражнение не принадлежит пользователю или дню")
 
 
@@ -2463,10 +2472,11 @@ async def add_set_fast(
     payload: dict | None = Body(default=None),
     date: str | None = None,
     ctx: AuthCtx = Depends(get_auth_ctx),
+    request: Request = None,
 ):
     user_id = ctx.user_id
     await _validate_day(user_id, day_index)
-    await _ensure_user_exercise(user_id, user_exercise_id, day_index)
+    await _ensure_user_exercise(user_id, user_exercise_id, day_index, request_path=str(request.url.path) if request else None)
     target_date = _parse_date_param(date)
     iso_date = _iso_date(target_date)
     active_system_id = await get_active_training_system_id(user_id)
@@ -2843,7 +2853,7 @@ async def update_exercise_note(
 
 
 
-async def _ensure_all_exercise(user_id: int, exercise_id: int) -> int:
+async def _get_or_create_free_user_exercise(user_id: int, exercise_id: int) -> int:
     await _require_catalog_exercise(user_id, exercise_id)
     await db.add_user_exercise(user_id, 0, exercise_id)
     async with db.connect_db() as conn:
@@ -3049,7 +3059,7 @@ async def create_all_exercises_catalog_exercise(payload: dict = Body(...), ctx: 
         str(name_raw).strip(),
         muscle_raw if isinstance(muscle_raw, str) else None,
     )
-    ue_id = await _ensure_all_exercise(ctx.user_id, exercise_id)
+    ue_id = await _get_or_create_free_user_exercise(ctx.user_id, exercise_id)
     return {"ok": True, "exercise_id": exercise_id, "user_exercise_id": ue_id}
 
 
@@ -3059,7 +3069,7 @@ async def all_exercise_session(exercise_id: int, date: str | None = None, ctx: A
         raise HTTPException(status_code=403, detail="Раздел доступен только для личного дневника")
     user_id = ctx.user_id
     name, muscle_group = await _require_catalog_exercise(user_id, exercise_id)
-    ue_id = await _ensure_all_exercise(user_id, exercise_id)
+    ue_id = await _get_or_create_free_user_exercise(user_id, exercise_id)
     target_date = _parse_date_param(date)
     iso_date = _iso_date(target_date)
     session_id = await db.get_or_create_today_session(user_id, iso_date, 0, await get_active_training_system_id(user_id))
@@ -3116,7 +3126,7 @@ async def all_exercise_add_set(exercise_id: int, payload: dict | None = Body(def
     if ctx.is_acting:
         raise HTTPException(status_code=403, detail="Раздел доступен только для личного дневника")
     user_id = ctx.user_id
-    ue_id = await _ensure_all_exercise(user_id, exercise_id)
+    ue_id = await _get_or_create_free_user_exercise(user_id, exercise_id)
     iso_date = _iso_date(_parse_date_param(date))
     session_id = await db.get_or_create_today_session(user_id, iso_date, 0, await get_active_training_system_id(user_id))
     sets_rows = await db.fetch_exercise_sets(session_id, ue_id)
@@ -3143,7 +3153,7 @@ async def all_exercise_remove_last(exercise_id: int, date: str | None = None, ct
     if ctx.is_acting:
         raise HTTPException(status_code=403, detail="Раздел доступен только для личного дневника")
     user_id = ctx.user_id
-    ue_id = await _ensure_all_exercise(user_id, exercise_id)
+    ue_id = await _get_or_create_free_user_exercise(user_id, exercise_id)
     iso_date = _iso_date(_parse_date_param(date))
     session_id = await db.get_or_create_today_session(user_id, iso_date, 0, await get_active_training_system_id(user_id))
     await db.remove_last_set(ue_id, session_id)
@@ -3155,7 +3165,7 @@ async def all_exercise_inc_set(exercise_id: int, payload: dict = Body(...), date
     if ctx.is_acting:
         raise HTTPException(status_code=403, detail="Раздел доступен только для личного дневника")
     user_id = ctx.user_id
-    ue_id = await _ensure_all_exercise(user_id, exercise_id)
+    ue_id = await _get_or_create_free_user_exercise(user_id, exercise_id)
     field = (payload or {}).get("field")
     delta = (payload or {}).get("delta")
     set_no = (payload or {}).get("set_no")
@@ -3189,7 +3199,7 @@ async def all_exercise_done(exercise_id: int, date: str | None = None, ctx: Auth
     if ctx.is_acting:
         raise HTTPException(status_code=403, detail="Раздел доступен только для личного дневника")
     user_id = ctx.user_id
-    ue_id = await _ensure_all_exercise(user_id, exercise_id)
+    ue_id = await _get_or_create_free_user_exercise(user_id, exercise_id)
     iso_date = _iso_date(_parse_date_param(date))
     session_id = await db.get_or_create_today_session(user_id, iso_date, 0, await get_active_training_system_id(user_id))
     sets_rows = await db.fetch_exercise_sets(session_id, ue_id)
@@ -6480,7 +6490,7 @@ async def ai_coach_query(payload: dict = Body(default_factory=dict), ctx: AuthCt
     # --- OpenAI call (mode-aware) ---
     system_prompt = _build_ai_system_prompt(mode, requested_days=requested_days)
     try:
-        result = await _call_openai_chat(system_prompt, user_prompt, mode=mode)
+        result = await _call_openai_chat(system_prompt, user_prompt, mode=mode, requested_days=requested_days)
     except TypeError:
         # если _call_openai_chat еще старой сигнатуры
         result = await _call_openai_chat(system_prompt, user_prompt)
@@ -6508,6 +6518,18 @@ async def ai_coach_query(payload: dict = Body(default_factory=dict), ctx: AuthCt
         active_day_count=len(context_payload.get("day_snapshots") or []),
         requested_days=requested_days,
     )
+    if mode == "new_system" and requested_days and not (sanitized_plan.get("actions") if isinstance(sanitized_plan, dict) else []):
+        if any("вместо" in str(w) for w in plan_warnings):
+            retry_prompt = user_prompt + f"\n\nВНИМАНИЕ: Ты вернул неверное число дней. Верни строго {requested_days} дней в create_system.days."
+            retry_result = await _call_openai_chat(system_prompt, retry_prompt, mode=mode, requested_days=requested_days)
+            retry_root = retry_result.get("parsed") if isinstance(retry_result, dict) else {}
+            retry_plan = retry_root.get("action_plan") if isinstance(retry_root, dict) and isinstance(retry_root.get("action_plan"), dict) else {"actions": []}
+            sanitized_plan, plan_warnings = _sanitize_ai_action_plan(
+                retry_plan, mode,
+                workouts_per_week=_to_int((context_payload.get("user_profile") or {}).get("workouts_per_week"), 0),
+                active_day_count=len(context_payload.get("day_snapshots") or []),
+                requested_days=requested_days,
+            )
 
     summary = str(parsed_root.get("summary") or "").strip()
     rationale = parsed_root.get("rationale")
@@ -6543,4 +6565,6 @@ async def ai_coach_query(payload: dict = Body(default_factory=dict), ctx: AuthCt
         "action_plan_warnings": plan_warnings,
         "context_preview": context_text,
         "model": get_openai_model(),
+        "requested_days": requested_days,
+        "expected_days": requested_days,
     }
