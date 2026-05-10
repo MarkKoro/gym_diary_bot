@@ -2460,9 +2460,14 @@
     
     .all-ex-top-left{display:flex;gap:8px;align-items:center;}
     .all-ex-unfinished-top{white-space:nowrap;}
-    .all-ex-summary-center{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:min(76vw,520px);text-align:center;pointer-events:none;z-index:2;}
-    .all-ex-summary-lines{display:grid;gap:4px;color:var(--text);font-weight:700;}
-    .all-ex-summary-line{font-size:clamp(10px,1.8vw,16px);opacity:.92;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+    .all-ex-summary-center{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:min(70vw,420px);max-height:min(34vh,250px);padding:8px 6px;text-align:left;pointer-events:none;z-index:2;overflow:hidden;}
+    .all-ex-summary-lines{display:grid;gap:4px;color:#fff;font-weight:700;}
+    .all-ex-summary-line{font-size:clamp(9px,1.6vw,12px);opacity:.94;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-shadow:0 1px 8px rgba(0,0,0,.42);}
+    .all-ex-summary-group{font-weight:850;}
+    .all-ex-summary-exercise{font-weight:600;opacity:.96;}
+    .all-ex-sheet{position:fixed;inset:0;z-index:9998;background:rgba(3,7,18,.48);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);display:flex;align-items:flex-end;justify-content:center;padding:0 10px calc(8px + env(safe-area-inset-bottom));}
+    .all-ex-sheet-card{width:min(96vw,620px);max-height:min(84dvh,760px);overflow:auto;-webkit-overflow-scrolling:touch;background:color-mix(in srgb, var(--card) 96%, transparent);border:1px solid var(--border);border-radius:22px 22px 14px 14px;padding:10px;box-shadow:var(--sheet-shadow);animation:allExSheetIn .2s ease;}
+    @keyframes allExSheetIn { from { transform:translateY(22px); opacity:.0; } to { transform:translateY(0); opacity:1; } }
 .all-ex-finish-day { font-size: 12px; padding: 8px 10px; border-radius: 999px; border: 1px solid var(--border); background: color-mix(in srgb, var(--card) 92%, var(--bg)); color: var(--muted); }
     @keyframes petalIn { from { opacity: 0; transform: rotate(var(--angle)) translate(calc(var(--radius) * .55)) rotate(calc(-1 * var(--angle))) scale(.88); } to { opacity: 1; } }
     @media (max-width: 420px) {
@@ -6594,14 +6599,44 @@
       const st = allExercisesState();
       if (st.view !== 'groups') return;
       const lines = [];
+      const doneToday = new Map();
+      for (const ex of state.exercises.values()) {
+        if (!ex || !ex.is_done) continue;
+        const key = normalizeMuscleKey(ex.muscle_group || 'other');
+        if (!doneToday.has(key)) doneToday.set(key, []);
+        doneToday.get(key).push(ex.name || 'Упражнение');
+      }
       (st.groups || []).forEach((g) => {
         const done = Number(g.done_count || 0);
-        if (done > 0) lines.push(`${g.name || allExercisesGroupName(g.code)} — выполнено ${done}`);
+        const key = normalizeMuscleKey(g.code || 'other');
+        if (done > 0 && doneToday.has(key)) {
+          doneToday.get(key).slice(0, 3).forEach((name) => lines.push({ group: g.name || allExercisesGroupName(g.code), name, color: getMuscleColor(key) }));
+        }
       });
       const box = document.createElement('div');
       box.className = 'all-ex-summary-center';
-      box.innerHTML = lines.length ? `<div class="all-ex-summary-lines">${lines.map((l)=>`<div class="all-ex-summary-line">${escapeHtml(l)}</div>`).join('')}</div>` : '';
+      box.innerHTML = lines.length ? `<div class="all-ex-summary-lines">${lines.slice(0, 10).map((l)=>`<div class="all-ex-summary-line"><span class="all-ex-summary-group" style="color:${escapeHtml(l.color)}">${escapeHtml(l.group)}:</span> <span class="all-ex-summary-exercise">${escapeHtml(l.name)}</span></div>`).join('')}</div>` : '';
       stage.appendChild(box);
+    }
+
+    function closeAllExerciseSheet() {
+      document.getElementById('allExerciseFloatingModal')?.remove();
+      document.body.classList.remove('all-ex-modal-open');
+    }
+
+    function openAllExerciseSheet(ex) {
+      closeAllExerciseSheet();
+      const wrap = document.createElement('div');
+      wrap.id = 'allExerciseFloatingModal';
+      wrap.className = 'all-ex-sheet';
+      wrap.addEventListener('click', (e) => { if (e.target === wrap) closeAllExerciseSheet(); });
+      const card = document.createElement('div');
+      card.className = 'all-ex-sheet-card';
+      card.appendChild(renderExerciseCard(ex));
+      wrap.appendChild(card);
+      document.body.appendChild(wrap);
+      document.body.classList.add('all-ex-modal-open');
+      syncExpandedCards();
     }
 
     function initAllExercisesPinchZoom(stage) {
@@ -6703,13 +6738,8 @@
         }
       }
       if (st.exercise?.user_exercise_id) {
-        const wrap = document.createElement('div');
-        wrap.style.marginTop = '12px';
-        wrap.id = 'cards';
-        stage.appendChild(wrap);
         const ex = state.exercises.get(Number(st.exercise.user_exercise_id));
-        if (ex) wrap.appendChild(renderExerciseCard(ex));
-        syncExpandedCards();
+        if (ex) openAllExerciseSheet(ex);
       }
     }
 
