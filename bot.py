@@ -11708,11 +11708,14 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 page = 0
             limit = 8
             items = await list_active_gift_codes(limit=limit, offset=page * limit)
-            lines = ["🟢 Неиспользованные коды", "", "Нажми на код ниже, чтобы быстро скопировать:"]
+            lines = ["🟢 Неиспользованные коды", "", "Нажми на код ниже, чтобы быстро скопировать:", ""]
             if not items:
                 lines.append("Список пуст.")
-            for it in items:
-                lines.append(f"• <code>{it['code']}</code> — {it['days']} дн.")
+            else:
+                for it in items:
+                    lines.append(f"<code>{it['code']}</code>")
+                    lines.append(f"Срок: {it['days']} дн.")
+                    lines.append("")
             rows = []
             for it in items[:8]:
                 rows.append([InlineKeyboardButton(f"🗑 Удалить {it['code']}", callback_data=f"settings:gift_code:del:{it['id']}:{page}")])
@@ -11724,19 +11727,26 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if nav:
                 rows.append(nav)
             rows.append([InlineKeyboardButton(BACK_BTN, callback_data="settings:gift_code:codes")])
-            await show_screen(q, context, "\n".join(lines), InlineKeyboardMarkup(rows), target_user_id)
+            await show_screen(
+                q,
+                context,
+                "\n".join(lines).rstrip(),
+                InlineKeyboardMarkup(rows),
+                target_user_id,
+                parse_mode=ParseMode.HTML,
+            )
             return
         if data.startswith("settings:gift_code:del:"):
             if update.effective_user.id not in ADMIN_IDS:
                 await q.answer("Только для админа", show_alert=True)
                 return
             parts = data.split(":")
-            if len(parts) != 6:
+            if len(parts) != 5:
                 await q.answer("Некорректные данные")
                 return
             try:
-                code_id = int(parts[4])
-                page = max(0, int(parts[5]))
+                code_id = int(parts[3])
+                page = max(0, int(parts[4]))
             except ValueError:
                 await q.answer("Некорректные данные")
                 return
@@ -11746,8 +11756,14 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if not items and page > 0:
                 page -= 1
                 items = await list_active_gift_codes(limit=8, offset=page * 8)
-            lines = ["🟢 Неиспользованные коды", "", "Нажми на код ниже, чтобы быстро скопировать:"]
-            lines.extend([f"• <code>{it['code']}</code> — {it['days']} дн." for it in items] or ["Список пуст."])
+            lines = ["🟢 Неиспользованные коды", "", "Нажми на код ниже, чтобы быстро скопировать:", ""]
+            if not items:
+                lines.append("Список пуст.")
+            else:
+                for it in items:
+                    lines.append(f"<code>{it['code']}</code>")
+                    lines.append(f"Срок: {it['days']} дн.")
+                    lines.append("")
             rows = [[InlineKeyboardButton(f"🗑 Удалить {it['code']}", callback_data=f"settings:gift_code:del:{it['id']}:{page}")] for it in items]
             nav = []
             if page > 0:
@@ -11757,7 +11773,14 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if nav:
                 rows.append(nav)
             rows.append([InlineKeyboardButton(BACK_BTN, callback_data="settings:gift_code:codes")])
-            await show_screen(q, context, "\n".join(lines), InlineKeyboardMarkup(rows), target_user_id)
+            await show_screen(
+                q,
+                context,
+                "\n".join(lines).rstrip(),
+                InlineKeyboardMarkup(rows),
+                target_user_id,
+                parse_mode=ParseMode.HTML,
+            )
             return
 
         if data == "settings:refadmin:search":
