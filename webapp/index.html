@@ -6818,7 +6818,7 @@
       state.exercises.set(ueId, normalizedExercise);
       st.editorPrevDayIndex = state.dayIndex;
       state.dayIndex = 0;
-      openEditor(ueId);
+      openEditor(ueId, "all_exercises");
 
     }
 
@@ -10501,7 +10501,11 @@
       const isoDate = getIsoDate();
       ctx.loading = true;
       ctx.error = false;
-      ctx.promise = apiFetch(`/gymapi/day/${state.dayIndex}/exercise/${ueId}/context?date=${isoDate}`, { silent: true })
+      const ex = state.exercises.get(ueId);
+      const contextUrl = isAllExercisesEditorContext()
+        ? `/gymapi/all_exercises/exercise/${Number(ex?.exercise_id || 0)}/session?date=${isoDate}`
+        : `/gymapi/day/${state.dayIndex}/exercise/${ueId}/context?date=${isoDate}`;
+      ctx.promise = apiFetch(contextUrl, { silent: true })
         .then((data) => {
           ctx.loading = false;
           ctx.loaded = true;
@@ -10522,7 +10526,11 @@
     async function saveExerciseNote(ueId, value) {
       const ctx = getOrCreateContext(ueId);
       try {
-        const data = await apiFetch(`/gymapi/day/${state.dayIndex}/exercise/${ueId}/note?date=${getIsoDate()}`, {
+        const ex = state.exercises.get(ueId);
+        const noteUrl = isAllExercisesEditorContext()
+          ? `/gymapi/all_exercises/exercise/${Number(ex?.exercise_id || 0)}/note?date=${getIsoDate()}`
+          : `/gymapi/day/${state.dayIndex}/exercise/${ueId}/note?date=${getIsoDate()}`;
+        const data = await apiFetch(noteUrl, {
           method: 'PUT',
           body: JSON.stringify({ note: value }),
           silent: true,
@@ -11271,7 +11279,7 @@
 
     async function handleExerciseDone(ueId) {
       await flushInlineNumberInput();
-      if (!state.dayIndex) return;
+      if (!state.dayIndex && !isAllExercisesEditorContext()) return;
       const exercise = state.exercises.get(ueId);
       if (exercise && !isRunningExercise(exercise) && (exercise.sets?.length || 0) === 0) {
         const draft = ensureDraft(ueId);
@@ -11723,7 +11731,7 @@
     }
 
     async function handleExerciseDelete(exercise) {
-      if (!state.dayIndex) return;
+      if (!state.dayIndex && !isAllExercisesEditorContext()) return;
       const card = document.querySelector(`.card[data-ueid="${exercise.user_exercise_id}"]`);
       if (card?.dataset.deleting === '1') return;
       if (card) card.dataset.deleting = '1';
@@ -11745,7 +11753,7 @@
     }
 
     async function archiveExercise(exercise) {
-      if (!state.dayIndex) return;
+      if (!state.dayIndex && !isAllExercisesEditorContext()) return;
       const card = document.querySelector(`.card[data-ueid="${exercise.user_exercise_id}"]`);
       closeMenus();
       try {
@@ -11898,7 +11906,7 @@
     }
 
     async function completeDay() {
-      if (!state.dayIndex) return;
+      if (!state.dayIndex && !isAllExercisesEditorContext()) return;
       try {
         const query = state.dateIso ? `?date=${state.dateIso}` : '';
         const data = await apiFetch(`/gymapi/day/${state.dayIndex}/complete${query}`, { method: 'POST', body: JSON.stringify({}), silent: false });
@@ -12354,7 +12362,7 @@
     }
 
     function openManageAddSheet() {
-      if (!state.dayIndex) return;
+      if (!state.dayIndex && !isAllExercisesEditorContext()) return;
       state.manage.add.open = true;
       state.manage.add.view = 'groups';
       state.manage.add.dayIndex = state.dayIndex;
@@ -13697,7 +13705,7 @@
       const fab = document.getElementById('finishFab');
       const pop = document.getElementById('finishPopover');
       document.getElementById('finishBtn').addEventListener('click', () => {
-        if (!state.dayIndex) return;
+        if (!state.dayIndex && !isAllExercisesEditorContext()) return;
         closeFinishPopover();
         openConfirmModal?.(() => completeDay(), 'Завершить день?', 'Ты больше не будешь добавлять подходы в этот день?');
       });
@@ -15063,9 +15071,14 @@
       }
     }
 
-    function openEditor(ueId) {
+
+    function isAllExercisesEditorContext() {
+      return state.currentRoute === 'all_exercises' && state.editor?.source === 'all_exercises';
+    }
+
+    function openEditor(ueId, source = "today") {
       triggerHaptic();
-      state.editor = { open: true, ueId, selectedSet: null, tab: 'sets', noteTimer: null, noteStatusTimer: null, flashSet: null, flashTimer: null, scrollTarget: null };
+      state.editor = { open: true, ueId, source, selectedSet: null, tab: 'sets', noteTimer: null, noteStatusTimer: null, flashSet: null, flashTimer: null, scrollTarget: null };
       setActiveTab('sets');
       renderEditor();
       setFinishFabVisible(false);

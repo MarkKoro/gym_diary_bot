@@ -2113,6 +2113,8 @@ def api_me(tg: TelegramInitData = Depends(get_tg_init_data)):
 
 @app.get("/whoami")
 async def whoami(ctx: AuthCtx = Depends(get_auth_ctx)):
+    running_state = await _build_running_state(user_id, 0, ue_id, target_date, history_limit=30)
+
     return {
         "ok": True,
         "tg_id": ctx.tg_id,
@@ -3089,6 +3091,9 @@ async def all_exercise_session(exercise_id: int, date: str | None = None, ctx: A
         "display": _all_exercise_display_flags(name, muscle_group),
         "effective_group": normalize_exercise_group_for_ui(muscle_group),
         "source": "all_exercises",
+        "running": running_state.get("running"),
+        "running_history": running_state.get("running_history"),
+        "previous_running": running_state.get("previous_running"),
     }
 
 
@@ -3314,7 +3319,7 @@ async def list_library_exercises(
 
     user_id = ctx.user_id
     muscle_filter = (muscle or "").strip().lower() or None
-    rows = await db.list_user_exercises_for_mapping(user_id, query, muscle_filter)
+    rows = await db.list_visible_catalog_exercises_for_user_in_group(user_id, muscle_filter or "other", query) if muscle_filter else await db.list_visible_catalog_exercises_for_user(user_id)
     return {
         "ok": True,
         "items": [
@@ -3322,7 +3327,7 @@ async def list_library_exercises(
                 "id": int(row[0]),
                 "name": row[1],
                 "muscle_group": row[2],
-                "has_user_anatomy_override": bool(row[3]) if len(row) > 3 else False,
+                "has_user_anatomy_override": False,
             }
             for row in rows
             if row
