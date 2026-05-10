@@ -2452,8 +2452,9 @@
     .all-ex-controls .control-block { padding: 8px; }
     .all-ex-controls .control-head { font-size: 11px; }
     .all-ex-note { min-height: 68px; }
-    .all-ex-center-wrap { position: fixed; inset: 0; z-index: 120; display: grid; place-items: center; background: rgba(3, 7, 18, .52); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); padding: 12px; }
-    .all-ex-center.fullscreen { position: relative; width: min(94vw, 560px); max-height: min(82vh, 720px); height: auto; transform: none; border-radius: 24px; z-index: 121; margin: 0 auto; padding: 14px; }
+    .all-ex-modal { position: fixed; inset: 0; z-index: 9999; display: flex; align-items: center; justify-content: center; padding: max(12px, env(safe-area-inset-top)) 12px max(18px, env(safe-area-inset-bottom)); background: rgba(3, 7, 18, .58); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); }
+    .all-ex-modal-card { position: relative; width: min(94vw, 560px); max-height: min(82dvh, 720px); overflow-y: auto; -webkit-overflow-scrolling: touch; border-radius: 24px; padding: 16px; background: color-mix(in srgb, var(--card) 96%, transparent); border: 1px solid color-mix(in srgb, var(--text) 10%, transparent); box-shadow: var(--shadow); left: auto; top: auto; transform: none; margin: 0; }
+    .all-ex-modal-header,.all-ex-modal-body,.all-ex-modal-controls,.all-ex-modal-footer{display:grid;gap:10px;}
     .all-ex-hide-bottom { width: min(94vw, 560px); }
     
     .all-ex-top-left{display:flex;gap:8px;align-items:center;}
@@ -6704,7 +6705,9 @@
     function renderAllExerciseCenter(center) {
       const st = allExercisesState();
       const ex = st.exercise;
-      center.className = `all-ex-center ${st.view === 'exercise' ? 'fullscreen' : ''}`;
+      center.className = `all-ex-modal-card`;
+      center.innerHTML = `<div class="all-ex-modal-body"></div>`;
+      const modalBody = center.querySelector('.all-ex-modal-body');
       if (!ex) { center.innerHTML = '<div class="all-ex-center-title">Загрузка…</div>'; return; }
       const sets = ex.sets || [];
       const previous = summarizePreviousSets(ex.previous_sets || []);
@@ -6857,7 +6860,7 @@
       const center = document.createElement('div');
       renderAllExerciseCenter(center);
       const wrapper = document.createElement('div');
-      wrapper.className = 'all-ex-center-wrap';
+      wrapper.className = 'all-ex-modal';
       wrapper.id = 'allExerciseFloatingModal';
       wrapper.addEventListener('click', (ev) => { if (ev.target === wrapper) goBackAllExercises(); });
       center.addEventListener('click', (ev) => ev.stopPropagation());

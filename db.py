@@ -7339,6 +7339,87 @@ async def hard_delete_user_owned_exercise(user_id: int, exercise_id: int) -> boo
         return True
 
 
+
+
+def normalize_exercise_group_for_ui(value: str | None) -> str:
+    raw = str(value or "").strip().lower()
+    if not raw or raw == "none":
+        return "other"
+    return raw
+
+
+async def list_visible_catalog_exercises_for_user(user_id: int):
+    async with connect_db() as db:
+        cur = await db.execute(
+            """
+            SELECT e.id, e.name, COALESCE(NULLIF(TRIM(e.muscle_group), ''), 'none') AS muscle_group,
+                   IFNULL(e.created_by_user_id, 0) AS owner_id
+            FROM exercises e
+            WHERE IFNULL(e.created_by_user_id, 0) IN (0, ?)
+            ORDER BY e.name COLLATE NOCASE
+            """,
+            (int(user_id),),
+        )
+        return await cur.fetchall()
+
+
+async def build_effective_exercise_index_for_user(user_id: int, iso_date: str):
+    visible = await list_visible_catalog_exercises_for_user(user_id)
+    async with connect_db() as db:
+        cur = await db.execute(
+            """
+            SELECT ue.exercise_id,
+                   COUNT(DISTINCT st.id) AS total_sets_count,
+                   MAX(s.date) AS last_done_at,
+                   MAX(CASE WHEN s.date=? AND IFNULL(se.is_done,0) != 1 AND st.id IS NOT NULL THEN 1 ELSE 0 END) AS unfinished_today,
+                   MAX(CASE WHEN ue.user_id IS NOT NULL THEN 1 ELSE 0 END) AS has_user_link
+            FROM user_exercises ue
+            LEFT JOIN sessions s ON s.user_id=ue.user_id AND s.day_index=0
+            LEFT JOIN sets st ON st.session_id=s.id AND st.user_exercise_id=ue.id
+            LEFT JOIN session_exercises se ON se.session_id=s.id AND se.user_exercise_id=ue.id
+            WHERE ue.user_id=? AND ue.is_archived=0
+            GROUP BY ue.exercise_id
+            """,
+            (iso_date, int(user_id)),
+        )
+        overlay={int(r[0]): r for r in (await cur.fetchall() or []) if r and r[0] is not None}
+    items=[]
+    for ex_id,name,mg,owner in visible:
+        ov=overlay.get(int(ex_id))
+        total_sets=int((ov[1] if ov else 0) or 0)
+        last_done=ov[2] if ov else None
+        unfinished=bool((ov[3] if ov else 0) or 0)
+        has_link=bool((ov[4] if ov else 0) or 0)
+        items.append({
+            'exercise_id': int(ex_id), 'name': str(name or ''), 'base_group_raw': str(mg or 'none'),
+            'effective_group': normalize_exercise_group_for_ui(mg), 'is_base': int(owner or 0)==0,
+            'created_by_user': int(owner or 0)==int(user_id), 'visible_for_user': True,
+            'has_user_link': has_link, 'has_history': total_sets>0, 'last_done_at': last_done,
+            'total_sets_count': total_sets, 'unfinished_today': unfinished,
+            'sort_bucket': 0 if unfinished else (1 if total_sets>0 else 2),
+            'can_hard_delete': int(owner or 0)==int(user_id), 'can_unlink': has_link,
+            'hidden_by_user': False,
+        })
+    items.sort(key=lambda it: (0 if it['unfinished_today'] else 1, 0 if it['has_history'] else 1, -(int(str(it['last_done_at']).replace('-','')) if it['last_done_at'] else 0), 0 if it['created_by_user'] else 1, it['name'].lower()))
+    return items
+
+
+async def list_all_exercise_groups_for_user(user_id: int, iso_date: str):
+    items = await build_effective_exercise_index_for_user(user_id, iso_date)
+    out={}
+    for it in items:
+        g=it['effective_group']
+        out.setdefault(g, {'count':0,'done_count':0})
+        out[g]['count']+=1
+        if it['unfinished_today'] is False and it['has_user_link']:
+            out[g]['done_count'] += 1 if (it.get('last_done_at')==iso_date) else 0
+    return out, items
+
+
+async def list_all_exercises_in_group_for_user(user_id: int, group_code: str, iso_date: str):
+    normalized = normalize_exercise_group_for_ui(group_code)
+    items = await build_effective_exercise_index_for_user(user_id, iso_date)
+    return [it for it in items if it['effective_group']==normalized]
 async def clear_group_exercises_for_user(user_id: int, group_code: str) -> int:
     normalized = str(group_code or "").strip().lower() or "other"
     removed_links = 0
@@ -7417,50 +7498,24 @@ async def unlink_exercise_for_user(user_id: int, exercise_id: int) -> int:
 
 
 async def clear_non_base_group_exercises_for_user(user_id: int) -> int:
-    base_groups = {"chest", "back", "legs", "shoulders", "core", "biceps", "triceps", "cardio"}
-    removed = 0
     async with aiosqlite.connect(DB_PATH) as db:
-        cur = await db.execute(
-            """
-            SELECT e.id
-            FROM exercises e
-            WHERE IFNULL(e.created_by_user_id, 0)=?
-              AND LOWER(COALESCE(NULLIF(TRIM(e.muscle_group), ''), 'none')) NOT IN ({})
-            """.format(",".join("?" for _ in base_groups)),
-            (int(user_id), *sorted(base_groups)),
-        )
-        custom_ids = [int(row[0]) for row in await cur.fetchall() if row and row[0] is not None]
+        cur = await db.execute("SELECT id FROM exercises WHERE IFNULL(created_by_user_id,0)=?", (int(user_id),))
+        custom_ids = [int(r[0]) for r in await cur.fetchall() if r and r[0] is not None]
         if not custom_ids:
             return 0
-
         placeholders = ",".join("?" for _ in custom_ids)
-        ue_cur = await db.execute(
-            f"SELECT id FROM user_exercises WHERE exercise_id IN ({placeholders})",
-            tuple(custom_ids),
-        )
-        ue_ids = [int(row[0]) for row in await ue_cur.fetchall() if row and row[0] is not None]
+        ue_ids = [int(r[0]) for r in await (await db.execute(f"SELECT id FROM user_exercises WHERE exercise_id IN ({placeholders})", tuple(custom_ids))).fetchall()]
         if ue_ids:
-            ue_ph = ",".join("?" for _ in ue_ids)
-            await db.execute(f"DELETE FROM sets WHERE user_exercise_id IN ({ue_ph})", tuple(ue_ids))
-            await db.execute(f"DELETE FROM session_exercises WHERE user_exercise_id IN ({ue_ph})", tuple(ue_ids))
-            await db.execute(f"DELETE FROM running_entries WHERE user_exercise_id IN ({ue_ph})", tuple(ue_ids))
-            await db.execute(f"DELETE FROM user_exercises WHERE id IN ({ue_ph})", tuple(ue_ids))
-
-        await db.execute(
-            f"DELETE FROM exercise_notes WHERE exercise_id IN ({placeholders})",
-            tuple(custom_ids),
-        )
-        await db.execute(
-            f"DELETE FROM user_exercise_muscles WHERE exercise_id IN ({placeholders})",
-            tuple(custom_ids),
-        )
-        await db.execute(
-            f"DELETE FROM exercises WHERE created_by_user_id=? AND id IN ({placeholders})",
-            (int(user_id), *custom_ids),
-        )
-        removed = len(custom_ids)
+            ph=",".join("?" for _ in ue_ids)
+            await db.execute(f"DELETE FROM sets WHERE user_exercise_id IN ({ph})", tuple(ue_ids))
+            await db.execute(f"DELETE FROM session_exercises WHERE user_exercise_id IN ({ph})", tuple(ue_ids))
+            await db.execute(f"DELETE FROM running_entries WHERE user_exercise_id IN ({ph})", tuple(ue_ids))
+            await db.execute(f"DELETE FROM user_exercises WHERE id IN ({ph})", tuple(ue_ids))
+        await db.execute(f"DELETE FROM exercise_notes WHERE exercise_id IN ({placeholders})", tuple(custom_ids))
+        await db.execute(f"DELETE FROM user_exercise_muscles WHERE exercise_id IN ({placeholders})", tuple(custom_ids))
+        await db.execute(f"DELETE FROM exercises WHERE created_by_user_id=? AND id IN ({placeholders})", (int(user_id), *custom_ids))
         await db.commit()
-    return removed
+        return len(custom_ids)
 
 
 async def resolve_exercise_muscles(user_id: int, exercise_ids: Sequence[int]):

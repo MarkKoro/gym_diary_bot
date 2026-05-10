@@ -2864,114 +2864,35 @@ async def _all_exercises_groups_payload(user_id: int, iso_date: str) -> dict:
     custom = await db.list_user_muscle_groups(user_id)
     group_names = {code: name for code, name in MG_NAMES.items()}
     group_names.update({code: name for code, name in custom})
-    async with db.connect_db() as conn:
-        cur = await conn.execute(
-            """
-            SELECT COALESCE(NULLIF(TRIM(e.muscle_group), ''), 'none') AS code,
-                   COUNT(DISTINCT e.id) AS exercise_count,
-                   COUNT(DISTINCT CASE WHEN se.is_done=1 THEN e.id END) AS done_count
-            FROM exercises e
-            LEFT JOIN user_exercises ue0
-              ON ue0.user_id=? AND ue0.exercise_id=e.id AND ue0.day_index=0 AND ue0.is_archived=0
-            LEFT JOIN sessions s
-              ON s.user_id=? AND s.date=? AND s.day_index=0
-            LEFT JOIN session_exercises se
-              ON se.session_id=s.id AND se.user_exercise_id=ue0.id
-            WHERE e.created_by_user_id IN (0, ?)
-               OR EXISTS (
-                    SELECT 1 FROM user_exercises uex
-                    WHERE uex.user_id=? AND uex.exercise_id=e.id
-               )
-            GROUP BY code
-            """,
-            (int(user_id), int(user_id), iso_date, int(user_id), int(user_id)),
-        )
-        rows = await cur.fetchall()
-    stats: dict[str, tuple[int, int]] = {}
-    for code, count, done in rows:
-        normalized = normalize_exercise_group_for_ui(str(code or "none"))
-        prev = stats.get(normalized, (0, 0))
-        stats[normalized] = (prev[0] + int(count or 0), prev[1] + int(done or 0))
-    for code in group_names:
-        stats.setdefault(code, (0, 0))
-    items = []
-    for code, (count, done) in stats.items():
-        items.append({
+    stats, _items = await db.list_all_exercise_groups_for_user(user_id, iso_date)
+    groups = []
+    for code, st in stats.items():
+        groups.append({
             "code": code,
             "name": group_names.get(code) or MUSCLE_NAME_MAP.get(code) or code,
-            "count": int(count or 0),
-            "done_count": int(done or 0),
+            "count": int(st.get("count") or 0),
+            "done_count": int(st.get("done_count") or 0),
             "is_custom": code not in MG_NAMES,
         })
-    def key_fn(item: dict):
-        code = normalize_exercise_group_for_ui(item.get("code"))
-        try:
-            base = LIBRARY_GROUP_ORDER.index(code)
-        except ValueError:
-            base = len(LIBRARY_GROUP_ORDER)
-        return (base, str(item.get("name") or code).lower())
-    return {"ok": True, "date": iso_date, "groups": sorted(items, key=key_fn)}
+    groups.sort(key=lambda item: (LIBRARY_GROUP_ORDER.index(item["code"]) if item["code"] in LIBRARY_GROUP_ORDER else len(LIBRARY_GROUP_ORDER), str(item.get("name") or "").lower()))
+    return {"ok": True, "date": iso_date, "groups": groups}
 
 
 async def _all_exercises_group_items(user_id: int, code: str, iso_date: str) -> list[dict]:
-    normalized_code = normalize_exercise_group_for_ui(code)
-    rows = await db.list_exercises_by_group(normalized_code, user_id, include_catalog=True)
-    items: list[dict] = []
-    async with db.connect_db() as conn:
-        for row in rows:
-            if not row:
-                continue
-            ex_id = row[0]
-            name = row[1] if len(row) > 1 else ""
-            muscle = row[2] if len(row) > 2 else normalized_code
-            exercise_id = int(ex_id)
-            cur = await conn.execute(
-                """
-                SELECT ue.id, IFNULL(se.is_done, 0)
-                FROM user_exercises ue
-                LEFT JOIN sessions s ON s.user_id=ue.user_id AND s.date=? AND s.day_index=0
-                LEFT JOIN session_exercises se ON se.session_id=s.id AND se.user_exercise_id=ue.id
-                WHERE ue.user_id=? AND ue.exercise_id=? AND ue.day_index=0 AND ue.is_archived=0
-                LIMIT 1
-                """,
-                (iso_date, int(user_id), exercise_id),
-            )
-            day0 = await cur.fetchone()
-            cur = await conn.execute(
-                """
-                SELECT s.date, st.set_no, st.reps, st.seconds, st.weight_kg
-                FROM sessions s
-                JOIN sets st ON st.session_id=s.id
-                JOIN user_exercises ue ON ue.id=st.user_exercise_id
-                WHERE s.user_id=? AND ue.exercise_id=?
-                ORDER BY s.date DESC, s.id DESC, st.set_no DESC
-                LIMIT 1
-                """,
-                (int(user_id), exercise_id),
-            )
-            last = await cur.fetchone()
-            items.append({
-                "exercise_id": exercise_id,
-                "user_exercise_id": int(day0[0]) if day0 else None,
-                "name": name,
-                "muscle_group": normalize_exercise_group_for_ui(muscle or normalized_code),
-                "is_done_today": bool(day0 and day0[1]),
-                "last_date": last[0] if last else None,
-                "last_set": {
-                    "set_no": int(last[1]),
-                    "reps": int(last[2] or 0),
-                    "seconds": int(last[3] or 0),
-                    "weight_kg": float(last[4] or 0.0),
-                } if last else None,
-            })
-    def _sort_key(item: dict) -> tuple[int, str, str]:
-        last_date = str(item.get("last_date") or "").strip()
-        has_last = 1 if last_date else 0
-        name = str(item.get("name") or "").lower()
-        # Сначала упражнения с историей, затем по самой свежей дате, затем по имени.
-        return (has_last, last_date, name)
-    items.sort(key=_sort_key, reverse=True)
-    return items
+    items = await db.list_all_exercises_in_group_for_user(user_id, code, iso_date)
+    return [{
+        "exercise_id": int(it["exercise_id"]),
+        "user_exercise_id": None,
+        "name": it["name"],
+        "muscle_group": it["effective_group"],
+        "is_done_today": False,
+        "last_date": it.get("last_done_at"),
+        "last_set": None,
+        "has_history": bool(it.get("has_history")),
+        "unfinished_today": bool(it.get("unfinished_today")),
+        "can_hard_delete": bool(it.get("can_hard_delete")),
+        "can_unlink": bool(it.get("can_unlink")),
+    } for it in items]
 
 
 @app.post("/settings/system_groups/{code}/clear")
@@ -2984,7 +2905,9 @@ async def settings_system_group_clear(
     if normalized != "other":
         raise HTTPException(status_code=400, detail="unsupported_group")
     removed_links, removed_owned_exercises = await db.clear_group_exercises_for_user(ctx.user_id, normalized)
-    return {"ok": True, "removed_links": int(removed_links), "removed_owned_exercises": int(removed_owned_exercises)}
+    groups_stats, _ = await db.list_all_exercise_groups_for_user(ctx.user_id, _iso_date(_parse_date_param(None)))
+    remaining_catalog_items = int((groups_stats.get("other") or {}).get("count", 0))
+    return {"ok": True, "removed_links": int(removed_links), "removed_owned_exercises": int(removed_owned_exercises), "remaining_catalog_items": remaining_catalog_items}
 
 
 @app.post("/settings/exercises/{exercise_id}/move")
@@ -4811,58 +4734,27 @@ async def settings_overview(ctx: AuthCtx = Depends(get_auth_ctx)):
     user_id = ctx.user_id
     wpw, active_days = await _load_user_settings(user_id)
     custom_groups = await list_user_muscle_groups(user_id)
-    custom_map = {str(code).strip().lower(): str(name or '').strip() for code, name in custom_groups}
-    orphan_codes = [code for code in await _list_user_orphan_group_codes(user_id) if code not in custom_map]
     reminders = await list_user_reminders(user_id)
     notifications_enabled = await get_user_notifications_enabled(user_id)
     leaderboard_visible = await get_user_leaderboard_visible(user_id)
     timezone = await get_user_timezone(user_id)
-    async with db.connect_db() as conn:
-        cur = await conn.execute(
-            """
-            SELECT DISTINCT e.id, e.name, COALESCE(NULLIF(TRIM(e.muscle_group), ''), 'none') AS muscle_group, IFNULL(e.created_by_user_id, 0) AS owner_id
-            FROM user_exercises ue
-            JOIN exercises e ON e.id = ue.exercise_id
-            WHERE ue.user_id=?
-              AND ue.is_archived=0
-            ORDER BY e.name COLLATE NOCASE
-            """,
-            (int(user_id),),
-        )
-        custom_exercises_rows = await cur.fetchall()
+    iso_date = _iso_date(_parse_date_param(None))
+    group_stats, effective_items = await db.list_all_exercise_groups_for_user(user_id, iso_date)
+    manageable = [it for it in effective_items if it.get("created_by_user") or it.get("can_unlink")]
     return {
         "ok": True,
         "workouts_per_week": wpw,
         "days": [{"day_index": int(d), "label": label} for d, label in active_days],
-        "custom_groups": [
-            *[{"code": code, "name": name} for code, name in custom_groups],
-            *[{"code": code, "name": code.upper()} for code in orphan_codes],
-        ],
-        "reminders": [
-            {"day_no": int(day_no), "dow": int(dow), "hour": int(hour), "minute": int(minute)}
-            for day_no, dow, hour, minute in reminders
-        ],
+        "custom_groups": [{"code": code, "name": name} for code, name in custom_groups],
+        "reminders": [{"day_no": int(day_no), "dow": int(dow), "hour": int(hour), "minute": int(minute)} for day_no, dow, hour, minute in reminders],
         "notifications_enabled": bool(notifications_enabled),
         "leaderboard_visible": bool(leaderboard_visible),
         "timezone": timezone,
-        "custom_exercises": [
-            {"exercise_id": int(row[0]), "name": str(row[1] or ""), "muscle_group": normalize_exercise_group_for_ui(row[2])}
-            for row in (custom_exercises_rows or [])
-        ],
-        "manageable_exercises": [
-            {
-                "exercise_id": int(row[0]),
-                "name": str(row[1] or ""),
-                "muscle_group": normalize_exercise_group_for_ui(row[2]),
-                "is_base": int(row[3] or 0) == 0,
-                "can_hard_delete": int(row[3] or 0) == int(user_id),
-                "can_unlink": True,
-            }
-            for row in (custom_exercises_rows or [])
-            if normalize_exercise_group_for_ui(row[2]) == "other"
-            or normalize_exercise_group_for_ui(row[2]).startswith("u")
-            or int(row[3] or 0) == int(user_id)
-        ],
+        "all_exercises_group_stats": [{"code": code, "count": int(st.get("count") or 0)} for code, st in group_stats.items()],
+        "settings_manageable_groups": [{"code": code, "name": (dict(custom_groups).get(code) or MUSCLE_NAME_MAP.get(code) or code)} for code, st in group_stats.items() if int(st.get("count") or 0) > 0],
+        "settings_manageable_exercises": [{"exercise_id": int(it["exercise_id"]), "name": it["name"], "muscle_group": it["effective_group"], "is_base": bool(it["is_base"]), "can_hard_delete": bool(it["can_hard_delete"]), "can_unlink": bool(it["can_unlink"])} for it in manageable],
+        "custom_exercises": [{"exercise_id": int(it["exercise_id"]), "name": it["name"], "muscle_group": it["effective_group"]} for it in effective_items if it.get("created_by_user")],
+        "manageable_exercises": [{"exercise_id": int(it["exercise_id"]), "name": it["name"], "muscle_group": it["effective_group"], "is_base": bool(it["is_base"]), "can_hard_delete": bool(it["can_hard_delete"]), "can_unlink": bool(it["can_unlink"])} for it in manageable],
     }
 
 
