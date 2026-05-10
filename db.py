@@ -7508,7 +7508,7 @@ async def list_visible_catalog_exercises_for_user(user_id: int):
 
 
 
-async def list_visible_catalog_exercises_for_user_in_group(user_id: int, group_code: str):
+async def list_visible_catalog_exercises_for_user_in_group(user_id: int, group_code: str, query: str | None = None):
     normalized = normalize_exercise_group_for_ui(group_code)
     items = await list_visible_catalog_exercises_for_user(user_id)
     result = []
@@ -7519,6 +7519,10 @@ async def list_visible_catalog_exercises_for_user_in_group(user_id: int, group_c
                 result.append((int(ex_id), str(name or ''), effective_group))
         elif effective_group == normalized:
             result.append((int(ex_id), str(name or ''), effective_group))
+    if query:
+        q = str(query or '').strip().lower()
+        if q:
+            result = [row for row in result if q in row[1].lower()]
     result.sort(key=lambda r: r[1].lower())
     return result
 
