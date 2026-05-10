@@ -6776,6 +6776,10 @@
         ...(state.exercises.get(ueId) || {}),
         ...data,
         user_exercise_id: ueId,
+        exercise_id: Number(data.exercise_id || exerciseId),
+        day_index: 0,
+        source: 'all_exercises',
+        free_workout: true,
         is_done: Boolean(data.is_done),
       };
       state.exercises.set(ueId, normalizedExercise);
@@ -6796,7 +6800,7 @@
         st.doneToday = groupsData.done_today || [];
         st.unfinishedCount = Array.isArray(unfinishedData.items) ? unfinishedData.items.length : 0;
       } catch (_) {}
-      if (state.currentRoute === 'allExercises') renderAllExercises();
+      if (state.currentRoute === 'allExercises' && !allExercisesState().sheetOpen) renderAllExercises();
     }
 
     function goBackAllExercises() {
@@ -10425,7 +10429,7 @@
       ctx.loading = true;
       ctx.error = false;
       const ex = state.exercises.get(ueId);
-      const contextUrl = getEditorSource() === 'all_exercises'
+      const contextUrl = getExerciseActionSource(ueId) === 'all_exercises'
         ? getEditorActionUrl(ueId, 'session', isoDate)
         : getEditorActionUrl(ueId, 'context', isoDate);
       ctx.promise = apiFetch(contextUrl, { silent: true })
@@ -11299,7 +11303,7 @@
       const durationSec = Math.max(0, Math.round(durationMs / 1000));
       await queueExerciseAction(ueId, async () => {
         try {
-          const url = getEditorSource() === 'all_exercises'
+          const url = getExerciseActionSource(ueId) === 'all_exercises'
             ? getEditorActionUrl(ueId, 'session', getIsoDate())
             : `/gymapi/day/${state.dayIndex}/exercise/${ueId}/running${state.dateIso ? `?date=${state.dateIso}` : ''}`;
           const data = await apiFetch(url, {
@@ -11327,7 +11331,7 @@
       const durationSec = Math.max(0, Math.round(durationMs / 1000));
       await queueExerciseAction(ueId, async () => {
         try {
-          const url = getEditorSource() === 'all_exercises'
+          const url = getExerciseActionSource(ueId) === 'all_exercises'
             ? getEditorActionUrl(ueId, 'done', getIsoDate())
             : `/gymapi/day/${state.dayIndex}/exercise/${ueId}/running/done${state.dateIso ? `?date=${state.dateIso}` : ''}`;
           const data = await apiFetch(url, {
@@ -11341,19 +11345,19 @@
             },
           });
           applyRunningUpdate(ueId, data);
-          if (getEditorSource() !== 'all_exercises') {
+          if (getExerciseActionSource(ueId) !== 'all_exercises') {
             const doneIds = state.workout.doneIds instanceof Set ? state.workout.doneIds : new Set();
             doneIds.add(ueId);
             state.workout.doneIds = doneIds;
           }
-          if (data.completed_days && getEditorSource() !== 'all_exercises') {
+          if (data.completed_days && getExerciseActionSource(ueId) !== 'all_exercises') {
             state.completedDays = new Set((data.completed_days || []).map(Number));
             renderDayOptions(state.dayIndex);
             renderDayHeader();
             updateFinishButton();
           }
           if (data?.last_completed_at) updateLastCompleted(data.last_completed_at);
-          if (getEditorSource() === 'all_exercises') refreshAllExercisesMeta();
+          if (getExerciseActionSource(ueId) === 'all_exercises') refreshAllExercisesMeta();
           toast('Забег сохранён ✅');
         } catch (err) {
           const msg = String(err?.message || '').toLowerCase();
@@ -11761,7 +11765,7 @@
           state.editor.scrollTarget = last.set_no;
           setFlashSet(last.set_no);
         }
-        if (getEditorSource() === 'all_exercises') refreshAllExercisesMeta();
+        if (getExerciseActionSource(ueId) === 'all_exercises') refreshAllExercisesMeta();
         if (opts.toastOnSave) toast('Сохранено');
         return data;
       } catch (e) {
@@ -11776,7 +11780,7 @@
       applySetsUpdate(ueId, data.sets);
       const last = data.sets[data.sets.length - 1];
       if (state.editor.ueId === ueId) state.editor.selectedSet = last?.set_no || null;
-      if (getEditorSource() === 'all_exercises') refreshAllExercisesMeta();
+      if (getExerciseActionSource(ueId) === 'all_exercises') refreshAllExercisesMeta();
       if (opts.toastOnSave !== false) toast('Сохранено');
       return data;
     }
@@ -11808,7 +11812,7 @@
         body: JSON.stringify({ field, delta, set_no: targetSet }),
       });
       applySetsUpdate(ueId, data.sets);
-      if (getEditorSource() === 'all_exercises') refreshAllExercisesMeta();
+      if (getExerciseActionSource(ueId) === 'all_exercises') refreshAllExercisesMeta();
       toast('Сохранено');
     }
 
@@ -13063,6 +13067,7 @@
         const rawPlan = data.parsed_action_plan || null;
         const normalizedActions = normalizeAiCoachActions(rawPlan, mode);
         state.aiCoach.parsed = rawPlan ? { ...rawPlan, actions: normalizedActions } : null;
+        state.aiCoach.expectedDays = Number(data?.expected_days || 0) || null;
         state.aiCoach.done = {};
         state.aiCoach.warnings = Array.isArray(data.action_plan_warnings) ? data.action_plan_warnings.filter(Boolean) : [];
         const quota = data?.quota || {};
@@ -13082,6 +13087,7 @@
         state.aiCoach.summary = '';
         state.aiCoach.rationale = [];
         state.aiCoach.parsed = null;
+        state.aiCoach.expectedDays = null;
         state.aiCoach.warnings = [];
         state.aiCoach.hasResponse = true;
         renderAiCoachResult();
@@ -13116,6 +13122,11 @@
       try {
         if (createAction) {
           const systemDays = Array.isArray(createAction.days) ? createAction.days : [];
+          const expectedDays = Number(state.aiCoach.expectedDays || createAction?.expected_days || 0);
+          if (expectedDays > 0 && systemDays.length !== expectedDays) {
+            toast(`ИИ вернул ${systemDays.length} день(дней) вместо ${expectedDays}. Система не применена.`);
+            return;
+          }
           const daysCount = Math.max(1, Math.min(7, Number(systemDays.length || 3)));
           const systemName = String(createAction.system_name || 'Система от ИИ').trim() || 'Система от ИИ';
           const currentRoute = state.currentRoute;
@@ -15007,8 +15018,26 @@
       return state.currentRoute === 'allExercises' && state.editor?.source === 'all_exercises';
     }
 
+    function getExerciseActionSource(ueId = null) {
+      if (state.editor?.open && state.editor?.source === 'all_exercises') return 'all_exercises';
+      const st = allExercisesState?.();
+      const nUeId = Number(ueId || 0);
+      if (
+        state.currentRoute === 'allExercises' &&
+        st?.exercise?.user_exercise_id &&
+        Number(st.exercise.user_exercise_id) === nUeId
+      ) return 'all_exercises';
+      const ex = state.exercises.get(nUeId);
+      if (
+        state.currentRoute === 'allExercises' &&
+        ex &&
+        Number(ex.day_index || 0) === 0
+      ) return 'all_exercises';
+      return 'today';
+    }
+
     function getEditorSource() {
-      return state.editor?.source === 'all_exercises' ? 'all_exercises' : 'today';
+      return getExerciseActionSource(state.editor?.ueId);
     }
 
     function getEditorExercise(ueId) {
@@ -15023,10 +15052,10 @@
     }
 
     function getEditorActionUrl(ueId, action, isoDate = getIsoDate()) {
-      const source = getEditorSource();
+      const source = getExerciseActionSource(ueId);
       if (source === 'all_exercises') {
         const exerciseId = getEditorExerciseId(ueId);
-        const withDate = action === 'session' || action === 'note' || action === 'done';
+        const withDate = ['session', 'note', 'done', 'set/add', 'set/remove_last', 'set/inc_last'].includes(action);
         return `/gymapi/all_exercises/exercise/${exerciseId}/${action}${withDate ? `?date=${isoDate}` : ''}`;
       }
       return `/gymapi/day/${state.dayIndex}/exercise/${Number(ueId)}/${action}?date=${isoDate}`;
