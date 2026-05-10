@@ -7506,6 +7506,22 @@ async def list_visible_catalog_exercises_for_user(user_id: int):
         return await cur.fetchall()
 
 
+
+
+async def list_visible_catalog_exercises_for_user_in_group(user_id: int, group_code: str):
+    normalized = normalize_exercise_group_for_ui(group_code)
+    items = await list_visible_catalog_exercises_for_user(user_id)
+    result = []
+    for ex_id, name, muscle_group, _owner in items:
+        effective_group = normalize_exercise_group_for_ui(muscle_group)
+        if normalized == 'metcon' and METCON_SHARED_NAMES:
+            if effective_group == normalized or str(name or '') in METCON_SHARED_NAMES:
+                result.append((int(ex_id), str(name or ''), effective_group))
+        elif effective_group == normalized:
+            result.append((int(ex_id), str(name or ''), effective_group))
+    result.sort(key=lambda r: r[1].lower())
+    return result
+
 async def build_effective_exercise_index_for_user(user_id: int, iso_date: str):
     visible = await list_visible_catalog_exercises_for_user(user_id)
     async with connect_db() as db:

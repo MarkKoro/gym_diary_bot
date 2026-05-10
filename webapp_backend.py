@@ -2284,7 +2284,7 @@ async def list_catalog_group_exercises(
         raise HTTPException(status_code=400, detail="Группа не указана")
     if day_index is not None:
         await _validate_day(user_id, int(day_index))
-    rows = await db.list_exercises_by_group(normalized_code, user_id, include_catalog=True)
+    rows = await db.list_visible_catalog_exercises_for_user_in_group(user_id, normalized_code)
     added = set()
     if day_index is not None:
         added = set(await db.list_user_exercise_ids(user_id, int(day_index), normalized_code))
@@ -2294,10 +2294,10 @@ async def list_catalog_group_exercises(
             {
                 "id": int(ex_id),
                 "name": name,
-                "muscle_group": normalized_code,
+                "muscle_group": normalize_exercise_group_for_ui(muscle_group),
                 "is_added": int(ex_id) in added,
             }
-            for ex_id, name in rows
+            for ex_id, name, muscle_group in rows
         ],
     }
 
@@ -3087,6 +3087,8 @@ async def all_exercise_session(exercise_id: int, date: str | None = None, ctx: A
         "current_note": current_note,
         "completed_count": completed_count,
         "display": _all_exercise_display_flags(name, muscle_group),
+        "effective_group": normalize_exercise_group_for_ui(muscle_group),
+        "source": "all_exercises",
     }
 
 
