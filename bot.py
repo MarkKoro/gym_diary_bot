@@ -262,6 +262,7 @@ from db import (
     list_active_gift_codes,
     delete_gift_code,
     create_gift_code,
+    redeem_gift_code,
     get_referral_profile,
     get_referrer_by_slug,
     assign_referral_attribution,
@@ -416,6 +417,7 @@ TRAINER_MAX_TRAINEES_SUB: int | None = None
 REFERRAL_NAME_INPUT_KEY = "awaiting_referral_name"
 REFERRAL_ADMIN_SEARCH_KEY = "awaiting_referral_admin_search"
 GIFT_CODE_DAYS_INPUT_KEY = "awaiting_gift_code_days"
+GIFT_CODE_INPUT_KEY = "awaiting_gift_code"
 REFERRAL_ADMIN_PAGE_SIZE = 8
 
 
@@ -10048,6 +10050,73 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             remember_message(chat_id, msg_id)
         return
+    gift_code_state = context.user_data.get(GIFT_CODE_INPUT_KEY)
+    if gift_code_state:
+        if not update.message or update.message.text is None:
+            return
+        target_user_id = gift_code_state.get("target_user_id")
+        try:
+            target_user_id = int(target_user_id)
+        except (TypeError, ValueError):
+            target_user_id = user_id
+        if target_user_id != user_id:
+            context.user_data.pop(GIFT_CODE_INPUT_KEY, None)
+            return
+        code_input = normalize_whitespace(update.message.text or "").upper()
+        await try_delete(update.message)
+        chat_id = gift_code_state.get("chat_id")
+        msg_id = gift_code_state.get("message_id")
+        if not code_input:
+            if chat_id and msg_id:
+                kb = InlineKeyboardMarkup(
+                    [[InlineKeyboardButton(BACK_BTN, callback_data="settings:gift_code")]]
+                )
+                await context.bot.edit_message_text(
+                    "🎟 Активация подарочного кода\n\n"
+                    "Код не должен быть пустым.\n"
+                    "Отправь код одним сообщением.\n"
+                    "Пример: <code>GIFT-ABCD2345</code>",
+                    chat_id=chat_id,
+                    message_id=msg_id,
+                    reply_markup=kb,
+                    parse_mode=ParseMode.HTML,
+                )
+                remember_message(chat_id, msg_id)
+            return
+        days = await redeem_gift_code(code_input, user_id)
+        if days is None:
+            if chat_id and msg_id:
+                kb = InlineKeyboardMarkup(
+                    [[InlineKeyboardButton(BACK_BTN, callback_data="settings:gift_code")]]
+                )
+                await context.bot.edit_message_text(
+                    "❌ Такого кода нет, либо он уже был использован.\n\n"
+                    "Проверь код и отправь снова одним сообщением.\n"
+                    "Пример: <code>GIFT-ABCD2345</code>",
+                    chat_id=chat_id,
+                    message_id=msg_id,
+                    reply_markup=kb,
+                    parse_mode=ParseMode.HTML,
+                )
+                remember_message(chat_id, msg_id)
+            return
+        expires_at = await grant_subscription_days(user_id, days, plan="gift_code")
+        context.user_data.pop(GIFT_CODE_INPUT_KEY, None)
+        if chat_id and msg_id:
+            expires_label = format_dt_local(expires_at, user_id)
+            kb = InlineKeyboardMarkup(
+                [[InlineKeyboardButton(BACK_BTN, callback_data="settings:gift_code")]]
+            )
+            await context.bot.edit_message_text(
+                "✅ Код активирован!\n\n"
+                f"Подписка продлена на {days} дн.\n"
+                f"Активна до: {expires_label}",
+                chat_id=chat_id,
+                message_id=msg_id,
+                reply_markup=kb,
+            )
+            remember_message(chat_id, msg_id)
+        return
     for_time_state = context.user_data.get(FOR_TIME_INPUT_KEY)
     if for_time_state:
         if not await ensure_can_edit_from_message(context, update):
@@ -11530,13 +11599,34 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "🎟 Подарочный код\n\n"
                 "Здесь можно активировать подарочный код для подписки."
             )
-            rows = [[InlineKeyboardButton("✅ Активировать код", callback_data="menu:subscription")]]
+            rows = [[InlineKeyboardButton("✅ Активировать код", callback_data="settings:gift_code:activate")]]
             if is_admin:
                 text += "\n\nКак администратор, ты также можешь создавать новые коды."
                 rows.insert(0, [InlineKeyboardButton("➕ Создать код", callback_data="settings:gift_code:create")])
                 rows.insert(2, [InlineKeyboardButton("📊 Коды", callback_data="settings:gift_code:codes")])
             rows.append([InlineKeyboardButton(BACK_BTN, callback_data="menu:settings")])
             await show_screen(q, context, text, InlineKeyboardMarkup(rows), target_user_id)
+            return
+        if data == "settings:gift_code:activate":
+            context.user_data[GIFT_CODE_INPUT_KEY] = {
+                "chat_id": q.message.chat_id,
+                "message_id": q.message.message_id,
+                "target_user_id": target_user_id,
+            }
+            kb = InlineKeyboardMarkup(
+                [[InlineKeyboardButton(BACK_BTN, callback_data="settings:gift_code")]]
+            )
+            await show_screen(
+                q,
+                context,
+                "🎟 Активация подарочного кода\n\n"
+                "Отправь код одним сообщением.\n"
+                "Пример: <code>GIFT-ABCD2345</code>\n\n"
+                "Ниже просто вставь код — я проверю и активирую подписку.",
+                kb,
+                target_user_id,
+                parse_mode=ParseMode.HTML,
+            )
             return
 
         if data == "settings:gift_code:create":
