@@ -3961,18 +3961,25 @@ async def create_gift_code(code: str, days: int, created_by_user_id: int | None 
 
 
 async def redeem_gift_code(code: str, user_id: int) -> int | None:
+    status, days = await redeem_gift_code_with_status(code, user_id)
+    if status != "ok":
+        return None
+    return days
+
+
+async def redeem_gift_code_with_status(code: str, user_id: int) -> tuple[str, int | None]:
     normalized_code = str(code or "").strip().upper()
     if not normalized_code:
-        return None
+        return ("empty", None)
     async with connect_db() as db:
         await _ensure_gift_codes_schema(db)
         cur = await db.execute(
-            "SELECT id, days FROM gift_codes WHERE code=? AND used_by_user_id IS NULL LIMIT 1",
+            "SELECT id, days FROM gift_codes WHERE code=? LIMIT 1",
             (normalized_code,),
         )
         row = await cur.fetchone()
         if not row:
-            return None
+            return ("not_found", None)
         code_id = int(row[0])
         days = max(1, int(row[1] or 0))
         mark = await db.execute(
@@ -3985,9 +3992,9 @@ async def redeem_gift_code(code: str, user_id: int) -> int | None:
         )
         if (mark.rowcount or 0) <= 0:
             await db.rollback()
-            return None
+            return ("already_used", None)
         await db.commit()
-        return days
+        return ("ok", days)
 
 
 async def update_payment_status(
