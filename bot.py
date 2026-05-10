@@ -258,6 +258,9 @@ from db import (
     list_all_teams,
     delete_team,
     create_or_update_referral_profile,
+    gift_code_stats,
+    list_active_gift_codes,
+    delete_gift_code,
     get_referral_profile,
     get_referrer_by_slug,
     assign_referral_attribution,
@@ -11475,6 +11478,70 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 page = max(0, int(data.rsplit(":", 1)[-1]))
             except ValueError:
                 page = 0
+                rows.insert(1, [InlineKeyboardButton("📊 Коды", callback_data="settings:gift_code:codes")])
+        if data == "settings:gift_code:codes":
+            if update.effective_user.id not in ADMIN_IDS:
+                await q.answer("Только для админа", show_alert=True)
+                return
+            stats = await gift_code_stats()
+            text = (
+                "📊 Статистика подарочных кодов\n\n"
+                f"Всего создано: {stats['total']}\n"
+                f"Активные (не использованы): {stats['active']}\n"
+                f"Использованные: {stats['used']}"
+            )
+            kb = InlineKeyboardMarkup([
+                [InlineKeyboardButton("🟢 Неиспользованные", callback_data="settings:gift_code:active:0")],
+                [InlineKeyboardButton(BACK_BTN, callback_data="settings:gift_code")],
+            ])
+            await show_screen(q, context, text, kb, target_user_id)
+            return
+        if data.startswith("settings:gift_code:active:"):
+            if update.effective_user.id not in ADMIN_IDS:
+                await q.answer("Только для админа", show_alert=True)
+                return
+            try:
+                page = max(0, int(data.rsplit(":", 1)[-1]))
+            except ValueError:
+                page = 0
+            limit = 8
+            items = await list_active_gift_codes(limit=limit, offset=page * limit)
+            lines = ["🟢 Неиспользованные коды", ""]
+            if not items:
+                lines.append("Список пуст.")
+            for it in items:
+                lines.append(f"• {it['code']} — {it['days']} дн.")
+            rows = []
+            for it in items[:8]:
+                rows.append([InlineKeyboardButton(f"🗑 {it['code']} ({it['days']}д)", callback_data=f"settings:gift_code:del:{it['id']}:{page}")])
+            nav = []
+            if page > 0:
+                nav.append(InlineKeyboardButton("◀️", callback_data=f"settings:gift_code:active:{page-1}"))
+            if len(items) == limit:
+                nav.append(InlineKeyboardButton("▶️", callback_data=f"settings:gift_code:active:{page+1}"))
+            if nav:
+                rows.append(nav)
+            rows.append([InlineKeyboardButton(BACK_BTN, callback_data="settings:gift_code:codes")])
+            await show_screen(q, context, "\n".join(lines), InlineKeyboardMarkup(rows), target_user_id)
+            return
+        if data.startswith("settings:gift_code:del:"):
+            if update.effective_user.id not in ADMIN_IDS:
+                await q.answer("Только для админа", show_alert=True)
+                return
+            parts = data.split(":")
+            if len(parts) < 6:
+                await q.answer()
+                return
+            code_id = int(parts[4])
+            page = int(parts[5])
+            deleted = await delete_gift_code(code_id)
+            await q.answer("Код удалён" if deleted else "Код уже использован или не найден")
+            items = await list_active_gift_codes(limit=8, offset=max(0, page) * 8)
+            lines = ["🟢 Неиспользованные коды", ""] + ([f"• {it['code']} — {it['days']} дн." for it in items] or ["Список пуст."])
+            rows = [[InlineKeyboardButton(f"🗑 {it['code']} ({it['days']}д)", callback_data=f"settings:gift_code:del:{it['id']}:{page}")] for it in items]
+            rows.append([InlineKeyboardButton(BACK_BTN, callback_data="settings:gift_code:codes")])
+            await show_screen(q, context, "\n".join(lines), InlineKeyboardMarkup(rows), target_user_id)
+            return
             context.user_data["refadmin_page"] = page
             query = context.user_data.get("refadmin_query")
             text, kb = await build_referral_admin_screen(page=page, search=query)

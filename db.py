@@ -3831,6 +3831,51 @@ async def create_payment_record(
     provider: str,
     amount: int,
     currency: str,
+async def gift_code_stats() -> dict:
+    async with connect_db() as db:
+        cur = await db.execute(
+            """
+            SELECT
+              COUNT(*) AS total,
+              SUM(CASE WHEN used_by_user_id IS NULL THEN 1 ELSE 0 END) AS active,
+              SUM(CASE WHEN used_by_user_id IS NOT NULL THEN 1 ELSE 0 END) AS used
+            FROM gift_codes
+            """
+        )
+        row = await cur.fetchone()
+        total, active, used = row if row else (0, 0, 0)
+        return {"total": int(total or 0), "active": int(active or 0), "used": int(used or 0)}
+
+
+async def list_active_gift_codes(limit: int = 20, offset: int = 0) -> list[dict]:
+    async with connect_db() as db:
+        cur = await db.execute(
+            """
+            SELECT id, code, days, created_at
+            FROM gift_codes
+            WHERE used_by_user_id IS NULL
+            ORDER BY id DESC
+            LIMIT ? OFFSET ?
+            """,
+            (max(1, int(limit)), max(0, int(offset))),
+        )
+        rows = await cur.fetchall()
+    return [
+        {"id": int(r[0]), "code": str(r[1]), "days": int(r[2] or 0), "created_at": str(r[3] or "")}
+        for r in rows
+    ]
+
+
+async def delete_gift_code(code_id: int) -> bool:
+    async with connect_db() as db:
+        cur = await db.execute(
+            "DELETE FROM gift_codes WHERE id=? AND used_by_user_id IS NULL",
+            (int(code_id),),
+        )
+        await db.commit()
+        return (cur.rowcount or 0) > 0
+
+
     status: str,
     payload: dict | None = None,
     external_id: str | None = None,
