@@ -3960,6 +3960,36 @@ async def create_gift_code(code: str, days: int, created_by_user_id: int | None 
         return int(row[0]) if row and row[0] is not None else 0
 
 
+async def redeem_gift_code(code: str, user_id: int) -> int | None:
+    normalized_code = str(code or "").strip().upper()
+    if not normalized_code:
+        return None
+    async with connect_db() as db:
+        await _ensure_gift_codes_schema(db)
+        cur = await db.execute(
+            "SELECT id, days FROM gift_codes WHERE code=? AND used_by_user_id IS NULL LIMIT 1",
+            (normalized_code,),
+        )
+        row = await cur.fetchone()
+        if not row:
+            return None
+        code_id = int(row[0])
+        days = max(1, int(row[1] or 0))
+        mark = await db.execute(
+            """
+            UPDATE gift_codes
+            SET used_at=?, used_by_user_id=?
+            WHERE id=? AND used_by_user_id IS NULL
+            """,
+            (datetime.now(UTC).isoformat(), int(user_id), code_id),
+        )
+        if (mark.rowcount or 0) <= 0:
+            await db.rollback()
+            return None
+        await db.commit()
+        return days
+
+
 async def update_payment_status(
     external_id: str,
     status: str,
