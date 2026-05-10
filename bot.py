@@ -11708,14 +11708,14 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 page = 0
             limit = 8
             items = await list_active_gift_codes(limit=limit, offset=page * limit)
-            lines = ["🟢 Неиспользованные коды", ""]
+            lines = ["🟢 Неиспользованные коды", "", "Нажми на код ниже, чтобы быстро скопировать:"]
             if not items:
                 lines.append("Список пуст.")
             for it in items:
-                lines.append(f"• {it['code']} — {it['days']} дн.")
+                lines.append(f"• <code>{it['code']}</code> — {it['days']} дн.")
             rows = []
             for it in items[:8]:
-                rows.append([InlineKeyboardButton(f"🗑 {it['code']} ({it['days']}д)", callback_data=f"settings:gift_code:del:{it['id']}:{page}")])
+                rows.append([InlineKeyboardButton(f"🗑 Удалить {it['code']}", callback_data=f"settings:gift_code:del:{it['id']}:{page}")])
             nav = []
             if page > 0:
                 nav.append(InlineKeyboardButton("◀️", callback_data=f"settings:gift_code:active:{page-1}"))
@@ -11731,16 +11731,31 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await q.answer("Только для админа", show_alert=True)
                 return
             parts = data.split(":")
-            if len(parts) < 6:
-                await q.answer()
+            if len(parts) != 6:
+                await q.answer("Некорректные данные")
                 return
-            code_id = int(parts[4])
-            page = int(parts[5])
+            try:
+                code_id = int(parts[4])
+                page = max(0, int(parts[5]))
+            except ValueError:
+                await q.answer("Некорректные данные")
+                return
             deleted = await delete_gift_code(code_id)
             await q.answer("Код удалён" if deleted else "Код уже использован или не найден")
-            items = await list_active_gift_codes(limit=8, offset=max(0, page) * 8)
-            lines = ["🟢 Неиспользованные коды", ""] + ([f"• {it['code']} — {it['days']} дн." for it in items] or ["Список пуст."])
-            rows = [[InlineKeyboardButton(f"🗑 {it['code']} ({it['days']}д)", callback_data=f"settings:gift_code:del:{it['id']}:{page}")] for it in items]
+            items = await list_active_gift_codes(limit=8, offset=page * 8)
+            if not items and page > 0:
+                page -= 1
+                items = await list_active_gift_codes(limit=8, offset=page * 8)
+            lines = ["🟢 Неиспользованные коды", "", "Нажми на код ниже, чтобы быстро скопировать:"]
+            lines.extend([f"• <code>{it['code']}</code> — {it['days']} дн." for it in items] or ["Список пуст."])
+            rows = [[InlineKeyboardButton(f"🗑 Удалить {it['code']}", callback_data=f"settings:gift_code:del:{it['id']}:{page}")] for it in items]
+            nav = []
+            if page > 0:
+                nav.append(InlineKeyboardButton("◀️", callback_data=f"settings:gift_code:active:{page-1}"))
+            if len(items) == 8:
+                nav.append(InlineKeyboardButton("▶️", callback_data=f"settings:gift_code:active:{page+1}"))
+            if nav:
+                rows.append(nav)
             rows.append([InlineKeyboardButton(BACK_BTN, callback_data="settings:gift_code:codes")])
             await show_screen(q, context, "\n".join(lines), InlineKeyboardMarkup(rows), target_user_id)
             return
