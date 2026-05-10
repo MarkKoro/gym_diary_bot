@@ -6392,7 +6392,9 @@
 
       const showTooltip = (idx) => {
         const point = points[idx];
-        const [x, y] = coords[idx];
+        const xy = coords[idx];
+        if (!point || !Array.isArray(xy)) return;
+        const [x, y] = xy;
         const val = Number(point[field] || 0);
         const labelDate = (point.date || '').split('-').reverse().join('.') || point.day || '';
         let label = `${title}: ${val}`;
@@ -6703,86 +6705,6 @@
       }
     }
 
-    function renderAllExerciseCenter(center) {
-      const st = allExercisesState();
-      const ex = st.exercise;
-      center.className = `all-ex-modal-card`;
-      center.innerHTML = `<div class="all-ex-modal-body"></div>`;
-      const modalBody = center.querySelector('.all-ex-modal-body');
-      if (!ex) { center.innerHTML = '<div class="all-ex-center-title">Загрузка…</div>'; return; }
-      const sets = ex.sets || [];
-      const previous = summarizePreviousSets(ex.previous_sets || []);
-      const draft = st.draft || deriveAllExerciseDraft(ex);
-      st.draft = draft;
-      center.innerHTML = `
-        <div class="all-ex-center-title">${escapeHtml(ex.name)}</div>
-        <div class="all-ex-empty">${previous ? `Прошлый раз${ex.previous_date ? ` (${escapeHtml(ex.previous_date)})` : ''}: ${escapeHtml(previous)}` : 'Прошлых подходов пока нет — начнём с нуля.'}</div>
-        <div class="all-ex-sets">${sets.length ? sets.map((set) => `<div class="all-ex-set"><span>Подход ${Number(set.set_no || 0)}</span><b>${escapeHtml(formatSetDetail(set) || '—')}</b></div>`).join('') : '<div class="all-ex-empty">Сегодня подходов ещё нет.</div>'}</div>
-        <div class="all-ex-controls" id="allExerciseControls"></div>
-        <div class="sheet-actions" style="display:grid; grid-template-columns:1fr 1fr; gap:8px;">
-          <button class="btn primary" data-action="all-ex-add-set">Добавить подход</button>
-          <button class="btn" data-action="all-ex-remove-set">Удалить</button>
-          <button class="btn" data-action="all-ex-history">История</button>
-          <button class="btn primary" data-action="all-ex-done">Готово</button>
-        </div>
-        <textarea class="note-area all-ex-note" id="allExerciseNote" placeholder="Заметка к упражнению…">${escapeHtml(ex.current_note || '')}</textarea>
-      `;
-      const flags = ex.display || {};
-      const controls = center.querySelector('#allExerciseControls');
-      if (flags.is_running) {
-        controls.appendChild(buildAllExerciseControl('Дистанция (км×10)', 'reps', Number(draft.reps || 0)));
-        controls.appendChild(buildAllExerciseControl('Время (сек)', 'seconds', Number(draft.seconds || 0)));
-        controls.appendChild(buildAllExerciseControl('Калории', 'weight_kg', Number(draft.weight_kg || 0)));
-      } else if (flags.is_for_time) {
-        controls.appendChild(buildAllExerciseControl('Время (сек)', 'seconds', Number(draft.seconds || 0)));
-        controls.appendChild(buildAllExerciseControl('Раунды / повторы', 'reps', Number(draft.reps || 0)));
-      } else if (flags.is_amrap) {
-        controls.appendChild(buildAllExerciseControl('Минуты', 'seconds', Number(draft.seconds || 0)));
-        controls.appendChild(buildAllExerciseControl('Итог повт.', 'reps', Number(draft.reps || 0)));
-      } else {
-        const topFields = [];
-        if (flags.show_weight) topFields.push(['Вес','weight_kg']);
-        if (flags.show_reps) topFields.push(['Повторы','reps']);
-        topFields.forEach(([label,field]) => controls.appendChild(buildAllExerciseControl(label, field, Number(draft[field] || 0))));
-        if (flags.show_seconds) {
-          const secondRow = document.createElement('div');
-          secondRow.className = 'all-ex-controls seconds-row';
-          secondRow.appendChild(buildAllExerciseControl('Сек', 'seconds', Number(draft.seconds || 0)));
-          controls.parentElement.insertBefore(secondRow, controls.nextSibling);
-        }
-      }
-      center.querySelector('[data-action="all-ex-add-set"]')?.addEventListener('click', () => runUiAction('Не удалось добавить подход', () => allExerciseAddSet()));
-      center.querySelector('[data-action="all-ex-remove-set"]')?.addEventListener('click', () => runUiAction('Не удалось удалить подход', () => allExerciseRemoveSet()));
-      center.querySelector('[data-action="all-ex-done"]')?.addEventListener('click', () => runUiAction('Не удалось завершить упражнение', () => allExerciseDone()));
-      center.querySelector('[data-action="all-ex-hide"]')?.addEventListener('click', () => goBackAllExercises());
-      center.querySelector('[data-action="all-ex-history"]')?.addEventListener('click', () => { state.library.currentExerciseId = ex.exercise_id; state.library.currentExerciseName = ex.name; state.library.currentExerciseMuscleGroup = ex.muscle_group; state.library.view = 'details'; navigateTo('library'); });
-      const note = center.querySelector('#allExerciseNote');
-      note?.addEventListener('input', () => scheduleAllExerciseNoteSave(note.value));
-    }
-
-    function buildAllExerciseControl(label, field, value) {
-      const block = document.createElement('div');
-      block.className = 'control-block';
-      const head = document.createElement('div'); head.className = 'control-head'; head.textContent = label;
-      const actions = document.createElement('div'); actions.className = 'control-actions';
-      const minus = document.createElement('button'); minus.type = 'button'; minus.className = 'circle-btn'; minus.textContent = '−';
-      const val = document.createElement('div'); val.className = 'control-value'; val.textContent = value; val.tabIndex = 0; val.setAttribute('role', 'button');
-      const plus = document.createElement('button'); plus.type = 'button'; plus.className = 'circle-btn'; plus.textContent = '+';
-      const step = field === 'weight_kg' ? 1 : 1;
-      const formatValue = (next) => (field === 'weight_kg' ? String(Number(next).toFixed(1)).replace(/\.0$/, '') : String(Math.round(Number(next) || 0)));
-      const syncValue = (next) => { val.textContent = formatValue(next); };
-      const adjust = (delta) => {
-        const st = allExercisesState();
-        const next = Math.max(0, Number(st.draft?.[field] || 0) + delta);
-        st.draft = { ...(st.draft || {}), [field]: next };
-        syncValue(next);
-      };
-      minus.addEventListener('click', () => adjust(-step));
-      plus.addEventListener('click', () => adjust(step));
-      attachInlineNumberHandler(val, () => ({ value: Number(allExercisesState().draft?.[field] || 0), min: 0, max: field === 'weight_kg' ? 500 : 3600, step: 1, decimals: field === 'weight_kg' ? 1 : 0, inputMode: field === 'weight_kg' ? 'decimal' : 'numeric', onCommit: (next) => { allExercisesState().draft = { ...(allExercisesState().draft || {}), [field]: next }; syncValue(next); } }));
-      actions.append(minus, val, plus); block.append(head, actions); return block;
-    }
-
     async function loadAllExercisesGroups() {
       const st = allExercisesState(); st.loading = true; renderAllExercises();
       try {
@@ -6816,54 +6738,10 @@
         is_done: Boolean(data.is_done),
       };
       state.exercises.set(ueId, normalizedExercise);
-      st.editorPrevDayIndex = state.dayIndex;
-      state.dayIndex = 0;
       openEditor(ueId, "all_exercises");
-
     }
 
     async function refreshAllExerciseSession() { if (allExercisesState().selectedExerciseId) await openAllExercise(allExercisesState().selectedExerciseId); }
-
-    async function allExerciseAddSet() {
-      const st = allExercisesState();
-      const id = Number(st.selectedExerciseId || 0); if (!id) return;
-      const data = await apiFetch(`/gymapi/all_exercises/exercise/${id}/set/add`, { method: 'POST', body: JSON.stringify(st.draft || {}) });
-      if (st.exercise) st.exercise.sets = data.sets || [];
-      const last = (data.sets || []).slice(-1)[0]; if (last) st.draft = { weight_kg: Number(last.weight_kg || 0), reps: Number(last.reps || 0), seconds: Number(last.seconds || 0) };
-      renderAllExercises(); markAllExercisesActivity(); toast('Подход сохранён');
-    }
-
-    async function allExerciseRemoveSet() {
-      const st = allExercisesState();
-      const id = Number(st.selectedExerciseId || 0); if (!id) return;
-      const data = await apiFetch(`/gymapi/all_exercises/exercise/${id}/set/remove_last`, { method: 'POST', body: JSON.stringify({}) });
-      if (st.exercise) st.exercise.sets = data.sets || [];
-      renderAllExercises(); markAllExercisesActivity(); toast('Подход удалён');
-    }
-
-    async function allExerciseDone() {
-      const st = allExercisesState();
-      const id = Number(st.selectedExerciseId || 0); if (!id) return;
-      if (st.exercise && !(st.exercise.sets || []).length) await allExerciseAddSet();
-      const data = await apiFetch(`/gymapi/all_exercises/exercise/${id}/done`, { method: 'POST', body: JSON.stringify({}) });
-      st.groups = data.groups || st.groups;
-      if (st.previousView === 'unfinished') await loadAllExercisesUnfinished(true);
-      else if (st.selectedGroup) await openAllExercisesGroup(st.selectedGroup);
-      st.view = st.previousView || 'exercises'; st.exercise = null; st.selectedExerciseId = null;
-      renderAllExercises(); markAllExercisesActivity(); toast('Упражнение выполнено ✅');
-      runUiAction('Не удалось обновить достижения', () => loadAchievementsOverview());
-    }
-
-    function scheduleAllExerciseNoteSave(value) {
-      const st = allExercisesState();
-      if (st.noteTimer) clearTimeout(st.noteTimer);
-      const id = Number(st.selectedExerciseId || 0); if (!id) return;
-      st.noteTimer = setTimeout(() => {
-        apiFetch(`/gymapi/all_exercises/exercise/${id}/note`, { method: 'PUT', body: JSON.stringify({ note: value }) })
-          .then((data) => { if (st.exercise) st.exercise.current_note = data.current_note || ''; markAllExercisesActivity(); })
-          .catch((err) => reportActionError('Не удалось сохранить заметку', err));
-      }, 450);
-    }
 
     function goBackAllExercises() {
       const st = allExercisesState();
@@ -6883,19 +6761,6 @@
         st.loading = false;
         renderAllExercises();
       }
-    }
-
-    function renderAllExerciseModal() {
-      document.body.classList.add('all-ex-modal-open');
-      const center = document.createElement('div');
-      renderAllExerciseCenter(center);
-      const wrapper = document.createElement('div');
-      wrapper.className = 'all-ex-modal';
-      wrapper.id = 'allExerciseFloatingModal';
-      wrapper.addEventListener('click', (ev) => { if (ev.target === wrapper) goBackAllExercises(); });
-      center.addEventListener('click', (ev) => ev.stopPropagation());
-      wrapper.append(center);
-      document.body.appendChild(wrapper);
     }
 
     function promptAllExercisesGroup() {
@@ -10502,9 +10367,9 @@
       ctx.loading = true;
       ctx.error = false;
       const ex = state.exercises.get(ueId);
-      const contextUrl = isAllExercisesEditorContext()
-        ? `/gymapi/all_exercises/exercise/${Number(ex?.exercise_id || 0)}/session?date=${isoDate}`
-        : `/gymapi/day/${state.dayIndex}/exercise/${ueId}/context?date=${isoDate}`;
+      const contextUrl = getEditorSource() === 'all_exercises'
+        ? getEditorActionUrl(ueId, 'session', isoDate)
+        : getEditorActionUrl(ueId, 'context', isoDate);
       ctx.promise = apiFetch(contextUrl, { silent: true })
         .then((data) => {
           ctx.loading = false;
@@ -10527,9 +10392,7 @@
       const ctx = getOrCreateContext(ueId);
       try {
         const ex = state.exercises.get(ueId);
-        const noteUrl = isAllExercisesEditorContext()
-          ? `/gymapi/all_exercises/exercise/${Number(ex?.exercise_id || 0)}/note?date=${getIsoDate()}`
-          : `/gymapi/day/${state.dayIndex}/exercise/${ueId}/note?date=${getIsoDate()}`;
+        const noteUrl = getEditorActionUrl(ueId, 'note', getIsoDate());
         const data = await apiFetch(noteUrl, {
           method: 'PUT',
           body: JSON.stringify({ note: value }),
@@ -11376,10 +11239,12 @@
       const draft = ensureRunningDraft(ueId);
       const durationMs = getRunningDraftDurationMs(ueId);
       const durationSec = Math.max(0, Math.round(durationMs / 1000));
-      const query = state.dateIso ? `?date=${state.dateIso}` : '';
       await queueExerciseAction(ueId, async () => {
         try {
-          const data = await apiFetch(`/gymapi/day/${state.dayIndex}/exercise/${ueId}/running${query}`, {
+          const url = getEditorSource() === 'all_exercises'
+            ? getEditorActionUrl(ueId, 'session', getIsoDate())
+            : `/gymapi/day/${state.dayIndex}/exercise/${ueId}/running${state.dateIso ? `?date=${state.dateIso}` : ''}`;
+          const data = await apiFetch(url, {
             method: 'POST',
             body: {
               distance_km: Number(draft.distance_km || 0),
@@ -11402,10 +11267,12 @@
       const draft = ensureRunningDraft(ueId);
       const durationMs = getRunningDraftDurationMs(ueId);
       const durationSec = Math.max(0, Math.round(durationMs / 1000));
-      const query = state.dateIso ? `?date=${state.dateIso}` : '';
       await queueExerciseAction(ueId, async () => {
         try {
-          const data = await apiFetch(`/gymapi/day/${state.dayIndex}/exercise/${ueId}/running/done${query}`, {
+          const url = getEditorSource() === 'all_exercises'
+            ? getEditorActionUrl(ueId, 'done', getIsoDate())
+            : `/gymapi/day/${state.dayIndex}/exercise/${ueId}/running/done${state.dateIso ? `?date=${state.dateIso}` : ''}`;
+          const data = await apiFetch(url, {
             method: 'POST',
             body: {
               distance_km: Number(draft.distance_km || 0),
@@ -11416,10 +11283,12 @@
             },
           });
           applyRunningUpdate(ueId, data);
-          const doneIds = state.workout.doneIds instanceof Set ? state.workout.doneIds : new Set();
-          doneIds.add(ueId);
-          state.workout.doneIds = doneIds;
-          if (data.completed_days) {
+          if (getEditorSource() !== 'all_exercises') {
+            const doneIds = state.workout.doneIds instanceof Set ? state.workout.doneIds : new Set();
+            doneIds.add(ueId);
+            state.workout.doneIds = doneIds;
+          }
+          if (data.completed_days && getEditorSource() !== 'all_exercises') {
             state.completedDays = new Set((data.completed_days || []).map(Number));
             renderDayOptions(state.dayIndex);
             renderDayHeader();
@@ -11823,7 +11692,7 @@
         state.editor.selectedSet = null;
       }
       try {
-        const data = await apiFetch(`/gymapi/day/${state.dayIndex}/exercise/${ueId}/set/add`, { method: 'POST', body: JSON.stringify(payload) });
+      const data = await apiFetch(getEditorActionUrl(ueId, 'set/add', getIsoDate()), { method: 'POST', body: JSON.stringify(payload) });
         applySetsUpdate(ueId, data.sets);
         const last = data.sets[data.sets.length - 1];
         if (opts.selectLast !== false) {
@@ -11843,7 +11712,7 @@
 
     async function removeSet(ueId, opts = {}) {
       triggerHaptic();
-      const data = await apiFetch(`/gymapi/day/${state.dayIndex}/exercise/${ueId}/set/remove_last`, { method: 'POST', body: JSON.stringify({}) });
+      const data = await apiFetch(getEditorActionUrl(ueId, 'set/remove_last', getIsoDate()), { method: 'POST', body: JSON.stringify({}) });
       applySetsUpdate(ueId, data.sets);
       const last = data.sets[data.sets.length - 1];
       if (state.editor.ueId === ueId) state.editor.selectedSet = last?.set_no || null;
@@ -11873,7 +11742,7 @@
         targetSet = await ensureSetExists(ueId);
       }
       if (!targetSet) return;
-      const data = await apiFetch(`/gymapi/day/${state.dayIndex}/exercise/${ueId}/set/inc_last`, {
+      const data = await apiFetch(getEditorActionUrl(ueId, 'set/inc_last', getIsoDate()), {
         method: 'POST',
         body: JSON.stringify({ field, delta, set_no: targetSet }),
       });
@@ -15076,6 +14945,31 @@
       return state.currentRoute === 'all_exercises' && state.editor?.source === 'all_exercises';
     }
 
+    function getEditorSource() {
+      return state.editor?.source === 'all_exercises' ? 'all_exercises' : 'today';
+    }
+
+    function getEditorExercise(ueId) {
+      return state.exercises.get(Number(ueId)) || null;
+    }
+
+    function getEditorExerciseId(ueId) {
+      const ex = getEditorExercise(ueId);
+      const id = Number(ex?.exercise_id || 0);
+      if (!id) throw new Error('exercise_id_missing');
+      return id;
+    }
+
+    function getEditorActionUrl(ueId, action, isoDate = getIsoDate()) {
+      const source = getEditorSource();
+      if (source === 'all_exercises') {
+        const exerciseId = getEditorExerciseId(ueId);
+        const withDate = action === 'session' || action === 'note' || action === 'done';
+        return `/gymapi/all_exercises/exercise/${exerciseId}/${action}${withDate ? `?date=${isoDate}` : ''}`;
+      }
+      return `/gymapi/day/${state.dayIndex}/exercise/${Number(ueId)}/${action}?date=${isoDate}`;
+    }
+
     function openEditor(ueId, source = "today") {
       triggerHaptic();
       state.editor = { open: true, ueId, source, selectedSet: null, tab: 'sets', noteTimer: null, noteStatusTimer: null, flashSet: null, flashTimer: null, scrollTarget: null };
@@ -15089,13 +14983,6 @@
       if (state.editor.noteStatusTimer) clearTimeout(state.editor.noteStatusTimer);
       if (state.editor.flashTimer) clearTimeout(state.editor.flashTimer);
       state.editor = { open: false, ueId: null, selectedSet: null, tab: 'sets', noteTimer: null, noteStatusTimer: null, flashSet: null, flashTimer: null, scrollTarget: null };
-      if (state.currentRoute === 'all_exercises') {
-        const st = allExercisesState();
-        if (Object.prototype.hasOwnProperty.call(st, 'editorPrevDayIndex')) {
-          state.dayIndex = st.editorPrevDayIndex;
-          delete st.editorPrevDayIndex;
-        }
-      }
       const sheet = document.getElementById('sheet');
       if (sheet) sheet.classList.remove('show');
       closeSourceMetaPopover();
