@@ -262,7 +262,7 @@ from db import (
     list_active_gift_codes,
     delete_gift_code,
     create_gift_code,
-    redeem_gift_code,
+    redeem_gift_code_with_status,
     get_referral_profile,
     get_referrer_by_slug,
     assign_referral_attribution,
@@ -10083,14 +10083,18 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
                 remember_message(chat_id, msg_id)
             return
-        days = await redeem_gift_code(code_input, user_id)
-        if days is None:
+        redeem_status, days = await redeem_gift_code_with_status(code_input, user_id)
+        if redeem_status != "ok":
             if chat_id and msg_id:
                 kb = InlineKeyboardMarkup(
                     [[InlineKeyboardButton(BACK_BTN, callback_data="settings:gift_code")]]
                 )
+                if redeem_status == "already_used":
+                    error_text = "❌ Этот подарочный код уже был использован."
+                else:
+                    error_text = "❌ Такого подарочного кода не существует."
                 await context.bot.edit_message_text(
-                    "❌ Такого кода нет, либо он уже был использован.\n\n"
+                    f"{error_text}\n\n"
                     "Проверь код и отправь снова одним сообщением.\n"
                     "Пример: <code>GIFT-ABCD2345</code>",
                     chat_id=chat_id,
@@ -10100,20 +10104,17 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
                 remember_message(chat_id, msg_id)
             return
-        expires_at = await grant_subscription_days(user_id, days, plan="gift_code")
+        await grant_subscription_days(user_id, days, plan="gift_code")
         context.user_data.pop(GIFT_CODE_INPUT_KEY, None)
         if chat_id and msg_id:
-            expires_label = format_dt_local(expires_at, user_id)
-            kb = InlineKeyboardMarkup(
-                [[InlineKeyboardButton(BACK_BTN, callback_data="settings:gift_code")]]
-            )
+            menu_text, menu_kb, _ = await compose_main_menu(user_id)
             await context.bot.edit_message_text(
-                "✅ Код активирован!\n\n"
-                f"Подписка продлена на {days} дн.\n"
-                f"Активна до: {expires_label}",
+                "🎉 Поздравляем! Подарочный код активирован.\n"
+                f"Вам начислено {days} дн. подписки.\n\n"
+                f"{menu_text}",
                 chat_id=chat_id,
                 message_id=msg_id,
-                reply_markup=kb,
+                reply_markup=menu_kb,
             )
             remember_message(chat_id, msg_id)
         return
@@ -11593,29 +11594,18 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await show_screen(q, context, text, kb, target_user_id)
             return
 
-        if data == "settings:gift_code":
+        if data == "settings:gift_code" or data == "settings:gift_code:activate":
             is_admin = bool(update.effective_user and update.effective_user.id in ADMIN_IDS)
-            text = (
-                "🎟 Подарочный код\n\n"
-                "Здесь можно активировать подарочный код для подписки."
-            )
-            rows = [[InlineKeyboardButton("✅ Активировать код", callback_data="settings:gift_code:activate")]]
-            if is_admin:
-                text += "\n\nКак администратор, ты также можешь создавать новые коды."
-                rows.insert(0, [InlineKeyboardButton("➕ Создать код", callback_data="settings:gift_code:create")])
-                rows.insert(2, [InlineKeyboardButton("📊 Коды", callback_data="settings:gift_code:codes")])
-            rows.append([InlineKeyboardButton(BACK_BTN, callback_data="menu:settings")])
-            await show_screen(q, context, text, InlineKeyboardMarkup(rows), target_user_id)
-            return
-        if data == "settings:gift_code:activate":
             context.user_data[GIFT_CODE_INPUT_KEY] = {
                 "chat_id": q.message.chat_id,
                 "message_id": q.message.message_id,
                 "target_user_id": target_user_id,
             }
-            kb = InlineKeyboardMarkup(
-                [[InlineKeyboardButton(BACK_BTN, callback_data="settings:gift_code")]]
-            )
+            rows = []
+            if is_admin:
+                rows.append([InlineKeyboardButton("➕ Создать код", callback_data="settings:gift_code:create")])
+                rows.append([InlineKeyboardButton("📊 Коды", callback_data="settings:gift_code:codes")])
+            rows.append([InlineKeyboardButton(BACK_BTN, callback_data="menu:settings")])
             await show_screen(
                 q,
                 context,
@@ -11623,7 +11613,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "Отправь код одним сообщением.\n"
                 "Пример: <code>GIFT-ABCD2345</code>\n\n"
                 "Ниже просто вставь код — я проверю и активирую подписку.",
-                kb,
+                InlineKeyboardMarkup(rows),
                 target_user_id,
                 parse_mode=ParseMode.HTML,
             )
