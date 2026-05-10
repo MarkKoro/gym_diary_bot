@@ -2865,28 +2865,28 @@ async def _ensure_all_exercise(user_id: int, exercise_id: int) -> int:
 def _all_exercise_display_flags(name: str | None, muscle_group: str | None) -> dict:
     raw_name = str(name or "").strip().lower()
     mg = normalize_exercise_group_for_ui(muscle_group)
+
     is_running = mg == "run"
-    is_amrap = "amrap" in raw_name
-    is_for_time = ("for time" in raw_name) or ("на время" in raw_name)
-    is_duration = any(token in raw_name for token in ("планка", "удержан", "вис", "duration"))
-    kind = "strength"
-    show_weight = True
-    show_reps = True
-    show_seconds = False
-    with_weight = True
+    special_duration_group = mg in {"workout", "core", "kb", "metcon"}
+    is_duration_name = any(token in raw_name for token in ("(сек", "удержание", "стойка", "планк"))
+
+    # Повторяем логику отображения как в разделе "Сегодня":
+    # run -> running, workout/core/kb/metcon -> duration c весом,
+    # остальные -> reps (или duration по имени упражнения).
     if is_running:
         kind = "running"
-        show_weight = show_reps = with_weight = False
-    elif is_amrap:
-        kind = "amrap"
-        show_weight = show_reps = with_weight = False
-    elif is_for_time:
-        kind = "for_time"
-        show_weight = show_reps = with_weight = False
-    elif is_duration or mg == "cardio":
+        with_weight = False
+    elif special_duration_group:
         kind = "duration"
-        show_weight = show_reps = with_weight = False
-        show_seconds = True
+        with_weight = True
+    else:
+        kind = "duration" if is_duration_name else "reps"
+        with_weight = True
+
+    show_weight = with_weight and kind != "running"
+    show_reps = kind == "reps"
+    show_seconds = kind == "duration"
+
     return {
         "kind": kind,
         "with_weight": with_weight,
@@ -2894,9 +2894,11 @@ def _all_exercise_display_flags(name: str | None, muscle_group: str | None) -> d
         "show_reps": show_reps,
         "show_seconds": show_seconds,
         "is_running": is_running,
-        "is_amrap": is_amrap,
-        "is_for_time": is_for_time,
+        "is_duration": kind == "duration",
+        "is_amrap": False,
+        "is_for_time": False,
     }
+
 
 
 async def _all_exercises_groups_payload(user_id: int, iso_date: str) -> dict:
@@ -3065,6 +3067,17 @@ async def all_exercise_session(exercise_id: int, date: str | None = None, ctx: A
     previous_sets_rows = await db.fetch_last_session_sets(user_id, 0, ue_id, iso_date, None)
     previous_summary = _format_prev_summary(await db.get_last_session_summary(user_id, 0, ue_id, iso_date, None))
     previous_date = await _get_previous_done_date(user_id, exercise_id, session_id)
+    normalized_group = _normalize_group(muscle_group)
+    running_state: dict[str, object] = {}
+    if normalized_group == "run":
+        running_state = await _build_running_state(
+            user_id,
+            0,
+            ue_id,
+            target_date,
+            exercise_id=exercise_id,
+            history_limit=20,
+        )
     async with db.connect_db() as conn:
         completed_count = await db.count_completed_sessions_for_exercise(conn, user_id, exercise_id)
         cur = await conn.execute(
