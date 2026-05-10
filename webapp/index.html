@@ -6701,7 +6701,6 @@
           stage.appendChild(empty);
         }
       }
-      if (st.view === 'exercise') renderAllExerciseModal();
     }
 
     function renderAllExerciseCenter(center) {
@@ -6804,12 +6803,23 @@
     async function openAllExercise(exerciseId) {
       const st = allExercisesState();
       st.previousView = st.view === 'unfinished' ? 'unfinished' : 'exercises';
-      st.view = 'exercise'; st.selectedExerciseId = Number(exerciseId); st.exercise = null; st.loading = true; renderAllExercises();
-      try {
-        const data = await apiFetch(`/gymapi/all_exercises/exercise/${Number(exerciseId)}/session`, { silent: true });
-        st.exercise = data;
-        st.draft = deriveAllExerciseDraft(data);
-      } finally { st.loading = false; renderAllExercises(); }
+      st.selectedExerciseId = Number(exerciseId);
+      const data = await apiFetch(`/gymapi/all_exercises/exercise/${Number(exerciseId)}/session`, { silent: true });
+      st.exercise = data;
+      st.draft = deriveAllExerciseDraft(data);
+      const ueId = Number(data.user_exercise_id || 0);
+      if (!ueId) return;
+      const normalizedExercise = {
+        ...(state.exercises.get(ueId) || {}),
+        ...data,
+        user_exercise_id: ueId,
+        is_done: Boolean(data.is_done),
+      };
+      state.exercises.set(ueId, normalizedExercise);
+      st.editorPrevDayIndex = state.dayIndex;
+      state.dayIndex = 0;
+      openEditor(ueId);
+
     }
 
     async function refreshAllExerciseSession() { if (allExercisesState().selectedExerciseId) await openAllExercise(allExercisesState().selectedExerciseId); }
@@ -6857,7 +6867,6 @@
 
     function goBackAllExercises() {
       const st = allExercisesState();
-      if (st.view === 'exercise') { st.view = st.previousView || 'exercises'; st.exercise = null; st.selectedExerciseId = null; renderAllExercises(); return; }
       if (st.view === 'exercises') { st.view = 'groups'; st.selectedGroup = null; st.exercises = []; renderAllExercises(); runUiAction('Не удалось обновить группы', () => loadAllExercisesGroups()); }
     }
 
@@ -15067,6 +15076,13 @@
       if (state.editor.noteStatusTimer) clearTimeout(state.editor.noteStatusTimer);
       if (state.editor.flashTimer) clearTimeout(state.editor.flashTimer);
       state.editor = { open: false, ueId: null, selectedSet: null, tab: 'sets', noteTimer: null, noteStatusTimer: null, flashSet: null, flashTimer: null, scrollTarget: null };
+      if (state.currentRoute === 'all_exercises') {
+        const st = allExercisesState();
+        if (Object.prototype.hasOwnProperty.call(st, 'editorPrevDayIndex')) {
+          state.dayIndex = st.editorPrevDayIndex;
+          delete st.editorPrevDayIndex;
+        }
+      }
       const sheet = document.getElementById('sheet');
       if (sheet) sheet.classList.remove('show');
       closeSourceMetaPopover();
