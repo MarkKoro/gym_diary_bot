@@ -4575,29 +4575,44 @@ async def set_exercise_scheme(user_id: int, day_index: int, exercise_id: int, te
 
 async def get_last_session_summary(user_id: int, day_index: int, ue_id: int, today: str, system_id: int | None = None):
     async with connect_db() as db:
+        cur = await db.execute("SELECT exercise_id FROM user_exercises WHERE id=?", (ue_id,))
+        row = await cur.fetchone()
+        if not row:
+            return None
+        exercise_id = int(row[0])
         if system_id is None:
             cur = await db.execute(
-                "SELECT id FROM sessions WHERE user_id=? AND day_index=? AND date<? ORDER BY date DESC LIMIT 1",
-                (user_id, day_index, today),
+                """
+                SELECT s.id, st.user_exercise_id
+                FROM sessions s
+                JOIN sets st ON st.session_id=s.id AND st.is_warmup=0
+                JOIN user_exercises ue ON ue.id=st.user_exercise_id
+                WHERE s.user_id=? AND ue.exercise_id=? AND s.date<?
+                ORDER BY s.date DESC, st.set_no DESC
+                LIMIT 1
+                """,
+                (user_id, exercise_id, today),
             )
         else:
             cur = await db.execute(
-                "SELECT id FROM sessions WHERE user_id=? AND day_index=? AND date<? AND COALESCE(system_id,0)=? ORDER BY date DESC LIMIT 1",
-                (user_id, day_index, today, int(system_id)),
+                """
+                SELECT s.id, st.user_exercise_id
+                FROM sessions s
+                JOIN sets st ON st.session_id=s.id AND st.is_warmup=0
+                JOIN user_exercises ue ON ue.id=st.user_exercise_id
+                WHERE s.user_id=? AND ue.exercise_id=? AND s.date<? AND COALESCE(s.system_id,0)=?
+                ORDER BY s.date DESC, st.set_no DESC
+                LIMIT 1
+                """,
+                (user_id, exercise_id, today, int(system_id)),
             )
         row = await cur.fetchone()
         if not row:
             return None
-        session_id = row[0]
+        session_id, prev_ue_id = row
         cur = await db.execute(
-            """
-            SELECT reps, seconds, weight_kg
-            FROM sets
-            WHERE session_id=? AND user_exercise_id=? AND is_warmup=0
-            ORDER BY set_no DESC
-            LIMIT 1
-            """,
-            (session_id, ue_id),
+            "SELECT reps, seconds, weight_kg FROM sets WHERE session_id=? AND user_exercise_id=? AND is_warmup=0 ORDER BY set_no DESC LIMIT 1",
+            (session_id, prev_ue_id),
         )
         last = await cur.fetchone()
         if not last:
@@ -4605,7 +4620,7 @@ async def get_last_session_summary(user_id: int, day_index: int, ue_id: int, tod
         reps, seconds, weight = last
         cur = await db.execute(
             "SELECT COUNT(*) FROM sets WHERE session_id=? AND user_exercise_id=? AND is_warmup=0",
-            (session_id, ue_id),
+            (session_id, prev_ue_id),
         )
         count = (await cur.fetchone())[0]
         return count, reps, seconds, weight
@@ -7583,6 +7598,30 @@ async def list_all_exercises_in_group_for_user(user_id: int, group_code: str, is
     normalized = normalize_exercise_group_for_ui(group_code)
     items = await build_effective_exercise_index_for_user(user_id, iso_date)
     return [it for it in items if it['effective_group']==normalized]
+
+
+async def list_all_exercises_done_today(user_id: int, iso_date: str):
+    async with connect_db() as db:
+        cur = await db.execute(
+            """
+            SELECT DISTINCT e.id, e.name, COALESCE(NULLIF(TRIM(e.muscle_group), ''), 'none') AS muscle_group,
+                   COALESCE(se.done_at, s.date || 'T00:00:00') AS done_at
+            FROM sessions s
+            JOIN session_exercises se ON se.session_id=s.id
+            JOIN user_exercises ue ON ue.id=se.user_exercise_id
+            JOIN exercises e ON e.id=ue.exercise_id
+            WHERE s.user_id=? AND s.date=? AND s.day_index=0 AND IFNULL(se.is_done,0)=1
+            ORDER BY done_at DESC
+            """,
+            (int(user_id), iso_date),
+        )
+        rows = await cur.fetchall()
+    return [{
+        "exercise_id": int(r[0]),
+        "name": str(r[1] or ""),
+        "muscle_group": normalize_exercise_group_for_ui(r[2]),
+        "done_at": r[3],
+    } for r in (rows or [])]
 async def clear_group_exercises_for_user(user_id: int, group_code: str) -> int:
     normalized = str(group_code or "").strip().lower() or "other"
     removed_links = 0

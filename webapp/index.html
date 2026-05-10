@@ -2469,6 +2469,7 @@
     .all-ex-sheet-card{width:min(96vw,620px);max-height:min(84dvh,760px);overflow:auto;-webkit-overflow-scrolling:touch;background:color-mix(in srgb, var(--card) 96%, transparent);border:1px solid var(--border);border-radius:22px 22px 14px 14px;padding:10px;box-shadow:var(--sheet-shadow);animation:allExSheetIn .2s ease;}
     @keyframes allExSheetIn { from { transform:translateY(22px); opacity:.0; } to { transform:translateY(0); opacity:1; } }
 .all-ex-finish-day { font-size: 12px; padding: 8px 10px; border-radius: 999px; border: 1px solid var(--border); background: color-mix(in srgb, var(--card) 92%, var(--bg)); color: var(--muted); }
+    .all-ex-unfinished-top.active { background: color-mix(in srgb, var(--accent) 22%, var(--card)); color: var(--text); border-color: color-mix(in srgb, var(--accent) 60%, var(--border)); box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 45%, transparent), 0 6px 16px color-mix(in srgb, var(--accent) 20%, transparent); }
     @keyframes petalIn { from { opacity: 0; transform: rotate(var(--angle)) translate(calc(var(--radius) * .55)) rotate(calc(-1 * var(--angle))) scale(.88); } to { opacity: 1; } }
     @media (max-width: 420px) {
       .all-ex-stage { min-height: 390px; }
@@ -6475,13 +6476,12 @@
       if (last > 0 && now - last < 12 * 60 * 60 * 1000) return;
       if (st.loading) return;
       st.lastResetAt = now;
-      await apiFetch('/gymapi/all_exercises/reset_day', { method: 'POST', body: JSON.stringify({}) });
       markAllExercisesActivity();
     }
 
     async function finishAllExercisesDay() {
       const st = allExercisesState();
-      const data = await apiFetch('/gymapi/all_exercises/reset_day', { method: 'POST', body: JSON.stringify({}) });
+      const data = await apiFetch('/gymapi/all_exercises/finish_day', { method: 'POST', body: JSON.stringify({}) });
       st.groups = data.groups || st.groups;
       st.finishedAt = Date.now();
       st.view = 'groups';
@@ -6600,12 +6600,11 @@
       if (st.view !== 'groups') return;
       const lines = [];
       const doneToday = new Map();
-      for (const ex of state.exercises.values()) {
-        if (!ex || !ex.is_done) continue;
-        const key = normalizeMuscleKey(ex.muscle_group || 'other');
+      (st.doneToday || []).forEach((item) => {
+        const key = normalizeMuscleKey(item.muscle_group || 'other');
         if (!doneToday.has(key)) doneToday.set(key, []);
-        doneToday.get(key).push(ex.name || 'Упражнение');
-      }
+        doneToday.get(key).push(item.name || 'Упражнение');
+      });
       (st.groups || []).forEach((g) => {
         const done = Number(g.done_count || 0);
         const key = normalizeMuscleKey(g.code || 'other');
@@ -6625,6 +6624,7 @@
     }
 
     function openAllExerciseSheet(ex) {
+      if (!ex?.user_exercise_id) return;
       closeAllExerciseSheet();
       const wrap = document.createElement('div');
       wrap.id = 'allExerciseFloatingModal';
@@ -6666,8 +6666,6 @@
     }
 
     function renderAllExercises() {
-      document.getElementById('allExerciseFloatingModal')?.remove();
-      document.body.classList.remove('all-ex-modal-open');
       const root = document.getElementById('allExercisesContent');
       if (!root) return;
       const st = allExercisesState();
@@ -6751,6 +6749,7 @@
           apiFetch(`/gymapi/all_exercises/unfinished?date=${encodeURIComponent(getTodayIsoLocal())}`, { silent: true }),
         ]);
         st.groups = groupsData.groups || [];
+        st.doneToday = groupsData.done_today || [];
         st.unfinishedCount = Array.isArray(unfinishedData.items) ? unfinishedData.items.length : 0;
       } finally { st.loading = false; renderAllExercises(); }
     }
@@ -6781,15 +6780,29 @@
       };
       state.exercises.set(ueId, normalizedExercise);
       state.workout.expanded = ueId;
-      renderAllExercises();
+      openAllExerciseSheet(normalizedExercise);
     }
 
     async function refreshAllExerciseSession() { if (allExercisesState().selectedExerciseId) await openAllExercise(allExercisesState().selectedExerciseId); }
 
+    async function refreshAllExercisesMeta() {
+      try {
+        const [groupsData, unfinishedData] = await Promise.all([
+          apiFetch('/gymapi/all_exercises/groups', { silent: true }),
+          apiFetch(`/gymapi/all_exercises/unfinished?date=${encodeURIComponent(getTodayIsoLocal())}`, { silent: true }),
+        ]);
+        const st = allExercisesState();
+        st.groups = groupsData.groups || [];
+        st.doneToday = groupsData.done_today || [];
+        st.unfinishedCount = Array.isArray(unfinishedData.items) ? unfinishedData.items.length : 0;
+      } catch (_) {}
+      if (state.currentRoute === 'allExercises') renderAllExercises();
+    }
+
     function goBackAllExercises() {
       const st = allExercisesState();
-      if (st.view === 'unfinished') { st.view = 'groups'; renderAllExercises(); return; }
-      if (st.view === 'exercises') { st.view = 'groups'; st.selectedGroup = null; st.exercises = []; renderAllExercises(); runUiAction('Не удалось обновить группы', () => loadAllExercisesGroups()); }
+      if (st.view === 'unfinished') { st.view = 'groups'; closeAllExerciseSheet(); renderAllExercises(); return; }
+      if (st.view === 'exercises') { st.view = 'groups'; st.selectedGroup = null; st.selectedExerciseId = null; st.exercise = null; st.exercises = []; closeAllExerciseSheet(); renderAllExercises(); runUiAction('Не удалось обновить группы', () => loadAllExercisesGroups()); }
     }
 
     async function loadAllExercisesUnfinished(silentSwitch = false) {
@@ -11340,6 +11353,7 @@
             updateFinishButton();
           }
           if (data?.last_completed_at) updateLastCompleted(data.last_completed_at);
+          if (getEditorSource() === 'all_exercises') refreshAllExercisesMeta();
           toast('Забег сохранён ✅');
         } catch (err) {
           const msg = String(err?.message || '').toLowerCase();
@@ -11747,6 +11761,7 @@
           state.editor.scrollTarget = last.set_no;
           setFlashSet(last.set_no);
         }
+        if (getEditorSource() === 'all_exercises') refreshAllExercisesMeta();
         if (opts.toastOnSave) toast('Сохранено');
         return data;
       } catch (e) {
@@ -11761,6 +11776,7 @@
       applySetsUpdate(ueId, data.sets);
       const last = data.sets[data.sets.length - 1];
       if (state.editor.ueId === ueId) state.editor.selectedSet = last?.set_no || null;
+      if (getEditorSource() === 'all_exercises') refreshAllExercisesMeta();
       if (opts.toastOnSave !== false) toast('Сохранено');
       return data;
     }
@@ -11792,6 +11808,7 @@
         body: JSON.stringify({ field, delta, set_no: targetSet }),
       });
       applySetsUpdate(ueId, data.sets);
+      if (getEditorSource() === 'all_exercises') refreshAllExercisesMeta();
       toast('Сохранено');
     }
 
@@ -14987,7 +15004,7 @@
 
 
     function isAllExercisesEditorContext() {
-      return state.currentRoute === 'all_exercises' && state.editor?.source === 'all_exercises';
+      return state.currentRoute === 'allExercises' && state.editor?.source === 'all_exercises';
     }
 
     function getEditorSource() {

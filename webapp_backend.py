@@ -1438,7 +1438,7 @@ def _ai_schema_base() -> dict:
         'properties': {
             'type': {'type': 'string', 'const': 'create_system'},
             'system_name': {'type': 'string', 'minLength': 2, 'maxLength': 60},
-            'days': {'type': 'array', 'minItems': 2, 'maxItems': 7, 'items': system_day},
+            'days': {'type': 'array', 'minItems': 1, 'maxItems': 7, 'items': system_day},
             'rationale': {'type': 'array', 'maxItems': 8, 'items': {'type': 'string'}},
         },
         'required': ['type', 'system_name', 'days', 'rationale'],
@@ -2916,7 +2916,8 @@ async def _all_exercises_groups_payload(user_id: int, iso_date: str) -> dict:
             "is_custom": code not in MG_NAMES,
         })
     groups.sort(key=lambda item: (LIBRARY_GROUP_ORDER.index(item["code"]) if item["code"] in LIBRARY_GROUP_ORDER else len(LIBRARY_GROUP_ORDER), str(item.get("name") or "").lower()))
-    return {"ok": True, "date": iso_date, "groups": groups}
+    done_today = await db.list_all_exercises_done_today(user_id, iso_date)
+    return {"ok": True, "date": iso_date, "groups": groups, "done_today": done_today}
 
 
 async def _all_exercises_group_items(user_id: int, code: str, iso_date: str) -> list[dict]:
@@ -3204,8 +3205,8 @@ async def all_exercise_done(exercise_id: int, date: str | None = None, ctx: Auth
 
 
 
-@app.post("/all_exercises/reset_day")
-async def all_exercises_reset_day(date: str | None = None, ctx: AuthCtx = Depends(get_auth_ctx)):
+@app.post("/all_exercises/finish_day")
+async def all_exercises_finish_day(date: str | None = None, ctx: AuthCtx = Depends(get_auth_ctx)):
     if ctx.is_acting:
         raise HTTPException(status_code=403, detail="Раздел доступен только для личного дневника")
     user_id = ctx.user_id
@@ -3214,8 +3215,17 @@ async def all_exercises_reset_day(date: str | None = None, ctx: AuthCtx = Depend
     session_id = await db.get_or_create_today_session(user_id, iso_date, 0, system_id)
     async with db.connect_db() as conn:
         await conn.execute(
-            "UPDATE session_exercises SET is_done=0, done_at=NULL WHERE session_id=?",
-            (int(session_id),),
+            """
+            UPDATE session_exercises
+            SET is_done=1, done_at=COALESCE(done_at, CURRENT_TIMESTAMP)
+            WHERE session_id=?
+              AND user_exercise_id IN (
+                SELECT DISTINCT st.user_exercise_id
+                FROM sets st
+                WHERE st.session_id=?
+              )
+            """,
+            (int(session_id), int(session_id)),
         )
         await conn.commit()
     groups = await _all_exercises_groups_payload(user_id, iso_date)
