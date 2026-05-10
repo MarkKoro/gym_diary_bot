@@ -3065,6 +3065,17 @@ async def all_exercise_session(exercise_id: int, date: str | None = None, ctx: A
     previous_sets_rows = await db.fetch_last_session_sets(user_id, 0, ue_id, iso_date, None)
     previous_summary = _format_prev_summary(await db.get_last_session_summary(user_id, 0, ue_id, iso_date, None))
     previous_date = await _get_previous_done_date(user_id, exercise_id, session_id)
+    normalized_group = _normalize_group(muscle_group)
+    running_state: dict[str, object] = {}
+    if normalized_group == "run":
+        running_state = await _build_running_state(
+            user_id,
+            0,
+            ue_id,
+            target_date,
+            exercise_id=exercise_id,
+            history_limit=20,
+        )
     async with db.connect_db() as conn:
         completed_count = await db.count_completed_sessions_for_exercise(conn, user_id, exercise_id)
         cur = await conn.execute(
