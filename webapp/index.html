@@ -2427,7 +2427,9 @@
     .all-ex-hero { display: grid; grid-template-columns: auto 1fr auto; gap: 10px; align-items: center; margin-bottom: 10px; }
     .all-ex-title { font-size: 24px; font-weight: 850; letter-spacing: -0.02em; text-align:center; }
     .all-ex-subtitle { color: var(--muted); font-size: 11px; line-height: 1.25; margin-top: 2px; text-align:center; max-width: 380px; }
-    .all-ex-stage { position: relative; min-height: calc(100vh - 220px); border-radius: 0; border: 0; background: radial-gradient(circle at center, color-mix(in srgb, var(--accent) 10%, transparent), transparent 58%); overflow: auto; isolation: isolate; -webkit-overflow-scrolling: touch; margin: 0 -16px; padding: 0 8px; touch-action:pan-x pan-y; }
+    .all-ex-stage-wrap { position: relative; width: 100%; min-height: 520px; overflow: hidden; }
+    .all-ex-stage { position: relative; width: 100%; min-height: max(520px, calc(100vh - 220px)); border-radius: 0; border: 0; background: radial-gradient(circle at center, color-mix(in srgb, var(--accent) 10%, transparent), transparent 58%); overflow: auto; isolation: isolate; -webkit-overflow-scrolling: touch; margin: 0 -16px; padding: 0 8px; touch-action:pan-x pan-y; }
+    .all-ex-center-overlay { position: absolute; inset: 0; pointer-events: none; z-index: 4; display: grid; place-items: center; }
     .all-ex-petals { position: relative; width: max(100%, 1220px); height: max(100%, 1220px); min-height: 760px; display: block; transition: opacity .22s ease, transform .28s ease; margin: 0 auto; }
     .all-ex-petals.columns { width: 100%; min-height: 0; height: auto; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px 10px; padding: 10px 8px 20px; }
     .all-ex-petals.animating-out { opacity: 0; transform: scale(.86) rotate(-7deg); }
@@ -2460,54 +2462,45 @@
     
     .all-ex-top-left{display:flex;gap:8px;align-items:center;}
     .all-ex-unfinished-top{white-space:nowrap;}
-    .all-ex-summary-center {
-      position: absolute;
-      left: 50%;
-      top: 50%;
-      transform: translate(-50%, -50%);
-      width: min(64vw, 280px);
-      max-height: 190px;
-      padding: 10px 12px;
-      border-radius: 18px;
-      border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
-      background: color-mix(in srgb, var(--card) 72%, transparent);
-      backdrop-filter: blur(14px);
-      -webkit-backdrop-filter: blur(14px);
-      box-shadow: 0 10px 28px rgba(15,23,42,.16);
-      pointer-events: none;
-      z-index: 1;
-      overflow: hidden;
-    }
-    .all-ex-summary-kicker { font-size: 11px; font-weight: 800; color: var(--muted); margin-bottom: 6px; text-align: center; }
+    .all-ex-summary-center { width: min(62vw, 285px); max-height: 168px; padding: 10px 12px; border-radius: 18px; border: 1px solid color-mix(in srgb, var(--border) 82%, transparent); background: color-mix(in srgb, var(--card) 72%, transparent); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); box-shadow: 0 12px 30px rgba(0,0,0,.24), inset 0 1px 0 rgba(255,255,255,.08); overflow: hidden; opacity: .96; pointer-events: none; }
+    .all-ex-summary-kicker { font-size: 11px; line-height: 1.1; font-weight: 850; color: var(--muted); text-align: center; margin-bottom: 7px; }
     .all-ex-summary-lines { display: grid; gap: 4px; min-width: 0; }
-    .all-ex-summary-line { display: flex; align-items: center; gap: 4px; min-width: 0; font-size: 11px; line-height: 1.25; color: var(--text); }
+    .all-ex-summary-line { display: flex; align-items: center; gap: 4px; min-width: 0; font-size: 11px; line-height: 1.22; color: var(--text); }
     .all-ex-summary-dot { width: 6px; height: 6px; border-radius: 999px; flex: 0 0 auto; }
-    .all-ex-summary-group { font-weight: 800; white-space: nowrap; flex: 0 0 auto; }
+    .all-ex-summary-group { flex: 0 0 auto; max-width: 72px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 850; }
     .all-ex-summary-sep { color: var(--muted); flex: 0 0 auto; }
-    .all-ex-summary-exercise { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); opacity: .92; }
-    .all-ex-summary-more { text-align: center; color: var(--muted); font-size: 11px; font-weight: 700; padding-top: 2px; }
+    .all-ex-summary-exercise { min-width: 0; flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; opacity: .94; }
+    .all-ex-summary-more { text-align: center; color: var(--muted); font-size: 11px; font-weight: 750; padding-top: 2px; }
     @media (max-width: 420px) {
-      .all-ex-summary-center { width: min(58vw, 230px); max-height: 150px; padding: 8px 10px; }
-      .all-ex-summary-line { font-size: 10px; }
+      .all-ex-summary-center { width: min(56vw, 230px); max-height: 142px; padding: 8px 9px; border-radius: 15px; }
+      .all-ex-summary-kicker { font-size: 10px; margin-bottom: 5px; }
+      .all-ex-summary-line { font-size: 10px; gap: 3px; }
+      .all-ex-summary-group { max-width: 58px; }
+    }
+    @media (max-width: 360px) {
+      .all-ex-summary-center { width: min(54vw, 205px); max-height: 126px; }
+      .all-ex-summary-line { font-size: 9.5px; }
+      .all-ex-summary-group { max-width: 50px; }
     }
     .all-ex-sheet{position:fixed;inset:0;z-index:9998;background:rgba(3,7,18,.48);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);display:flex;align-items:flex-end;justify-content:center;padding:0 10px calc(8px + env(safe-area-inset-bottom));}
     .all-ex-sheet-card{width:min(96vw,620px);max-height:min(84dvh,760px);overflow:auto;-webkit-overflow-scrolling:touch;background:color-mix(in srgb, var(--card) 96%, transparent);border:1px solid var(--border);border-radius:22px 22px 14px 14px;padding:10px;box-shadow:var(--sheet-shadow);animation:allExSheetIn .2s ease;}
     @keyframes allExSheetIn { from { transform:translateY(22px); opacity:.0; } to { transform:translateY(0); opacity:1; } }
 .all-ex-finish-day { font-size: 12px; padding: 8px 10px; border-radius: 999px; border: 1px solid var(--border); background: color-mix(in srgb, var(--card) 92%, var(--bg)); color: var(--muted); }
     .all-ex-finish-day.active { background: color-mix(in srgb, #22c55e 24%, var(--card)); color: var(--text); border-color: color-mix(in srgb, #22c55e 62%, var(--border)); box-shadow: 0 0 0 1px color-mix(in srgb, #22c55e 36%, transparent), 0 8px 18px color-mix(in srgb, #22c55e 16%, transparent); }
-    .all-ex-header-main{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:8px;}
-    .all-ex-header-left,.all-ex-header-right{display:flex;align-items:center;gap:8px;min-width:88px;}
-    .all-ex-header-right{justify-content:flex-end;}
-    .all-ex-header-title{font-weight:800;font-size:17px;text-align:center;flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
-    .all-ex-unfinished-main.active { background: color-mix(in srgb, var(--accent) 22%, var(--card)); color: var(--text); border-color: color-mix(in srgb, var(--accent) 60%, var(--border)); box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 45%, transparent), 0 6px 16px color-mix(in srgb, var(--accent) 20%, transparent); }
+    .all-ex-header-unfinished { min-height: 36px; max-width: 160px; padding: 8px 11px; border-radius: 999px; border: 1px solid var(--border); background: color-mix(in srgb, var(--card) 88%, var(--bg)); color: var(--muted); font-size: 12px; font-weight: 800; line-height: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; box-shadow: var(--shadow); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); }
+    .all-ex-header-unfinished.active { background: color-mix(in srgb, var(--accent) 24%, var(--card)); color: var(--text); border-color: color-mix(in srgb, var(--accent) 62%, var(--border)); box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 36%, transparent), 0 8px 18px color-mix(in srgb, var(--accent) 18%, transparent); }
+    .all-ex-header-unfinished:disabled,
+    .all-ex-header-unfinished[aria-disabled="true"] { opacity: .45; cursor: default; pointer-events: none; box-shadow: none; }
     @keyframes petalIn { from { opacity: 0; transform: rotate(var(--angle)) translate(calc(var(--radius) * .55)) rotate(calc(-1 * var(--angle))) scale(.88); } to { opacity: 1; } }
     @media (max-width: 420px) {
+      .all-ex-stage-wrap { min-height: 390px; }
       .all-ex-stage { min-height: 390px; }
       .all-ex-petal { width: 118px; min-height: 80px; margin-left: -59px; margin-top: -40px; padding: 10px; }
       .all-ex-petal-title { font-size: 12px; }
       .all-ex-petal-meta { font-size: 10px; }
       .all-ex-center { width: min(92vw, 390px); max-height: min(74vh, 540px); padding: 14px; }
       .all-ex-petals.columns { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .all-ex-header-unfinished { max-width: 135px; padding: 8px 9px; font-size: 11px; }
     }
   </style>
 </head>
@@ -2599,6 +2592,7 @@
         </div>
         <div class="header-title" id="headerTitle">Сегодня</div>
         <div class="header-right">
+          <button id="allExercisesUnfinishedHeaderBtn" class="all-ex-header-unfinished hidden" type="button" disabled aria-disabled="true">Незавершённые</button>
           <button id="productivityBtn" class="icon-btn productivity-btn" aria-label="Открыть хаб продуктивности">
             <svg class="icon productivity-gauge-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
               <path class="gauge-ring" d="M4 14a8 8 0 1 1 16 0"></path>
@@ -5844,6 +5838,12 @@
       if (productivityBtn) productivityBtn.addEventListener('click', (e) => { e.stopPropagation(); openProductivitySheet(); });
       const systemBtn = document.getElementById('systemOpenBtn');
       if (systemBtn) systemBtn.addEventListener('click', (e) => { e.stopPropagation(); runUiAction('Не удалось открыть выбор системы', () => openSystemSheet()); });
+      document.getElementById('allExercisesUnfinishedHeaderBtn')?.addEventListener('click', () => {
+        const st = allExercisesState();
+        if (state.currentRoute !== 'allExercises') return;
+        if (Number(st.unfinishedCount || 0) <= 0) return;
+        runUiAction('Не удалось загрузить незавершённые', () => loadAllExercisesUnfinished());
+      });
 
       document.getElementById('timerCloseBtn')?.addEventListener('click', closeTimerSheet);
       document.getElementById('productivityCloseBtn')?.addEventListener('click', closeProductivitySheet);
@@ -6628,23 +6628,30 @@
       return wrap;
     }
 
-    function renderAllExercisesSummaryOverlay(stage) {
+    function renderAllExercisesSummaryOverlay() {
+      const overlay = document.getElementById('allExercisesCenterOverlay');
+      if (!overlay) return;
+      overlay.innerHTML = '';
       const st = allExercisesState();
       if (st.view !== 'groups') return;
       const items = Array.isArray(st.doneToday) ? st.doneToday : [];
       if (!items.length) return;
-      const lines = items.slice(0, 7).map((item) => ({
-        group: allExercisesGroupName(normalizeMuscleKey(item.muscle_group || 'other')) ,
-        name: String(item.name || '').trim(),
-        color: getMuscleColor(normalizeMuscleKey(item.muscle_group || 'other')),
-      })).filter((x) => x.name);
-      const more = Math.max(0, items.length - lines.length);
+      const normalized = items.map((item) => {
+        const groupCode = normalizeMuscleKey(item.muscle_group || item.group || 'other');
+        const name = String(item.name || item.exercise_name || '').trim();
+        if (!name) return null;
+        return { group: allExercisesGroupName(groupCode), groupCode, name, color: getMuscleColor(groupCode) };
+      }).filter(Boolean);
+      if (!normalized.length) return;
+      const maxLines = window.innerWidth <= 390 ? 4 : 5;
+      const visible = normalized.slice(0, maxLines);
+      const more = Math.max(0, normalized.length - visible.length);
       const box = document.createElement('div');
-      box.className = 'all-ex-summary-center';
+      box.className = `all-ex-summary-center lines-${Math.min(visible.length, 5)}`;
       box.innerHTML = `
         <div class="all-ex-summary-kicker">Сегодня сделано</div>
         <div class="all-ex-summary-lines">
-          ${lines.map((l) => `
+          ${visible.map((l) => `
             <div class="all-ex-summary-line">
               <span class="all-ex-summary-dot" style="background:${escapeHtml(l.color)}"></span>
               <span class="all-ex-summary-group">${escapeHtml(l.group)}</span>
@@ -6655,7 +6662,7 @@
           ${more ? `<div class="all-ex-summary-more">+ ещё ${more}</div>` : ''}
         </div>
       `;
-      stage.appendChild(box);
+      overlay.appendChild(box);
     }
 
     function closeAllExerciseSheet(options = {}) {
@@ -6735,18 +6742,7 @@
       const root = document.getElementById('allExercisesContent');
       if (!root) return;
       const st = allExercisesState();
-      const selectedGroupName = st.selectedGroup ? allExercisesGroupName(st.selectedGroup) : '';
       root.innerHTML = `
-        <div class="all-ex-header-main">
-          <div class="all-ex-header-left">${st.view !== 'groups' ? '<button class="all-ex-back" data-action="all-ex-back">← Назад</button>' : ''}</div>
-          <div class="all-ex-header-title">${st.view === 'exercises' ? escapeHtml(selectedGroupName) : 'Все упражнения'}</div>
-          <div class="all-ex-header-right">
-            <button class="all-ex-finish-day all-ex-unfinished-main ${Number(st.unfinishedCount || 0) > 0 ? 'active' : ''}" data-action="all-ex-open-unfinished">
-              Незавершённые
-              <span class="all-ex-unfinished-count">${Number(st.unfinishedCount || 0) > 0 ? Number(st.unfinishedCount || 0) : ''}</span>
-            </button>
-          </div>
-        </div>
         <div class="all-ex-hero">
           <div class="all-ex-hero-copy">
             ${st.view === 'groups' ? '<div class="all-ex-title">Все упражнения</div><div class="all-ex-subtitle">Свободная тренировка без привязки к плану дня. Подходы сохраняются в общей истории и подтянутся в «Сегодня».</div>' : ''}
@@ -6756,13 +6752,15 @@
             <button class="all-ex-finish-day ${hasAllExercisesDoneToday() ? 'active' : ''}" data-action="all-ex-finish-day">Завершить день</button>
           </div>
         </div>
-        <div class="all-ex-stage" id="allExercisesStage"></div>
+        <div class="all-ex-stage-wrap" id="allExercisesStageWrap">
+          <div class="all-ex-stage" id="allExercisesStage"></div>
+          <div class="all-ex-center-overlay" id="allExercisesCenterOverlay"></div>
+        </div>
       `;
       root.querySelector('[data-action="all-ex-back"]')?.addEventListener('click', goBackAllExercises);
       root.querySelector('[data-action="all-ex-add-group"]')?.addEventListener('click', promptAllExercisesGroup);
       root.querySelector('[data-action="all-ex-add-exercise"]')?.addEventListener('click', promptAllExerciseCreate);
       root.querySelector('[data-action="all-ex-finish-day"]')?.addEventListener('click', () => runUiAction('Не удалось завершить день', () => finishAllExercisesDay()));
-      root.querySelector('[data-action="all-ex-open-unfinished"]')?.addEventListener('click', () => runUiAction('Не удалось загрузить незавершённые', () => loadAllExercisesUnfinished()));
       const stage = document.getElementById('allExercisesStage');
       if (!stage) return;
       const center = document.createElement('div');
@@ -6780,7 +6778,7 @@
           });
         const petals = groups.map((g) => ({ code: g.code, title: g.name || allExercisesGroupName(g.code), meta: `${Number(g.count || 0)} упр. · выполнено ${Number(g.done_count || 0)}`, done: Number(g.done_count || 0) > 0, color: getMuscleColor(g.code) }));
         stage.appendChild(renderAllExercisesPetals(petals, 'group'));
-        renderAllExercisesSummaryOverlay(stage);
+        renderAllExercisesSummaryOverlay();
         requestAnimationFrame(() => { centerAllExercisesStage(stage); initAllExercisesPinchZoom(stage); });
         return;
       }
@@ -6820,6 +6818,7 @@
         st.groups = groupsData.groups || [];
         st.doneToday = groupsData.done_today || [];
         st.unfinishedCount = Number(groupsData.unfinished_count || 0);
+        syncAllExercisesHeaderButton();
       } finally { st.loading = false; renderAllExercises(); }
     }
 
@@ -6871,6 +6870,7 @@
         st.groups = data.groups || [];
         st.doneToday = data.done_today || [];
         st.unfinishedCount = Number(data.unfinished_count || 0);
+        syncAllExercisesHeaderButton();
       } catch (_) {
       } finally {
         st.metaRefreshInFlight = false;
@@ -6882,10 +6882,8 @@
 
     function updateAllExercisesSummaryOnly() {
       if (state.currentRoute !== 'allExercises') return;
-      const stage = document.querySelector('#allExercisesContent .all-ex-stage');
-      if (!stage) return;
-      stage.querySelector('.all-ex-summary-center')?.remove();
-      renderAllExercisesSummaryOverlay(stage);
+      if (allExercisesState().view !== 'groups') return;
+      renderAllExercisesSummaryOverlay();
     }
 
     function updateAllExercisesGroupPetalMetaOnly() {
@@ -6907,13 +6905,7 @@
 
     function updateAllExercisesHeaderCountersOnly() {
       const st = allExercisesState();
-      const btn = document.querySelector('[data-all-ex-action="unfinished"]') || document.querySelector('[data-action="all-ex-open-unfinished"]');
-      if (btn) {
-        const count = Number(st.unfinishedCount || 0);
-        btn.classList.toggle('active', count > 0);
-        const label = btn.querySelector('.all-ex-unfinished-count');
-        if (label) label.textContent = count > 0 ? String(count) : '';
-      }
+      syncAllExercisesHeaderButton();
       if (state.currentRoute === 'allExercises' && !st.sheetOpen && st.view === 'groups') {
         updateAllExercisesSummaryOnly();
         updateAllExercisesGroupPetalMetaOnly();
@@ -6928,8 +6920,8 @@
 
     function goBackAllExercises() {
       const st = allExercisesState();
-      if (st.view === 'unfinished') { st.view = 'groups'; closeAllExerciseSheet(); renderAllExercises(); return; }
-      if (st.view === 'exercises') { st.view = 'groups'; st.selectedGroup = null; st.selectedExerciseId = null; st.exercise = null; st.exercises = []; closeAllExerciseSheet(); renderAllExercises(); runUiAction('Не удалось обновить группы', () => loadAllExercisesGroups()); }
+      if (st.view === 'unfinished') { st.view = 'groups'; closeAllExerciseSheet(); renderAllExercises(); syncAllExercisesHeaderButton(); return; }
+      if (st.view === 'exercises') { st.view = 'groups'; st.selectedGroup = null; st.selectedExerciseId = null; st.exercise = null; st.exercises = []; closeAllExerciseSheet(); renderAllExercises(); syncAllExercisesHeaderButton(); runUiAction('Не удалось обновить группы', () => loadAllExercisesGroups()); }
     }
 
     async function loadAllExercisesUnfinished(silentSwitch = false) {
@@ -6942,6 +6934,7 @@
         const data = await apiFetch(`/gymapi/all_exercises/unfinished?date=${date}`, { silent: true });
         st.unfinished = data.items || [];
         st.unfinishedCount = st.unfinished.length;
+        syncAllExercisesHeaderButton();
       } finally {
         st.loading = false;
         renderAllExercises();
@@ -9495,6 +9488,10 @@
           : ROUTE_TITLES.measurements;
         return;
       }
+      if (state.currentRoute === 'allExercises') {
+        header.textContent = 'Свободная тренировка';
+        return;
+      }
       header.textContent = state.currentRoute === 'today'
         ? getTodayHeaderTitle()
         : (ROUTE_TITLES[state.currentRoute] || ROUTE_TITLES.today);
@@ -9560,6 +9557,7 @@
       });
       document.body.classList.toggle('route-today', normalized === 'today');
       syncHeaderTitle();
+      syncAllExercisesHeaderButton();
       applyTitleFrame();
       setVisible(document.getElementById('todayHeader'), normalized === 'today');
       updateAddButtonVisibility();
@@ -9620,6 +9618,26 @@
         scheduleDeferredAction(() => loadSubscriptionOverview());
       }
       syncFinishFabVisibility();
+    }
+
+    function syncAllExercisesHeaderButton() {
+      const btn = document.getElementById('allExercisesUnfinishedHeaderBtn');
+      if (!btn) return;
+      const isAllExercises = state.currentRoute === 'allExercises';
+      const count = isAllExercises ? Number(allExercisesState()?.unfinishedCount || 0) : 0;
+      btn.classList.toggle('hidden', !isAllExercises);
+      if (!isAllExercises) {
+        btn.disabled = true;
+        btn.setAttribute('aria-disabled', 'true');
+        btn.textContent = 'Незавершённые';
+        btn.classList.remove('active');
+        return;
+      }
+      const active = count > 0;
+      btn.disabled = !active;
+      btn.setAttribute('aria-disabled', active ? 'false' : 'true');
+      btn.classList.toggle('active', active);
+      btn.textContent = active ? `Незавершённые (${count})` : 'Незавершённые';
     }
 
     function navigateTo(route, replace = false) {
