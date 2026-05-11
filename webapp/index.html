@@ -2460,11 +2460,36 @@
     
     .all-ex-top-left{display:flex;gap:8px;align-items:center;}
     .all-ex-unfinished-top{white-space:nowrap;}
-    .all-ex-summary-center{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:min(70vw,420px);max-height:min(34vh,250px);padding:8px 6px;text-align:left;pointer-events:none;z-index:2;overflow:hidden;}
-    .all-ex-summary-lines{display:grid;gap:4px;color:#fff;font-weight:700;}
-    .all-ex-summary-line{font-size:clamp(9px,1.6vw,12px);opacity:.94;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-shadow:0 1px 8px rgba(0,0,0,.42);}
-    .all-ex-summary-group{font-weight:850;}
-    .all-ex-summary-exercise{font-weight:600;opacity:.96;}
+    .all-ex-summary-center {
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      transform: translate(-50%, -50%);
+      width: min(64vw, 280px);
+      max-height: 190px;
+      padding: 10px 12px;
+      border-radius: 18px;
+      border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+      background: color-mix(in srgb, var(--card) 72%, transparent);
+      backdrop-filter: blur(14px);
+      -webkit-backdrop-filter: blur(14px);
+      box-shadow: 0 10px 28px rgba(15,23,42,.16);
+      pointer-events: none;
+      z-index: 1;
+      overflow: hidden;
+    }
+    .all-ex-summary-kicker { font-size: 11px; font-weight: 800; color: var(--muted); margin-bottom: 6px; text-align: center; }
+    .all-ex-summary-lines { display: grid; gap: 4px; min-width: 0; }
+    .all-ex-summary-line { display: flex; align-items: center; gap: 4px; min-width: 0; font-size: 11px; line-height: 1.25; color: var(--text); }
+    .all-ex-summary-dot { width: 6px; height: 6px; border-radius: 999px; flex: 0 0 auto; }
+    .all-ex-summary-group { font-weight: 800; white-space: nowrap; flex: 0 0 auto; }
+    .all-ex-summary-sep { color: var(--muted); flex: 0 0 auto; }
+    .all-ex-summary-exercise { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); opacity: .92; }
+    .all-ex-summary-more { text-align: center; color: var(--muted); font-size: 11px; font-weight: 700; padding-top: 2px; }
+    @media (max-width: 420px) {
+      .all-ex-summary-center { width: min(58vw, 230px); max-height: 150px; padding: 8px 10px; }
+      .all-ex-summary-line { font-size: 10px; }
+    }
     .all-ex-sheet{position:fixed;inset:0;z-index:9998;background:rgba(3,7,18,.48);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);display:flex;align-items:flex-end;justify-content:center;padding:0 10px calc(8px + env(safe-area-inset-bottom));}
     .all-ex-sheet-card{width:min(96vw,620px);max-height:min(84dvh,760px);overflow:auto;-webkit-overflow-scrolling:touch;background:color-mix(in srgb, var(--card) 96%, transparent);border:1px solid var(--border);border-radius:22px 22px 14px 14px;padding:10px;box-shadow:var(--sheet-shadow);animation:allExSheetIn .2s ease;}
     @keyframes allExSheetIn { from { transform:translateY(22px); opacity:.0; } to { transform:translateY(0); opacity:1; } }
@@ -6482,13 +6507,16 @@
     async function finishAllExercisesDay() {
       const st = allExercisesState();
       const data = await apiFetch('/gymapi/all_exercises/finish_day', { method: 'POST', body: JSON.stringify({}) });
-      st.groups = data.groups || st.groups;
+      st.groups = data.groups || [];
+      st.doneToday = data.done_today || [];
+      st.unfinishedCount = Number(data.unfinished_count || 0);
       st.finishedAt = Date.now();
       st.view = 'groups';
       st.selectedGroup = null;
       st.selectedExerciseId = null;
       st.exercise = null;
       st.exercises = [];
+      closeAllExerciseSheet();
       renderAllExercises();
       markAllExercisesActivity();
       toast('Свободный день завершён ✅');
@@ -6598,31 +6626,54 @@
     function renderAllExercisesSummaryOverlay(stage) {
       const st = allExercisesState();
       if (st.view !== 'groups') return;
-      const lines = [];
-      const doneToday = new Map();
-      (st.doneToday || []).forEach((item) => {
-        const key = normalizeMuscleKey(item.muscle_group || 'other');
-        if (!doneToday.has(key)) doneToday.set(key, []);
-        doneToday.get(key).push(item.name || 'Упражнение');
-      });
-      (st.groups || []).forEach((g) => {
-        const done = Number(g.done_count || 0);
-        const key = normalizeMuscleKey(g.code || 'other');
-        if (done > 0 && doneToday.has(key)) {
-          doneToday.get(key).slice(0, 3).forEach((name) => lines.push({ group: g.name || allExercisesGroupName(g.code), name, color: getMuscleColor(key) }));
-        }
-      });
+      const items = Array.isArray(st.doneToday) ? st.doneToday : [];
+      if (!items.length) return;
+      const lines = items.slice(0, 7).map((item) => ({
+        group: allExercisesGroupName(normalizeMuscleKey(item.muscle_group || 'other')) ,
+        name: String(item.name || '').trim(),
+        color: getMuscleColor(normalizeMuscleKey(item.muscle_group || 'other')),
+      })).filter((x) => x.name);
+      const more = Math.max(0, items.length - lines.length);
       const box = document.createElement('div');
       box.className = 'all-ex-summary-center';
-      box.innerHTML = lines.length ? `<div class="all-ex-summary-lines">${lines.slice(0, 10).map((l)=>`<div class="all-ex-summary-line"><span class="all-ex-summary-group" style="color:${escapeHtml(l.color)}">${escapeHtml(l.group)}:</span> <span class="all-ex-summary-exercise">${escapeHtml(l.name)}</span></div>`).join('')}</div>` : '';
+      box.innerHTML = `
+        <div class="all-ex-summary-kicker">Сегодня сделано</div>
+        <div class="all-ex-summary-lines">
+          ${lines.map((l) => `
+            <div class="all-ex-summary-line">
+              <span class="all-ex-summary-dot" style="background:${escapeHtml(l.color)}"></span>
+              <span class="all-ex-summary-group">${escapeHtml(l.group)}</span>
+              <span class="all-ex-summary-sep">·</span>
+              <span class="all-ex-summary-exercise">${escapeHtml(l.name)}</span>
+            </div>
+          `).join('')}
+          ${more ? `<div class="all-ex-summary-more">+ ещё ${more}</div>` : ''}
+        </div>
+      `;
       stage.appendChild(box);
     }
 
-    function closeAllExerciseSheet() {
-      const st = allExercisesState();
-      st.sheetOpen = false;
+    function closeAllExerciseSheet(options = {}) {
       document.getElementById('allExerciseFloatingModal')?.remove();
       document.body.classList.remove('all-ex-modal-open');
+      const st = allExercisesState();
+      st.sheetOpen = false;
+      if (!options.keepState) {
+      }
+    }
+
+
+    function openAllExerciseEditor(ueId, tab = 'sets') {
+      const source = getExerciseActionSource(ueId);
+      if (source === 'all_exercises') {
+        closeAllExerciseSheet({ keepState: true });
+      }
+      openEditor(ueId, source);
+      if (tab && tab !== 'sets') {
+        setActiveTab(tab);
+        runUiAction('Не удалось загрузить данные упражнения', () => ensureExerciseContext(ueId));
+        renderEditor();
+      }
     }
 
     function openAllExerciseSheet(ex) {
@@ -6762,7 +6813,7 @@
         const data = await apiFetch(`/gymapi/all_exercises/group/${encodeURIComponent(code)}`, { silent: true });
         if (seq !== st.groupRequestSeq) return;
         st.exercises = data.items || [];
-      } finally { st.loading = false; renderAllExercises(); }
+      } finally { if (seq === st.groupRequestSeq) { st.loading = false; renderAllExercises(); } }
     }
 
     async function openAllExercise(exerciseId) {
@@ -6811,8 +6862,31 @@
       if (st.metaRefreshQueued) { st.metaRefreshQueued = false; refreshAllExercisesMeta({ render }); }
     }
 
+    function updateAllExercisesSummaryOnly() {
+      if (state.currentRoute !== 'allExercises') return;
+      const stage = document.querySelector('#allExercisesContent .all-ex-stage');
+      if (!stage) return;
+      stage.querySelector('.all-ex-summary-center')?.remove();
+      renderAllExercisesSummaryOverlay(stage);
+    }
+
+    function updateAllExercisesGroupPetalMetaOnly() {
+      if (state.currentRoute === 'allExercises' && !allExercisesState().sheetOpen && allExercisesState().view === 'groups') renderAllExercises();
+    }
+
     function updateAllExercisesHeaderCountersOnly() {
-      if (state.currentRoute === 'allExercises' && !allExercisesState().sheetOpen) renderAllExercises();
+      const st = allExercisesState();
+      const btn = document.querySelector('[data-all-ex-action="unfinished"]') || document.querySelector('[data-action="all-ex-open-unfinished"]');
+      if (btn) {
+        const count = Number(st.unfinishedCount || 0);
+        btn.classList.toggle('active', count > 0);
+        const label = btn.querySelector('.all-ex-unfinished-count');
+        if (label) label.textContent = count > 0 ? String(count) : '';
+      }
+      if (state.currentRoute === 'allExercises' && !st.sheetOpen && st.view === 'groups') {
+        updateAllExercisesSummaryOnly();
+        updateAllExercisesGroupPetalMetaOnly();
+      }
     }
 
     function scheduleAllExercisesMetaRefresh() {
@@ -10503,9 +10577,14 @@
         ctx.data = { ...(ctx.data || {}), current_note: data.current_note };
         const exercise = state.exercises.get(ueId);
         if (exercise) exercise.current_note = String(data.current_note || '');
-        renderExercises(Array.from(state.exercises.values()));
-        if (state.editor.open && state.editor.ueId === ueId) {
-          renderEditor();
+        if (getExerciseActionSource(ueId) === 'all_exercises') {
+          if (state.editor.open && state.editor.ueId === ueId) renderEditor();
+          scheduleAllExercisesMetaRefresh();
+        } else {
+          renderExercises(Array.from(state.exercises.values()));
+          if (state.editor.open && state.editor.ueId === ueId) {
+            renderEditor();
+          }
         }
         setNoteStatus('Сохранено ✅', true);
       } catch (e) {
@@ -11011,7 +11090,7 @@
       const doneBtn = document.createElement('button'); doneBtn.type = 'button'; doneBtn.className = 'outline-btn done-btn'; doneBtn.textContent = '✅ Готово';
       doneBtn.addEventListener('click', (ev) => { ev.stopPropagation(); runUiAction('Не удалось отметить упражнение выполненным', () => handleExerciseDone(ueId)); });
       const detailsBtn = document.createElement('button'); detailsBtn.type = 'button'; detailsBtn.className = 'outline-btn'; detailsBtn.textContent = 'ℹ️ Детали';
-      detailsBtn.addEventListener('click', (ev) => { ev.stopPropagation(); openEditor(exercise.user_exercise_id, getExerciseActionSource(exercise.user_exercise_id)); });
+      detailsBtn.addEventListener('click', (ev) => { ev.stopPropagation(); openAllExerciseEditor(exercise.user_exercise_id, 'sets'); });
       actionsRow.append(addBtn, removeBtn, detailsBtn, doneBtn);
       container.appendChild(actionsRow);
     }
@@ -11173,7 +11252,7 @@
       const actionsRow = document.createElement('div');
       actionsRow.className = 'workout-actions';
       const historyBtn = document.createElement('button'); historyBtn.type = 'button'; historyBtn.className = 'btn'; historyBtn.textContent = 'История';
-      historyBtn.addEventListener('click', (ev) => { ev.stopPropagation(); openEditor(exercise.user_exercise_id, getExerciseActionSource(exercise.user_exercise_id)); });
+      historyBtn.addEventListener('click', (ev) => { ev.stopPropagation(); openAllExerciseEditor(exercise.user_exercise_id, 'history'); });
       const doneBtn = document.createElement('button'); doneBtn.type = 'button'; doneBtn.className = 'outline-btn done-btn'; doneBtn.textContent = '✅ Готово';
       doneBtn.addEventListener('click', (ev) => { ev.stopPropagation(); runUiAction('Не удалось сохранить завершение пробежки', () => handleRunningDone(exercise)); });
       actionsRow.append(historyBtn, doneBtn);
@@ -11538,9 +11617,7 @@
             ev.preventDefault();
             ev.stopPropagation();
             closeSourceMetaPopover();
-            openEditor(exercise.user_exercise_id);
-            setActiveTab('note');
-            renderEditor();
+            openAllExerciseEditor(exercise.user_exercise_id, 'note');
           });
         }
 
