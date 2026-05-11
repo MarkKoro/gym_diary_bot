@@ -2459,8 +2459,6 @@
     .all-ex-hide-bottom { width: min(94vw, 560px); }
     
     .all-ex-top-left{display:flex;gap:8px;align-items:center;}
-    .all-ex-top-mid{display:flex;justify-content:flex-start;}
-    .all-ex-top-right{display:flex;justify-content:flex-end;align-items:center;}
     .all-ex-unfinished-top{white-space:nowrap;}
     .all-ex-summary-center {
       position: absolute;
@@ -2496,7 +2494,6 @@
     .all-ex-sheet-card{width:min(96vw,620px);max-height:min(84dvh,760px);overflow:auto;-webkit-overflow-scrolling:touch;background:color-mix(in srgb, var(--card) 96%, transparent);border:1px solid var(--border);border-radius:22px 22px 14px 14px;padding:10px;box-shadow:var(--sheet-shadow);animation:allExSheetIn .2s ease;}
     @keyframes allExSheetIn { from { transform:translateY(22px); opacity:.0; } to { transform:translateY(0); opacity:1; } }
 .all-ex-finish-day { font-size: 12px; padding: 8px 10px; border-radius: 999px; border: 1px solid var(--border); background: color-mix(in srgb, var(--card) 92%, var(--bg)); color: var(--muted); }
-    .all-ex-finish-day.active { background: color-mix(in srgb, var(--accent) 14%, var(--card)); color: var(--text); border-color: color-mix(in srgb, var(--accent) 40%, var(--border)); }
     .all-ex-unfinished-top.active { background: color-mix(in srgb, var(--accent) 22%, var(--card)); color: var(--text); border-color: color-mix(in srgb, var(--accent) 60%, var(--border)); box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 45%, transparent), 0 6px 16px color-mix(in srgb, var(--accent) 20%, transparent); }
     @keyframes petalIn { from { opacity: 0; transform: rotate(var(--angle)) translate(calc(var(--radius) * .55)) rotate(calc(-1 * var(--angle))) scale(.88); } to { opacity: 1; } }
     @media (max-width: 420px) {
@@ -6731,16 +6728,14 @@
       root.innerHTML = `
         <div class="all-ex-hero">
           <div class="all-ex-top-left">${st.view !== 'groups' ? '<button class="all-ex-back" data-action="all-ex-back">← Назад</button>' : ''}</div>
-          <div class="all-ex-top-mid">
+          <div>
             <div class="all-ex-title">${st.view === 'exercises' ? escapeHtml(selectedGroupName) : 'Все упражнения'}</div>
             ${st.view === 'groups' ? '<div class="all-ex-subtitle">Свободная тренировка без привязки к плану дня. Подходы сохраняются в общей истории и подтянутся в «Сегодня».</div>' : ''}
           </div>
-          <div class="all-ex-top-right">
-            ${st.view === 'groups' ? `<button class="all-ex-finish-day all-ex-unfinished-top ${Number(st.unfinishedCount||0)>0?'active':''}" data-action="all-ex-open-unfinished">Незавершённые${Number(st.unfinishedCount||0)>0?` (${Number(st.unfinishedCount||0)})`:''}</button>` : ''}
-          </div>
           <div class="all-ex-toolbar">
             ${st.view === 'groups' ? '<button class="all-ex-back" data-action="all-ex-add-group">＋ Группа</button>' : '<button class="all-ex-back" data-action="all-ex-add-exercise">＋ Упражнение</button>'}
-            <button class="all-ex-finish-day ${Number(st.doneToday?.length||0)>0?'active':''}" data-action="all-ex-finish-day">Завершить день</button>
+            ${st.view === 'groups' ? `<button class="all-ex-finish-day all-ex-unfinished-top ${Number(st.unfinishedCount||0)>0?'active':''}" data-action="all-ex-open-unfinished">Незавершённые${Number(st.unfinishedCount||0)>0?` (${Number(st.unfinishedCount||0)})`:''}</button>` : ''}
+            <button class="all-ex-finish-day" data-action="all-ex-finish-day">Завершить день</button>
           </div>
         </div>
         <div class="all-ex-stage" id="allExercisesStage"></div>
@@ -6881,14 +6876,13 @@
 
     function updateAllExercisesHeaderCountersOnly() {
       const st = allExercisesState();
-      const btn = document.querySelector('[data-action="all-ex-open-unfinished"]');
+      const btn = document.querySelector('[data-all-ex-action="unfinished"]') || document.querySelector('[data-action="all-ex-open-unfinished"]');
       if (btn) {
         const count = Number(st.unfinishedCount || 0);
         btn.classList.toggle('active', count > 0);
-        btn.textContent = `Незавершённые${count > 0 ? ` (${count})` : ''}`;
+        const label = btn.querySelector('.all-ex-unfinished-count');
+        if (label) label.textContent = count > 0 ? String(count) : '';
       }
-      const finishBtn = document.querySelector('[data-action="all-ex-finish-day"]');
-      if (finishBtn) finishBtn.classList.toggle('active', Number(st.doneToday?.length || 0) > 0);
       if (state.currentRoute === 'allExercises' && !st.sheetOpen && st.view === 'groups') {
         updateAllExercisesSummaryOnly();
         updateAllExercisesGroupPetalMetaOnly();
@@ -11353,23 +11347,17 @@
       if (nextUeId) scrollExerciseIntoView(nextUeId);
 
       try {
-        const url = source === 'all_exercises'
-          ? getEditorActionUrl(ueId, 'done', getIsoDate())
-          : `/gymapi/day/${state.dayIndex}/exercise/${ueId}/done${state.dateIso ? `?date=${state.dateIso}` : ''}`;
-        const data = await apiFetch(url, { method: 'POST' });
-        if (data?.completed_days && source !== 'all_exercises') state.completedDays = new Set((data.completed_days || []).map(Number));
+        const query = state.dateIso ? `?date=${state.dateIso}` : '';
+        const data = await apiFetch(`/gymapi/day/${state.dayIndex}/exercise/${ueId}/done${query}`, { method: 'POST' });
+        if (data?.completed_days) state.completedDays = new Set((data.completed_days || []).map(Number));
         const current = state.exercises.get(ueId);
         if (current) state.exercises.set(ueId, { ...current, is_done: true });
-        if (source !== 'all_exercises') {
-          renderDayOptions(state.dayIndex);
-          renderDayHeader();
-          updateFinishButton();
-          if (Number.isFinite(Number(data?.last_completed_volume_kg))) state.lastCompletedVolumeKg = Number(data.last_completed_volume_kg) || 0;
-          if (data?.last_completed_at) updateLastCompleted(data.last_completed_at);
-          if (data?.day_completed) toast('День отмечен завершённым ✅');
-        } else {
-          scheduleAllExercisesMetaRefresh();
-        }
+        renderDayOptions(state.dayIndex);
+        renderDayHeader();
+        updateFinishButton();
+        if (Number.isFinite(Number(data?.last_completed_volume_kg))) state.lastCompletedVolumeKg = Number(data.last_completed_volume_kg) || 0;
+        if (data?.last_completed_at) updateLastCompleted(data.last_completed_at);
+        if (data?.day_completed) toast('День отмечен завершённым ✅');
       } catch (e) {
         state.workout.doneIds = previousDone;
         state.workout.animations = prevAnimations;
