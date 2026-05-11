@@ -7562,7 +7562,8 @@ async def build_effective_exercise_index_for_user(user_id: int, iso_date: str):
             """
             SELECT ue.exercise_id,
                    COUNT(st.id) AS total_sets_count,
-                   MAX(s.date) AS last_done_at,
+                   MAX(s.date) AS last_activity_at,
+                   MAX(CASE WHEN IFNULL(se.is_done,0)=1 THEN s.date END) AS last_done_at,
                    MAX(CASE WHEN s.date=? AND s.day_index=0 AND IFNULL(se.is_done,0) != 1 AND st.id IS NOT NULL THEN 1 ELSE 0 END) AS unfinished_today,
                    MAX(CASE WHEN ue.user_id IS NOT NULL THEN 1 ELSE 0 END) AS has_user_link
             FROM user_exercises ue
@@ -7580,19 +7581,19 @@ async def build_effective_exercise_index_for_user(user_id: int, iso_date: str):
         ov=overlay.get(int(ex_id))
         total_sets=int((ov[1] if ov else 0) or 0)
         last_done=ov[2] if ov else None
-        unfinished=bool((ov[3] if ov else 0) or 0)
-        has_link=bool((ov[4] if ov else 0) or 0)
+        unfinished=bool((ov[4] if ov else 0) or 0)
+        has_link=bool((ov[5] if ov else 0) or 0)
         items.append({
             'exercise_id': int(ex_id), 'name': str(name or ''), 'base_group_raw': str(mg or 'none'),
             'effective_group': normalize_exercise_group_for_ui(mg), 'is_base': int(owner or 0)==0,
             'created_by_user': int(owner or 0)==int(user_id), 'visible_for_user': True,
-            'has_user_link': has_link, 'has_history': total_sets>0, 'last_done_at': last_done,
+            'has_user_link': has_link, 'has_history': total_sets>0, 'last_activity_at': last_done, 'last_done_at': (ov[3] if ov else None),
             'total_sets_count': total_sets, 'unfinished_today': unfinished,
             'sort_bucket': 0 if unfinished else (1 if total_sets>0 else 2),
             'can_hard_delete': int(owner or 0)==int(user_id), 'can_unlink': has_link,
             'hidden_by_user': False,
         })
-    items.sort(key=lambda it: (0 if it['unfinished_today'] else 1, 0 if it['has_history'] else 1, -(int(str(it['last_done_at']).replace('-','')) if it['last_done_at'] else 0), 0 if it['created_by_user'] else 1, it['name'].lower()))
+    items.sort(key=lambda it: (0 if it['unfinished_today'] else 1, 0 if it['has_history'] else 1, -(int(str(it['last_activity_at']).replace('-','')) if it['last_activity_at'] else 0), 0 if it['created_by_user'] else 1, it['name'].lower()))
     return items
 
 
@@ -7637,7 +7638,7 @@ async def list_all_exercises_in_group_for_user_with_last_sets(user_id: int, grou
                 FROM sessions s
                 JOIN sets st ON st.session_id=s.id
                 JOIN user_exercises ue ON ue.id=st.user_exercise_id
-                WHERE s.user_id=? AND ue.user_id=? AND ue.day_index=0 AND ue.is_archived=0 AND ue.exercise_id IN ({ph})
+                WHERE s.user_id=? AND ue.user_id=? AND ue.is_archived=0 AND ue.exercise_id IN ({ph})
             )
             SELECT exercise_id, set_no, reps, seconds, weight_kg, date
             FROM last_rows WHERE rn=1
@@ -7652,10 +7653,12 @@ async def list_all_exercises_in_group_for_user_with_last_sets(user_id: int, grou
         merged['last_reps'] = int(r[2]) if r else None
         merged['last_seconds'] = int(r[3]) if r else None
         merged['last_weight_kg'] = float(r[4]) if r else None
+        if r and not merged.get('last_activity_at'):
+            merged['last_activity_at'] = r[5]
         if r and not merged.get('last_done_at'):
             merged['last_done_at'] = r[5]
         out.append(merged)
-    out.sort(key=lambda it: (0 if it.get('unfinished_today') else 1, 0 if it.get('has_history') else 1, -(int(str(it.get('last_done_at') or '0').replace('-',''))), 0 if it.get('created_by_user') else 1, str(it.get('name') or '').lower()))
+    out.sort(key=lambda it: (0 if it.get('unfinished_today') else 1, 0 if it.get('has_history') else 1, -(int(str(it.get('last_activity_at') or it.get('last_done_at') or '0').replace('-',''))), 0 if it.get('created_by_user') else 1, str(it.get('name') or '').lower()))
     return out
 
 

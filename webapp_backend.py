@@ -3269,8 +3269,8 @@ async def all_exercises_finish_day(date: str | None = None, ctx: AuthCtx = Depen
             (int(session_id), int(session_id)),
         )
         await conn.commit()
-    groups = await _all_exercises_groups_payload(user_id, iso_date)
-    return {"ok": True, "groups": groups.get("groups", [])}
+    groups_payload = await _all_exercises_groups_payload(user_id, iso_date)
+    return groups_payload | {"ok": True}
 
 @app.get("/muscles")
 async def list_muscles(ctx: AuthCtx = Depends(get_auth_ctx)):
