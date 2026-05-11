@@ -7655,8 +7655,6 @@ async def list_all_exercises_in_group_for_user_with_last_sets(user_id: int, grou
         merged['last_weight_kg'] = float(r[4]) if r else None
         if r and not merged.get('last_activity_at'):
             merged['last_activity_at'] = r[5]
-        if r and not merged.get('last_done_at'):
-            merged['last_done_at'] = r[5]
         out.append(merged)
     out.sort(key=lambda it: (0 if it.get('unfinished_today') else 1, 0 if it.get('has_history') else 1, -(int(str(it.get('last_activity_at') or it.get('last_done_at') or '0').replace('-',''))), 0 if it.get('created_by_user') else 1, str(it.get('name') or '').lower()))
     return out
