@@ -2466,6 +2466,13 @@
     .all-ex-card { overflow: visible; padding: 14px 0 0; background: transparent; border: 0; box-shadow: none; }
     .all-ex-hero { display: grid; grid-template-columns: auto 1fr auto; gap: 10px; align-items: center; margin-bottom: 10px; }
     .all-ex-title { font-size: 20px; font-weight: 820; letter-spacing: -0.01em; text-align:center; }
+    .all-ex-hero.free-frame { position: relative; border-radius: 16px; padding: 8px 10px; overflow: hidden; }
+    .all-ex-hero.free-frame::before { content: ""; position: absolute; inset: 0; border-radius: 16px; opacity: .34; pointer-events: none; }
+    .all-ex-hero.free-frame::after { content: ""; position: absolute; inset: 0; border-radius: 16px; box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 20%, transparent); pointer-events: none; }
+    .all-ex-hero.free-frame.frame_first_set::before { background: linear-gradient(90deg, #f59e0b, #fbbf24); }
+    .all-ex-hero.free-frame.frame_check::before { background: linear-gradient(90deg, #10b981, #34d399); }
+    .all-ex-hero.free-frame.frame_fire::before { background: linear-gradient(90deg, #fb7185, #f97316); }
+
     .all-ex-subtitle { color: var(--muted); font-size: 10px; line-height: 1.2; margin-top: 2px; text-align:center; max-width: 360px; }
     .all-ex-stage { position: relative; min-height: calc(100vh - 220px); border-radius: 0; border: 0; background: radial-gradient(circle at center, color-mix(in srgb, var(--accent) 10%, transparent), transparent 58%); overflow: auto; isolation: isolate; -webkit-overflow-scrolling: touch; margin: 0 -16px; padding: 0 8px; touch-action:pan-x pan-y; }
     .all-ex-petals { position: relative; width: max(100%, 1220px); height: max(100%, 1220px); min-height: 760px; display: block; transition: opacity .22s ease, transform .28s ease; margin: 0 auto; }
@@ -2486,7 +2493,7 @@
     .all-ex-toolbar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; justify-content:flex-end; }
     .all-ex-back { border: 1px solid var(--border); background: var(--card); color: var(--text); border-radius: 999px; padding: 9px 12px; font-weight: 750; }
     .all-ex-done-pill { font-size: 12px; padding: 8px 10px; border-radius: 999px; border: 1px solid var(--border); background: color-mix(in srgb, var(--card) 92%, var(--bg)); color: var(--muted); font-weight: 800; }
-    .all-ex-done-pill.active { background: color-mix(in srgb, #22c55e 24%, var(--card)); color: var(--text); border-color: color-mix(in srgb, #22c55e 62%, var(--border)); box-shadow: 0 0 0 1px color-mix(in srgb, #22c55e 36%, transparent), 0 8px 18px color-mix(in srgb, #22c55e 16%, transparent); }
+    .all-ex-done-pill.active { border-color: color-mix(in srgb, var(--accent) 50%, var(--border)); background: color-mix(in srgb, var(--accent) 12%, var(--card)); box-shadow: 0 8px 22px color-mix(in srgb, var(--accent) 14%, transparent); color: var(--text); }
     .all-ex-empty { color: var(--muted); font-size: 13px; line-height: 1.35; padding: 10px; border-radius: 16px; background: color-mix(in srgb, var(--bg) 72%, transparent); }
     .all-ex-sets { display: grid; gap: 6px; font-size: 12px; }
     .all-ex-set { display: flex; justify-content: space-between; gap: 8px; padding: 7px 8px; border-radius: 12px; background: color-mix(in srgb, var(--bg) 70%, transparent); }
@@ -3315,7 +3322,7 @@
         unseenCodes: new Set(),
         lastSeenAt: '',
       },
-      allExercises: { view: 'groups', loading: false, groups: [], exercises: [], unfinished: [], unfinishedCount: 0, selectedGroup: null, selectedExerciseId: null, exercise: null, draft: {}, noteTimer: null, animating: false, lastResetAt: 0, finishedAt: 0, sheetOpen: false, metaRefreshTimer: null, metaRefreshInFlight: false, metaRefreshQueued: false, groupRequestSeq: 0, exerciseRequestSeq: 0 },
+      allExercises: { view: 'groups', loading: false, groups: [], exercises: [], unfinished: [], unfinishedCount: 0, selectedGroup: null, selectedExerciseId: null, exercise: null, draft: {}, noteTimer: null, animating: false, lastResetAt: 0, finishedAt: 0, sheetOpen: false, metaVersion: 0, metaRefreshTimer: null, metaRefreshInFlight: false, metaRefreshQueued: false, groupRequestSeq: 0, exerciseRequestSeq: 0 },
       library: {
         view: 'groups',
         loading: false,
@@ -3663,7 +3670,7 @@
       return color || `rgba(0,122,255,${safeAlpha})`;
     }
 
-    function getTodayIsoLocal() {
+    function getAllExercisesDate() {
       const now = new Date();
       const local = new Date(now.getTime() - now.getTimezoneOffset() * 60000);
       return local.toISOString().slice(0, 10);
@@ -6531,12 +6538,39 @@
       markAllExercisesActivity();
     }
 
+
+    function bumpAllExercisesMetaVersion() {
+      const st = allExercisesState();
+      st.metaVersion = Number(st.metaVersion || 0) + 1;
+      clearTimeout(st.metaRefreshTimer);
+      st.metaRefreshTimer = null;
+      st.metaRefreshQueued = false;
+      return st.metaVersion;
+    }
+
+    function applyAllExercisesPayload(data, options = {}) {
+      const st = allExercisesState();
+      if (!data || typeof data !== 'object') return;
+      if (Array.isArray(data.groups)) st.groups = data.groups;
+      if (Array.isArray(data.done_today)) st.doneToday = data.done_today;
+      if (Number.isFinite(Number(data.unfinished_count))) st.unfinishedCount = Number(data.unfinished_count || 0);
+      if (Array.isArray(st.unfinished) && Number(data.exercise_id || 0) > 0) {
+        const doneExerciseId = Number(data.exercise_id);
+        st.unfinished = st.unfinished.filter((x) => Number(x.exercise_id) !== doneExerciseId);
+      }
+      syncAllExercisesHeaderButton?.();
+      updateAllExercisesDonePopover?.();
+      updateAllExercisesFinishButton?.();
+      if (options.render) renderAllExercises();
+    }
+
+    function currentFrameCode() {
+      return state.cosmetics?.title_frame_code || state.settings?.cosmetics?.title_frame_code || state.achievements?.overview?.cosmetics?.title_frame_code || '';
+    }
     async function finishAllExercisesDay() {
       const st = allExercisesState();
-      const data = await apiFetch('/gymapi/all_exercises/finish_day', { method: 'POST', body: JSON.stringify({}) });
-      st.groups = data.groups || [];
-      st.doneToday = data.done_today || [];
-      st.unfinishedCount = Number(data.unfinished_count || 0);
+      const data = await apiFetch(`/gymapi/all_exercises/finish_day?date=${encodeURIComponent(getAllExercisesDate())}`, { method: 'POST' });
+      applyAllExercisesPayload(data, { render: false });
       st.finishedAt = Date.now();
       st.view = 'groups';
       st.selectedGroup = null;
@@ -6760,7 +6794,7 @@
       closeAllExercisesDonePopup();
       const st = allExercisesState();
       root.innerHTML = `
-        <div class="all-ex-hero">
+        <div class="all-ex-hero ${currentFrameCode() ? `free-frame ${escapeHtml(currentFrameCode())}` : ""}">
           <div class="all-ex-hero-copy">
             ${st.view === 'groups' ? '<div class="all-ex-title">Все упражнения</div><div class="all-ex-subtitle">Свободная тренировка без привязки к плану дня. Подходы сохраняются в общей истории и подтянутся в «Сегодня».</div>' : ''}
           </div>
@@ -6829,7 +6863,7 @@
     async function loadAllExercisesGroups() {
       const st = allExercisesState(); st.loading = true; renderAllExercises();
       try {
-        const groupsData = await apiFetch(`/gymapi/all_exercises/groups?date=${encodeURIComponent(getTodayIsoLocal())}`, { silent: true });
+        const groupsData = await apiFetch(`/gymapi/all_exercises/groups?date=${encodeURIComponent(getAllExercisesDate())}`, { silent: true });
         st.groups = groupsData.groups || [];
         st.doneToday = groupsData.done_today || [];
         st.unfinishedCount = Number(groupsData.unfinished_count || 0);
@@ -6842,7 +6876,7 @@
       const seq = ++st.groupRequestSeq;
       st.view = 'exercises'; st.selectedGroup = code; st.selectedExerciseId = null; st.exercise = null; st.loading = true; renderAllExercises();
       try {
-        const data = await apiFetch(`/gymapi/all_exercises/group/${encodeURIComponent(code)}`, { silent: true });
+        const data = await apiFetch(`/gymapi/all_exercises/group/${encodeURIComponent(code)}?date=${encodeURIComponent(getAllExercisesDate())}`, { silent: true });
         if (seq !== st.groupRequestSeq) return;
         st.exercises = data.items || [];
       } finally { if (seq === st.groupRequestSeq) { st.loading = false; renderAllExercises(); } }
@@ -6853,7 +6887,7 @@
       const seq = ++st.exerciseRequestSeq;
       st.previousView = st.view === 'unfinished' ? 'unfinished' : 'exercises';
       st.selectedExerciseId = Number(exerciseId);
-      const data = await apiFetch(`/gymapi/all_exercises/exercise/${Number(exerciseId)}/session`, { silent: true });
+      const data = await apiFetch(`/gymapi/all_exercises/exercise/${Number(exerciseId)}/session?date=${encodeURIComponent(getAllExercisesDate())}`, { silent: true });
       if (seq !== st.exerciseRequestSeq) return;
       st.exercise = data;
       st.draft = deriveAllExerciseDraft(data);
@@ -6878,14 +6912,13 @@
 
     async function refreshAllExercisesMeta({ render = false } = {}) {
       const st = allExercisesState();
+      const version = Number(st.metaVersion || 0);
       if (st.metaRefreshInFlight) { st.metaRefreshQueued = true; return; }
       st.metaRefreshInFlight = true;
       try {
-        const data = await apiFetch(`/gymapi/all_exercises/groups?date=${encodeURIComponent(getTodayIsoLocal())}`, { silent: true });
-        st.groups = data.groups || [];
-        st.doneToday = data.done_today || [];
-        st.unfinishedCount = Number(data.unfinished_count || 0);
-        syncAllExercisesHeaderButton();
+        const data = await apiFetch(`/gymapi/all_exercises/groups?date=${encodeURIComponent(getAllExercisesDate())}`, { silent: true });
+        if (version !== Number(st.metaVersion || 0)) return;
+        applyAllExercisesPayload(data, { render: false });
       } catch (_) {
       } finally {
         st.metaRefreshInFlight = false;
@@ -6956,7 +6989,7 @@
       if (!silentSwitch) st.view = 'unfinished';
       renderAllExercises();
       try {
-        const date = encodeURIComponent(getTodayIsoLocal());
+        const date = encodeURIComponent(getAllExercisesDate());
         const data = await apiFetch(`/gymapi/all_exercises/unfinished?date=${date}`, { silent: true });
         st.unfinished = data.items || [];
         st.unfinishedCount = st.unfinished.length;
@@ -11437,18 +11470,17 @@
         }
       }
       try {
-        const data = await apiFetch(getEditorActionUrl(ueId, 'done', getTodayIsoLocal()), { method: 'POST' });
+        const data = await apiFetch(getEditorActionUrl(ueId, 'done', getAllExercisesDate()), { method: 'POST' });
         const current = state.exercises.get(Number(ueId));
         if (current) {
           state.exercises.set(Number(ueId), { ...current, is_done: true, source: 'all_exercises', day_index: 0, free_workout: true });
         }
+        bumpAllExercisesMetaVersion();
+        applyAllExercisesPayload(data, { render: false });
         const st = allExercisesState();
-        if (data?.groups) st.groups = data.groups || [];
-        if (data?.done_today) st.doneToday = data.done_today || [];
-        if (Number.isFinite(Number(data?.unfinished_count))) st.unfinishedCount = Number(data.unfinished_count || 0);
         if (Array.isArray(st.unfinished)) st.unfinished = st.unfinished.filter((x) => Number(x.exercise_id) !== Number(exercise.exercise_id));
         closeAllExerciseSheet({ keepState: true });
-        if (state.currentRoute === 'allExercises') renderAllExercises();
+        if (state.currentRoute === 'allExercises') { renderAllExercises(); syncAllExercisesHeaderButton?.(); }
         markAllExercisesActivity?.();
         toast('Упражнение завершено ✅');
       } catch (err) {
@@ -11510,7 +11542,7 @@
       await queueExerciseAction(ueId, async () => {
         try {
           const url = getExerciseActionSource(ueId) === 'all_exercises'
-            ? getEditorActionUrl(ueId, 'running', getIsoDate())
+            ? getEditorActionUrl(ueId, 'running', getAllExercisesDate())
             : `/gymapi/day/${state.dayIndex}/exercise/${ueId}/running${state.dateIso ? `?date=${state.dateIso}` : ''}`;
           const data = await apiFetch(url, {
             method: 'POST',
@@ -11538,7 +11570,7 @@
       await queueExerciseAction(ueId, async () => {
         try {
           const url = getExerciseActionSource(ueId) === 'all_exercises'
-            ? getEditorActionUrl(ueId, 'running/done', getIsoDate())
+            ? getEditorActionUrl(ueId, 'running/done', getAllExercisesDate())
             : `/gymapi/day/${state.dayIndex}/exercise/${ueId}/running/done${state.dateIso ? `?date=${state.dateIso}` : ''}`;
           const data = await apiFetch(url, {
             method: 'POST',
@@ -11563,7 +11595,7 @@
             updateFinishButton();
           }
           if (data?.last_completed_at) updateLastCompleted(data.last_completed_at);
-          if (getExerciseActionSource(ueId) === 'all_exercises') scheduleAllExercisesMetaRefresh();
+          if (getExerciseActionSource(ueId) === 'all_exercises') { bumpAllExercisesMetaVersion(); applyAllExercisesPayload(data, { render: false }); syncAllExercisesHeaderButton?.(); }
           toast('Забег сохранён ✅');
         } catch (err) {
           const msg = String(err?.message || '').toLowerCase();
@@ -12838,7 +12870,7 @@
     }
 
     function getAiCoachDayKey() {
-      const datePart = state.dateIso || getTodayIsoLocal() || '';
+      const datePart = state.dateIso || getAllExercisesDate() || '';
       const dayPart = Number(state.dayIndex || 0);
       return `${datePart}:${dayPart}`;
     }
