@@ -3213,8 +3213,8 @@ async def all_exercise_done(exercise_id: int, date: str | None = None, ctx: Auth
             await db.add_set(session_id, ue_id, int(defaults[0] or 0), int(defaults[1] or 0), float(defaults[2] or 0.0), False)
     await mark_exercise_done(session_id, ue_id)
     await _evaluate_achievements(user_id)
-    groups = await _all_exercises_groups_payload(user_id, iso_date)
-    return {"ok": True, "user_exercise_id": ue_id, "exercise_id": exercise_id, "groups": groups.get("groups", [])}
+    payload = await _all_exercises_groups_payload(user_id, iso_date)
+    return payload | {"ok": True, "user_exercise_id": ue_id, "exercise_id": exercise_id}
 
 
 @app.post("/all_exercises/exercise/{exercise_id}/running")
@@ -3227,7 +3227,8 @@ async def all_exercise_running_save(exercise_id: int, payload: dict = Body(...),
     session_id = await db.get_or_create_today_session(user_id, iso_date, 0, await get_active_training_system_id(user_id))
     await db.update_running_entry(user_id, ue_id, exercise_id, session_id, 0, payload or {})
     state = await _build_running_state(user_id, 0, ue_id, _parse_date_param(date), exercise_id=exercise_id, history_limit=20)
-    return {"ok": True, "exercise_id": int(exercise_id), "user_exercise_id": int(ue_id), "running": state.get("running"), "running_history": state.get("running_history"), "previous_running": state.get("previous_running")}
+    payload = await _all_exercises_groups_payload(user_id, iso_date)
+    return payload | {"ok": True, "exercise_id": int(exercise_id), "user_exercise_id": int(ue_id), "running": state.get("running"), "running_history": state.get("running_history"), "previous_running": state.get("previous_running")}
 
 
 @app.post("/all_exercises/exercise/{exercise_id}/running/done")
@@ -3243,7 +3244,8 @@ async def all_exercise_running_done(exercise_id: int, payload: dict = Body(defau
     await db.mark_running_entry_done(user_id, ue_id, session_id)
     await mark_exercise_done(session_id, ue_id)
     state = await _build_running_state(user_id, 0, ue_id, _parse_date_param(date), exercise_id=exercise_id, history_limit=20)
-    return {"ok": True, "exercise_id": int(exercise_id), "user_exercise_id": int(ue_id), "running": state.get("running"), "running_history": state.get("running_history"), "previous_running": state.get("previous_running")}
+    payload = await _all_exercises_groups_payload(user_id, iso_date)
+    return payload | {"ok": True, "exercise_id": int(exercise_id), "user_exercise_id": int(ue_id), "running": state.get("running"), "running_history": state.get("running_history"), "previous_running": state.get("previous_running")}
 
 
 @app.post("/all_exercises/finish_day")

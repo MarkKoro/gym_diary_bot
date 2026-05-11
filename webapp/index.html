@@ -2494,7 +2494,12 @@
     .all-ex-sheet-card{width:min(96vw,620px);max-height:min(84dvh,760px);overflow:auto;-webkit-overflow-scrolling:touch;background:color-mix(in srgb, var(--card) 96%, transparent);border:1px solid var(--border);border-radius:22px 22px 14px 14px;padding:10px;box-shadow:var(--sheet-shadow);animation:allExSheetIn .2s ease;}
     @keyframes allExSheetIn { from { transform:translateY(22px); opacity:.0; } to { transform:translateY(0); opacity:1; } }
 .all-ex-finish-day { font-size: 12px; padding: 8px 10px; border-radius: 999px; border: 1px solid var(--border); background: color-mix(in srgb, var(--card) 92%, var(--bg)); color: var(--muted); }
-    .all-ex-unfinished-top.active { background: color-mix(in srgb, var(--accent) 22%, var(--card)); color: var(--text); border-color: color-mix(in srgb, var(--accent) 60%, var(--border)); box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 45%, transparent), 0 6px 16px color-mix(in srgb, var(--accent) 20%, transparent); }
+    .all-ex-finish-day.active { background: color-mix(in srgb, #22c55e 24%, var(--card)); color: var(--text); border-color: color-mix(in srgb, #22c55e 62%, var(--border)); box-shadow: 0 0 0 1px color-mix(in srgb, #22c55e 36%, transparent), 0 8px 18px color-mix(in srgb, #22c55e 16%, transparent); }
+    .all-ex-header-main{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:8px;}
+    .all-ex-header-left,.all-ex-header-right{display:flex;align-items:center;gap:8px;min-width:88px;}
+    .all-ex-header-right{justify-content:flex-end;}
+    .all-ex-header-title{font-weight:800;font-size:17px;text-align:center;flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+    .all-ex-unfinished-main.active { background: color-mix(in srgb, var(--accent) 22%, var(--card)); color: var(--text); border-color: color-mix(in srgb, var(--accent) 60%, var(--border)); box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 45%, transparent), 0 6px 16px color-mix(in srgb, var(--accent) 20%, transparent); }
     @keyframes petalIn { from { opacity: 0; transform: rotate(var(--angle)) translate(calc(var(--radius) * .55)) rotate(calc(-1 * var(--angle))) scale(.88); } to { opacity: 1; } }
     @media (max-width: 420px) {
       .all-ex-stage { min-height: 390px; }
@@ -6720,22 +6725,35 @@
       stage.onpointerup = up; stage.onpointercancel = up;
     }
 
+    function hasAllExercisesDoneToday() {
+      const st = allExercisesState();
+      if (Array.isArray(st.doneToday) && st.doneToday.length > 0) return true;
+      return (st.groups || []).some((g) => Number(g.done_count || 0) > 0);
+    }
+
     function renderAllExercises() {
       const root = document.getElementById('allExercisesContent');
       if (!root) return;
       const st = allExercisesState();
       const selectedGroupName = st.selectedGroup ? allExercisesGroupName(st.selectedGroup) : '';
       root.innerHTML = `
+        <div class="all-ex-header-main">
+          <div class="all-ex-header-left">${st.view !== 'groups' ? '<button class="all-ex-back" data-action="all-ex-back">← Назад</button>' : ''}</div>
+          <div class="all-ex-header-title">${st.view === 'exercises' ? escapeHtml(selectedGroupName) : 'Все упражнения'}</div>
+          <div class="all-ex-header-right">
+            <button class="all-ex-finish-day all-ex-unfinished-main ${Number(st.unfinishedCount || 0) > 0 ? 'active' : ''}" data-action="all-ex-open-unfinished">
+              Незавершённые
+              <span class="all-ex-unfinished-count">${Number(st.unfinishedCount || 0) > 0 ? Number(st.unfinishedCount || 0) : ''}</span>
+            </button>
+          </div>
+        </div>
         <div class="all-ex-hero">
-          <div class="all-ex-top-left">${st.view !== 'groups' ? '<button class="all-ex-back" data-action="all-ex-back">← Назад</button>' : ''}</div>
-          <div>
-            <div class="all-ex-title">${st.view === 'exercises' ? escapeHtml(selectedGroupName) : 'Все упражнения'}</div>
-            ${st.view === 'groups' ? '<div class="all-ex-subtitle">Свободная тренировка без привязки к плану дня. Подходы сохраняются в общей истории и подтянутся в «Сегодня».</div>' : ''}
+          <div class="all-ex-hero-copy">
+            ${st.view === 'groups' ? '<div class="all-ex-title">Все упражнения</div><div class="all-ex-subtitle">Свободная тренировка без привязки к плану дня. Подходы сохраняются в общей истории и подтянутся в «Сегодня».</div>' : ''}
           </div>
           <div class="all-ex-toolbar">
             ${st.view === 'groups' ? '<button class="all-ex-back" data-action="all-ex-add-group">＋ Группа</button>' : '<button class="all-ex-back" data-action="all-ex-add-exercise">＋ Упражнение</button>'}
-            ${st.view === 'groups' ? `<button class="all-ex-finish-day all-ex-unfinished-top ${Number(st.unfinishedCount||0)>0?'active':''}" data-action="all-ex-open-unfinished">Незавершённые${Number(st.unfinishedCount||0)>0?` (${Number(st.unfinishedCount||0)})`:''}</button>` : ''}
-            <button class="all-ex-finish-day" data-action="all-ex-finish-day">Завершить день</button>
+            <button class="all-ex-finish-day ${hasAllExercisesDoneToday() ? 'active' : ''}" data-action="all-ex-finish-day">Завершить день</button>
           </div>
         </div>
         <div class="all-ex-stage" id="allExercisesStage"></div>
@@ -6871,7 +6889,20 @@
     }
 
     function updateAllExercisesGroupPetalMetaOnly() {
-      if (state.currentRoute === 'allExercises' && !allExercisesState().sheetOpen && allExercisesState().view === 'groups') renderAllExercises();
+      if (state.currentRoute !== 'allExercises') return;
+      const st = allExercisesState();
+      if (st.sheetOpen || st.view !== 'groups') return;
+      const groupsByCode = new Map((st.groups || []).map((g) => [String(g.code || ''), g]));
+      document.querySelectorAll('.all-ex-petal[data-group-code]').forEach((petal) => {
+        const code = String(petal.dataset.groupCode || '');
+        const group = groupsByCode.get(code);
+        if (!group) return;
+        const doneCount = Number(group.done_count || 0);
+        const totalCount = Number(group.count || 0);
+        const meta = petal.querySelector('.all-ex-petal-meta');
+        if (meta) meta.textContent = `${totalCount} упр. · выполнено ${doneCount}`;
+        petal.classList.toggle('done', doneCount > 0);
+      });
     }
 
     function updateAllExercisesHeaderCountersOnly() {
@@ -11322,7 +11353,12 @@
     async function handleExerciseDone(ueId) {
       await flushInlineNumberInput();
       const source = getExerciseActionSource(ueId);
-      if (source !== 'all_exercises' && !state.dayIndex) return;
+      if (source === 'all_exercises') return handleAllExerciseDone(ueId);
+      return handleTodayExerciseDone(ueId);
+    }
+
+    async function handleTodayExerciseDone(ueId) {
+      if (!state.dayIndex) return;
       const exercise = state.exercises.get(ueId);
       if (exercise && !isRunningExercise(exercise) && (exercise.sets?.length || 0) === 0) {
         const draft = ensureDraft(ueId);
@@ -11338,14 +11374,11 @@
       const prevExpanded = state.workout.expanded;
       const prevAnimations = { ...(state.workout.animations || { completed: null, next: null }) };
       if (state.workout.expanded === ueId) state.workout.expanded = null;
-
       const nextUeId = findNextIncomplete(ueId);
       if (nextUeId) state.workout.expanded = nextUeId;
       state.workout.animations = { completed: ueId, next: nextUeId || null };
-
       renderExercises(Array.from(state.exercises.values()));
       if (nextUeId) scrollExerciseIntoView(nextUeId);
-
       try {
         const query = state.dateIso ? `?date=${state.dateIso}` : '';
         const data = await apiFetch(`/gymapi/day/${state.dayIndex}/exercise/${ueId}/done${query}`, { method: 'POST' });
@@ -11365,6 +11398,36 @@
         renderExercises(Array.from(state.exercises.values()));
         updateFinishButton();
         toast('Ошибка связи. Попробуй ещё раз.');
+      }
+    }
+
+    async function handleAllExerciseDone(ueId) {
+      const exercise = state.exercises.get(Number(ueId));
+      if (!exercise) return;
+      if (!isRunningExercise(exercise) && (exercise.sets?.length || 0) === 0) {
+        const draft = ensureDraft(ueId);
+        const hasDraftData = Number(draft.weight_kg || 0) > 0 || Number(draft.reps || 0) > 0 || Number(draft.seconds || 0) > 0;
+        if (hasDraftData) {
+          await queueExerciseAction(ueId, () => addSet(ueId, { payload: { ...draft }, selectLast: false, toastOnSave: false }));
+        }
+      }
+      try {
+        const data = await apiFetch(getEditorActionUrl(ueId, 'done', getTodayIsoLocal()), { method: 'POST' });
+        const current = state.exercises.get(Number(ueId));
+        if (current) {
+          state.exercises.set(Number(ueId), { ...current, is_done: true, source: 'all_exercises', day_index: 0, free_workout: true });
+        }
+        const st = allExercisesState();
+        if (data?.groups) st.groups = data.groups || [];
+        if (data?.done_today) st.doneToday = data.done_today || [];
+        if (Number.isFinite(Number(data?.unfinished_count))) st.unfinishedCount = Number(data.unfinished_count || 0);
+        if (Array.isArray(st.unfinished)) st.unfinished = st.unfinished.filter((x) => Number(x.exercise_id) !== Number(exercise.exercise_id));
+        closeAllExerciseSheet({ keepState: true });
+        if (state.currentRoute === 'allExercises') renderAllExercises();
+        markAllExercisesActivity?.();
+        toast('Упражнение завершено ✅');
+      } catch (err) {
+        toast('Не получилось завершить упражнение');
       }
     }
 
