@@ -2487,9 +2487,14 @@
     .all-ex-petal-meta { font-size: 11px; opacity: .88; line-height: 1.25; margin-top: 5px; }
     .all-ex-center { position: absolute; left: 50%; top: 50%; width: min(92vw, 430px); max-height: min(78vh, 620px); transform: translate(-50%, -50%); border-radius: 26px; border: 1px solid color-mix(in srgb, var(--text) 10%, transparent); background: color-mix(in srgb, var(--card) 94%, transparent); box-shadow: var(--shadow); padding: 16px; display: grid; gap: 12px; overflow: auto; -webkit-overflow-scrolling: touch; z-index: 3; }
     .all-ex-center.empty { opacity: .72; background: transparent; border-color: transparent; box-shadow: none; }
-    .all-ex-center-title { font-size: 15px; font-weight: 850; }
-    .all-ex-done-list { display: grid; gap: 6px; font-size: 12px; color: var(--muted); }
-    .all-ex-done-line { display: flex; justify-content: space-between; gap: 10px; padding: 7px 9px; border-radius: 12px; background: color-mix(in srgb, var(--bg) 65%, transparent); }
+    .all-ex-center-title { font-size: 17px; font-weight: 800; }
+    .all-ex-done-list { display: grid; gap: 10px; }
+    .all-ex-done-group { position: relative; display: grid; gap: 8px; padding: 10px 12px 10px 14px; border-radius: 14px; background: color-mix(in srgb, var(--bg) 68%, transparent); border: 1px solid color-mix(in srgb, var(--text) 8%, transparent); overflow: hidden; }
+    .all-ex-done-group::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 4px; background: var(--group-accent, var(--accent)); }
+    .all-ex-done-group-title { font-size: 15px; font-weight: 760; color: var(--text); }
+    .all-ex-done-line { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 2px 0; font-size: 14px; }
+    .all-ex-done-name { color: var(--text); line-height: 1.25; }
+    .all-ex-done-sets { font-size: 12px; font-weight: 700; color: color-mix(in srgb, var(--group-accent, var(--accent)) 78%, #0f172a); background: color-mix(in srgb, var(--group-accent, var(--accent)) 18%, var(--card)); border: 1px solid color-mix(in srgb, var(--group-accent, var(--accent)) 48%, transparent); border-radius: 999px; padding: 4px 8px; white-space: nowrap; }
     .all-ex-toolbar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; justify-content:flex-end; }
     .all-ex-back, .all-ex-btn { border: 1px solid var(--border); background: var(--card); color: var(--text); border-radius: 999px; padding: 9px 12px; font-weight: 750; }
     .all-ex-done-pill { font-size: 12px; padding: 8px 10px; border-radius: 999px; border: 1px solid var(--border); background: color-mix(in srgb, var(--card) 92%, var(--bg)); color: var(--muted); font-weight: 800; }
@@ -2504,13 +2509,20 @@
     .all-ex-note { min-height: 68px; }
     .all-ex-modal { position: fixed; inset: 0; z-index: 9999; display: flex; align-items: center; justify-content: center; padding: max(12px, env(safe-area-inset-top)) 12px max(18px, env(safe-area-inset-bottom)); background: rgba(3, 7, 18, .58); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); }
     .all-ex-modal-card { position: relative; width: min(94vw, 560px); max-height: min(82dvh, 720px); overflow-y: auto; -webkit-overflow-scrolling: touch; border-radius: 24px; padding: 16px; background: color-mix(in srgb, var(--card) 96%, transparent); border: 1px solid color-mix(in srgb, var(--text) 10%, transparent); box-shadow: var(--shadow); left: auto; top: auto; transform: none; margin: 0; }
+    .all-ex-modal-card.free-frame { overflow: hidden; }
+    .all-ex-modal-card.free-frame::before { content: ""; position: absolute; inset: 0; border-radius: 24px; opacity: .24; pointer-events: none; }
+    .all-ex-modal-card.free-frame::after { content: ""; position: absolute; inset: 0; border-radius: 24px; box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 24%, transparent), 0 0 0 1px color-mix(in srgb, var(--accent) 14%, transparent); pointer-events: none; }
+    .all-ex-modal-card.free-frame.frame_first_set::before { background: linear-gradient(90deg, #f59e0b, #fbbf24); }
+    .all-ex-modal-card.free-frame.frame_check::before { background: linear-gradient(90deg, #10b981, #34d399); }
+    .all-ex-modal-card.free-frame.frame_fire::before { background: linear-gradient(90deg, #fb7185, #f97316); }
     .all-ex-modal-header,.all-ex-modal-body,.all-ex-modal-controls,.all-ex-modal-footer{display:grid;gap:10px;}
     .all-ex-hide-bottom { width: min(94vw, 560px); }
     
     .all-ex-top-left{display:flex;gap:8px;align-items:center;}
     .all-ex-unfinished-top{white-space:nowrap;}
     .all-ex-sheet{position:fixed;inset:0;z-index:9998;background:rgba(3,7,18,.48);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);display:flex;align-items:flex-end;justify-content:center;padding:0 10px calc(8px + env(safe-area-inset-bottom));}
-    .all-ex-sheet-card{width:min(96vw,620px);max-height:min(84dvh,760px);overflow:auto;-webkit-overflow-scrolling:touch;background:color-mix(in srgb, var(--card) 96%, transparent);border:1px solid var(--border);border-radius:22px 22px 14px 14px;padding:10px;box-shadow:var(--sheet-shadow);animation:allExSheetIn .2s ease;}
+    .all-ex-sheet-card{position:relative;width:min(96vw,620px);max-height:min(84dvh,760px);overflow:auto;-webkit-overflow-scrolling:touch;background:color-mix(in srgb, var(--card) 96%, transparent);border:1px solid var(--border);border-radius:22px 22px 14px 14px;padding:10px;box-shadow:var(--sheet-shadow);animation:allExSheetIn .2s ease;}
+    .all-ex-sheet-card.free-frame::after { content:""; position:absolute; inset:0; border-radius:22px 22px 14px 14px; box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 18%, transparent); pointer-events:none; }
     @keyframes allExSheetIn { from { transform:translateY(22px); opacity:.0; } to { transform:translateY(0); opacity:1; } }
 .all-ex-finish-day { font-size: 12px; padding: 8px 10px; border-radius: 999px; border: 1px solid var(--border); background: color-mix(in srgb, var(--card) 92%, var(--bg)); color: var(--muted); }
     .all-ex-finish-day.active { background: color-mix(in srgb, #22c55e 24%, var(--card)); color: var(--text); border-color: color-mix(in srgb, #22c55e 62%, var(--border)); box-shadow: 0 0 0 1px color-mix(in srgb, #22c55e 36%, transparent), 0 8px 18px color-mix(in srgb, #22c55e 16%, transparent); }
@@ -6688,6 +6700,15 @@
       document.getElementById('allExercisesDonePopup')?.remove();
     }
 
+    function pluralizeApproaches(n) {
+      const value = Math.abs(Number(n) || 0) % 100;
+      const last = value % 10;
+      if (value > 10 && value < 20) return 'подходов';
+      if (last === 1) return 'подход';
+      if (last >= 2 && last <= 4) return 'подхода';
+      return 'подходов';
+    }
+
     function toggleAllExercisesDonePopup() {
       const existing = document.getElementById('allExercisesDonePopup');
       if (existing) { existing.remove(); return; }
@@ -6696,21 +6717,28 @@
       if (!items.length) return;
       const byGroup = new Map();
       items.forEach((item) => {
-        const group = allExercisesGroupName(normalizeMuscleKey(item.muscle_group || 'other'));
         const name = String(item.name || '').trim();
-        const sets = Math.max(1, Number(item.sets_count || item.done_sets || item.total_sets || 1));
-        if (!name) return;
-        if (!byGroup.has(group)) byGroup.set(group, []);
-        byGroup.get(group).push({ name, sets });
+        const rawSets = Number(item.sets_count ?? item.done_sets ?? item.total_sets ?? 0);
+        const sets = Math.max(0, rawSets);
+        if (!name || sets <= 0) return;
+        const muscleKey = normalizeMuscleKey(item.muscle_group || 'other');
+        const groupName = allExercisesGroupName(muscleKey);
+        const groupColor = getMuscleColor(muscleKey);
+        if (!byGroup.has(groupName)) byGroup.set(groupName, { color: groupColor, entries: [] });
+        byGroup.get(groupName).entries.push({ name, sets });
       });
-      const rows = [...byGroup.entries()].map(([group, names]) => {
-        const joined = names.map((entry) => `${escapeHtml(entry.name)} — ${entry.sets} подх.`).join('<br>');
-        return `<div class="all-ex-done-line"><span><b>${escapeHtml(group)}</b><br>${joined}</span></div>`;
+      const rows = [...byGroup.entries()].map(([group, payload]) => {
+        const lines = payload.entries
+          .map((entry) => `<div class="all-ex-done-line"><span class="all-ex-done-name">${escapeHtml(entry.name)}</span><span class="all-ex-done-sets">${entry.sets} ${pluralizeApproaches(entry.sets)}</span></div>`)
+          .join('');
+        return `<section class="all-ex-done-group" style="--group-accent:${payload.color};"><div class="all-ex-done-group-title">${escapeHtml(group)}</div>${lines}</section>`;
       });
+      if (!rows.length) return;
+      const frameCode = currentFrameCode();
       const popup = document.createElement('div');
       popup.id = 'allExercisesDonePopup';
       popup.className = 'all-ex-modal';
-      popup.innerHTML = `<div class="all-ex-modal-card"><div class="all-ex-center-title">Сделано</div><div class="all-ex-done-list">${rows.join('')}</div></div>`;
+      popup.innerHTML = `<div class="all-ex-modal-card ${frameCode ? `free-frame ${escapeHtml(frameCode)}` : ''}"><div class="all-ex-center-title">Сделано</div><div class="all-ex-done-list">${rows.join('')}</div></div>`;
       popup.addEventListener('click', (e) => { if (e.target === popup) closeAllExercisesDonePopup(); });
       document.body.appendChild(popup);
     }
@@ -6747,7 +6775,7 @@
       wrap.className = 'all-ex-sheet';
       wrap.addEventListener('click', (e) => { if (e.target === wrap) closeAllExerciseSheet(); });
       const card = document.createElement('div');
-      card.className = 'all-ex-sheet-card loading';
+      card.className = `all-ex-sheet-card loading ${currentFrameCode() ? `free-frame ${currentFrameCode()}` : ''}`;
       card.innerHTML = `
         <div class="card exercise-card expanded">
           <div class="exercise-head">
@@ -6780,7 +6808,7 @@
       wrap.className = 'all-ex-sheet';
       wrap.addEventListener('click', (e) => { if (e.target === wrap) closeAllExerciseSheet(); });
       const card = document.createElement('div');
-      card.className = 'all-ex-sheet-card';
+      card.className = `all-ex-sheet-card ${currentFrameCode() ? `free-frame ${currentFrameCode()}` : ''}`;
       card.appendChild(renderExerciseCard(ex));
       wrap.appendChild(card);
       document.body.appendChild(wrap);
