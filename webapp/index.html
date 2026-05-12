@@ -600,10 +600,6 @@
         gap: 10px;
       }
       .exercise-card { cursor: pointer; position: relative; background: color-mix(in srgb, var(--card) 92%, var(--bg)); }
-    .exercise-card.free-cosmetic::before { content:""; position:absolute; inset:0; border-radius:var(--radius); pointer-events:none; opacity:.32; }
-    .exercise-card.free-cosmetic.frame_first_set::before { background: linear-gradient(90deg, #f59e0b, #fbbf24); }
-    .exercise-card.free-cosmetic.frame_check::before { background: linear-gradient(90deg, #10b981, #34d399); }
-    .exercise-card.free-cosmetic.frame_fire::before { background: linear-gradient(90deg, #fb7185, #f97316); }
     .exercise-card.delete-mode { cursor: default; }
     .exercise-delete-btn {
         width: 44px;
@@ -3153,8 +3149,7 @@
         <div class="sheet-actions">
           <button id="editorAddSet" class="btn primary">Добавить подход</button>
         <button id="editorRemoveSet" class="btn">Удалить подход</button>
-        <button id="editorDone" class="btn primary">✅ Готово</button>
-        <button id="editorClose" class="btn">Закрыть</button>
+        <button id="editorClose" class="btn">Готово</button>
       </div>
     </div>
   </div>
@@ -11438,8 +11433,8 @@
       const prevAnimations = { ...(state.workout.animations || { completed: null, next: null }) };
       if (state.workout.expanded === ueId) state.workout.expanded = null;
       const nextUeId = findNextIncomplete(ueId);
-      state.workout.expanded = null;
-      state.workout.animations = { completed: ueId, next: null };
+      if (nextUeId) state.workout.expanded = nextUeId;
+      state.workout.animations = { completed: ueId, next: nextUeId || null };
       renderExercises(Array.from(state.exercises.values()));
       if (nextUeId) scrollExerciseIntoView(nextUeId);
       try {
@@ -11592,8 +11587,6 @@
             const doneIds = state.workout.doneIds instanceof Set ? state.workout.doneIds : new Set();
             doneIds.add(ueId);
             state.workout.doneIds = doneIds;
-            state.workout.expanded = null;
-            renderExercises(Array.from(state.exercises.values()));
           }
           if (data.completed_days && getExerciseActionSource(ueId) !== 'all_exercises') {
             state.completedDays = new Set((data.completed_days || []).map(Number));
@@ -11654,7 +11647,6 @@
     function renderExerciseCard(exercise) {
       const card = document.createElement('div');
       card.className = 'card exercise-card';
-      if (exercise.free_workout || exercise.source === 'all_exercises') { card.classList.add('free-cosmetic'); const frame = currentFrameCode(); if (frame) card.classList.add(frame); }
       card.dataset.ueid = exercise.user_exercise_id;
       const isDone = state.workout.doneIds?.has(exercise.user_exercise_id);
       const isDeleteMode = state.manage.mode === 'delete';
@@ -14611,20 +14603,6 @@
         teams.offset = teams.offset + teams.limit;
         runUiAction('Не удалось загрузить таблицу команд', () => loadTeamLeaderboard());
       });
-      
-      document.getElementById('editorDone').addEventListener('click', async () => {
-        if (!state.editor.ueId) return;
-        const ueId = Number(state.editor.ueId);
-        const exercise = state.exercises.get(ueId);
-        if (!exercise) return;
-        if (isRunningExercise(exercise)) {
-          await runUiAction('Не удалось завершить упражнение', () => handleRunningDone(exercise));
-        } else {
-          await runUiAction('Не удалось завершить упражнение', () => handleExerciseDone(ueId));
-        }
-        closeEditor();
-      });
-
       document.getElementById('editorClose').addEventListener('click', closeEditor);
       document.getElementById('editorAddSet').addEventListener('click', async () => {
         await flushInlineNumberInput();
