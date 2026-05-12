@@ -7680,13 +7680,29 @@ async def list_all_exercises_done_today(user_id: int, iso_date: str):
     async with connect_db() as db:
         cur = await db.execute(
             """
-            SELECT DISTINCT e.id, e.name, COALESCE(NULLIF(TRIM(e.muscle_group), ''), 'none') AS muscle_group,
-                   COALESCE(se.done_at, s.date || 'T00:00:00') AS done_at
+            SELECT
+                e.id AS exercise_id,
+                ue.id AS user_exercise_id,
+                e.name,
+                COALESCE(NULLIF(TRIM(e.muscle_group), ''), 'none') AS muscle_group,
+                COALESCE(se.done_at, s.date || 'T00:00:00') AS done_at,
+                COUNT(st.id) AS sets_count,
+                MAX(COALESCE(st.reps, 0)) AS max_reps,
+                MAX(COALESCE(st.seconds, 0)) AS max_seconds,
+                MAX(COALESCE(st.weight_kg, 0)) AS max_weight_kg
             FROM sessions s
-            JOIN session_exercises se ON se.session_id=s.id
-            JOIN user_exercises ue ON ue.id=se.user_exercise_id
-            JOIN exercises e ON e.id=ue.exercise_id
-            WHERE s.user_id=? AND s.date=? AND s.day_index=0 AND IFNULL(se.is_done,0)=1
+            JOIN session_exercises se ON se.session_id = s.id
+            JOIN user_exercises ue ON ue.id = se.user_exercise_id
+            JOIN exercises e ON e.id = ue.exercise_id
+            LEFT JOIN sets st
+              ON st.session_id = s.id
+             AND st.user_exercise_id = ue.id
+             AND IFNULL(st.is_warmup, 0) = 0
+            WHERE s.user_id = ?
+              AND s.date = ?
+              AND s.day_index = 0
+              AND IFNULL(se.is_done, 0) = 1
+            GROUP BY e.id, ue.id, e.name, muscle_group, done_at
             ORDER BY done_at DESC
             """,
             (int(user_id), iso_date),
@@ -7694,9 +7710,14 @@ async def list_all_exercises_done_today(user_id: int, iso_date: str):
         rows = await cur.fetchall()
     return [{
         "exercise_id": int(r[0]),
-        "name": str(r[1] or ""),
-        "muscle_group": normalize_exercise_group_for_ui(r[2]),
-        "done_at": r[3],
+        "user_exercise_id": int(r[1]),
+        "name": str(r[2] or ""),
+        "muscle_group": normalize_exercise_group_for_ui(r[3]),
+        "done_at": r[4],
+        "sets_count": int(r[5] or 0),
+        "max_reps": int(r[6] or 0),
+        "max_seconds": int(r[7] or 0),
+        "max_weight_kg": float(r[8] or 0),
     } for r in (rows or [])]
 async def clear_group_exercises_for_user(user_id: int, group_code: str) -> int:
     normalized = str(group_code or "").strip().lower() or "other"
