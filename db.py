@@ -7680,13 +7680,18 @@ async def list_all_exercises_done_today(user_id: int, iso_date: str):
     async with connect_db() as db:
         cur = await db.execute(
             """
-            SELECT DISTINCT e.id, e.name, COALESCE(NULLIF(TRIM(e.muscle_group), ''), 'none') AS muscle_group,
-                   COALESCE(se.done_at, s.date || 'T00:00:00') AS done_at
+            SELECT e.id,
+                   e.name,
+                   COALESCE(NULLIF(TRIM(e.muscle_group), ''), 'none') AS muscle_group,
+                   MAX(COALESCE(se.done_at, s.date || 'T00:00:00')) AS done_at,
+                   COUNT(st.id) AS sets_count
             FROM sessions s
             JOIN session_exercises se ON se.session_id=s.id
             JOIN user_exercises ue ON ue.id=se.user_exercise_id
             JOIN exercises e ON e.id=ue.exercise_id
+            LEFT JOIN sets st ON st.session_id=s.id AND st.user_exercise_id=ue.id
             WHERE s.user_id=? AND s.date=? AND s.day_index=0 AND IFNULL(se.is_done,0)=1
+            GROUP BY e.id, e.name, muscle_group
             ORDER BY done_at DESC
             """,
             (int(user_id), iso_date),
@@ -7697,6 +7702,7 @@ async def list_all_exercises_done_today(user_id: int, iso_date: str):
         "name": str(r[1] or ""),
         "muscle_group": normalize_exercise_group_for_ui(r[2]),
         "done_at": r[3],
+        "sets_count": int(r[4] or 0),
     } for r in (rows or [])]
 async def clear_group_exercises_for_user(user_id: int, group_code: str) -> int:
     normalized = str(group_code or "").strip().lower() or "other"
