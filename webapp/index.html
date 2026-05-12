@@ -2524,8 +2524,6 @@
     .all-ex-sheet-card{position:relative;width:min(96vw,620px);max-height:min(84dvh,760px);overflow:auto;-webkit-overflow-scrolling:touch;background:color-mix(in srgb, var(--card) 96%, transparent);border:1px solid var(--border);border-radius:22px 22px 14px 14px;padding:10px;box-shadow:var(--sheet-shadow);animation:allExSheetIn .2s ease;}
     .all-ex-sheet-card.free-frame::after { content:""; position:absolute; inset:0; border-radius:22px 22px 14px 14px; box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 18%, transparent); pointer-events:none; }
     @keyframes allExSheetIn { from { transform:translateY(22px); opacity:.0; } to { transform:translateY(0); opacity:1; } }
-.all-ex-finish-day { font-size: 12px; padding: 8px 10px; border-radius: 999px; border: 1px solid var(--border); background: color-mix(in srgb, var(--card) 92%, var(--bg)); color: var(--muted); }
-    .all-ex-finish-day.active { background: color-mix(in srgb, #22c55e 24%, var(--card)); color: var(--text); border-color: color-mix(in srgb, #22c55e 62%, var(--border)); box-shadow: 0 0 0 1px color-mix(in srgb, #22c55e 36%, transparent), 0 8px 18px color-mix(in srgb, #22c55e 16%, transparent); }
     @keyframes petalIn { from { opacity: 0; transform: rotate(var(--angle)) translate(calc(var(--radius) * .55)) rotate(calc(-1 * var(--angle))) scale(.88); } to { opacity: 1; } }
     @media (max-width: 420px) {
       .all-ex-stage { min-height: 390px; }
@@ -6572,30 +6570,12 @@
       }
       syncAllExercisesHeaderButton?.();
       updateAllExercisesDonePopover?.();
-      updateAllExercisesFinishButton?.();
       if (options.render) renderAllExercises();
     }
 
     function currentFrameCode() {
       return state.cosmetics?.title_frame_code || state.settings?.cosmetics?.title_frame_code || state.achievements?.overview?.cosmetics?.title_frame_code || '';
     }
-    async function finishAllExercisesDay() {
-      const st = allExercisesState();
-      const data = await apiFetch(`/gymapi/all_exercises/finish_day?date=${encodeURIComponent(getAllExercisesDate())}`, { method: 'POST' });
-      applyAllExercisesPayload(data, { render: false });
-      st.finishedAt = Date.now();
-      st.view = 'groups';
-      st.selectedGroup = null;
-      st.selectedExerciseId = null;
-      st.exercise = null;
-      st.exercises = [];
-      closeAllExerciseSheet();
-      renderAllExercises();
-      markAllExercisesActivity();
-      toast('Свободный день завершён ✅');
-      try { setTimeout(() => getTg()?.close?.(), 140); } catch (_) {}
-    }
-
 
     function allExercisesGroupName(code) {
       const found = (allExercisesState().groups || []).find((g) => g.code === code);
@@ -6842,11 +6822,6 @@
       stage.onpointerup = up; stage.onpointercancel = up;
     }
 
-    function hasAllExercisesDoneToday() {
-      const st = allExercisesState();
-      if (Array.isArray(st.doneToday) && st.doneToday.length > 0) return true;
-      return (st.groups || []).some((g) => Number(g.done_count || 0) > 0);
-    }
 
     function renderAllExercises() {
       const root = document.getElementById('allExercisesContent');
@@ -6861,8 +6836,7 @@
           <div class="all-ex-toolbar">
             ${st.view === 'groups'
               ? `<button class="all-ex-btn" data-action="all-ex-add-group">＋ Группа</button>
-                 <button class="all-ex-done-pill ${Array.isArray(st.doneToday) && st.doneToday.length ? 'active' : ''}" data-action="all-ex-done-popup">Сделано</button>
-                 <button class="all-ex-finish-day ${hasAllExercisesDoneToday() ? 'active' : ''}" data-action="all-ex-finish-day">Завершить день</button>`
+                 <button class="all-ex-done-pill ${Array.isArray(st.doneToday) && st.doneToday.length ? 'active' : ''}" data-action="all-ex-done-popup">Сделано</button>`
               : st.view === 'exercises'
                 ? `<button class="all-ex-btn" data-action="all-ex-go-back">← Назад</button>
                    <button class="all-ex-btn" data-action="all-ex-add-exercise">＋ Упражнение</button>
@@ -6877,7 +6851,6 @@
       root.querySelector('[data-action="all-ex-add-group"]')?.addEventListener('click', promptAllExercisesGroup);
       root.querySelector('[data-action="all-ex-add-exercise"]')?.addEventListener('click', promptAllExerciseCreate);
       root.querySelector('[data-action="all-ex-done-popup"]')?.addEventListener('click', toggleAllExercisesDonePopup);
-      root.querySelector('[data-action="all-ex-finish-day"]')?.addEventListener('click', () => runUiAction('Не удалось завершить день', () => finishAllExercisesDay()));
       const stage = document.getElementById('allExercisesStage');
       if (!stage) return;
       const center = document.createElement('div');
