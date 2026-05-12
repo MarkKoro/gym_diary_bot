@@ -11484,9 +11484,7 @@
         applyAllExercisesPayload(data, { render: false });
         const st = allExercisesState();
         if (Array.isArray(st.unfinished)) st.unfinished = st.unfinished.filter((x) => Number(x.exercise_id) !== Number(exercise.exercise_id));
-        st.exercise = null;
-        st.selectedExerciseId = null;
-        closeAllExerciseSheet();
+        closeAllExerciseSheet({ keepState: true });
         if (state.currentRoute === 'allExercises') { renderAllExercises(); syncAllExercisesHeaderButton?.(); }
         markAllExercisesActivity?.();
         toast('Упражнение завершено ✅');
@@ -14619,16 +14617,12 @@
         const ueId = Number(state.editor.ueId);
         const exercise = state.exercises.get(ueId);
         if (!exercise) return;
-        try {
-          if (isRunningExercise(exercise)) {
-            await handleRunningDone(exercise);
-          } else {
-            await handleExerciseDone(ueId);
-          }
-          closeEditor();
-        } catch (err) {
-          reportActionError('Не удалось завершить упражнение', err);
+        if (isRunningExercise(exercise)) {
+          await runUiAction('Не удалось завершить упражнение', () => handleRunningDone(exercise));
+        } else {
+          await runUiAction('Не удалось завершить упражнение', () => handleExerciseDone(ueId));
         }
+        closeEditor();
       });
 
       document.getElementById('editorClose').addEventListener('click', closeEditor);
