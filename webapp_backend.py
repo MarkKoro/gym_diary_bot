@@ -2122,8 +2122,6 @@ def api_me(tg: TelegramInitData = Depends(get_tg_init_data)):
 
 @app.get("/whoami")
 async def whoami(ctx: AuthCtx = Depends(get_auth_ctx)):
-    running_state = await _build_running_state(user_id, 0, ue_id, target_date, history_limit=30)
-
     return {
         "ok": True,
         "tg_id": ctx.tg_id,
