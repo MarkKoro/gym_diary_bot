@@ -211,6 +211,26 @@ SUBSCRIPTION_PLANS = {
 }
 
 
+@app.on_event("startup")
+async def _startup_http_clients() -> None:
+    app.state.http_client_openai = httpx.AsyncClient(timeout=120.0)
+
+
+@app.on_event("shutdown")
+async def _shutdown_http_clients() -> None:
+    for name in ("http_client_openai",):
+        client = getattr(app.state, name, None)
+        if client:
+            await client.aclose()
+
+
+def _get_http_client(name: str) -> httpx.AsyncClient:
+    client = getattr(app.state, name, None)
+    if client:
+        return client
+    raise HTTPException(status_code=503, detail='HTTP client pool недоступен')
+
+
 
 
 def _plan_amount_stars(amount_rub: int | float) -> int:
@@ -1319,8 +1339,11 @@ async def _call_openai_chat(system_prompt: str, user_prompt: str, *, mode: str, 
         'Content-Type': 'application/json',
     }
 
-    async with httpx.AsyncClient(timeout=120.0) as client:
-        resp = await client.post('https://api.openai.com/v1/chat/completions', headers=headers, json=payload)
+    resp = await _get_http_client("http_client_openai").post(
+        'https://api.openai.com/v1/chat/completions',
+        headers=headers,
+        json=payload,
+    )
 
     if resp.status_code >= 400:
         detail = resp.text[:900]

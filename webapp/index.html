@@ -3689,10 +3689,15 @@
       return color || `rgba(0,122,255,${safeAlpha})`;
     }
 
+    let allExercisesDateCache = { dayStamp: '', date: '' };
     function getAllExercisesDate() {
       const now = new Date();
+      const dayStamp = `${now.getFullYear()}-${now.getMonth()}-${now.getDate()}`;
+      if (allExercisesDateCache.dayStamp === dayStamp && allExercisesDateCache.date) return allExercisesDateCache.date;
       const local = new Date(now.getTime() - now.getTimezoneOffset() * 60000);
-      return local.toISOString().slice(0, 10);
+      const date = local.toISOString().slice(0, 10);
+      allExercisesDateCache = { dayStamp, date };
+      return date;
     }
 
     function normalizeMuscleKey(value) {
@@ -3702,17 +3707,41 @@
       return 'other';
     }
 
+    const customGroupNameCache = {
+      settingsRef: null,
+      manageRef: null,
+      libraryRef: null,
+      map: new Map(),
+    };
+    function rebuildCustomGroupMapIfNeeded() {
+      const settingsRef = state.settings.customGroups || [];
+      const manageRef = state.manage.add.groups || [];
+      const libraryRef = state.library.groups || [];
+      if (
+        customGroupNameCache.settingsRef === settingsRef &&
+        customGroupNameCache.manageRef === manageRef &&
+        customGroupNameCache.libraryRef === libraryRef
+      ) return;
+
+      const map = new Map();
+      for (const source of [settingsRef, manageRef, libraryRef]) {
+        for (const group of source) {
+          const key = (group?.code || '').toString().trim().toLowerCase();
+          const name = (group?.name || '').toString().trim();
+          if (key && name && !map.has(key)) map.set(key, name);
+        }
+      }
+      customGroupNameCache.settingsRef = settingsRef;
+      customGroupNameCache.manageRef = manageRef;
+      customGroupNameCache.libraryRef = libraryRef;
+      customGroupNameCache.map = map;
+    }
+
     function findCustomGroupName(code) {
       const raw = (code ?? '').toString().trim();
       if (!raw) return '';
-      const lower = raw.toLowerCase();
-      const fromSettings = (state.settings.customGroups || []).find((group) => (group.code || '').toString().toLowerCase() === lower);
-      if (fromSettings?.name) return fromSettings.name;
-      const fromManage = (state.manage.add.groups || []).find((group) => (group.code || '').toString().toLowerCase() === lower);
-      if (fromManage?.name) return fromManage.name;
-      const fromLibrary = (state.library.groups || []).find((group) => (group.code || '').toString().toLowerCase() === lower);
-      if (fromLibrary?.name) return fromLibrary.name;
-      return '';
+      rebuildCustomGroupMapIfNeeded();
+      return customGroupNameCache.map.get(raw.toLowerCase()) || '';
     }
 
     function isRunningExercise(exercise) {
