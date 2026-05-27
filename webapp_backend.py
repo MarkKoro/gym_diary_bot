@@ -3,6 +3,7 @@ import json
 import random
 import logging
 import re
+import copy
 import httpx
 import uuid
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
@@ -1475,14 +1476,14 @@ def _ai_schema_base() -> dict:
 
 def _ai_response_format_for_mode(mode: str, requested_days: int | None = None) -> dict:
     base = _ai_schema_base()
-    defs = base['defs']
+    defs = copy.deepcopy(base['defs'])
     root = defs['root']
 
     if mode == 'mistakes_analysis':
-        root = json.loads(json.dumps(root, ensure_ascii=False))
+        root = copy.deepcopy(root)
         root['properties']['action_plan']['properties']['actions'] = {'type': 'array', 'maxItems': 0}
     elif mode == 'new_system':
-        root = json.loads(json.dumps(root, ensure_ascii=False))
+        root = copy.deepcopy(root)
         rd = int(requested_days or 0)
         min_days = rd if 1 <= rd <= 7 else 1
         max_days = rd if 1 <= rd <= 7 else 7
@@ -1495,7 +1496,7 @@ def _ai_response_format_for_mode(mode: str, requested_days: int | None = None) -
             'items': defs['create_system'],
         }
     elif mode == 'adjust_sets':
-        root = json.loads(json.dumps(root, ensure_ascii=False))
+        root = copy.deepcopy(root)
         root['properties']['action_plan']['properties']['actions'] = {
             'type': 'array',
             'minItems': 1,
@@ -1503,7 +1504,7 @@ def _ai_response_format_for_mode(mode: str, requested_days: int | None = None) -
             'items': defs['update_sets'],
         }
     else:
-        root = json.loads(json.dumps(root, ensure_ascii=False))
+        root = copy.deepcopy(root)
 
         action_item_props = {
             'type': {'type': 'string', 'enum': ['add_exercise', 'remove_exercise', 'update_sets']},
