@@ -153,22 +153,31 @@ def _duration_name_params() -> tuple[str, ...]:
 
 
 async def _seed_exercises(db, exercises: Sequence[tuple[str, str]], update_group: bool = True):
+    rows = await (await db.execute(
+        "SELECT name, muscle_group FROM exercises WHERE created_by_user_id=0"
+    )).fetchall()
+    existing = {str(name): str(mg) for name, mg in rows}
+
+    inserts: list[tuple[str, str]] = []
+    updates: list[tuple[str, str]] = []
     for name, mg in exercises:
-        cur = await db.execute(
-            "SELECT muscle_group FROM exercises WHERE name=? AND created_by_user_id=0",
-            (name,),
+        current_group = existing.get(name)
+        if current_group is None:
+            inserts.append((name, mg))
+            continue
+        if update_group and current_group != mg:
+            updates.append((mg, name))
+
+    if inserts:
+        await db.executemany(
+            "INSERT INTO exercises(name, muscle_group, created_by_user_id) VALUES(?,?,0)",
+            inserts,
         )
-        row = await cur.fetchone()
-        if not row:
-            await db.execute(
-                "INSERT INTO exercises(name, muscle_group, created_by_user_id) VALUES(?,?,0)",
-                (name, mg),
-            )
-        elif row[0] != mg and update_group:
-            await db.execute(
-                "UPDATE exercises SET muscle_group=? WHERE name=? AND created_by_user_id=0",
-                (mg, name),
-            )
+    if updates:
+        await db.executemany(
+            "UPDATE exercises SET muscle_group=? WHERE name=? AND created_by_user_id=0",
+            updates,
+        )
 
 
 async def _ensure_muscle_map_schema(db):
