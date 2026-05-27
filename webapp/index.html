@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
   <title>Дневник тренировок</title>
-  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <script defer src="https://telegram.org/js/telegram-web-app.js"></script>
   <style>
     :root {
       color-scheme: light;
@@ -3261,6 +3261,15 @@
 
     const state = {
       initData: '',
+      lifecycle: {
+        lastHiddenAt: 0,
+        lastResumeRefreshAt: 0,
+        resumeInFlight: false,
+      },
+      uiCache: {
+        screens: null,
+        menuItems: null,
+      },
       startDayIndex: null,
       dayIndex: null,
       date: '',
@@ -3332,7 +3341,7 @@
         unseenCodes: new Set(),
         lastSeenAt: '',
       },
-      allExercises: { view: 'groups', loading: false, groups: [], exercises: [], unfinished: [], unfinishedCount: 0, selectedGroup: null, selectedExerciseId: null, exercise: null, draft: {}, noteTimer: null, animating: false, lastResetAt: 0, finishedAt: 0, sheetOpen: false, metaVersion: 0, metaRefreshTimer: null, metaRefreshInFlight: false, metaRefreshQueued: false, groupRequestSeq: 0, exerciseRequestSeq: 0 },
+      allExercises: { view: 'groups', loading: false, groups: [], exercises: [], unfinished: [], unfinishedCount: 0, selectedGroup: null, selectedExerciseId: null, exercise: null, draft: {}, noteTimer: null, animating: false, lastResetAt: 0, finishedAt: 0, sheetOpen: false, metaVersion: 0, metaRefreshTimer: null, metaRefreshInFlight: false, metaRefreshQueued: false, groupRequestSeq: 0, exerciseRequestSeq: 0, sessionRequestKey: '', sessionRequestPromise: null, groupsLoadedAt: 0, groupsLoadPromise: null },
       library: {
         view: 'groups',
         loading: false,
@@ -6900,15 +6909,31 @@
       }
     }
 
-    async function loadAllExercisesGroups() {
-      const st = allExercisesState(); st.loading = true; renderAllExercises();
+    async function loadAllExercisesGroups({ force = false } = {}) {
+      const st = allExercisesState();
+      const now = Date.now();
+      if (!force && st.groupsLoadPromise) return st.groupsLoadPromise;
+      if (!force && st.groups?.length && (now - Number(st.groupsLoadedAt || 0) < 15_000)) {
+        syncAllExercisesHeaderButton();
+        return;
+      }
+      st.loading = true;
+      renderAllExercises();
+      const date = encodeURIComponent(getAllExercisesDate());
+      const request = apiFetch(`/gymapi/all_exercises/groups?date=${date}`, { silent: true });
+      st.groupsLoadPromise = request;
       try {
-        const groupsData = await apiFetch(`/gymapi/all_exercises/groups?date=${encodeURIComponent(getAllExercisesDate())}`, { silent: true });
+        const groupsData = await request;
         st.groups = groupsData.groups || [];
         st.doneToday = groupsData.done_today || [];
         st.unfinishedCount = Number(groupsData.unfinished_count || 0);
+        st.groupsLoadedAt = Date.now();
         syncAllExercisesHeaderButton();
-      } finally { st.loading = false; renderAllExercises(); }
+      } finally {
+        if (st.groupsLoadPromise === request) st.groupsLoadPromise = null;
+        st.loading = false;
+        renderAllExercises();
+      }
     }
 
     async function openAllExercisesGroup(code) {
@@ -6929,7 +6954,13 @@
       st.selectedExerciseId = Number(exerciseId);
       const quickExercise = (st.exercises || []).find((ex) => Number(ex.exercise_id) === Number(exerciseId)) || (st.unfinished || []).find((ex) => Number(ex.exercise_id) === Number(exerciseId));
       openAllExerciseLoadingSheet(exerciseId, quickExercise?.name || '', quickExercise?.muscle_group || st.selectedGroup || '');
-      const data = await apiFetch(`/gymapi/all_exercises/exercise/${Number(exerciseId)}/session?date=${encodeURIComponent(getAllExercisesDate())}`, { silent: true });
+      const sessionDate = getAllExercisesDate();
+      const requestKey = `${Number(exerciseId)}:${sessionDate}`;
+      if (st.sessionRequestKey !== requestKey) {
+        st.sessionRequestKey = requestKey;
+        st.sessionRequestPromise = apiFetch(`/gymapi/all_exercises/exercise/${Number(exerciseId)}/session?date=${encodeURIComponent(sessionDate)}`, { silent: true });
+      }
+      const data = await st.sessionRequestPromise;
       if (seq !== st.exerciseRequestSeq) return;
       st.exercise = data;
       st.draft = deriveAllExerciseDraft(data);
@@ -9649,12 +9680,18 @@
         return;
       }
       state.currentRoute = normalized;
-      if (normalized !== 'allExercises') closeAllExercisesDonePopup();
+      if (normalized !== 'allExercises') {
+        closeAllExercisesDonePopup();
+        state.allExercises.sessionRequestKey = '';
+        state.allExercises.sessionRequestPromise = null;
+        state.allExercises.groupsLoadPromise = null;
+      }
       if (normalized !== 'measurements') {
         state.settings.measurements.menuOpen = false;
         state.settings.measurements.formView = null;
       }
-      document.querySelectorAll('.screen').forEach((el) => {
+      const screens = state.uiCache?.screens || (state.uiCache.screens = Array.from(document.querySelectorAll('.screen')));
+      screens.forEach((el) => {
         el.classList.toggle('active', el.dataset.route === normalized);
       });
       document.body.classList.toggle('route-today', normalized === 'today');
@@ -9671,7 +9708,8 @@
         if (state.manage.mode !== 'normal') setManageMode('normal');
       }
       const activeSettingsView = state.settings.pendingView || state.settings.view;
-      document.querySelectorAll('.menu-item').forEach((btn) => {
+      const menuItems = state.uiCache?.menuItems || (state.uiCache.menuItems = Array.from(document.querySelectorAll('.menu-item')));
+      menuItems.forEach((btn) => {
         const routeMatch = btn.dataset.route === normalized;
         const sectionMatch = !btn.dataset.section || btn.dataset.section === activeSettingsView;
         const active = routeMatch && (normalized !== 'settings' || sectionMatch);
@@ -9803,7 +9841,9 @@
       if (traineeBtn) traineeBtn.addEventListener('click', openTraineeSheet);
       document.getElementById('closeDrawer').addEventListener('click', closeDrawer);
       document.getElementById('drawerOverlay').addEventListener('click', (e) => { if (e.target.id === 'drawerOverlay') closeDrawer(); });
-      document.querySelectorAll('.menu-item').forEach((btn) => btn.addEventListener('click', () => {
+      state.uiCache.screens = Array.from(document.querySelectorAll('.screen'));
+      state.uiCache.menuItems = Array.from(document.querySelectorAll('.menu-item'));
+      state.uiCache.menuItems.forEach((btn) => btn.addEventListener('click', () => {
         if (btn.dataset.action === 'open-teams') {
           closeDrawer();
           navigateTo('teams');
@@ -11914,10 +11954,12 @@
         ...order.filter((id) => exercisesMap.has(id) && !doneIds.has(id)),
         ...order.filter((id) => exercisesMap.has(id) && doneIds.has(id)),
       ];
+      const fragment = document.createDocumentFragment();
       sortedIds.forEach((id) => {
         const ex = exercisesMap.get(id);
-        if (ex) container.appendChild(renderExerciseCard(ex));
+        if (ex) fragment.appendChild(renderExerciseCard(ex));
       });
+      container.appendChild(fragment);
       syncExpandedCards();
       applyWorkoutAnimations(container);
       computeProductivityScore();
@@ -12265,9 +12307,9 @@
     }
 
     let lastDataRefresh = 0;
-    async function refreshAppData(source = '') {
+    async function refreshAppData(source = '', { force = false } = {}) {
       const now = Date.now();
-      if (now - lastDataRefresh < 5000) return;
+      if (!force && now - lastDataRefresh < 5000) return;
       lastDataRefresh = now;
       if (!state.isTelegram) return;
       if (state.onboarding.active) return;
@@ -12284,16 +12326,36 @@
       }
     }
 
+    async function handleAppResume(source) {
+      const lc = state.lifecycle || (state.lifecycle = { lastHiddenAt: 0, lastResumeRefreshAt: 0, resumeInFlight: false });
+      const now = Date.now();
+      if (lc.resumeInFlight) return;
+      if (now - Number(lc.lastResumeRefreshAt || 0) < 1500) return;
+      lc.lastResumeRefreshAt = now;
+      lc.resumeInFlight = true;
+      try {
+        const hiddenForMs = lc.lastHiddenAt ? Math.max(0, now - lc.lastHiddenAt) : 0;
+        const forceRefresh = hiddenForMs >= 2 * 60 * 1000;
+        await refreshAppData(source, { force: forceRefresh });
+        runUiAction('Не удалось проверить статус оплаты', () => checkPendingRubPaymentStatus());
+      } finally {
+        lc.resumeInFlight = false;
+      }
+    }
+
     function setupVisibilityRefresh() {
       document.addEventListener('visibilitychange', () => {
-        if (!document.hidden) {
-          refreshAppData('visibility');
-          runUiAction('Не удалось проверить статус оплаты', () => checkPendingRubPaymentStatus());
+        if (document.hidden) {
+          if (state.lifecycle) state.lifecycle.lastHiddenAt = Date.now();
+          return;
         }
+        handleAppResume('visibility');
       });
       window.addEventListener('focus', () => {
-        refreshAppData('focus');
-        runUiAction('Не удалось проверить статус оплаты', () => checkPendingRubPaymentStatus());
+        handleAppResume('focus');
+      });
+      window.addEventListener('pageshow', () => {
+        handleAppResume('pageshow');
       });
       window.addEventListener('resize', positionManageMenu);
       window.addEventListener('scroll', positionManageMenu, true);
