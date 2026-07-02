@@ -1592,6 +1592,7 @@ def library_manage_kb(
     back_callback: str | None = None,
     add_callback: str | None = None,
     show_add_button: bool = True,
+    group_name: str | None = None,
     context=None,
 ) -> InlineKeyboardMarkup:
     editing_allowed = _is_editing_allowed(context)
