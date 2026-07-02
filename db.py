@@ -1,4 +1,5 @@
-import aiosqlite, asyncio
+import asyncio
+import aiosqlite
 import json
 from datetime import datetime, timedelta, timezone, UTC
 import secrets
@@ -7747,7 +7748,6 @@ async def clear_group_exercises_for_user(user_id: int, group_code: str) -> int:
         rows = await cur.fetchall()
         exercise_ids = [int(row[0]) for row in (rows or []) if row and row[0] is not None]
         # Only non-base exercises are deletable by clear action.
-        deletable_ids = [int(row[0]) for row in (rows or []) if row and int(row[1] or 0) != 0]
         owned_ids = [int(row[0]) for row in (rows or []) if row and int(row[1] or 0) == int(user_id)]
         if not exercise_ids:
             return 0, 0

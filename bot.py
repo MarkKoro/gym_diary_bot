@@ -6,10 +6,9 @@ import math
 import random
 import secrets
 import os
-import uuid
 from dataclasses import dataclass, field
-from datetime import datetime, time, timedelta, timezone, tzinfo
-from datetime import datetime as _dt, timedelta as _td, time as _t
+from datetime import datetime, time, timedelta, timezone
+from datetime import datetime as _dt, timedelta as _td
 from html import escape
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 from zoneinfo import ZoneInfo
@@ -17,7 +16,6 @@ from zoneinfo import ZoneInfo as _Z
 from collections import defaultdict
 from types import SimpleNamespace
 from typing import Any, Sequence, TYPE_CHECKING
-import httpx
 import re
 from telegram import (
     Update,
@@ -84,7 +82,6 @@ from keyboards import (
     settings_groups_kb,
     rename_day_kb,
     days_count_kb,
-    confirm_day_group_delete_kb,
     confirm_settings_group_delete_kb,
     TIMEZONES,
     library_menu_kb,
@@ -102,7 +99,6 @@ from keyboards import (
     measurements_remove_kb,
     ui_footer_rows,
     HISTORY_BTN,
-    subscribe_channel_prompt_kb,
     channel_support_prompt_kb,
     trainee_trainer_settings_kb,
     trainee_become_kb,
@@ -149,7 +145,6 @@ from db import (
     normalize_dow,
     get_user_timezone,
     list_user_reminders,
-    clear_user_reminders,
     wipe_user,
     list_active_days,
     list_day_completions,
@@ -202,7 +197,6 @@ from db import (
     user_has_library_exercise,
     mark_day_completed,
     clear_day_completions,
-    list_all_user_tg_ids,
     METCON_EXERCISE_NAMES,
     get_running_entry,
     update_running_entry,
@@ -212,14 +206,11 @@ from db import (
     add_custom_measurement,
     list_custom_measurements,
     cleanup_expired_subscriptions,
-    get_custom_measurement,
     get_active_subscription,
     grant_subscription_days,
     degrant_subscription_days,
     create_payment_record,
     update_payment_status,
-    get_payment_by_external_id,
-    get_latest_pending_payment,
     list_exercise_weight_progress,
     clear_trainer_requests,
     count_trainer_requests,
@@ -372,7 +363,7 @@ SUBSCRIPTION_PLANS = {
     },
 }
 
-DAY_COMPLETION_RETENTION_DAYS = 2
+DAY_COMPLETION_RETENTION_DAYS = 5
 ORDINAL_WORDS = {
     1: "первая",
     2: "вторая",
@@ -555,19 +546,32 @@ async def _prune_expired_day_completions(
     return fresh
 
 
-async def get_active_day_completions(user_id: int) -> set[int]:
-    system_id = await _active_system_id(user_id)
+async def _active_completion_rows(user_id: int, system_id: int) -> list[tuple[int, datetime]]:
     rows = await list_day_completions(user_id, system_id=system_id)
     parsed, _ = _parse_completion_rows(rows)
     parsed = await _prune_expired_day_completions(user_id, system_id, parsed)
+
+    # Legacy completions were stored with system_id=0 before training systems were
+    # introduced. Keep reading them as a fallback so restart/migration does not
+    # immediately hide a recently completed day for existing users.
+    if system_id != 0:
+        legacy_rows = await list_day_completions(user_id, system_id=0)
+        legacy_parsed, _ = _parse_completion_rows(legacy_rows)
+        legacy_parsed = await _prune_expired_day_completions(user_id, 0, legacy_parsed)
+        known_days = {day for day, _ in parsed}
+        parsed.extend((day, completed_at) for day, completed_at in legacy_parsed if day not in known_days)
+    return parsed
+
+
+async def get_active_day_completions(user_id: int) -> set[int]:
+    system_id = await _active_system_id(user_id)
+    parsed = await _active_completion_rows(user_id, system_id)
     return {day for day, _ in parsed}
 
 
 async def record_day_completion(user_id: int, day_index: int) -> tuple[set[int], bool]:
     system_id = await _active_system_id(user_id)
-    rows = await list_day_completions(user_id, system_id=system_id)
-    parsed, _ = _parse_completion_rows(rows)
-    parsed = await _prune_expired_day_completions(user_id, system_id, parsed)
+    parsed = await _active_completion_rows(user_id, system_id)
     now = datetime.now(UTC)
     already_tracked = any(day == day_index for day, _ in parsed)
     await mark_day_completed(user_id, day_index, now.isoformat(), system_id=system_id)
@@ -4838,17 +4842,17 @@ def _measurement_item(
         if unit == "см":
             prompt = f"Введи обхват {lower} в сантиметрах (например: 32.5)."
         elif unit == "кг":
-            prompt = f"Введи значение в килограммах (например: 50.0)."
+            prompt = "Введи значение в килограммах (например: 50.0)."
         elif unit == "%":
-            prompt = f"Введи значение в процентах (например: 15.0)."
+            prompt = "Введи значение в процентах (например: 15.0)."
         elif unit == "повт.":
-            prompt = f"Укажи количество повторений (например: 12)."
+            prompt = "Укажи количество повторений (например: 12)."
         elif unit == "уд/мин":
-            prompt = f"Введи значение в ударах в минуту (например: 60)."
+            prompt = "Введи значение в ударах в минуту (например: 60)."
         elif unit == "ч":
-            prompt = f"Укажи количество часов (например: 7.5)."
+            prompt = "Укажи количество часов (например: 7.5)."
         else:
-            prompt = f"Введи значение (например: 10)."
+            prompt = "Введи значение (например: 10)."
     item = {
         "code": code,
         "name": name,
@@ -6706,7 +6710,7 @@ async def render_library_group_text(
     lines.append("")
     first_entry = True
     system_id = await _active_system_id(user_id)
-    session_id = await get_session_for_day(user_id, today, 0, system_id=system_id)
+    await get_session_for_day(user_id, today, 0, system_id=system_id)
     for ue_id, name in items:
         ex_id, _, ex_group = await get_exercise_info(ue_id)
         resolved_group = resolve_group(name, ex_group)
@@ -6908,7 +6912,6 @@ async def render_exercise_view(
                     int(prev_calories or 0),
                 )
                 prev_created_at = prev_created
-        plan_text = t("NOT_SET")
         done_text = current_line
         lines = [title, ""]
         lines.append("Сегодня:")
@@ -8027,8 +8030,8 @@ async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         data = await fetch_global_stats(None)
         text = "<b>Stats</b>\n<code>" + json.dumps(data, ensure_ascii=False, indent=2) + "</code>"
         await update.effective_message.reply_html(text)
-    except Exception as e:
-        await update.effective_message.reply_text(f"stats error: {e!s}")
+    except Exception as exc:
+        await update.effective_message.reply_text(f"stats error: {exc!s}")
 
 
 async def splash_reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -9106,7 +9109,7 @@ async def wizard_router(
 
                 # отметим, что дальше мы в мастер-режиме «одно сообщение»
                 context.user_data["wizard_onboarding"] = True
-            except Exception as e:
+            except Exception:
                 # Фолбэк: хотя бы не уронить поток
                 await context.bot.send_message(chat_id, "Давай продолжим: сколько тренировок в неделю?", reply_markup=week_count_kb())
 

@@ -50,7 +50,6 @@ from db import (
     find_user_by_id,
     find_user_by_trainer_code,
     get_running_entry,
-    get_day_completion,
     get_user_timezone,
     get_user_notifications_enabled,
     get_user_leaderboard_visible,
@@ -1377,7 +1376,6 @@ def _ai_limits_for_mode(mode: str) -> dict:
 
 
 def _ai_schema_base() -> dict:
-    int_pos = {'type': 'integer', 'minimum': 0}
     day_index = {'type': 'integer', 'minimum': 1, 'maximum': 7}
     sets = {'type': 'integer', 'minimum': 1, 'maximum': 12}
     reps = {'type': 'integer', 'minimum': 0, 'maximum': 50}
@@ -2146,8 +2144,6 @@ def api_me(tg: TelegramInitData = Depends(get_tg_init_data)):
 
 @app.get("/whoami")
 async def whoami(ctx: AuthCtx = Depends(get_auth_ctx)):
-    running_state = await _build_running_state(user_id, 0, ue_id, target_date, history_limit=30)
-
     return {
         "ok": True,
         "tg_id": ctx.tg_id,
@@ -4068,15 +4064,15 @@ def _measurement_item(
         if unit == "см":
             prompt = f"Введи обхват {lower} в сантиметрах (например: 32.5)."
         elif unit == "кг":
-            prompt = f"Введи значение в килограммах (например: 50.0)."
+            prompt = "Введи значение в килограммах (например: 50.0)."
         elif unit == "%":
-            prompt = f"Введи значение в процентах (например: 15.0)."
+            prompt = "Введи значение в процентах (например: 15.0)."
         elif unit == "повт.":
-            prompt = f"Укажи количество повторений (например: 12)."
+            prompt = "Укажи количество повторений (например: 12)."
         elif unit == "уд/мин":
-            prompt = f"Введи значение в ударах в минуту (например: 60)."
+            prompt = "Введи значение в ударах в минуту (например: 60)."
         elif unit == "ч":
-            prompt = f"Укажи количество часов (например: 7.5)."
+            prompt = "Укажи количество часов (например: 7.5)."
         else:
             prompt = "Введи значение (например: 10)."
     item = {
