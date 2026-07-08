@@ -10787,9 +10787,12 @@
       }
     }
 
+    function getExerciseCards(ueId) {
+      return Array.from(document.querySelectorAll(`[data-ueid="${Number(ueId)}"]`));
+    }
+
     function setExerciseBusy(ueId, busy) {
-      const card = document.querySelector(`[data-ueid="${ueId}"]`);
-      if (card) card.classList.toggle('busy', busy);
+      getExerciseCards(ueId).forEach((card) => card.classList.toggle('busy', busy));
       if (state.editor.ueId === ueId) {
         document.querySelectorAll('#sheet button, #sheet .circle-btn, #sheet .chip').forEach((btn) => {
           btn.disabled = busy;
@@ -11564,33 +11567,37 @@
       container.appendChild(actionsRow);
     }
 
-    function renderWorkoutBody(ueId) {
-      const card = document.querySelector(`[data-ueid="${ueId}"]`);
+    function renderWorkoutBody(ueId, card = null) {
       const exercise = state.exercises.get(ueId);
-      if (!card || !exercise) return;
-      const body = card.querySelector('.workout-body');
-      if (!body) return;
-      if (state.workout.expanded !== ueId) { body.innerHTML = ''; body.style.display = 'none'; return; }
-      body.style.display = '';
-      renderWorkoutControls(body, exercise);
+      const cards = card ? [card] : getExerciseCards(ueId);
+      if (!cards.length || !exercise) return;
+      cards.forEach((targetCard) => {
+        const body = targetCard.querySelector('.workout-body');
+        if (!body) return;
+        if (state.workout.expanded !== ueId) { body.innerHTML = ''; body.style.display = 'none'; return; }
+        body.style.display = '';
+        renderWorkoutControls(body, exercise);
+      });
     }
 
-    function renderRunningBody(ueId) {
-      const card = document.querySelector(`[data-ueid="${ueId}"]`);
+    function renderRunningBody(ueId, card = null) {
       const exercise = state.exercises.get(ueId);
-      if (!card || !exercise) return;
-      const body = card.querySelector('.workout-body');
-      if (!body) return;
-      if (state.workout.expanded !== ueId) { body.innerHTML = ''; body.style.display = 'none'; return; }
-      body.style.display = '';
-      renderRunningControls(body, exercise);
+      const cards = card ? [card] : getExerciseCards(ueId);
+      if (!cards.length || !exercise) return;
+      cards.forEach((targetCard) => {
+        const body = targetCard.querySelector('.workout-body');
+        if (!body) return;
+        if (state.workout.expanded !== ueId) { body.innerHTML = ''; body.style.display = 'none'; return; }
+        body.style.display = '';
+        renderRunningControls(body, exercise);
+      });
     }
 
-    function renderExerciseBody(ueId) {
+    function renderExerciseBody(ueId, card = null) {
       const exercise = state.exercises.get(ueId);
       if (!exercise) return;
-      if (isRunningExercise(exercise)) renderRunningBody(ueId);
-      else renderWorkoutBody(ueId);
+      if (isRunningExercise(exercise)) renderRunningBody(ueId, card);
+      else renderWorkoutBody(ueId, card);
     }
 
     function toggleWorkoutCard(ueId) {
@@ -11740,9 +11747,9 @@
         const expanded = state.workout.expanded === ueId;
         card.classList.toggle('expanded', expanded);
         const body = card.querySelector('.workout-body');
-        if (expanded) renderExerciseBody(ueId);
+        if (expanded) renderExerciseBody(ueId, card);
         else if (body) { body.innerHTML = ''; body.style.display = 'none'; }
-        updateCardSummary(ueId);
+        updateCardSummary(ueId, card);
       });
     }
 
@@ -12209,18 +12216,20 @@
 
     function renderMuscleLoad() { renderMuscleLoadCard(); }
 
-    function updateCardSummary(ueId) {
+    function updateCardSummary(ueId, card = null) {
       const exercise = state.exercises.get(ueId);
-      const card = document.querySelector(`[data-ueid="${ueId}"]`);
-      if (!card || !exercise) return;
-      const summary = card.querySelector('.exercise-summary');
-      const pill = card.querySelector('.exercise-sets-pill');
-      const expanded = card.classList.contains('expanded');
-      if (summary) {
-        summary.textContent = expanded ? buildExpandedExerciseSummary(exercise) : buildExerciseSummary(exercise);
-        summary.classList.toggle('empty', !isRunningExercise(exercise) && (exercise.sets?.length || 0) === 0);
-      }
-      if (pill) pill.textContent = isRunningExercise(exercise) ? 'Бег' : `Подходов: ${exercise.sets?.length || 0}`;
+      const cards = card ? [card] : getExerciseCards(ueId);
+      if (!cards.length || !exercise) return;
+      cards.forEach((targetCard) => {
+        const summary = targetCard.querySelector('.exercise-summary');
+        const pill = targetCard.querySelector('.exercise-sets-pill');
+        const expanded = targetCard.classList.contains('expanded');
+        if (summary) {
+          summary.textContent = expanded ? buildExpandedExerciseSummary(exercise) : buildExerciseSummary(exercise);
+          summary.classList.toggle('empty', !isRunningExercise(exercise) && (exercise.sets?.length || 0) === 0);
+        }
+        if (pill) pill.textContent = isRunningExercise(exercise) ? 'Бег' : `Подходов: ${exercise.sets?.length || 0}`;
+      });
     }
 
     function applySetsUpdate(ueId, sets) {
