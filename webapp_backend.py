@@ -213,11 +213,12 @@ SUBSCRIPTION_PLANS = {
 @app.on_event("startup")
 async def _startup_http_clients() -> None:
     app.state.http_client_openai = httpx.AsyncClient(timeout=120.0)
+    app.state.http_client_telegram = httpx.AsyncClient(timeout=15.0)
 
 
 @app.on_event("shutdown")
 async def _shutdown_http_clients() -> None:
-    for name in ("http_client_openai",):
+    for name in ("http_client_openai", "http_client_telegram"):
         client = getattr(app.state, name, None)
         if client:
             await client.aclose()
@@ -361,10 +362,17 @@ async def _create_telegram_subscription_invoice_link(
         'payload': payload,
     }
     body['currency'] = 'XTR'
-    body['prices'] = [{'label': f"{plan['title']} · Telegram Stars", 'amount': _plan_amount_stars(plan['amount_rub'])}]
+    body['prices'] = [
+        {
+            'label': f"{plan['title']} · Telegram Stars",
+            'amount': _plan_amount_stars(plan['amount_rub']),
+        }
+    ]
 
-    async with httpx.AsyncClient(timeout=15.0) as client:
-        resp = await client.post(f'https://api.telegram.org/bot{TG_TOKEN}/createInvoiceLink', json=body)
+    client = _get_http_client("http_client_telegram")
+    resp = await client.post(
+        f'https://api.telegram.org/bot{TG_TOKEN}/createInvoiceLink', json=body
+    )
     if resp.status_code >= 400:
         raise HTTPException(status_code=502, detail='Не удалось создать ссылку на оплату')
     data = resp.json()
@@ -2132,7 +2140,12 @@ def index():
     index_path = os.path.join(STATIC_DIR, "index.html")
     if not os.path.isfile(index_path):
         return JSONResponse({"ok": True, "note": "index.html not found yet"})
-    return FileResponse(index_path)
+    return FileResponse(
+        index_path,
+        headers={
+            "Cache-Control": "public, max-age=60, stale-while-revalidate=300",
+        },
+    )
 
 
 @app.get("/api/me")
