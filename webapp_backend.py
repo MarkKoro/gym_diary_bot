@@ -2937,13 +2937,25 @@ async def _all_exercises_groups_payload(user_id: int, iso_date: str) -> dict:
     group_names.update({code: name for code, name in custom})
     stats, _items = await db.list_all_exercise_groups_for_user(user_id, iso_date)
     groups = []
+    seen_codes = set()
     for code, st in stats.items():
+        seen_codes.add(code)
         groups.append({
             "code": code,
             "name": group_names.get(code) or MUSCLE_NAME_MAP.get(code) or code,
             "count": int(st.get("count") or 0),
             "done_count": int(st.get("done_count") or 0),
             "is_custom": code not in MG_NAMES,
+        })
+    for code, name in custom:
+        if code in seen_codes:
+            continue
+        groups.append({
+            "code": code,
+            "name": name,
+            "count": 0,
+            "done_count": 0,
+            "is_custom": True,
         })
     groups.sort(key=lambda item: (LIBRARY_GROUP_ORDER.index(item["code"]) if item["code"] in LIBRARY_GROUP_ORDER else len(LIBRARY_GROUP_ORDER), str(item.get("name") or "").lower()))
     done_today = await db.list_all_exercises_done_today(user_id, iso_date)
