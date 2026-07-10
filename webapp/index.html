@@ -7104,7 +7104,12 @@
       }
     }
 
-    async function refreshAllExerciseSession() { if (allExercisesState().selectedExerciseId) await openAllExercise(allExercisesState().selectedExerciseId); }
+    async function refreshAllExerciseSession({ force = true } = {}) {
+      const st = allExercisesState();
+      if (!st.selectedExerciseId) return;
+      if (force) invalidateAllExerciseSessionCache(st.selectedExerciseId);
+      await openAllExercise(st.selectedExerciseId);
+    }
 
     async function refreshAllExercisesMeta({ render = false } = {}) {
       const st = allExercisesState();
@@ -7209,7 +7214,7 @@
           if (!name || !name.trim()) return;
           runUiAction('Не удалось добавить группу', async () => {
             await apiFetch('/gymapi/catalog/group', { method: 'POST', body: JSON.stringify({ name: name.trim() }) });
-            await loadAllExercisesGroups();
+            await loadAllExercisesGroups({ force: true });
           });
         },
       });
@@ -10600,19 +10605,57 @@
         if (!headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
       }
 
-      const controller = new AbortController();
-      init.signal = controller.signal;
-      const timeout = setTimeout(() => controller.abort(new Error('timeout')), timeoutMs);
+      const isAbortLikeError = (err) => err?.name === 'AbortError' || String(err?.message || '').toLowerCase().includes('abort') || String(err?.message || '').toLowerCase().includes('timeout');
+      const waitUntilFetchCanRetry = () => new Promise((resolve) => {
+        if (document.visibilityState === 'visible' && navigator.onLine !== false) { resolve(); return; }
+        let done = false;
+        let timer = null;
+        const finish = () => {
+          if (done) return;
+          done = true;
+          clearTimeout(timer);
+          document.removeEventListener('visibilitychange', onReady);
+          window.removeEventListener('online', onReady);
+          window.removeEventListener('focus', onReady);
+          resolve();
+        };
+        const onReady = () => {
+          if (document.visibilityState === 'visible' && navigator.onLine !== false) finish();
+        };
+        document.addEventListener('visibilitychange', onReady);
+        window.addEventListener('online', onReady);
+        window.addEventListener('focus', onReady);
+        timer = setTimeout(finish, 8000);
+      });
+      const fetchOnce = async () => {
+        const controller = new AbortController();
+        const attemptInit = { ...init, signal: controller.signal };
+        const timeout = setTimeout(() => controller.abort(new Error('timeout')), timeoutMs);
+        try {
+          return await fetch(path, attemptInit);
+        } finally {
+          clearTimeout(timeout);
+        }
+      };
 
       let res;
       try {
-        res = await fetch(path, init);
+        res = await fetchOnce();
       } catch (e) {
-        setStatus('error');
-        if (!silent) showErrorOverlay('Сеть недоступна. Попробуйте снова.', { title: 'Нет соединения', details: 'Проверьте интернет и повторите действие.' });
-        throw e;
-      } finally {
-        clearTimeout(timeout);
+        if (isAbortLikeError(e)) {
+          await waitUntilFetchCanRetry();
+          try {
+            res = await fetchOnce();
+          } catch (retryError) {
+            setStatus('error');
+            if (!silent) showErrorOverlay('Сеть недоступна. Попробуйте снова.', { title: 'Нет соединения', details: 'Проверьте интернет и повторите действие.' });
+            throw retryError;
+          }
+        } else {
+          setStatus('error');
+          if (!silent) showErrorOverlay('Сеть недоступна. Попробуйте снова.', { title: 'Нет соединения', details: 'Проверьте интернет и повторите действие.' });
+          throw e;
+        }
       }
 
       if (!res.ok) {
@@ -12488,8 +12531,8 @@
       if (state.currentRoute === 'library') runUiAction('Не удалось загрузить библиотеку упражнений', () => loadLibraryGroups());
       if (state.currentRoute === 'allExercises') {
         const st = allExercisesState();
-        if (!st.sheetOpen) runUiAction('Не удалось обновить все упражнения', () => loadAllExercisesGroups());
-        else runUiAction('Не удалось обновить все упражнения', () => refreshAllExercisesMeta({ render: false }));
+        if (!st.sheetOpen) runUiAction('Не удалось обновить все упражнения', () => loadAllExercisesGroups({ force }));
+        else runUiAction('Не удалось обновить упражнение', () => refreshAllExerciseSession());
       }
       if (state.currentRoute === 'today' && !state.editor.open && !state.manage.add.open) {
         runUiAction('Не удалось обновить экран дня', () => refreshTodayData({ keepDay: true }));
