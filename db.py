@@ -788,10 +788,40 @@ async def fetch_global_stats(now_iso: str | None = None) -> dict:
     return stats
 
 
-async def _column_exists(db, table: str, column: str) -> bool:
+async def _get_table_columns(db, table: str) -> set[str]:
     cur = await db.execute(f"PRAGMA table_info({table})")
     rows = await cur.fetchall()
-    return any(row[1] == column for row in rows)
+    return {str(row[1]) for row in rows}
+
+
+class _SchemaColumnCache:
+    """Small per-migration cache to avoid repeated PRAGMA table_info calls."""
+
+    def __init__(self, db):
+        self.db = db
+        self._columns: dict[str, set[str]] = {}
+
+    async def columns(self, table: str) -> set[str]:
+        cached = self._columns.get(table)
+        if cached is None:
+            cached = await _get_table_columns(self.db, table)
+            self._columns[table] = cached
+        return cached
+
+    async def has_column(self, table: str, column: str) -> bool:
+        return column in await self.columns(table)
+
+    async def add_column_if_missing(self, table: str, column: str, definition: str) -> bool:
+        columns = await self.columns(table)
+        if column in columns:
+            return False
+        await self.db.execute(f"ALTER TABLE {table} ADD COLUMN {definition}")
+        columns.add(column)
+        return True
+
+
+async def _column_exists(db, table: str, column: str) -> bool:
+    return column in await _get_table_columns(db, table)
 
 
 async def _table_exists(db, table: str) -> bool:
@@ -1398,69 +1428,52 @@ async def init_db():
         CREATE INDEX IF NOT EXISTS idx_team_requests_team_status
             ON team_join_requests(team_id, status, created_at);
         """)
-        try:
-            await db.execute("ALTER TABLE users ADD COLUMN system TEXT")
-        except Exception:
-            pass
-        try:
-            await db.execute("ALTER TABLE users ADD COLUMN workouts_per_week INTEGER")
-        except Exception:
-            pass
-        try:
-            await db.execute("ALTER TABLE users ADD COLUMN day_finish_total INTEGER DEFAULT 0")
-        except Exception:
-            pass
-        try:
-            await db.execute("ALTER TABLE users ADD COLUMN subscription_prompt_total INTEGER DEFAULT 0")
-        except Exception:
-            pass
-        try:
-            await db.execute("ALTER TABLE sets ADD COLUMN is_warmup INTEGER DEFAULT 0")
-        except Exception:
-            pass
-        try:
-            await db.execute("ALTER TABLE sets ADD COLUMN seconds INTEGER DEFAULT 0")
-        except Exception:
-            pass
-        try:
-            await db.execute("ALTER TABLE user_prefs ADD COLUMN recording_mode TEXT")
-        except Exception:
-            pass
-        try:
-            await db.execute("ALTER TABLE user_prefs ADD COLUMN day_view_mode TEXT")
-        except Exception:
-            pass
-        if not await _column_exists(db, "user_prefs", "ui_mode"):
+        schema = _SchemaColumnCache(db)
+        await schema.add_column_if_missing("users", "system", "system TEXT")
+        await schema.add_column_if_missing(
+            "users", "workouts_per_week", "workouts_per_week INTEGER"
+        )
+        await schema.add_column_if_missing(
+            "users", "day_finish_total", "day_finish_total INTEGER DEFAULT 0"
+        )
+        await schema.add_column_if_missing(
+            "users", "subscription_prompt_total", "subscription_prompt_total INTEGER DEFAULT 0"
+        )
+        await schema.add_column_if_missing("sets", "is_warmup", "is_warmup INTEGER DEFAULT 0")
+        await schema.add_column_if_missing("sets", "seconds", "seconds INTEGER DEFAULT 0")
+        await schema.add_column_if_missing("user_prefs", "recording_mode", "recording_mode TEXT")
+        await schema.add_column_if_missing("user_prefs", "day_view_mode", "day_view_mode TEXT")
+        if not await schema.has_column("user_prefs", "ui_mode"):
             await db.execute(
                 "ALTER TABLE user_prefs ADD COLUMN ui_mode TEXT CHECK(ui_mode IN ('compact','detailed')) DEFAULT 'detailed'"
             )
-        if not await _column_exists(db, "user_prefs", "ui_emoji_enabled"):
+        if not await schema.has_column("user_prefs", "ui_emoji_enabled"):
             await db.execute(
                 "ALTER TABLE user_prefs ADD COLUMN ui_emoji_enabled INTEGER CHECK(ui_emoji_enabled IN (0,1)) DEFAULT 1"
             )
-        if not await _column_exists(db, "user_prefs", "ui_verbose_level"):
+        if not await schema.has_column("user_prefs", "ui_verbose_level"):
             await db.execute(
                 "ALTER TABLE user_prefs ADD COLUMN ui_verbose_level INTEGER CHECK(ui_verbose_level IN (0,1)) DEFAULT 0"
             )
-        if not await _column_exists(db, "user_prefs", "suppress_webapp_prompt"):
+        if not await schema.has_column("user_prefs", "suppress_webapp_prompt"):
             await db.execute(
                 "ALTER TABLE user_prefs ADD COLUMN suppress_webapp_prompt INTEGER CHECK(suppress_webapp_prompt IN (0,1)) DEFAULT 0"
             )
-        if not await _column_exists(db, "payments", "external_id"):
+        if not await schema.has_column("payments", "external_id"):
             await db.execute("ALTER TABLE payments ADD COLUMN external_id TEXT")
-        if not await _column_exists(db, "payments", "provider_charge_id"):
+        if not await schema.has_column("payments", "provider_charge_id"):
             await db.execute("ALTER TABLE payments ADD COLUMN provider_charge_id TEXT")
-        if not await _column_exists(db, "payments", "project_key"):
+        if not await schema.has_column("payments", "project_key"):
             await db.execute("ALTER TABLE payments ADD COLUMN project_key TEXT")
-        if not await _column_exists(db, "payments", "finalized_at"):
+        if not await schema.has_column("payments", "finalized_at"):
             await db.execute("ALTER TABLE payments ADD COLUMN finalized_at TEXT")
-        if not await _column_exists(db, "payments", "finalization_source"):
+        if not await schema.has_column("payments", "finalization_source"):
             await db.execute("ALTER TABLE payments ADD COLUMN finalization_source TEXT")
-        if not await _column_exists(db, "running_entries", "heart_rate"):
+        if not await schema.has_column("running_entries", "heart_rate"):
             await db.execute("ALTER TABLE running_entries ADD COLUMN heart_rate INTEGER DEFAULT 0")
-        if not await _column_exists(db, "running_entries", "duration_ms"):
+        if not await schema.has_column("running_entries", "duration_ms"):
             await db.execute("ALTER TABLE running_entries ADD COLUMN duration_ms INTEGER DEFAULT 0")
-        if not await _column_exists(db, "running_entries", "exercise_id"):
+        if not await schema.has_column("running_entries", "exercise_id"):
             await db.execute("ALTER TABLE running_entries ADD COLUMN exercise_id INTEGER")
             await db.execute(
                 """
@@ -1474,25 +1487,18 @@ async def init_db():
                 WHERE exercise_id IS NULL
                 """
             )
-        try:
-            await db.execute("ALTER TABLE users ADD COLUMN is_trainer INTEGER NOT NULL DEFAULT 0")
-        except Exception:
-            pass
-        try:
-            await db.execute("ALTER TABLE users ADD COLUMN trainer_code TEXT")
-        except Exception:
-            pass
-        try:
-            await db.execute(
-                "ALTER TABLE users ADD COLUMN notifications_enabled INTEGER NOT NULL DEFAULT 1"
-            )
-        except Exception:
-            pass
-        if not await _column_exists(db, "users", "leaderboard_visible"):
+        await schema.add_column_if_missing(
+            "users", "is_trainer", "is_trainer INTEGER NOT NULL DEFAULT 0"
+        )
+        await schema.add_column_if_missing("users", "trainer_code", "trainer_code TEXT")
+        await schema.add_column_if_missing(
+            "users", "notifications_enabled", "notifications_enabled INTEGER NOT NULL DEFAULT 1"
+        )
+        if not await schema.has_column("users", "leaderboard_visible"):
             await db.execute(
                 "ALTER TABLE users ADD COLUMN leaderboard_visible INTEGER NOT NULL DEFAULT 1"
             )
-        if not await _column_exists(db, "users", "trainer_accepts_requests"):
+        if not await schema.has_column("users", "trainer_accepts_requests"):
             await db.execute(
                 "ALTER TABLE users ADD COLUMN trainer_accepts_requests INTEGER NOT NULL DEFAULT 1"
             )
@@ -1502,21 +1508,21 @@ async def init_db():
             )
         except Exception:
             pass
-        if not await _column_exists(db, "users", "onboarding_video_chat_id"):
+        if not await schema.has_column("users", "onboarding_video_chat_id"):
             await db.execute("ALTER TABLE users ADD COLUMN onboarding_video_chat_id INTEGER")
-        if not await _column_exists(db, "users", "onboarding_video_message_id"):
+        if not await schema.has_column("users", "onboarding_video_message_id"):
             await db.execute("ALTER TABLE users ADD COLUMN onboarding_video_message_id INTEGER")
-        if not await _column_exists(db, "users", "onboarding_intro_chat_id"):
+        if not await schema.has_column("users", "onboarding_intro_chat_id"):
             await db.execute("ALTER TABLE users ADD COLUMN onboarding_intro_chat_id INTEGER")
-        if not await _column_exists(db, "users", "onboarding_intro_message_id"):
+        if not await schema.has_column("users", "onboarding_intro_message_id"):
             await db.execute("ALTER TABLE users ADD COLUMN onboarding_intro_message_id INTEGER")
-        if not await _column_exists(db, "users", "onboarding_completed"):
+        if not await schema.has_column("users", "onboarding_completed"):
             await db.execute(
                 "ALTER TABLE users ADD COLUMN onboarding_completed INTEGER NOT NULL DEFAULT 0"
             )
-        if not await _column_exists(db, "users", "active_system_id"):
+        if not await schema.has_column("users", "active_system_id"):
             await db.execute("ALTER TABLE users ADD COLUMN active_system_id INTEGER")
-        if not await _column_exists(db, "users", "systems_limit_prompted_at"):
+        if not await schema.has_column("users", "systems_limit_prompted_at"):
             await db.execute("ALTER TABLE users ADD COLUMN systems_limit_prompted_at TEXT")
         await db.execute(
             "CREATE TABLE IF NOT EXISTS referral_profiles(user_id INTEGER PRIMARY KEY, slug TEXT UNIQUE NOT NULL, display_name TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)"
@@ -1539,7 +1545,7 @@ async def init_db():
         await db.execute(
             "CREATE INDEX IF NOT EXISTS idx_ai_coach_requests_user_created ON ai_coach_requests(user_id, created_at)"
         )
-        if not await _column_exists(db, "sessions", "system_id"):
+        if not await schema.has_column("sessions", "system_id"):
             await db.execute("ALTER TABLE sessions ADD COLUMN system_id INTEGER")
         await db.execute("UPDATE sessions SET system_id=0 WHERE system_id IS NULL")
         await db.execute(
@@ -1551,22 +1557,16 @@ async def init_db():
         await db.execute(
             "UPDATE user_prefs SET ui_verbose_level = CASE WHEN ui_verbose_level IN (0,1) THEN ui_verbose_level ELSE 0 END"
         )
-        try:
-            await db.execute("ALTER TABLE user_exercises ADD COLUMN is_archived INTEGER DEFAULT 0")
-        except Exception:
-            pass
-        try:
-            await db.execute("ALTER TABLE session_exercises ADD COLUMN last_reps INTEGER")
-        except Exception:
-            pass
-        try:
-            await db.execute("ALTER TABLE session_exercises ADD COLUMN last_weight REAL")
-        except Exception:
-            pass
-        try:
-            await db.execute("ALTER TABLE session_exercises ADD COLUMN note TEXT")
-        except Exception:
-            pass
+        await schema.add_column_if_missing(
+            "user_exercises", "is_archived", "is_archived INTEGER DEFAULT 0"
+        )
+        await schema.add_column_if_missing(
+            "session_exercises", "last_reps", "last_reps INTEGER"
+        )
+        await schema.add_column_if_missing(
+            "session_exercises", "last_weight", "last_weight REAL"
+        )
+        await schema.add_column_if_missing("session_exercises", "note", "note TEXT")
         await db.execute(
             """
             CREATE TABLE IF NOT EXISTS exercise_notes(
@@ -1603,15 +1603,11 @@ async def init_db():
               )
             """
         )
-        try:
-            await db.execute("ALTER TABLE session_exercises ADD COLUMN last_seconds INTEGER")
-        except Exception:
-            pass
-        try:
-            await db.execute("ALTER TABLE exercise_baseline ADD COLUMN seconds INTEGER")
-        except Exception:
-            pass
-        if not await _column_exists(db, "user_measurement_custom", "category_code"):
+        await schema.add_column_if_missing(
+            "session_exercises", "last_seconds", "last_seconds INTEGER"
+        )
+        await schema.add_column_if_missing("exercise_baseline", "seconds", "seconds INTEGER")
+        if not await schema.has_column("user_measurement_custom", "category_code"):
             await db.execute(
                 "ALTER TABLE user_measurement_custom ADD COLUMN category_code TEXT"
             )
@@ -1631,7 +1627,7 @@ async def init_db():
             await db.execute(
                 "CREATE INDEX idx_user_measurement_categories_user ON user_measurement_categories(user_id, created_at DESC)"
             )
-        if not await _column_exists(db, "user_reminders", "day_no"):
+        if not await schema.has_column("user_reminders", "day_no"):
             await db.execute("ALTER TABLE user_reminders ADD COLUMN day_no INTEGER")
             cur = await db.execute(
                 "SELECT id, user_id FROM user_reminders WHERE day_no IS NULL ORDER BY user_id, id"
