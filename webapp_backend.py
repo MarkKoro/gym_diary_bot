@@ -2219,6 +2219,18 @@ async def day_sheet(
     day_label = await db.get_day_label(user_id, day_index)
     exercises_rows = await db.fetch_day_exercises(user_id, day_index, iso_date, active_system_id)
     exercise_sources = await fetch_training_system_exercise_sources(active_system_id, day_index)
+    strength_exercise_keys = [
+        (int(ue_id), int(exercise_id))
+        for ue_id, _name, muscle_group, _is_done, exercise_id, _session_note in exercises_rows
+        if _normalize_group(muscle_group) != "run"
+    ]
+    sheet_exercise_data = await db.fetch_day_sheet_exercise_data(
+        user_id,
+        session_id,
+        strength_exercise_keys,
+        iso_date,
+        active_system_id,
+    )
     exercises: list[dict] = []
     for ue_id, name, muscle_group, is_done, exercise_id, session_note in exercises_rows:
         normalized_group = _normalize_group(muscle_group)
@@ -2265,14 +2277,23 @@ async def day_sheet(
                 }
             )
         else:
-            sets_rows = await db.fetch_exercise_sets(session_id, ue_id)
-            exercise_payload["sets"] = _serialize_sets(sets_rows)
-            previous_sets_rows = await db.fetch_last_session_sets(user_id, day_index, ue_id, iso_date, active_system_id)
-            exercise_payload["previous_sets"] = _serialize_sets(previous_sets_rows)
-            exercise_payload["previous_summary"] = _format_prev_summary(
-                await db.get_last_session_summary(user_id, day_index, ue_id, iso_date, active_system_id)
+            exercise_data = sheet_exercise_data.get(
+                int(ue_id),
+                {
+                    "sets": [],
+                    "previous_sets": [],
+                    "previous_summary": None,
+                    "previous_date": None,
+                },
             )
-            exercise_payload["previous_date"] = await _get_previous_done_date(user_id, int(exercise_id), session_id)
+            exercise_payload["sets"] = _serialize_sets(exercise_data.get("sets") or [])
+            exercise_payload["previous_sets"] = _serialize_sets(
+                exercise_data.get("previous_sets") or []
+            )
+            exercise_payload["previous_summary"] = _format_prev_summary(
+                exercise_data.get("previous_summary")
+            )
+            exercise_payload["previous_date"] = exercise_data.get("previous_date")
         exercises.append(exercise_payload)
 
     return {

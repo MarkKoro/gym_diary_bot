@@ -4697,6 +4697,136 @@ async def fetch_last_session_sets(user_id: int, day_index: int, ue_id: int, toda
         return await cur.fetchall()
 
 
+async def fetch_day_sheet_exercise_data(
+    user_id: int,
+    session_id: int,
+    exercise_keys: Sequence[tuple[int, int]],
+    today: str,
+    system_id: int | None = None,
+) -> dict[int, dict[str, object]]:
+    """Batch-load per-exercise sheet data for the WebApp day screen."""
+
+    keys = [(int(ue_id), int(exercise_id)) for ue_id, exercise_id in exercise_keys]
+    if not keys:
+        return {}
+
+    ue_ids = [ue_id for ue_id, _ in keys]
+    exercise_ids = sorted({exercise_id for _, exercise_id in keys})
+    ue_placeholders = ",".join("?" for _ in ue_ids)
+    exercise_placeholders = ",".join("?" for _ in exercise_ids)
+    result: dict[int, dict[str, object]] = {
+        ue_id: {
+            "sets": [],
+            "previous_sets": [],
+            "previous_summary": None,
+            "previous_date": None,
+        }
+        for ue_id, _ in keys
+    }
+    exercise_to_current_ue = {exercise_id: ue_id for ue_id, exercise_id in keys}
+
+    async with connect_db() as conn:
+        cur = await conn.execute(
+            f"""
+            SELECT user_exercise_id, set_no, reps, seconds, weight_kg, is_warmup
+            FROM sets
+            WHERE session_id=? AND user_exercise_id IN ({ue_placeholders})
+            ORDER BY user_exercise_id, set_no
+            """,
+            (int(session_id), *ue_ids),
+        )
+        for row in await cur.fetchall():
+            ue_id = int(row[0])
+            result[ue_id]["sets"].append(tuple(row[1:]))
+
+        system_clause = ""
+        system_params: tuple[int, ...] = ()
+        if system_id is not None:
+            system_clause = "AND COALESCE(s.system_id,0)=?"
+            system_params = (int(system_id),)
+
+        cur = await conn.execute(
+            f"""
+            WITH ranked_previous AS (
+                SELECT
+                    ue.exercise_id,
+                    s.id AS session_id,
+                    st.user_exercise_id,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY ue.exercise_id
+                        ORDER BY s.date DESC, st.set_no DESC
+                    ) AS rn
+                FROM sessions s
+                JOIN sets st ON st.session_id=s.id AND st.is_warmup=0
+                JOIN user_exercises ue ON ue.id=st.user_exercise_id
+                WHERE s.user_id=?
+                  AND ue.exercise_id IN ({exercise_placeholders})
+                  AND s.date<?
+                  {system_clause}
+            )
+            SELECT
+                rp.exercise_id,
+                st.set_no,
+                st.reps,
+                st.seconds,
+                st.weight_kg
+            FROM ranked_previous rp
+            JOIN sets st
+              ON st.session_id=rp.session_id
+             AND st.user_exercise_id=rp.user_exercise_id
+             AND st.is_warmup=0
+            WHERE rp.rn=1
+            ORDER BY rp.exercise_id, st.set_no
+            """,
+            (int(user_id), *exercise_ids, today, *system_params),
+        )
+        previous_sets_by_exercise: dict[int, list[tuple]] = {}
+        for row in await cur.fetchall():
+            exercise_id = int(row[0])
+            previous_sets_by_exercise.setdefault(exercise_id, []).append(tuple(row[1:]))
+
+        for exercise_id, rows in previous_sets_by_exercise.items():
+            ue_id = exercise_to_current_ue.get(exercise_id)
+            if ue_id is None:
+                continue
+            result[ue_id]["previous_sets"] = rows
+            last_set = rows[-1] if rows else None
+            if last_set:
+                _set_no, reps, seconds, weight = last_set
+                result[ue_id]["previous_summary"] = (len(rows), reps, seconds, weight)
+
+        cur = await conn.execute(
+            f"""
+            WITH ranked_done AS (
+                SELECT
+                    ue.exercise_id,
+                    s.date,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY ue.exercise_id
+                        ORDER BY s.date DESC, COALESCE(se.done_at, s.date || 'T00:00:00') DESC
+                    ) AS rn
+                FROM session_exercises se
+                JOIN user_exercises ue ON ue.id = se.user_exercise_id
+                JOIN sessions s ON s.id = se.session_id
+                WHERE ue.exercise_id IN ({exercise_placeholders})
+                  AND s.user_id=?
+                  AND se.is_done=1
+                  AND se.session_id<>?
+            )
+            SELECT exercise_id, date
+            FROM ranked_done
+            WHERE rn=1
+            """,
+            (*exercise_ids, int(user_id), int(session_id)),
+        )
+        for exercise_id, previous_date in await cur.fetchall():
+            ue_id = exercise_to_current_ue.get(int(exercise_id))
+            if ue_id is not None:
+                result[ue_id]["previous_date"] = previous_date
+
+    return result
+
+
 async def count_completed_sessions_for_exercise(conn, user_id: int, exercise_id: int) -> int:
     """
     Сколько раз пользователь завершал упражнение (is_done=1) во всех сессиях.
