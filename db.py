@@ -80,14 +80,20 @@ DEFAULT_EXERCISES: Sequence[tuple[str, str]] = [
     ("Планка", "core"),
     ("Велосипед", "core"),
     ("Подъём корпуса", "core"),
+    ("Сгибание шеи лёжа", "neck"),
+    ("Разгибание шеи лёжа", "neck"),
+    ("Изометрия шеи вперёд", "neck"),
+    ("Изометрия шеи назад", "neck"),
+    ("Изометрия шеи в сторону", "neck"),
+    ("Шраги с гантелями", "neck"),
     ("Бег", "run"),
 ]
 
 KB_EXERCISES: Sequence[tuple[str, str]] = tuple((name, "kb") for name in KB_EXERCISE_NAMES)
 
-MUSCLE_CODES = ["chest", "back", "legs", "shoulders", "biceps", "triceps", "core", "cardio"]
+MUSCLE_CODES = ["neck", "chest", "back", "legs", "shoulders", "biceps", "triceps", "core", "cardio"]
 
-ANATOMICAL_GROUPS = {"chest", "back", "legs", "shoulders", "core", "biceps", "triceps"}
+ANATOMICAL_GROUPS = {"neck", "chest", "back", "legs", "shoulders", "core", "biceps", "triceps"}
 
 METCON_EXERCISES: Sequence[tuple[str, str]] = [
     ("Меткон — AMRAP (кастом)", "metcon"),
@@ -359,7 +365,7 @@ async def create_catalog_exercise(user_id: int, name: str, muscle_group: str | N
 async def _seed_exercise_muscles_defaults(db):
     mapping: dict[str, dict[str, int]] = {}
 
-    anatomical_groups = {"chest", "back", "legs", "shoulders", "biceps", "triceps", "core"}
+    anatomical_groups = {"neck", "chest", "back", "legs", "shoulders", "biceps", "triceps", "core"}
     for name, group in DEFAULT_EXERCISES:
         if group in anatomical_groups:
             mapping[name] = {group: 100}

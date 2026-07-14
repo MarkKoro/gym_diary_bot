@@ -150,6 +150,7 @@ STATIC_DIR = os.path.join(BASE_DIR, "webapp")
 MUSCLE_CODES = tuple(MG_NAMES.keys())
 
 MUSCLE_NAME_MAP = {
+    "neck": "Шея",
     "chest": "Грудь",
     "back": "Спина",
     "legs": "Ноги",
@@ -166,8 +167,9 @@ MUSCLE_NAME_MAP = {
     "none": "Не указано",
 }
 
-MAIN_MUSCLES = ("chest", "back", "legs", "shoulders", "core", "biceps", "triceps", "cardio", "other")
+MAIN_MUSCLES = ("neck", "chest", "back", "legs", "shoulders", "core", "biceps", "triceps", "cardio", "other")
 LIBRARY_GROUP_ORDER = (
+    "neck",
     "chest",
     "back",
     "legs",
@@ -183,6 +185,7 @@ LIBRARY_GROUP_ORDER = (
     "none",
 )
 ANATOMY_MUSCLE_CODES = {
+    "neck",
     "chest",
     "back",
     "legs",
@@ -655,7 +658,7 @@ def _sanitize_ai_action(action: dict, *, max_day_index: int) -> dict | None:
 
         # ru/en synonyms -> known codes
         alias = {
-            "грудь": "chest", "грудные": "chest",
+            "шея": "neck", "neck": "neck", "трапеции": "neck", "грудь": "chest", "грудные": "chest",
             "спина": "back",
             "плечи": "shoulders", "дельты": "shoulders",
             "бицепс": "biceps", "бицепсы": "biceps", "biceps": "biceps",

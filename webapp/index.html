@@ -2474,13 +2474,21 @@
     .all-ex-hero.free-frame.frame_fire::before { background: linear-gradient(90deg, #fb7185, #f97316); }
 
     .all-ex-subtitle { color: var(--muted); font-size: 10px; line-height: 1.2; margin-top: 2px; text-align:center; max-width: 360px; }
-    .all-ex-stage { position: relative; min-height: calc(100vh - 220px); border-radius: 0; border: 0; background: radial-gradient(circle at center, color-mix(in srgb, var(--accent) 10%, transparent), transparent 58%); overflow: auto; isolation: isolate; -webkit-overflow-scrolling: touch; margin: 0 -16px; padding: 0 8px; touch-action:pan-x pan-y; }
-    .all-ex-petals { position: relative; width: max(100%, 1220px); height: max(100%, 1220px); min-height: 760px; display: block; transition: opacity .22s ease, transform .28s ease; margin: 0 auto; }
-    .all-ex-petals.columns { width: 100%; min-height: 0; height: auto; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px 10px; padding: 10px 8px 20px; }
-    .all-ex-petals.animating-out { opacity: 0; transform: scale(.86) rotate(-7deg); }
-    .all-ex-petal { position: absolute; left: 50%; top: 50%; width: 132px; min-height: 82px; margin-left: -66px; margin-top: -41px; border: 0; border-radius: 999px 999px 999px 28px; padding: 12px; color: white; text-align: left; box-shadow: 0 14px 28px rgba(15,23,42,.18); transform: rotate(var(--angle)) translate(var(--radius)) rotate(calc(-1 * var(--angle))); transition: transform .34s cubic-bezier(.2,.8,.2,1), opacity .22s ease, filter .2s ease; animation: petalIn .34s cubic-bezier(.2,.8,.2,1) both; animation-delay: var(--delay); }
-    .all-ex-petal:active { transform: rotate(var(--angle)) translate(var(--radius)) rotate(calc(-1 * var(--angle))) scale(.96); filter: brightness(.94); }
+    .all-ex-stage { position: relative; min-height: calc(100svh - 220px); border-radius: 0; border: 0; background: radial-gradient(circle at 50% 12%, color-mix(in srgb, var(--accent) 14%, transparent), transparent 46%), linear-gradient(180deg, color-mix(in srgb, var(--card) 18%, transparent), transparent 42%); overflow: visible; isolation: isolate; margin: 0 -16px; padding: 0 12px 18px; touch-action: pan-y; }
+    .all-ex-petals { position: relative; width: 100%; min-height: 0; height: auto; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); grid-auto-rows: minmax(78px, auto); gap: 10px; padding: 10px max(8px, env(safe-area-inset-left)) 22px max(8px, env(safe-area-inset-right)); transition: opacity .22s ease, transform .28s ease; margin: 0 auto; max-width: 680px; }
+    .all-ex-petals.human { grid-template-areas: "emptyL neck neck emptyR" "triceps chest chest shoulders" "biceps core core back" "metcon legs legs workout" "kb run other other"; align-items: stretch; }
+    .all-ex-petals.custom-layout { grid-template-areas: none; }
+    .all-ex-petals.columns { width: 100%; min-height: 0; height: auto; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px 10px; padding: 10px 8px 20px; max-width: none; }
+    .all-ex-petals.animating-out { opacity: 0; transform: scale(.96); }
+    .all-ex-petal { position: relative; width: 100%; min-height: 82px; border: 0; border-radius: 24px; padding: 12px; color: white; text-align: left; box-shadow: 0 14px 28px rgba(15,23,42,.18); transform: none; transition: transform .2s ease, opacity .18s ease, filter .2s ease, box-shadow .2s ease; animation: petalGridIn .24s cubic-bezier(.2,.8,.2,1) both; animation-delay: var(--delay); overflow: hidden; }
+    .all-ex-petal:active { transform: scale(.98); filter: brightness(.94); }
+    .all-ex-petal::after { content: ""; position:absolute; inset:0; background: radial-gradient(circle at 82% 18%, rgba(255,255,255,.28), transparent 34%); pointer-events:none; }
     .all-ex-petal.done { background: linear-gradient(135deg, #22c55e, #16a34a) !important; }
+    .all-ex-layout-btn.active { background: color-mix(in srgb, var(--accent) 18%, var(--card)); border-color: color-mix(in srgb, var(--accent) 55%, var(--border)); color: var(--text); }
+    .all-ex-drag-handle { position:absolute; right:8px; top:8px; z-index:2; width:28px; height:28px; border-radius:999px; display:none; place-items:center; background:rgba(255,255,255,.22); color:#fff; font-weight:900; cursor:grab; }
+    .all-ex-petals.layout-editing .all-ex-drag-handle { display:grid; }
+    .all-ex-petals.layout-editing .all-ex-petal { padding-right:38px; cursor:grab; }
+    .all-ex-petal.dragging { opacity:.72; transform:scale(1.03); box-shadow:0 18px 34px rgba(15,23,42,.28); z-index:5; }
     .all-ex-petals.columns .all-ex-petal { position: relative; left: auto; top: auto; width: 100%; min-height: 88px; margin: 0; border-radius: 24px; transform: none !important; animation: none; }
     .all-ex-petals.columns .all-ex-petal:active { transform: scale(.98) !important; }
     .all-ex-petal-title { font-size: 13px; font-weight: 850; line-height: 1.12; }
@@ -2520,14 +2528,17 @@
     
     .all-ex-top-left{display:flex;gap:8px;align-items:center;}
     .all-ex-unfinished-top{white-space:nowrap;}
-    .all-ex-sheet{position:fixed;inset:0;z-index:9998;background:rgba(3,7,18,.48);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);display:flex;align-items:flex-end;justify-content:center;padding:0 10px calc(8px + env(safe-area-inset-bottom));}
-    .all-ex-sheet-card{position:relative;width:min(96vw,620px);max-height:min(84dvh,760px);overflow:auto;-webkit-overflow-scrolling:touch;background:color-mix(in srgb, var(--card) 96%, transparent);border:1px solid var(--border);border-radius:22px 22px 14px 14px;padding:10px;box-shadow:var(--sheet-shadow);animation:allExSheetIn .2s ease;}
+    .all-ex-sheet{position:fixed;inset:0;z-index:9998;background:rgba(3,7,18,.48);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);display:flex;align-items:center;justify-content:center;padding:max(10px,env(safe-area-inset-top)) 10px max(10px,env(safe-area-inset-bottom));}
+    .all-ex-sheet-card{position:relative;width:min(96vw,620px);max-height:min(88svh,760px);overflow:auto;overscroll-behavior:contain;-webkit-overflow-scrolling:touch;background:color-mix(in srgb, var(--card) 96%, transparent);border:1px solid var(--border);border-radius:22px;padding:10px;box-shadow:var(--sheet-shadow);animation:allExSheetIn .2s ease;}
     .all-ex-sheet-card.free-frame::after { content:""; position:absolute; inset:0; border-radius:22px 22px 14px 14px; box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 18%, transparent); pointer-events:none; }
-    @keyframes allExSheetIn { from { transform:translateY(22px); opacity:.0; } to { transform:translateY(0); opacity:1; } }
-    @keyframes petalIn { from { opacity: 0; transform: rotate(var(--angle)) translate(calc(var(--radius) * .55)) rotate(calc(-1 * var(--angle))) scale(.88); } to { opacity: 1; } }
+    @keyframes allExSheetIn { from { transform:translateY(10px); opacity:.0; } to { transform:translateY(0); opacity:1; } }
+    @keyframes petalIn { from { opacity: 0; transform: scale(.88); } to { opacity: 1; } }
+    @keyframes petalGridIn { from { opacity: 0; transform: translateY(8px) scale(.96); } to { opacity: 1; transform: none; } }
     @media (max-width: 420px) {
       .all-ex-stage { min-height: 390px; }
-      .all-ex-petal { width: 118px; min-height: 80px; margin-left: -59px; margin-top: -40px; padding: 10px; }
+      .all-ex-petals { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+      .all-ex-petals.human { grid-template-areas: "neck neck neck" "triceps chest shoulders" "biceps core back" "metcon legs workout" "kb run other"; }
+      .all-ex-petal { width: 100%; min-height: 80px; margin: 0; padding: 10px; }
       .all-ex-petal-title { font-size: 12px; }
       .all-ex-petal-meta { font-size: 10px; }
       .all-ex-center { width: min(92vw, 390px); max-height: min(74vh, 540px); padding: 14px; }
@@ -3187,6 +3198,7 @@
     }, { passive: false });
 
     const MUSCLE_NAMES = {
+      neck: 'Шея',
       chest: 'Грудь',
       back: 'Спина',
       legs: 'Ноги',
@@ -3202,6 +3214,7 @@
     };
 
     const MUSCLE_COLORS = {
+      neck: '#38bdf8',
       shoulders: '#f59e0b',
       biceps: '#3b82f6',
       chest: '#ef4444',
@@ -6660,23 +6673,48 @@
       return state.cosmetics?.title_frame_code || state.settings?.cosmetics?.title_frame_code || state.achievements?.overview?.cosmetics?.title_frame_code || '';
     }
 
+
+    const ALL_EX_LAYOUT_KEY = 'gymDiary.allExercises.groupLayout.v1';
+    const ALL_EX_HUMAN_AREAS = {
+      neck: 'neck', chest: 'chest', shoulders: 'shoulders', triceps: 'triceps', biceps: 'biceps', core: 'core', back: 'back', legs: 'legs', metcon: 'metcon', workout: 'workout', kb: 'kb', run: 'run', other: 'other'
+    };
+
+    function getAllExerciseLayoutOrder() {
+      try {
+        const parsed = JSON.parse(localStorage.getItem(ALL_EX_LAYOUT_KEY) || '[]');
+        return Array.isArray(parsed) ? parsed.map(String).filter(Boolean) : [];
+      } catch (_) { return []; }
+    }
+
+    function saveAllExerciseLayoutOrder(order) {
+      try { localStorage.setItem(ALL_EX_LAYOUT_KEY, JSON.stringify(order)); } catch (_) {}
+    }
+
+    function orderAllExerciseGroups(groups) {
+      const order = getAllExerciseLayoutOrder();
+      const byCode = new Map((groups || []).map((g) => [String(g.code || ''), g]));
+      const ordered = [];
+      order.forEach((code) => { if (byCode.has(code)) { ordered.push(byCode.get(code)); byCode.delete(code); } });
+      const canonical = ['neck', 'chest', 'shoulders', 'triceps', 'biceps', 'core', 'back', 'legs', 'metcon', 'workout', 'kb', 'run', 'other'];
+      canonical.forEach((code) => { if (byCode.has(code)) { ordered.push(byCode.get(code)); byCode.delete(code); } });
+      [...byCode.values()].sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), 'ru')).forEach((g) => ordered.push(g));
+      return ordered;
+    }
+
     function allExercisesGroupName(code) {
       const found = (allExercisesState().groups || []).find((g) => g.code === code);
       return found?.name || MUSCLE_NAMES[code] || libraryGroupLabel(code) || 'Группа';
     }
 
-    function allExercisePetalStyle(index, total, color) {
-      const safeTotal = Math.max(1, total || 1);
-      const angle = -90 + (360 / safeTotal) * index;
-      const radius = safeTotal <= 6 ? 196 : (safeTotal <= 10 ? 232 : (safeTotal <= 16 ? 274 : 318));
-      return `--angle:${angle}deg; --radius:${radius}px; --delay:${Math.min(index * 32, 360)}ms; background:linear-gradient(135deg, ${color}, color-mix(in srgb, ${color} 72%, #111827));`;
+    function allExercisePetalStyle(index, total, color, code = '') {
+      const area = ALL_EX_HUMAN_AREAS[String(code || '')] || '';
+      const areaStyle = area ? `grid-area:${area};` : '';
+      return `${areaStyle} --delay:${Math.min(index * 28, 260)}ms; background:linear-gradient(135deg, ${color}, color-mix(in srgb, ${color} 72%, #111827));`;
     }
 
     function centerAllExercisesStage(stage) {
       if (!stage) return;
-      const targetLeft = Math.max(0, (stage.scrollWidth - stage.clientWidth) / 2);
-      const targetTop = Math.max(0, (stage.scrollHeight - stage.clientHeight) * 0.62);
-      stage.scrollTo({ left: targetLeft, top: targetTop, behavior: 'auto' });
+      stage.scrollTo({ left: 0, top: 0, behavior: 'auto' });
     }
 
     function formatAllExerciseLast(item) {
@@ -6703,25 +6741,62 @@
       `;
     }
 
+    function enableAllExercisesGroupDrag(wrap) {
+      let dragState = null;
+      const finish = () => {
+        if (!dragState) return;
+        dragState.el.classList.remove('dragging');
+        const order = [...wrap.querySelectorAll('.all-ex-petal[data-group-code]')].map((el) => el.dataset.groupCode).filter(Boolean);
+        saveAllExerciseLayoutOrder(order);
+        wrap.classList.add('custom-layout');
+        wrap.querySelectorAll('.all-ex-petal').forEach((el) => { el.style.gridArea = 'auto'; });
+        dragState = null;
+      };
+      wrap.addEventListener('pointerdown', (event) => {
+        const handle = event.target?.closest('.all-ex-drag-handle');
+        if (!handle || !wrap.classList.contains('layout-editing')) return;
+        const el = handle.closest('.all-ex-petal');
+        if (!el) return;
+        event.preventDefault();
+        dragState = { el, pointerId: event.pointerId };
+        el.classList.add('dragging');
+        try { el.setPointerCapture(event.pointerId); } catch (_) {}
+      });
+      wrap.addEventListener('pointermove', (event) => {
+        if (!dragState || event.pointerId !== dragState.pointerId) return;
+        const target = document.elementFromPoint(event.clientX, event.clientY)?.closest('.all-ex-petal[data-group-code]');
+        if (!target || target === dragState.el || !wrap.contains(target)) return;
+        const rect = target.getBoundingClientRect();
+        const before = event.clientY < rect.top + rect.height / 2;
+        wrap.insertBefore(dragState.el, before ? target : target.nextSibling);
+      });
+      wrap.addEventListener('pointerup', finish);
+      wrap.addEventListener('pointercancel', finish);
+    }
+
     function renderAllExercisesPetals(items, type) {
       const wrap = document.createElement('div');
-      wrap.className = 'all-ex-petals';
+      const isGroup = type === 'group';
+      const hasCustomOrder = isGroup && getAllExerciseLayoutOrder().length > 0;
+      wrap.className = `all-ex-petals ${isGroup ? 'human' : ''} ${hasCustomOrder ? 'custom-layout' : ''}`.trim();
       const total = Math.max(1, items.length);
       items.forEach((item, idx) => {
         const btn = document.createElement('button');
         btn.type = 'button';
         btn.className = `all-ex-petal ${item.done ? 'done' : ''}`;
-        if (type === 'group' && item.code) btn.dataset.groupCode = String(item.code);
-        if (type !== 'group' && item.exercise_id) btn.dataset.exerciseId = String(item.exercise_id);
+        if (isGroup && item.code) btn.dataset.groupCode = String(item.code);
+        if (!isGroup && item.exercise_id) btn.dataset.exerciseId = String(item.exercise_id);
         const color = item.color || getMuscleColor(item.code || item.muscle_group || 'other');
-        btn.setAttribute('style', allExercisePetalStyle(idx, total, color));
-        btn.innerHTML = `<div class="all-ex-petal-title">${escapeHtml(item.title)}</div><div class="all-ex-petal-meta">${escapeHtml(item.meta || '')}</div>`;
-        btn.addEventListener('click', () => {
-          if (type === 'group') openAllExercisesGroup(item.code);
+        btn.setAttribute('style', allExercisePetalStyle(idx, total, color, hasCustomOrder ? '' : item.code));
+        btn.innerHTML = `${isGroup ? '<span class="all-ex-drag-handle" aria-hidden="true">☰</span>' : ''}<div class="all-ex-petal-title">${escapeHtml(item.title)}</div><div class="all-ex-petal-meta">${escapeHtml(item.meta || '')}</div>`;
+        btn.addEventListener('click', (event) => {
+          if (wrap.classList.contains('layout-editing') || event.target?.closest('.all-ex-drag-handle')) return;
+          if (isGroup) openAllExercisesGroup(item.code);
           else openAllExercise(item.exercise_id);
         });
         wrap.appendChild(btn);
       });
+      if (isGroup) enableAllExercisesGroupDrag(wrap);
       return wrap;
     }
     function buildSnakeOrder(items, columns = 3) {
@@ -6915,30 +6990,8 @@
       syncExpandedCards();
     }
 
-    function initAllExercisesPinchZoom(stage) {
-      const content = stage.querySelector('.all-ex-petals');
-      if (!content) return;
-      if (content.classList.contains('columns')) return;
-      if (!stage._zoomState) stage._zoomState = { scale: 0.72, startDist: 0, startScale: 0.72 };
-      content.style.transformOrigin = '50% 50%';
-      content.style.transform = `scale(${stage._zoomState.scale})`;
-      const pointers = new Map();
-      stage.onpointerdown = (e) => { pointers.set(e.pointerId, { x: e.clientX, y: e.clientY }); };
-      stage.onpointermove = (e) => {
-        if (!pointers.has(e.pointerId)) return;
-        pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
-        if (pointers.size === 2) {
-          e.preventDefault();
-          const pts = Array.from(pointers.values());
-          const dist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
-          if (!stage._zoomState.startDist) { stage._zoomState.startDist = dist; stage._zoomState.startScale = stage._zoomState.scale; }
-          const next = Math.min(1.35, Math.max(0.6, stage._zoomState.startScale * (dist / stage._zoomState.startDist)));
-          stage._zoomState.scale = next;
-          content.style.transform = `scale(${next})`;
-        }
-      };
-      const up = (e) => { pointers.delete(e.pointerId); if (pointers.size < 2) stage._zoomState.startDist = 0; };
-      stage.onpointerup = up; stage.onpointercancel = up;
+    function initAllExercisesPinchZoom(_stage) {
+      // Группы больше не требуют pinch zoom: они рендерятся в адаптивной «анатомической» сетке.
     }
 
 
@@ -6954,7 +7007,8 @@
           </div>
           <div class="all-ex-toolbar">
             ${st.view === 'groups'
-              ? `<button class="all-ex-btn" data-action="all-ex-add-group">＋ Группа</button>
+              ? `<button class="all-ex-btn all-ex-layout-btn" data-action="all-ex-layout">Расставить</button>
+                 <button class="all-ex-btn" data-action="all-ex-add-group">＋ Группа</button>
                  <button class="all-ex-done-pill ${Array.isArray(st.doneToday) && st.doneToday.length ? 'active' : ''}" data-action="all-ex-done-popup">Сделано</button>`
               : st.view === 'exercises'
                 ? `<button class="all-ex-btn" data-action="all-ex-go-back">← Назад</button>
@@ -6968,6 +7022,14 @@
       `;
       root.querySelector('[data-action="all-ex-go-back"]')?.addEventListener('click', goBackAllExercises);
       root.querySelector('[data-action="all-ex-add-group"]')?.addEventListener('click', promptAllExercisesGroup);
+      root.querySelector('[data-action="all-ex-layout"]')?.addEventListener('click', (event) => {
+        const wrap = document.querySelector('#allExercisesStage .all-ex-petals.human');
+        if (!wrap) return;
+        const active = wrap.classList.toggle('layout-editing');
+        event.currentTarget.classList.toggle('active', active);
+        event.currentTarget.textContent = active ? 'Готово' : 'Расставить';
+        toast(active ? 'Тяни карточки за ☰ — порядок сохранится автоматически.' : 'Расположение сохранено.');
+      });
       root.querySelector('[data-action="all-ex-add-exercise"]')?.addEventListener('click', promptAllExerciseCreate);
       root.querySelector('[data-action="all-ex-done-popup"]')?.addEventListener('click', toggleAllExercisesDonePopup);
       const stage = document.getElementById('allExercisesStage');
@@ -6980,11 +7042,7 @@
         return;
       }
       if (st.view === 'groups') {
-        const groups = (st.groups || [])
-          .sort((a, b) => {
-            const rank = (code) => (code === 'none' ? 0 : (code === 'other' ? 1 : 2));
-            return rank(a.code) - rank(b.code) || String(a.name || '').localeCompare(String(b.name || ''), 'ru');
-          });
+        const groups = orderAllExerciseGroups(st.groups || []);
         const petals = groups.map((g) => ({ code: g.code, title: g.name || allExercisesGroupName(g.code), meta: `${Number(g.count || 0)} упр. · выполнено ${Number(g.done_count || 0)}`, done: Number(g.done_count || 0) > 0, color: getMuscleColor(g.code) }));
         stage.appendChild(renderAllExercisesPetals(petals, 'group'));
         requestAnimationFrame(() => { centerAllExercisesStage(stage); initAllExercisesPinchZoom(stage); });

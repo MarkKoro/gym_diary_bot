@@ -447,6 +447,7 @@ def _option_marker(active: bool) -> str:
 
 
 MG_NAMES = {
+    "neck": "Шея",
     "chest": "Грудь",
     "back": "Спина",
     "legs": "Ноги",
