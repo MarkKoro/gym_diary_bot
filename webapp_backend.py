@@ -150,6 +150,7 @@ STATIC_DIR = os.path.join(BASE_DIR, "webapp")
 MUSCLE_CODES = tuple(MG_NAMES.keys())
 
 MUSCLE_NAME_MAP = {
+    "neck": "Шея",
     "chest": "Грудь",
     "back": "Спина",
     "legs": "Ноги",
@@ -166,8 +167,9 @@ MUSCLE_NAME_MAP = {
     "none": "Не указано",
 }
 
-MAIN_MUSCLES = ("chest", "back", "legs", "shoulders", "core", "biceps", "triceps", "cardio", "other")
+MAIN_MUSCLES = ("neck", "chest", "back", "legs", "shoulders", "core", "biceps", "triceps", "cardio", "other")
 LIBRARY_GROUP_ORDER = (
+    "neck",
     "chest",
     "back",
     "legs",
