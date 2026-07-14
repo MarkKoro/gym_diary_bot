@@ -185,6 +185,7 @@ LIBRARY_GROUP_ORDER = (
     "none",
 )
 ANATOMY_MUSCLE_CODES = {
+    "neck",
     "chest",
     "back",
     "legs",
@@ -657,7 +658,7 @@ def _sanitize_ai_action(action: dict, *, max_day_index: int) -> dict | None:
 
         # ru/en synonyms -> known codes
         alias = {
-            "грудь": "chest", "грудные": "chest",
+            "шея": "neck", "neck": "neck", "трапеции": "neck", "грудь": "chest", "грудные": "chest",
             "спина": "back",
             "плечи": "shoulders", "дельты": "shoulders",
             "бицепс": "biceps", "бицепсы": "biceps", "biceps": "biceps",
