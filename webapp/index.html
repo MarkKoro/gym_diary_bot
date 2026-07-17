@@ -2528,9 +2528,18 @@
     
     .all-ex-top-left{display:flex;gap:8px;align-items:center;}
     .all-ex-unfinished-top{white-space:nowrap;}
-    .all-ex-sheet{position:fixed;inset:0;z-index:9998;background:rgba(3,7,18,.48);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);display:flex;align-items:center;justify-content:center;padding:max(10px,env(safe-area-inset-top)) 10px max(10px,env(safe-area-inset-bottom));}
+    .all-ex-sheet{position:fixed;inset:0;z-index:9998;background:rgba(3,7,18,.48);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;padding:max(10px,env(safe-area-inset-top)) 10px max(10px,env(safe-area-inset-bottom));}
     .all-ex-sheet-card{position:relative;width:min(96vw,620px);max-height:min(88svh,760px);overflow:auto;overscroll-behavior:contain;-webkit-overflow-scrolling:touch;background:color-mix(in srgb, var(--card) 96%, transparent);border:1px solid var(--border);border-radius:22px;padding:10px;box-shadow:var(--sheet-shadow);animation:allExSheetIn .2s ease;}
     .all-ex-sheet-card.free-frame::after { content:""; position:absolute; inset:0; border-radius:22px 22px 14px 14px; box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 18%, transparent); pointer-events:none; }
+    .all-ex-history-strip{width:min(96vw,620px);border:1px solid color-mix(in srgb,var(--border) 82%,transparent);border-radius:18px;padding:8px 10px;background:color-mix(in srgb,var(--card) 86%,transparent);box-shadow:0 10px 26px rgba(15,23,42,.16);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);display:grid;grid-template-columns:34px minmax(0,1fr) 34px;align-items:center;gap:8px;animation:allExSheetIn .2s ease;}
+    .all-ex-history-main{min-width:0;display:grid;gap:3px;text-align:center;}
+    .all-ex-history-kicker{font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.07em;color:var(--muted);}
+    .all-ex-history-value{font-size:14px;font-weight:850;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+    .all-ex-history-date{font-size:12px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+    .all-ex-history-nav{width:34px;height:34px;border-radius:999px;border:1px solid var(--border);background:color-mix(in srgb,var(--card) 78%,var(--bg));color:var(--text);font-size:18px;font-weight:900;display:grid;place-items:center;box-shadow:0 6px 14px rgba(15,23,42,.12);cursor:pointer;}
+    .all-ex-history-nav:disabled{opacity:.35;cursor:default;box-shadow:none;}
+    @media (max-width:420px){.all-ex-history-strip{padding:7px 8px;grid-template-columns:30px minmax(0,1fr) 30px}.all-ex-history-nav{width:30px;height:30px}.all-ex-history-value{font-size:13px}}
+
     @keyframes allExSheetIn { from { transform:translateY(10px); opacity:.0; } to { transform:translateY(0); opacity:1; } }
     @keyframes petalIn { from { opacity: 0; transform: scale(.88); } to { opacity: 1; } }
     @keyframes petalGridIn { from { opacity: 0; transform: translateY(8px) scale(.96); } to { opacity: 1; transform: none; } }
@@ -3354,7 +3363,7 @@
         unseenCodes: new Set(),
         lastSeenAt: '',
       },
-      allExercises: { view: 'groups', loading: false, groups: [], exercises: [], unfinished: [], unfinishedCount: 0, selectedGroup: null, selectedExerciseId: null, exercise: null, draft: {}, noteTimer: null, animating: false, lastResetAt: 0, finishedAt: 0, sheetOpen: false, metaVersion: 0, metaRefreshTimer: null, metaRefreshInFlight: false, metaRefreshQueued: false, groupRequestSeq: 0, exerciseRequestSeq: 0, sessionRequestKey: '', sessionRequestPromise: null, groupsLoadedAt: 0, groupsLoadPromise: null },
+      allExercises: { view: 'groups', loading: false, groups: [], exercises: [], unfinished: [], unfinishedCount: 0, selectedGroup: null, selectedExerciseId: null, exercise: null, draft: {}, noteTimer: null, animating: false, lastResetAt: 0, finishedAt: 0, sheetOpen: false, quickHistory: {}, metaVersion: 0, metaRefreshTimer: null, metaRefreshInFlight: false, metaRefreshQueued: false, groupRequestSeq: 0, exerciseRequestSeq: 0, sessionRequestKey: '', sessionRequestPromise: null, groupsLoadedAt: 0, groupsLoadPromise: null },
       library: {
         view: 'groups',
         loading: false,
@@ -6971,16 +6980,145 @@
       document.body.classList.add('all-ex-modal-open');
     }
 
+    function getAllExerciseQuickHistoryState(exerciseId) {
+      const st = allExercisesState();
+      const key = String(Number(exerciseId || 0));
+      st.quickHistory = st.quickHistory || {};
+      if (!st.quickHistory[key]) st.quickHistory[key] = { loading: false, loaded: false, error: false, index: 0, sessions: [] };
+      return st.quickHistory[key];
+    }
+
+    function buildAllExerciseQuickSessions(exercise, historyData = null) {
+      const sessions = [];
+      const seen = new Set();
+      const currentDate = exercise?.date || getAllExercisesDate?.() || '';
+      const pushSession = (session) => {
+        const sets = (session?.sets || []).filter(Boolean);
+        if (!sets.length) return;
+        const date = session?.date || session?.session_date || '';
+        if (date && currentDate && date === currentDate) return;
+        const key = `${date}:${sets.map((s) => `${s.set_no || ''}-${s.reps || 0}-${s.seconds || 0}-${s.weight_kg || 0}`).join('|')}`;
+        if (seen.has(key)) return;
+        seen.add(key);
+        sessions.push({ date, sets });
+      };
+      if (Array.isArray(historyData?.sessions)) {
+        historyData.sessions.slice().reverse().forEach(pushSession);
+      }
+      if (historyData?.last_session) pushSession(historyData.last_session);
+      if (Array.isArray(exercise?.previous_sets) && exercise.previous_sets.length) {
+        pushSession({ date: exercise.previous_date || '', sets: exercise.previous_sets });
+      }
+      return sessions;
+    }
+
+    function renderAllExerciseQuickHistory(exercise) {
+      const exerciseId = Number(exercise?.exercise_id || 0);
+      if (!exerciseId) return null;
+      const history = getAllExerciseQuickHistoryState(exerciseId);
+      if (!history.loaded && !history.loading && !history.error) {
+        history.sessions = buildAllExerciseQuickSessions(exercise);
+      }
+      const sessions = history.sessions || [];
+      const idx = Math.max(0, Math.min(Number(history.index || 0), Math.max(0, sessions.length - 1)));
+      history.index = idx;
+      const current = sessions[idx] || null;
+      const strip = document.createElement('div');
+      strip.className = 'all-ex-history-strip';
+      strip.dataset.exerciseId = String(exerciseId);
+
+      const prev = document.createElement('button');
+      prev.type = 'button';
+      prev.className = 'all-ex-history-nav';
+      prev.textContent = '‹';
+      prev.setAttribute('aria-label', 'Более ранняя тренировка');
+      prev.disabled = !sessions.length || idx >= sessions.length - 1;
+
+      const next = document.createElement('button');
+      next.type = 'button';
+      next.className = 'all-ex-history-nav';
+      next.textContent = '›';
+      next.setAttribute('aria-label', 'Более новая тренировка');
+      next.disabled = !sessions.length || idx <= 0;
+
+      const main = document.createElement('div');
+      main.className = 'all-ex-history-main';
+      const kicker = document.createElement('div');
+      kicker.className = 'all-ex-history-kicker';
+      kicker.textContent = sessions.length > 1 ? `${idx + 1} из ${sessions.length}` : 'В прошлый раз';
+      const value = document.createElement('div');
+      value.className = 'all-ex-history-value';
+      const date = document.createElement('div');
+      date.className = 'all-ex-history-date';
+      if (history.loading && !current) {
+        value.textContent = 'Загружаем историю…';
+        date.textContent = 'Можно сразу добавлять подходы';
+      } else if (history.error && !current) {
+        value.textContent = 'История временно недоступна';
+        date.textContent = 'Попробуй открыть детали позже';
+      } else if (current) {
+        value.textContent = summarizePreviousSets(current.sets) || formatSetsCompact(current.sets) || '—';
+        date.textContent = current.date ? `Дата: ${current.date}` : 'Предыдущая тренировка';
+      } else {
+        value.textContent = 'Нет прошлых подходов';
+        date.textContent = 'Первый результат появится здесь';
+      }
+      main.append(kicker, value, date);
+      strip.append(prev, main, next);
+
+      prev.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        if (history.index < sessions.length - 1) {
+          history.index += 1;
+          openAllExerciseSheet(exercise);
+        }
+      });
+      next.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        if (history.index > 0) {
+          history.index -= 1;
+          openAllExerciseSheet(exercise);
+        }
+      });
+      return strip;
+    }
+
+    async function ensureAllExerciseQuickHistory(exercise) {
+      const exerciseId = Number(exercise?.exercise_id || 0);
+      if (!exerciseId) return;
+      const history = getAllExerciseQuickHistoryState(exerciseId);
+      if (history.loaded || history.loading || history.error) return;
+      history.loading = true;
+      try {
+        const data = await apiFetch(`/gymapi/exercise/${exerciseId}/history?range=all`, { silent: true });
+        history.sessions = buildAllExerciseQuickSessions(exercise, data);
+        history.loaded = true;
+        history.error = false;
+      } catch (_) {
+        history.error = true;
+      } finally {
+        history.loading = false;
+        const st = allExercisesState();
+        if (st.sheetOpen && Number(st.exercise?.exercise_id || 0) === exerciseId) {
+          const current = state.exercises.get(Number(st.exercise?.user_exercise_id || exercise.user_exercise_id)) || exercise;
+          openAllExerciseSheet(current);
+        }
+      }
+    }
+
     function openAllExerciseSheet(ex) {
       if (!ex?.user_exercise_id) return;
       closeAllExerciseSheet({ keepState: true });
       const st = allExercisesState();
       st.sheetOpen = true;
+      st.exercise = { ...(st.exercise || {}), ...ex };
       state.workout.expanded = Number(ex.user_exercise_id);
       const wrap = document.createElement('div');
       wrap.id = 'allExerciseFloatingModal';
       wrap.className = 'all-ex-sheet';
       wrap.addEventListener('click', (e) => { if (e.target === wrap) closeAllExerciseSheet(); });
+      const quickHistory = renderAllExerciseQuickHistory(ex);
+      if (quickHistory) wrap.appendChild(quickHistory);
       const card = document.createElement('div');
       card.className = `all-ex-sheet-card ${currentFrameCode() ? `free-frame ${currentFrameCode()}` : ''}`;
       card.appendChild(renderExerciseCard(ex));
@@ -6988,6 +7126,7 @@
       document.body.appendChild(wrap);
       document.body.classList.add('all-ex-modal-open');
       syncExpandedCards();
+      ensureAllExerciseQuickHistory(ex);
     }
 
     function initAllExercisesPinchZoom(_stage) {
