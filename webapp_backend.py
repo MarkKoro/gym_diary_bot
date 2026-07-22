@@ -2117,6 +2117,13 @@ async def _get_previous_done_date(user_id: int, exercise_id: int, exclude_sessio
         return row[0]
 
 
+def _sets_summary_tuple(rows: list[tuple]) -> tuple[int, int, int, float] | None:
+    if not rows:
+        return None
+    last = rows[-1]
+    return (len(rows), int(last[1] or 0), int(last[2] or 0), float(last[3] or 0))
+
+
 def _serialize_sets(rows: list[tuple]) -> list[dict]:
     return [
         {
@@ -2865,7 +2872,18 @@ async def exercise_context(
     previous_summary = _format_prev_summary(
         await db.get_last_session_summary(user_id, day_index, ue_id, iso_date, await get_active_training_system_id(user_id))
     )
-    previous_sets_rows = await db.fetch_last_session_sets(user_id, day_index, ue_id, iso_date, await get_active_training_system_id(user_id))
+    active_system_id = await get_active_training_system_id(user_id)
+    previous_sets_rows = await db.fetch_last_session_sets(user_id, day_index, ue_id, iso_date, active_system_id)
+    previous_sessions_rows = await db.fetch_previous_exercise_sessions(user_id, ue_id, iso_date, active_system_id, limit=20)
+    previous_sessions = [
+        {
+            "session_id": int(item["session_id"]),
+            "date": item.get("date"),
+            "sets": _serialize_sets(item.get("sets") or []),
+            "summary": _format_prev_summary(_sets_summary_tuple(item.get("sets") or [])),
+        }
+        for item in previous_sessions_rows
+    ]
     async with db.connect_db() as conn:
         completed_count = await db.count_completed_sessions_for_exercise(conn, user_id, exercise_id)
 
@@ -2880,6 +2898,7 @@ async def exercise_context(
         "previous_date": previous_date,
         "previous_summary": previous_summary,
         "previous_sets": _serialize_sets(previous_sets_rows),
+        "previous_sessions": previous_sessions,
         "completed_count": completed_count,
     }
 

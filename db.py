@@ -4703,6 +4703,70 @@ async def fetch_last_session_sets(user_id: int, day_index: int, ue_id: int, toda
         return await cur.fetchall()
 
 
+async def fetch_previous_exercise_sessions(user_id: int, ue_id: int, today: str, system_id: int | None = None, limit: int = 12):
+    async with connect_db() as db:
+        cur = await db.execute(
+            "SELECT exercise_id FROM user_exercises WHERE id=?",
+            (ue_id,),
+        )
+        row = await cur.fetchone()
+        if not row:
+            return []
+        exercise_id = int(row[0])
+        system_clause = ""
+        params: list = [int(user_id), exercise_id, today]
+        if system_id is not None:
+            system_clause = "AND COALESCE(s.system_id,0)=?"
+            params.append(int(system_id))
+        params.append(max(1, min(int(limit or 12), 50)))
+        cur = await db.execute(
+            f"""
+            WITH previous_sessions AS (
+                SELECT
+                    s.id AS session_id,
+                    s.date,
+                    st.user_exercise_id,
+                    MAX(st.set_no) AS last_set_no
+                FROM sessions s
+                JOIN sets st ON st.session_id=s.id AND st.is_warmup=0
+                JOIN user_exercises ue ON ue.id=st.user_exercise_id
+                WHERE s.user_id=?
+                  AND ue.exercise_id=?
+                  AND s.date<?
+                  {system_clause}
+                GROUP BY s.id, s.date, st.user_exercise_id
+                ORDER BY s.date DESC, s.id DESC
+                LIMIT ?
+            )
+            SELECT
+                ps.session_id,
+                ps.date,
+                st.set_no,
+                st.reps,
+                st.seconds,
+                st.weight_kg
+            FROM previous_sessions ps
+            JOIN sets st
+              ON st.session_id=ps.session_id
+             AND st.user_exercise_id=ps.user_exercise_id
+             AND st.is_warmup=0
+            ORDER BY ps.date DESC, ps.session_id DESC, st.set_no
+            """,
+            tuple(params),
+        )
+        grouped: list[dict] = []
+        by_session: dict[int, dict] = {}
+        for session_id, date, set_no, reps, seconds, weight in await cur.fetchall():
+            sid = int(session_id)
+            item = by_session.get(sid)
+            if item is None:
+                item = {"session_id": sid, "date": date, "sets": []}
+                by_session[sid] = item
+                grouped.append(item)
+            item["sets"].append((set_no, reps, seconds, weight))
+        return grouped
+
+
 async def fetch_day_sheet_exercise_data(
     user_id: int,
     session_id: int,
