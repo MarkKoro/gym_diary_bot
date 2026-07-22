@@ -3308,6 +3308,7 @@
       todayDraft: {},
       runningDraft: {},
       runningHistoryIndex: {},
+      todayHistoryIndex: {},
       workout: { expanded: null, doneIds: new Set(), order: [], animations: { completed: null, next: null } },
       actionQueues: new Map(),
       contexts: new Map(),
@@ -11391,6 +11392,16 @@
       state.runningHistoryIndex[ueId] = Math.max(0, Math.round(Number(value) || 0));
     }
 
+    function getTodayHistoryIndex(ueId) {
+      const idx = state.todayHistoryIndex?.[ueId];
+      return Number.isInteger(idx) && idx >= 0 ? idx : 0;
+    }
+
+    function setTodayHistoryIndex(ueId, value) {
+      state.todayHistoryIndex = state.todayHistoryIndex || {};
+      state.todayHistoryIndex[ueId] = Math.max(0, Math.round(Number(value) || 0));
+    }
+
     function setRunningDraftValue(ueId, field, value) {
       const draft = ensureRunningDraft(ueId);
       const num = Number(value);
@@ -12631,6 +12642,7 @@
           state.todayDraft = {};
           state.runningDraft = {};
           state.runningHistoryIndex = {};
+          state.todayHistoryIndex = {};
         }
         state.contexts = new Map();
         const sheet = await apiFetch(`/gymapi/day/${dayIndex}/sheet`);
@@ -15520,32 +15532,48 @@
       if (ctx.loading) { container.textContent = 'Загрузка…'; return; }
       if (ctx.error) { container.textContent = 'Ошибка связи'; return; }
       const data = ctx.data || {};
-      const hasPrev = data.previous_date || data.previous_summary || (data.previous_sets && data.previous_sets.length);
+      const sessions = Array.isArray(data.previous_sessions) && data.previous_sessions.length
+        ? data.previous_sessions
+        : ((data.previous_sets && data.previous_sets.length) ? [{ date: data.previous_date || '', summary: data.previous_summary || '', sets: data.previous_sets }] : []);
       const showPrevNote = data.previous_note && !data.current_note;
-      if (!hasPrev && !showPrevNote) {
+      if (!sessions.length && !showPrevNote) {
         container.textContent = 'Пока нет прошлых данных по этому упражнению.';
         return;
       }
-      if (hasPrev) {
+      if (sessions.length) {
+        const ueId = exercise.user_exercise_id;
+        const idx = Math.min(getTodayHistoryIndex(ueId), sessions.length - 1);
+        setTodayHistoryIndex(ueId, idx);
+        const selected = sessions[idx] || {};
+        const sets = Array.isArray(selected.sets) ? selected.sets : [];
+
         const title = document.createElement('div');
         title.className = 'history-title';
-        title.textContent = 'Прошлый раз';
+        title.textContent = idx === 0 ? 'Прошлый раз' : 'История упражнения';
         container.appendChild(title);
-        const fallbackSummary = formatSetsCompact(data.previous_sets || []);
-        if (data.previous_date || data.previous_summary || fallbackSummary) {
-          const line = document.createElement('div');
-          line.textContent = `${data.previous_date || '—'} — ${data.previous_summary || fallbackSummary || '—'}`;
-          container.appendChild(line);
+
+        const summaryLine = document.createElement('div');
+        const fallbackSummary = formatSetsCompact(sets);
+        summaryLine.textContent = `${selected.date || '—'} — ${selected.summary || fallbackSummary || '—'}`;
+        container.appendChild(summaryLine);
+
+        if (sessions.length > 1) {
+          const pager = buildHistoryPager(sessions.length, idx, (nextIdx) => {
+            setTodayHistoryIndex(ueId, nextIdx);
+            renderHistoryTab(exercise);
+          }, selected.date || '');
+          container.appendChild(pager);
         }
-        if (data.previous_sets && data.previous_sets.length) {
+
+        if (sets.length) {
           const table = document.createElement('table');
           table.className = 'history-table';
           const thead = document.createElement('thead');
-          thead.innerHTML = '<tr><th>№</th><th>повт</th><th>сек</th><th>кг</th></tr>';
+          thead.innerHTML = '<tr><th>Подход</th><th>Кг</th><th>Повторы</th><th>Сек</th></tr>';
           const tbody = document.createElement('tbody');
-          data.previous_sets.forEach((s) => {
+          sets.forEach((set, i) => {
             const row = document.createElement('tr');
-            row.innerHTML = `<td>${s.set_no}</td><td>${s.reps}</td><td>${s.seconds}</td><td>${s.weight_kg}</td>`;
+            row.innerHTML = `<td>${set.set_no || i + 1}</td><td>${set.weight_kg || 0}</td><td>${set.reps || 0}</td><td>${set.seconds || 0}</td>`;
             tbody.appendChild(row);
           });
           table.append(thead, tbody);
