@@ -899,7 +899,8 @@
       pointer-events: none;
       transition: opacity 0.2s ease;
     }
-    .sheet-backdrop.show { opacity: 1; pointer-events: auto; }
+    .sheet-backdrop:not(.show) { visibility: hidden; }
+    .sheet-backdrop.show { opacity: 1; pointer-events: auto; visibility: visible; }
     .sheet {
       width: 100%;
       max-width: 520px;
@@ -1006,17 +1007,16 @@
     [data-theme="dark"] .control-block.primary { background: rgba(110,168,255,0.08); }
     .control-head { display: flex; justify-content: space-between; align-items: center; font-size: 13px; color: var(--muted); }
     .control-value { font-size: 28px; font-weight: 800; text-align: center; letter-spacing: -0.01em; cursor: pointer; padding: 10px 12px; border-radius: 12px; border: 1px solid var(--border); background: var(--card); box-shadow: inset 0 1px 0 rgba(255,255,255,0.04); }
-    .inline-num-input{
-      width: 100%;
-      height: 40px;
-      border-radius: 12px;
-      border: 1px solid rgba(255,255,255,0.14);
-      background: rgba(255,255,255,0.06);
-      color: var(--tg-theme-text-color, #fff);
-      text-align: center;
-      font-size: 16px;
-      outline: none;
+    .control-value { min-width: 0; flex: 1; max-width: 180px; height: 56px; padding: 8px; }
+    .inline-num-input {
+      display: block; width: 100%; min-width: 0; height: 100%; padding: 0;
+      border: 0; border-radius: 0; background: transparent; color: var(--text);
+      text-align: center; font: inherit; line-height: 1; outline: none;
     }
+    .control-value:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
+    .circle-btn { flex-shrink: 0; }
+    input, textarea, select { scroll-margin-block: 20px; }
+    @media (pointer: coarse) { input, textarea, select { font-size: max(16px, 1em); } }
     .control-actions { display: flex; align-items: center; justify-content: center; gap: 16px; }
     .circle-btn { width: 48px; height: 48px; border-radius: 50%; border: 1px solid var(--border); background: var(--card); font-size: 22px; font-weight: 700; cursor: pointer; box-shadow: var(--shadow); color: var(--text); }
     .circle-btn:disabled { opacity: 0.55; cursor: not-allowed; box-shadow: none; }
@@ -2553,6 +2553,18 @@
       .all-ex-center { width: min(92vw, 390px); max-height: min(74vh, 540px); padding: 14px; }
       .all-ex-petals.columns { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     }
+    /* One viewport policy for all overlays, including Telegram's keyboard resize. */
+    body, .app { min-height: var(--stable-height, 100svh); }
+    .sheet-backdrop, .all-ex-sheet, .all-ex-modal { bottom: auto; top: var(--visual-top, 0px); height: var(--visual-height, 100%); }
+    .sheet-backdrop .sheet { max-height: 100%; overflow-y: auto; overscroll-behavior: contain; }
+    #sheet .sheet { max-height: min(760px, 100%); }
+    .ai-coach-fullscreen .sheet { height: 100%; max-height: 100%; }
+    .all-ex-sheet { justify-content: flex-start; overflow: hidden; }
+    .all-ex-history-strip { flex: 0 1 auto; min-height: 0; max-height: 32%; animation: none; }
+    .all-ex-sheet-card { flex: 0 1 auto; min-height: 0; max-height: 100%; margin-top: auto; animation: none; }
+    body.keyboard-open .sheet { transition: none; }
+    body.exercise-modal-open, body.all-ex-modal-open { overflow: hidden; overscroll-behavior: none; }
+    .exercise-card[aria-busy="true"] .workout-actions button { pointer-events: none; opacity: .65; }
   </style>
 </head>
 <body>
@@ -3306,6 +3318,9 @@
       completedDays: new Set(),
       exercises: new Map(),
       todayDraft: {},
+      draftDirty: {},
+      draftRevision: {},
+      completionActions: new Map(),
       runningDraft: {},
       runningHistoryIndex: {},
       todayHistoryIndex: {},
@@ -6625,12 +6640,16 @@
       if (Array.isArray(data.groups)) st.groups = data.groups;
       if (Array.isArray(data.done_today)) st.doneToday = data.done_today;
       if (Number.isFinite(Number(data.unfinished_count))) st.unfinishedCount = Number(data.unfinished_count || 0);
-      if (Array.isArray(st.unfinished) && Number(data.exercise_id || 0) > 0) {
+      if (Array.isArray(data.done_today) && Array.isArray(st.unfinished) && Number(data.exercise_id || 0) > 0
+          && data.done_today.some((item) => Number(item.exercise_id) === Number(data.exercise_id))) {
         const doneExerciseId = Number(data.exercise_id);
         st.unfinished = st.unfinished.filter((x) => Number(x.exercise_id) !== doneExerciseId);
       }
       syncAllExercisesHeaderButton?.();
-      updateAllExercisesDonePopover?.();
+      if (document.getElementById('allExercisesDonePopup')) {
+        closeAllExercisesDonePopup();
+        toggleAllExercisesDonePopup();
+      }
       if (options.render) renderAllExercises();
     }
 
@@ -6895,11 +6914,13 @@
     }
 
     function closeAllExerciseSheet(options = {}) {
+      flushInlineNumberInput().catch(() => {});
       document.getElementById('allExerciseFloatingModal')?.remove();
       document.body.classList.remove('all-ex-modal-open');
       const st = allExercisesState();
       st.sheetOpen = false;
       if (!options.keepState) {
+        st.exerciseRequestSeq += 1;
         st.selectedExerciseId = null;
         st.exercise = null;
         const expanded = Number(state.workout?.expanded || 0);
@@ -6911,6 +6932,7 @@
     }
 
     async function closeAllExerciseEditorToSheet() {
+      await flushInlineNumberInput();
       const ueId = Number(state.editor?.ueId || 0);
       if (!ueId) { closeEditor(); return; }
       if (state.editor?.noteTimer) {
@@ -7071,17 +7093,27 @@
         ev.stopPropagation();
         if (history.index < sessions.length - 1) {
           history.index += 1;
-          openAllExerciseSheet(exercise);
+          updateAllExerciseQuickHistory(exercise);
         }
       });
       next.addEventListener('click', (ev) => {
         ev.stopPropagation();
         if (history.index > 0) {
           history.index -= 1;
-          openAllExerciseSheet(exercise);
+          updateAllExerciseQuickHistory(exercise);
         }
       });
       return strip;
+    }
+
+    function updateAllExerciseQuickHistory(exercise) {
+      const modal = document.getElementById('allExerciseFloatingModal');
+      if (!modal) return;
+      const strip = renderAllExerciseQuickHistory(exercise);
+      if (!strip) return;
+      const previous = modal.querySelector('.all-ex-history-strip');
+      if (previous) previous.replaceWith(strip);
+      else modal.prepend(strip);
     }
 
     async function ensureAllExerciseQuickHistory(exercise) {
@@ -7102,7 +7134,7 @@
         const st = allExercisesState();
         if (st.sheetOpen && Number(st.exercise?.exercise_id || 0) === exerciseId) {
           const current = state.exercises.get(Number(st.exercise?.user_exercise_id || exercise.user_exercise_id)) || exercise;
-          openAllExerciseSheet(current);
+          updateAllExerciseQuickHistory(current);
         }
       }
     }
@@ -7220,18 +7252,21 @@
     async function loadAllExercisesGroups({ force = false } = {}) {
       const st = allExercisesState();
       const now = Date.now();
-      if (!force && st.groupsLoadPromise) return st.groupsLoadPromise;
+      if (st.groupsLoadPromise) return st.groupsLoadPromise;
       if (!force && st.groups?.length && (now - Number(st.groupsLoadedAt || 0) < 15_000)) {
         syncAllExercisesHeaderButton();
         return;
       }
-      st.loading = true;
-      if (!st.sheetOpen) renderAllExercises();
+      const version = st.metaVersion;
+      const cold = !st.groups.length;
+      st.loading = cold;
+      if (cold && !st.sheetOpen) renderAllExercises();
       const date = encodeURIComponent(getAllExercisesDate());
       const request = apiFetch(`/gymapi/all_exercises/groups?date=${date}`, { silent: true });
       st.groupsLoadPromise = request;
       try {
         const groupsData = await request;
+        if (version !== st.metaVersion) return;
         st.groups = groupsData.groups || [];
         st.doneToday = groupsData.done_today || [];
         st.unfinishedCount = Number(groupsData.unfinished_count || 0);
@@ -7292,7 +7327,8 @@
         };
         state.exercises.set(ueId, normalizedExercise);
         state.workout.expanded = ueId;
-        openAllExerciseSheet(normalizedExercise);
+        if (!cachedExercise || !st.sheetOpen) openAllExerciseSheet(normalizedExercise);
+        else { updateCardSummary(ueId); if (!isRunningExercise(normalizedExercise)) renderWorkoutBody(ueId); }
       } catch (e) {
         if (seq === st.exerciseRequestSeq) {
           invalidateAllExerciseSessionCache(numericExerciseId);
@@ -7304,9 +7340,20 @@
 
     async function refreshAllExerciseSession({ force = true } = {}) {
       const st = allExercisesState();
-      if (!st.selectedExerciseId) return;
-      if (force) invalidateAllExerciseSessionCache(st.selectedExerciseId);
-      await openAllExercise(st.selectedExerciseId);
+      const exerciseId = st.selectedExerciseId;
+      if (!exerciseId || hasActiveWorkoutInteraction()) return;
+      const seq = st.exerciseRequestSeq;
+      const version = state.lifecycle.dataVersion || 0;
+      const data = await apiFetch(`/gymapi/all_exercises/exercise/${exerciseId}/session?date=${encodeURIComponent(getAllExercisesDate())}`, { silent: true });
+      if (seq !== st.exerciseRequestSeq || exerciseId !== st.selectedExerciseId || !st.sheetOpen || hasActiveWorkoutInteraction() || version !== (state.lifecycle.dataVersion || 0)) return;
+      const ueId = Number(data.user_exercise_id);
+      const exercise = { ...state.exercises.get(ueId), ...data, source: 'all_exercises', free_workout: true, day_index: 0 };
+      st.exercise = exercise;
+      state.exercises.set(ueId, exercise);
+      invalidateAllExerciseSessionCache(exerciseId);
+      updateCardSummary(ueId);
+      // Preserve the current inputs, focus and card scroll position.
+      if (!isRunningExercise(exercise)) renderWorkoutBody(ueId);
     }
 
     async function refreshAllExercisesMeta({ render = false } = {}) {
@@ -7316,8 +7363,7 @@
       st.metaRefreshInFlight = true;
       try {
         const data = await apiFetch(`/gymapi/all_exercises/groups?date=${encodeURIComponent(getAllExercisesDate())}`, { silent: true });
-        if (version !== Number(st.metaVersion || 0)) return;
-        applyAllExercisesPayload(data, { render: false });
+        if (version === Number(st.metaVersion || 0)) applyAllExercisesPayload(data, { render: false });
       } catch (_) {
       } finally {
         st.metaRefreshInFlight = false;
@@ -8774,7 +8820,7 @@
     async function ensureSettingsOverviewLoaded({ refreshExercises = false } = {}) {
       if (state.settings.loaded || state.settings.loading) return;
       await loadSettingsOverview();
-      if (refreshExercises && state.currentRoute === 'today') {
+      if (refreshExercises && state.currentRoute === 'today' && !hasActiveWorkoutInteraction()) {
         renderExercises(Array.from(state.exercises.values()));
       }
     }
@@ -10003,6 +10049,7 @@
     }
 
     function applyRoute(route) {
+      flushInlineNumberInput().catch(() => {});
       const normalized = ROUTE_TITLES[route] ? route : 'today';
       if (state.acting.userId && ['settings', 'achievements', 'subscription', 'teams', 'allExercises'].includes(normalized)) {
         toast('Раздел недоступен в режиме тренера');
@@ -10011,6 +10058,7 @@
       }
       state.currentRoute = normalized;
       if (normalized !== 'allExercises') {
+        closeAllExerciseSheet();
         closeAllExercisesDonePopup();
         state.allExercises.sessionRequestKey = '';
         state.allExercises.sessionRequestPromise = null;
@@ -10113,6 +10161,15 @@
     }
 
     function handleBackAction() {
+      if (state.editor.open) {
+        runUiAction('Не удалось сохранить изменения', async () => {
+          await flushInlineNumberInput();
+          if (state.editor.source === 'all_exercises') await closeAllExerciseEditorToSheet();
+          else closeEditor();
+        });
+        return;
+      }
+      if (state.allExercises.sheetOpen) { closeAllExerciseSheet(); return; }
       if (state.tour.active) { stopTour({ completed: true }); return; }
       const timerSheetOpen = document.getElementById('timerSheet')?.classList.contains('show');
       if (timerSheetOpen) { closeTimerSheet(); return; }
@@ -10803,6 +10860,7 @@
         if (!headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
       }
 
+      const canRetry = ['GET', 'HEAD'].includes(String(init.method).toUpperCase());
       const isAbortLikeError = (err) => err?.name === 'AbortError' || String(err?.message || '').toLowerCase().includes('abort') || String(err?.message || '').toLowerCase().includes('timeout');
       const waitUntilFetchCanRetry = () => new Promise((resolve) => {
         if (document.visibilityState === 'visible' && navigator.onLine !== false) { resolve(); return; }
@@ -10840,7 +10898,7 @@
       try {
         res = await fetchOnce();
       } catch (e) {
-        if (isAbortLikeError(e)) {
+        if (canRetry && isAbortLikeError(e)) {
           await waitUntilFetchCanRetry();
           try {
             res = await fetchOnce();
@@ -11033,22 +11091,28 @@
     }
 
     function setExerciseBusy(ueId, busy) {
-      getExerciseCards(ueId).forEach((card) => card.classList.toggle('busy', busy));
-      if (state.editor.ueId === ueId) {
-        document.querySelectorAll('#sheet button, #sheet .circle-btn, #sheet .chip').forEach((btn) => {
-          btn.disabled = busy;
-        });
-      }
+      // A network write must not prevent switching between weight and reps.
+      getExerciseCards(ueId).forEach((card) => card.setAttribute('aria-busy', String(busy)));
     }
 
     function queueExerciseAction(ueId, actionFn) {
       const last = state.actionQueues.get(ueId) || Promise.resolve();
       const run = async () => {
+        state.lifecycle.dataVersion = Number(state.lifecycle.dataVersion || 0) + 1;
         setExerciseBusy(ueId, true);
-        try { await actionFn(); } finally { setExerciseBusy(ueId, false); }
+        try { return await actionFn(); }
+        finally {
+          state.lifecycle.dataVersion += 1;
+          setExerciseBusy(ueId, false);
+        }
       };
       const next = last.then(run, run);
-      state.actionQueues.set(ueId, next.catch(() => {}));
+      const settled = next.catch(() => {});
+      state.actionQueues.set(ueId, settled);
+      settled.then(() => {
+        if (state.actionQueues.get(ueId) === settled) state.actionQueues.delete(ueId);
+        schedulePendingRefresh();
+      });
       return next;
     }
 
@@ -11126,10 +11190,8 @@
           if (state.editor.open && state.editor.ueId === ueId) renderEditor();
           scheduleAllExercisesMetaRefresh();
         } else {
-          renderExercises(Array.from(state.exercises.values()));
-          if (state.editor.open && state.editor.ueId === ueId) {
-            renderEditor();
-          }
+          if (!hasActiveWorkoutInteraction()) renderExercises(Array.from(state.exercises.values()));
+          if (state.editor.open && state.editor.ueId === ueId) renderEditor();
         }
         setNoteStatus('Сохранено ✅', true);
       } catch (e) {
@@ -11197,7 +11259,7 @@
         return;
       }
       const previousSets = ctx.data?.previous_sets || [];
-      if (previousSets.length) {
+      if (previousSets.length && !exercise.sets?.length && !state.draftDirty[exercise.user_exercise_id]) {
         const latest = previousSets[previousSets.length - 1];
         applyDraftFromSet(exercise.user_exercise_id, latest);
       }
@@ -11255,11 +11317,33 @@
       return sets.length ? sets[sets.length - 1] : null;
     }
 
+    function workoutStorageScope() {
+      return `${location.pathname}:${state.userId || 'guest'}:${state.acting?.userId || 'self'}:${state.settings.systems.activeSystemId || 0}`;
+    }
+
     function getLastValuesCacheKey(exercise) {
-      const exerciseId = Number(exercise?.exercise_id || 0);
-      if (exerciseId > 0) return `gd_last_vals_ex_${exerciseId}`;
-      const ueId = Number(exercise?.user_exercise_id || 0);
-      return `gd_last_vals_${ueId}`;
+      return `gd_last_vals_v2:${workoutStorageScope()}:${exercise.exercise_id || exercise.user_exercise_id}`;
+    }
+
+    function workoutDraftKey(ueId, kind) {
+      const ex = state.exercises.get(Number(ueId));
+      const source = ex?.source === 'all_exercises' || ex?.free_workout ? 'free' : state.dayIndex;
+      return `gd_draft_v1:${workoutStorageScope()}:${source}:${source === 'free' ? getAllExercisesDate() : getIsoDate()}:${ueId}:${kind}`;
+    }
+
+    function readWorkoutDraft(ueId, kind) {
+      try {
+        const item = JSON.parse(sessionStorage.getItem(workoutDraftKey(ueId, kind)) || 'null');
+        if (!item || Date.now() - item.savedAt > 12 * 60 * 60 * 1000) return null;
+        const fields = kind === 'running' ? ['distance_km', 'duration_ms', 'duration_sec', 'calories', 'heart_rate'] : ['weight_kg', 'reps', 'seconds'];
+        if (!fields.every((field) => Number.isFinite(item.values?.[field]) && item.values[field] >= 0)) return null;
+        return Object.fromEntries(fields.map((field) => [field, item.values[field]]));
+      } catch (_) { return null; }
+    }
+
+    function persistWorkoutDraft(ueId, kind, values) {
+      try { sessionStorage.setItem(workoutDraftKey(ueId, kind), JSON.stringify({ savedAt: Date.now(), values })); }
+      catch (_) { /* Storage can be unavailable inside a WebView; memory still works. */ }
     }
 
     function getCachedLastValues(exercise) {
@@ -11317,7 +11401,9 @@
       const exercise = state.exercises.get(ueId);
       if (!exercise) return { weight_kg: 0, reps: 0, seconds: 0 };
       if (!state.todayDraft[ueId]) {
-        state.todayDraft[ueId] = deriveDraft(exercise);
+        const saved = readWorkoutDraft(ueId, 'sets');
+        state.todayDraft[ueId] = saved || deriveDraft(exercise);
+        if (saved) state.draftDirty[ueId] = Object.keys(saved).some((key) => saved[key] !== Number(getLastSet(exercise)?.[key] || 0));
       }
       return state.todayDraft[ueId];
     }
@@ -11331,6 +11417,7 @@
     function updateDraft(ueId, patch) {
       const current = ensureDraft(ueId);
       state.todayDraft[ueId] = { ...current, ...patch };
+      persistWorkoutDraft(ueId, 'sets', state.todayDraft[ueId]);
     }
 
     function applyDraftFromSet(ueId, set) {
@@ -11355,7 +11442,7 @@
       if (!state.runningDraft[ueId]) {
         const running = exercise.running || {};
         const durationMs = normalizeRunningDurationMs(running);
-        state.runningDraft[ueId] = {
+        state.runningDraft[ueId] = readWorkoutDraft(ueId, 'running') || {
           distance_km: Number(running.distance_km || running.distance || 0),
           duration_sec: Math.max(0, Math.round(durationMs / 1000)),
           duration_ms: durationMs,
@@ -11379,6 +11466,7 @@
       const sec = Math.max(0, Math.round(safeMs / 1000));
       const draft = ensureRunningDraft(ueId);
       state.runningDraft[ueId] = { ...draft, duration_ms: safeMs, duration_sec: sec };
+      persistWorkoutDraft(ueId, 'running', state.runningDraft[ueId]);
       return safeMs;
     }
 
@@ -11413,6 +11501,7 @@
         ? Math.max(0, Math.round(raw * 1000) / 1000)
         : Math.max(0, Math.min(Math.round(raw), field === 'heart_rate' ? 260 : Number.MAX_SAFE_INTEGER));
       state.runningDraft[ueId] = { ...draft, [field]: safe };
+      persistWorkoutDraft(ueId, 'running', state.runningDraft[ueId]);
       return safe;
     }
 
@@ -11459,7 +11548,12 @@
     function setDraftValue(ueId, field, value) {
       const next = Math.max(0, Number(value) || 0);
       const rounded = field === 'weight_kg' ? Math.round(next * 10) / 10 : Math.round(next);
-      const draft = { ...ensureDraft(ueId), [field]: rounded };
+      const previous = ensureDraft(ueId);
+      if (Number(previous[field] || 0) !== rounded) {
+        state.draftDirty[ueId] = true;
+        state.draftRevision[ueId] = (state.draftRevision[ueId] || 0) + 1;
+      }
+      const draft = { ...previous, [field]: rounded };
       updateDraft(ueId, draft);
       const exercise = state.exercises.get(ueId);
       if (exercise) saveCachedLastValues(exercise, draft);
@@ -11496,104 +11590,103 @@
       if (state.editor.open && state.editor.ueId === ueId) renderEditor();
     }
 
-    function beginInlineNumberEdit(containerEl, {
-      value,
-      min = 0,
-      max = 9999,
-      step = 1,
-      decimals = 0,
-      inputMode = 'numeric',
-      onCommit,
-    }) {
-      if (!containerEl) return;
-      const prevText = containerEl.textContent;
-      let finalized = false;
-
-      const input = document.createElement('input');
-      input.type = 'number';
-      input.inputMode = inputMode;
-      input.step = String(step);
-      input.min = String(min);
-      input.max = String(max);
-      input.value = (value ?? 0);
-      input.pattern = '[0-9]*';
-      input.enterKeyHint = 'done';
-
-      input.className = 'inline-num-input';
-      containerEl.textContent = '';
-      containerEl.appendChild(input);
-
-      const commit = ({ defer = false } = {}) => {
-        if (finalized) return;
-        finalized = true;
-        const run = () => {
-          let v = Number(input.value);
-          if (Number.isNaN(v)) v = Number(value || 0);
-          v = Math.min(max, Math.max(min, v));
-          const k = Math.pow(10, decimals);
-          v = Math.round(v * k) / k;
-
-          containerEl.textContent = prevText; // will be re-rendered anyway
-          onCommit?.(v);
-        };
-        if (defer) setTimeout(run, 0);
-        else run();
-      };
-
-      const cancel = () => {
-        if (finalized) return;
-        finalized = true;
-        containerEl.textContent = prevText;
-      };
-
-      input.addEventListener('click', (e) => e.stopPropagation());
-      input.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter') commit();
-        if (e.key === 'Escape') cancel();
-      });
-      input.addEventListener('blur', () => commit({ defer: true }));
-
-      input.focus();
-      input.select();
-    }
-
+    // Keep native inputs mounted: blur must never remove the next tap target.
     function attachInlineNumberHandler(el, getOptions) {
       if (!el || typeof getOptions !== 'function') return;
-
-      const startEdit = (event) => {
-        if (event) {
-          event.preventDefault();
-          event.stopPropagation();
-        }
-        if (el.querySelector('input.inline-num-input')) return;
+      const initial = getOptions();
+      const input = document.createElement('input');
+      input.type = 'text';
+      input.inputMode = initial.inputMode || 'numeric';
+      input.enterKeyHint = 'done';
+      input.autocomplete = 'off';
+      input.className = 'inline-num-input';
+      input.setAttribute('aria-label', initial.label || 'Значение');
+      input.value = String(initial.value ?? 0);
+      el.removeAttribute('role');
+      el.removeAttribute('tabindex');
+      el.textContent = '';
+      el.appendChild(input);
+      let dirty = false;
+      let editVersion = 0;
+      let saving = false;
+      let pending = Promise.resolve();
+      let focusValue = input.value;
+      const parse = () => {
         const opts = getOptions();
-        beginInlineNumberEdit(el, opts);
+        const raw = input.value.trim().replace(',', '.');
+        const num = raw === '' ? NaN : Number(raw);
+        const value = Number.isFinite(num) ? num : Number(opts.value || 0);
+        const k = 10 ** (opts.decimals || 0);
+        return Math.round(Math.min(opts.max ?? 9999, Math.max(opts.min ?? 0, value)) * k) / k;
       };
-
-      el.addEventListener('pointerdown', startEdit);
-      el.addEventListener('mousedown', startEdit);
-      el.addEventListener('touchstart', startEdit, { passive: false });
-      el.addEventListener('click', startEdit);
-
-      el.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter' || e.key === ' ') {
-          e.preventDefault();
-          startEdit();
+      input._syncValue = () => {
+        if (!dirty && !saving && document.activeElement !== input) input.value = String(getOptions().value ?? 0);
+      };
+      input._commit = () => {
+        if (!dirty) return pending;
+        const value = parse();
+        dirty = false;
+        input.value = String(value);
+        const version = ++editVersion;
+        saving = true;
+        try { pending = Promise.resolve(getOptions().onCommit?.(value)); }
+        catch (error) { pending = Promise.reject(error); }
+        pending.then(() => {
+          if (version === editVersion) saving = false;
+        }, () => {
+          if (version === editVersion) { saving = false; dirty = true; }
+          toast('Значение не сохранилось. Проверь связь и повтори действие.');
+        });
+        return pending;
+      };
+      input.addEventListener('focus', () => { focusValue = input.value; });
+      input.addEventListener('input', () => {
+        editVersion += 1;
+        saving = false;
+        dirty = true;
+        const raw = input.value.trim().replace(',', '.');
+        if (raw !== '' && Number.isFinite(Number(raw))) getOptions().onInput?.(parse());
+      });
+      input.addEventListener('click', (event) => event.stopPropagation());
+      input.addEventListener('blur', () => { input._commit().catch(() => {}); });
+      input.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter') { event.preventDefault(); input.blur(); }
+        if (event.key === 'Escape') {
+          input.value = focusValue;
+          dirty = true;
+          getOptions().onInput?.(parse());
+          input.blur();
         }
       });
     }
 
     async function flushInlineNumberInput() {
-      const input = document.querySelector('input.inline-num-input');
-      if (!input) return;
-      input.blur();
-      await new Promise((resolve) => setTimeout(resolve, 0));
+      // Commit synchronously before any navigation can change editor/source IDs.
+      const inputs = [...document.querySelectorAll('input.inline-num-input')].filter((input) => {
+        if (input.closest('#sheet')) return state.editor.open;
+        return !input.closest('.screen:not(.active)');
+      });
+      const pending = inputs.map((input) => input._commit?.());
+      if (document.activeElement?.matches('input.inline-num-input')) document.activeElement.blur();
+      await Promise.all(pending);
+    }
+
+    function syncNumberControls(container) {
+      container.querySelectorAll('input.inline-num-input').forEach((input) => input._syncValue?.());
     }
 
     function renderWorkoutControls(container, exercise) {
       const ueId = exercise.user_exercise_id;
       const draft = ensureDraft(ueId);
       const isDuration = isTimeBasedExercise(exercise);
+      const controlsKey = `${ueId}:${isDuration}`;
+      if (container.dataset.controlsKey === controlsKey && container.querySelector('.inline-num-input')) {
+        syncNumberControls(container);
+        const remove = container.querySelector('[data-remove-set]');
+        if (remove) remove.disabled = !(exercise.sets || []).length;
+        return;
+      }
+      container.dataset.controlsKey = controlsKey;
       container.innerHTML = '';
 
       const controls = document.createElement('div');
@@ -11608,18 +11701,15 @@
         valueEl.setAttribute('role', 'button');
         valueEl.style.cursor = 'text';
         attachInlineNumberHandler(valueEl, () => ({
-          value: Number(draft[field] || 0),
+          label,
+          value: Number(ensureDraft(ueId)[field] || 0),
           min: 0,
           max: field === 'weight_kg' ? 500 : (field === 'seconds' ? 3600 : 200),
           step: 1,
           decimals: field === 'weight_kg' ? 1 : 0,
           inputMode: field === 'weight_kg' ? 'decimal' : 'numeric',
-          onCommit: (next) => {
-            const current = Number(draft[field] || 0);
-            if (next === current) return;
-            setDraftValue(ueId, field, next);
-            renderWorkoutBody(ueId);
-          },
+          onInput: (next) => setDraftValue(ueId, field, next),
+          onCommit: (next) => setDraftValue(ueId, field, next),
         }));
         const actions = document.createElement('div'); actions.className = 'control-actions';
         const minus = document.createElement('button'); minus.type = 'button'; minus.className = 'circle-btn'; minus.textContent = '−';
@@ -11642,10 +11732,11 @@
       const actionsRow = document.createElement('div');
       actionsRow.className = 'workout-actions';
       const addBtn = document.createElement('button'); addBtn.type = 'button'; addBtn.className = 'btn primary'; addBtn.textContent = 'Добавить подход';
-      addBtn.addEventListener('click', (ev) => { ev.stopPropagation(); handleWorkoutAdd(exercise); });
+      addBtn.addEventListener('click', (ev) => { ev.stopPropagation(); handleWorkoutAdd(state.exercises.get(ueId) || exercise); });
       const removeBtn = document.createElement('button'); removeBtn.type = 'button'; removeBtn.className = 'btn'; removeBtn.textContent = 'Удалить подход';
+      removeBtn.dataset.removeSet = '';
       removeBtn.disabled = !(exercise.sets || []).length;
-      removeBtn.addEventListener('click', (ev) => { ev.stopPropagation(); handleWorkoutRemove(exercise); });
+      removeBtn.addEventListener('click', (ev) => { ev.stopPropagation(); handleWorkoutRemove(state.exercises.get(ueId) || exercise); });
       const doneBtn = document.createElement('button'); doneBtn.type = 'button'; doneBtn.className = 'outline-btn done-btn'; doneBtn.textContent = '✅ Готово';
       doneBtn.addEventListener('click', (ev) => { ev.stopPropagation(); runUiAction('Не удалось отметить упражнение выполненным', () => handleExerciseDone(ueId)); });
       const detailsBtn = document.createElement('button'); detailsBtn.type = 'button'; detailsBtn.className = 'outline-btn'; detailsBtn.textContent = 'ℹ️ Детали';
@@ -11699,6 +11790,7 @@
         const input = document.createElement('input');
         input.type = 'number';
         input.className = 'control-input';
+        input.setAttribute('aria-label', label);
         input.inputMode = opts.inputMode || 'decimal';
         if (opts.step) input.step = String(opts.step);
         if (opts.min !== undefined) input.min = String(opts.min);
@@ -11885,14 +11977,18 @@
     async function handleExerciseDone(ueId) {
       await flushInlineNumberInput();
       const source = getExerciseActionSource(ueId);
-      if (source === 'all_exercises') return handleAllExerciseDone(ueId);
-      return handleTodayExerciseDone(ueId);
+      if (state.completionActions.has(ueId)) return state.completionActions.get(ueId);
+      const action = source === 'all_exercises' ? handleAllExerciseDone(ueId) : handleTodayExerciseDone(ueId);
+      state.completionActions.set(ueId, action);
+      try { return await action; }
+      finally { state.completionActions.delete(ueId); }
     }
 
     async function handleTodayExerciseDone(ueId) {
       if (!state.dayIndex) return;
       const exercise = state.exercises.get(ueId);
-      if (exercise && !isRunningExercise(exercise) && (exercise.sets?.length || 0) === 0) {
+      ensureDraft(ueId);
+      if (exercise && !isRunningExercise(exercise) && ((exercise.sets?.length || 0) === 0 || state.draftDirty[ueId])) {
         const draft = ensureDraft(ueId);
         const hasDraftData = Number(draft.weight_kg || 0) > 0 || Number(draft.reps || 0) > 0 || Number(draft.seconds || 0) > 0;
         if (hasDraftData) {
@@ -11913,7 +12009,8 @@
       if (nextUeId) scrollExerciseIntoView(nextUeId);
       try {
         const query = state.dateIso ? `?date=${state.dateIso}` : '';
-        const data = await apiFetch(`/gymapi/day/${state.dayIndex}/exercise/${ueId}/done${query}`, { method: 'POST' });
+        const doneUrl = `/gymapi/day/${state.dayIndex}/exercise/${ueId}/done${query}`;
+        const data = await queueExerciseAction(ueId, () => apiFetch(doneUrl, { method: 'POST' }));
         if (data?.completed_days) state.completedDays = new Set((data.completed_days || []).map(Number));
         const current = state.exercises.get(ueId);
         if (current) state.exercises.set(ueId, { ...current, is_done: true });
@@ -11936,7 +12033,8 @@
     async function handleAllExerciseDone(ueId) {
       const exercise = state.exercises.get(Number(ueId));
       if (!exercise) return;
-      if (!isRunningExercise(exercise) && (exercise.sets?.length || 0) === 0) {
+      ensureDraft(ueId);
+      if (!isRunningExercise(exercise) && ((exercise.sets?.length || 0) === 0 || state.draftDirty[ueId])) {
         const draft = ensureDraft(ueId);
         const hasDraftData = Number(draft.weight_kg || 0) > 0 || Number(draft.reps || 0) > 0 || Number(draft.seconds || 0) > 0;
         if (hasDraftData) {
@@ -11963,6 +12061,7 @@
         st.exercises = st.exercises.map((item) => Number(item.exercise_id) !== Number(exercise.exercise_id) ? item : ({ ...item, is_done_today: true, unfinished_today: false, last_date: data?.date || getAllExercisesDate(), has_history: true, last_activity_at: data?.date || getAllExercisesDate() }));
       }
       bumpAllExercisesMetaVersion();
+      invalidateAllExerciseSessionCache(exercise.exercise_id);
       applyAllExercisesPayload(data, { render: false });
       const wasUnfinishedView = st.view === 'unfinished' || st.previousView === 'unfinished';
       if (Array.isArray(st.unfinished)) {
@@ -12016,7 +12115,7 @@
         await queueExerciseAction(ueId, async () => {
           const data = await addSet(ueId, { payload, selectLast: false, toastOnSave: false });
           const latest = getLastSet({ sets: data.sets || [] });
-          applyDraftFromSet(ueId, latest || payload);
+          if (!state.draftDirty[ueId]) applyDraftFromSet(ueId, latest || payload);
         });
       } catch (e) {
         toast('Ошибка связи. Попробуй ещё раз.');
@@ -12091,6 +12190,10 @@
             const doneIds = state.workout.doneIds instanceof Set ? state.workout.doneIds : new Set();
             doneIds.add(ueId);
             state.workout.doneIds = doneIds;
+            const current = state.exercises.get(ueId);
+            if (current) state.exercises.set(ueId, { ...current, is_done: true });
+            state.workout.expanded = null;
+            renderExercises([...state.exercises.values()]);
           }
           if (data.completed_days && getExerciseActionSource(ueId) !== 'all_exercises') {
             state.completedDays = new Set((data.completed_days || []).map(Number));
@@ -12157,7 +12260,7 @@
       const card = document.createElement('div');
       card.className = 'card exercise-card';
       card.dataset.ueid = exercise.user_exercise_id;
-      const isDone = state.workout.doneIds?.has(exercise.user_exercise_id);
+      const isDone = Boolean(exercise.is_done || exercise.is_done_today || state.workout.doneIds?.has(exercise.user_exercise_id));
       const isDeleteMode = state.manage.mode === 'delete';
       if (isDone) {
         card.classList.add('is-done');
@@ -12487,7 +12590,7 @@
       const exercise = state.exercises.get(ueId);
       if (!exercise) return;
       exercise.sets = sets;
-      applyDraftFromSet(ueId, getLastSet(exercise));
+      if (!state.draftDirty[ueId]) applyDraftFromSet(ueId, getLastSet(exercise));
       updateCardSummary(ueId);
       if (state.editor.open && state.editor.ueId === ueId) {
         const lastSet = sets[sets.length - 1];
@@ -12508,6 +12611,7 @@
     async function addSet(ueId, opts = {}) {
       triggerHaptic();
       const payload = opts.payload || { ...ensureDraft(ueId) };
+      const draftRevision = state.draftRevision[ueId] || 0;
       const exercise = state.exercises.get(ueId);
       const prevSets = exercise ? [...exercise.sets] : null;
       const optimisticNo = (prevSets?.[prevSets.length - 1]?.set_no || 0) + 1;
@@ -12518,6 +12622,7 @@
       }
       try {
       const data = await apiFetch(getEditorActionUrl(ueId, 'set/add', getExerciseActionSource(ueId) === 'all_exercises' ? getAllExercisesDate() : getIsoDate()), { method: 'POST', body: JSON.stringify(payload) });
+        if ((state.draftRevision[ueId] || 0) === draftRevision) state.draftDirty[ueId] = false;
         applySetsUpdate(ueId, data.sets);
         const last = data.sets[data.sets.length - 1];
         if (opts.selectLast !== false) {
@@ -12547,61 +12652,6 @@
       return data;
     }
 
-    async function ensureSetExists(ueId) {
-      const exercise = state.exercises.get(ueId);
-      if (!exercise) return null;
-      if (exercise.sets.length === 0) {
-        await addSet(ueId, { toastOnSave: false });
-      }
-      const updated = state.exercises.get(ueId);
-      const last = updated?.sets[updated.sets.length - 1];
-      return last ? last.set_no : null;
-    }
-
-    async function incSet(ueId, field, delta) {
-      const exercise = state.exercises.get(ueId);
-      if (!exercise) return;
-      let targetSet = state.editor.selectedSet;
-      if (!targetSet || !exercise.sets.find((s) => s.set_no === targetSet)) {
-        targetSet = exercise.sets[exercise.sets.length - 1]?.set_no || null;
-      }
-      if (!targetSet) {
-        targetSet = await ensureSetExists(ueId);
-      }
-      if (!targetSet) return;
-      const data = await apiFetch(getEditorActionUrl(ueId, 'set/inc_last', getExerciseActionSource(ueId) === 'all_exercises' ? getAllExercisesDate() : getIsoDate()), {
-        method: 'POST',
-        body: JSON.stringify({ field, delta, set_no: targetSet }),
-      });
-      applySetsUpdate(ueId, data.sets);
-      if (getExerciseActionSource(ueId) === 'all_exercises') scheduleAllExercisesMetaRefresh();
-      toast('Сохранено');
-    }
-
-    async function setSelectedSetValue(field, value) {
-      const exercise = state.exercises.get(state.editor.ueId);
-      if (!exercise) return;
-      let selected = exercise.sets.find((s) => s.set_no === state.editor.selectedSet) || null;
-      if (!selected) {
-        const ensured = await ensureSetExists(state.editor.ueId);
-        if (!ensured) return;
-        state.editor.selectedSet = ensured;
-        const updated = state.exercises.get(state.editor.ueId);
-        selected = updated?.sets.find((s) => s.set_no === ensured) || null;
-      }
-      if (!selected) return;
-
-      const current = field === 'kg' ? Number(selected.weight_kg || 0)
-        : field === 'reps' ? Number(selected.reps || 0)
-          : Number(selected.seconds || 0);
-      const normalized = field === 'kg'
-        ? Math.round(Math.max(0, Number(value) || 0) * 10) / 10
-        : Math.max(0, Math.round(Number(value) || 0));
-      const delta = normalized - current;
-      if (delta === 0) { renderEditor(); return; }
-      await incSet(state.editor.ueId, field, delta);
-    }
-
     async function completeDay() {
       if (!state.dayIndex && !isAllExercisesEditorContext()) return;
       try {
@@ -12627,51 +12677,56 @@
       }
     }
 
-    async function loadSheet(dayIndex) {
+    async function loadSheet(dayIndex, { background = false } = {}) {
+      if (!dayIndex) return;
       const shell = document.getElementById('todayShell');
-      shell?.classList.add('switching');
-      const prevDay = state.dayIndex;
+      const requestSeq = state.lifecycle.sheetRequestSeq = (state.lifecycle.sheetRequestSeq || 0) + 1;
+      const version = state.lifecycle.dataVersion || 0;
+      const scope = workoutStorageScope();
+      if (!background) {
+        await flushInlineNumberInput();
+        shell?.classList.add('switching');
+      }
       try {
-        const dayChanged = prevDay !== dayIndex;
+        const sheet = await apiFetch(`/gymapi/day/${dayIndex}/sheet`, { silent: background });
+        if (requestSeq !== state.lifecycle.sheetRequestSeq || scope !== workoutStorageScope()) return;
+        if (background && ((state.lifecycle.dataVersion || 0) !== version || hasActiveWorkoutInteraction() || state.currentRoute !== 'today')) return;
+        const dayChanged = Number(state.dayIndex) !== Number(dayIndex) || (state.dateIso && state.dateIso !== toIsoDate(sheet.date));
+        const unchanged = !dayChanged && JSON.stringify([...state.exercises.values()]) === JSON.stringify(sheet.exercises || []);
         state.dayIndex = dayIndex;
         if (dayChanged) {
           state.workout.expanded = null;
-          state.workout.doneIds = new Set();
           state.workout.order = [];
           state.workout.animations = { completed: null, next: null };
           state.todayDraft = {};
+          state.draftDirty = {};
+          state.draftRevision = {};
           state.runningDraft = {};
           state.runningHistoryIndex = {};
           state.todayHistoryIndex = {};
         }
         state.contexts = new Map();
-        const sheet = await apiFetch(`/gymapi/day/${dayIndex}/sheet`);
-        if (sheet.completed_days) {
-          state.completedDays = new Set(sheet.completed_days.map(Number));
-          renderDayOptions(dayIndex);
-        }
-        const active = state.activeDays.find((d) => Number(d.day_index) === Number(dayIndex));
+        if (sheet.completed_days) state.completedDays = new Set(sheet.completed_days.map(Number));
+        renderDayOptions(dayIndex);
+        const active = state.activeDays.find((day) => Number(day.day_index) === Number(dayIndex));
         state.dayLabel = sheet.day_label || active?.label || `День ${dayIndex}`;
-        state.daySubtitle = active?.subtitle || (dayIndex ? `День ${dayIndex}` : '');
+        state.daySubtitle = active?.subtitle || `День ${dayIndex}`;
         state.date = sheet.date;
         state.dateIso = toIsoDate(sheet.date);
-        state.lastCompletedVolumeKg = Number(sheet.last_completed_volume_kg || 0) || 0;
+        state.lastCompletedVolumeKg = Number(sheet.last_completed_volume_kg || 0);
         updateLastCompleted(sheet.last_completed_at || null);
         state.workout.order = (sheet.exercises || []).map((ex) => ex.user_exercise_id);
-        const doneIdsFromServer = new Set();
-        (sheet.exercises || []).forEach((ex) => { if (ex.is_done) doneIdsFromServer.add(Number(ex.user_exercise_id)); });
-        state.workout.doneIds = doneIdsFromServer;
-        if (state.workout.doneIds && state.workout.doneIds.size) {
-          const valid = new Set();
-          state.workout.order.forEach((id) => { if (state.workout.doneIds.has(id)) valid.add(id); });
-          state.workout.doneIds = valid;
-        }
+        state.workout.doneIds = new Set((sheet.exercises || []).filter((ex) => ex.is_done).map((ex) => Number(ex.user_exercise_id)));
         renderDayHeader();
         updateAddButtonVisibility();
-        renderExercises(sheet.exercises || []);
+        if (!background || !unchanged) {
+          const scrollY = window.scrollY;
+          renderExercises(sheet.exercises || []);
+          if (background) window.scrollTo({ top: scrollY, behavior: 'instant' });
+        }
         updateFinishButton();
       } finally {
-        setTimeout(() => shell?.classList.remove('switching'), 180);
+        if (requestSeq === state.lifecycle.sheetRequestSeq) shell?.classList.remove('switching');
       }
     }
 
@@ -12701,86 +12756,140 @@
       }
     }
 
-    async function refreshTodayData({ keepDay = true } = {}) {
+    function schedulePendingRefresh() {
+      clearTimeout(state.lifecycle.refreshTimer);
+      if (!state.lifecycle.refreshPending) return;
+      state.lifecycle.refreshTimer = setTimeout(() => {
+        if (!hasActiveWorkoutInteraction()) refreshAppData('interaction-finished', { force: true });
+      }, 250);
+    }
+
+    function hasActiveWorkoutInteraction() {
+      return state.editor.open || state.manage.add.open || state.actionQueues.size > 0
+        || Boolean(document.activeElement?.matches('input, textarea, select, [contenteditable="true"]'));
+    }
+
+    async function refreshTodayData({ keepDay = true, background = false } = {}) {
       if (state.onboarding.active) return;
-      try {
-        const info = await apiFetch('/gymapi/day/today');
-        state.activeDays = info.active_days || [];
-        state.completedDays = new Set((info.completed_days || []).map(Number));
-        const keepCurrentDay = keepDay && state.dayIndex
-          && state.activeDays.some((d) => Number(d.day_index) === Number(state.dayIndex));
-        const targetDay = keepCurrentDay
-          ? state.dayIndex
-          : (info.suggested_day_index || state.activeDays[0]?.day_index);
-        if (targetDay) {
-          renderDayOptions(targetDay);
-          if (state.manage.add.open) renderManageDayOptions();
-          state.date = info.date || '';
-          await loadSheet(targetDay);
-          applyTitleFrame();
-        }
-        setStatus('ready');
-      } catch (e) {
-        const status = e?.status ? ` (HTTP ${e.status})` : '';
-        const text = normalizeError(e).split('\n')[0].slice(0, 140);
-        showErrorOverlay(`Не удалось обновить данные дня${status}. ${text}`);
-        setStatus('error');
-      }
+      const version = state.lifecycle.dataVersion || 0;
+      const scope = workoutStorageScope();
+      const info = await apiFetch('/gymapi/day/today', { silent: background });
+      if (scope !== workoutStorageScope() || (background && ((state.lifecycle.dataVersion || 0) !== version || hasActiveWorkoutInteraction() || state.currentRoute !== 'today'))) return;
+      state.activeDays = info.active_days || [];
+      state.completedDays = new Set((info.completed_days || []).map(Number));
+      const keepCurrent = keepDay && state.activeDays.some((day) => Number(day.day_index) === Number(state.dayIndex));
+      const targetDay = keepCurrent ? state.dayIndex : (info.suggested_day_index || state.activeDays[0]?.day_index);
+      if (targetDay) await loadSheet(targetDay, { background });
+      setStatus('ready');
     }
 
     let lastDataRefresh = 0;
     async function refreshAppData(source = '', { force = false } = {}) {
-      const now = Date.now();
-      if (!force && now - lastDataRefresh < 5000) return;
-      lastDataRefresh = now;
-      if (!state.isTelegram) return;
-      if (state.onboarding.active) return;
-      if (!state.settings.loading) runUiAction('Не удалось загрузить настройки', () => loadSettingsOverview());
-      if (!state.settings.trainer.loading) runUiAction('Не удалось загрузить данные тренерского режима', () => loadTrainerOverview());
-      if (state.currentRoute === 'library') runUiAction('Не удалось загрузить библиотеку упражнений', () => loadLibraryGroups());
-      if (state.currentRoute === 'allExercises') {
-        const st = allExercisesState();
-        if (!st.sheetOpen) runUiAction('Не удалось обновить все упражнения', () => loadAllExercisesGroups({ force }));
-        else runUiAction('Не удалось обновить упражнение', () => refreshAllExerciseSession());
-      }
-      if (state.currentRoute === 'today' && !state.editor.open && !state.manage.add.open) {
-        runUiAction('Не удалось обновить экран дня', () => refreshTodayData({ keepDay: true }));
+      if (!state.isTelegram || state.onboarding.active || document.hidden) return;
+      if (hasActiveWorkoutInteraction()) { state.lifecycle.refreshPending = true; return; }
+      if (!force && Date.now() - lastDataRefresh < 30_000) return;
+      lastDataRefresh = Date.now();
+      state.lifecycle.refreshPending = false;
+      // Revalidate the visible screen only; keep its existing DOM while waiting.
+      try {
+        if (state.currentRoute === 'today') await refreshTodayData({ keepDay: true, background: true });
+        else if (state.currentRoute === 'allExercises') {
+          if (state.allExercises.sheetOpen) await refreshAllExerciseSession();
+          else await loadAllExercisesGroups({ force });
+        } else if (state.currentRoute === 'library') {
+          if (state.library.view === 'groups') await loadLibraryGroups();
+        } else if (state.currentRoute === 'measurements') await loadMeasurementsOverview({ force });
+        else if (state.currentRoute === 'settings' && !state.settings.loading) await loadSettingsOverview();
+      } catch (error) {
+        lastDataRefresh = 0;
+        // Existing data remains usable when an unlock happens without a network.
+        console.warn('Background refresh failed', error);
       }
     }
 
     async function handleAppResume(source) {
-      const lc = state.lifecycle || (state.lifecycle = { lastHiddenAt: 0, lastResumeRefreshAt: 0, resumeInFlight: false });
+      const lc = state.lifecycle;
+      if (document.hidden || lc.resumeInFlight) return;
       const now = Date.now();
-      if (lc.resumeInFlight) return;
       if (now - Number(lc.lastResumeRefreshAt || 0) < 1500) return;
+      const hiddenForMs = lc.lastHiddenAt ? now - lc.lastHiddenAt : 0;
+      // Focus also fires for keyboard changes. It is not evidence of stale data.
+      if (!lc.lastHiddenAt && source !== 'online') return;
+      lc.lastHiddenAt = 0;
       lc.lastResumeRefreshAt = now;
+      if (hiddenForMs < 30_000 && source !== 'online') {
+        if (readPendingPayment()) await checkPendingRubPaymentStatus();
+        return;
+      }
       lc.resumeInFlight = true;
       try {
-        const hiddenForMs = lc.lastHiddenAt ? Math.max(0, now - lc.lastHiddenAt) : 0;
-        const forceRefresh = hiddenForMs >= 2 * 60 * 1000;
-        await refreshAppData(source, { force: forceRefresh });
-        runUiAction('Не удалось проверить статус оплаты', () => checkPendingRubPaymentStatus());
-      } finally {
-        lc.resumeInFlight = false;
-      }
+        await refreshAppData(source, { force: true });
+        if (readPendingPayment()) await checkPendingRubPaymentStatus();
+      } finally { lc.resumeInFlight = false; }
     }
 
     function setupVisibilityRefresh() {
+      const onHidden = () => {
+        state.lifecycle.lastHiddenAt = Date.now();
+        flushInlineNumberInput().catch(() => {});
+        flushEditorNote();
+      };
       document.addEventListener('visibilitychange', () => {
-        if (document.hidden) {
-          if (state.lifecycle) state.lifecycle.lastHiddenAt = Date.now();
-          return;
-        }
-        handleAppResume('visibility');
+        if (document.hidden) onHidden();
+        else handleAppResume('visibility');
       });
-      window.addEventListener('focus', () => {
-        handleAppResume('focus');
-      });
-      window.addEventListener('pageshow', () => {
-        handleAppResume('pageshow');
-      });
+      window.addEventListener('pagehide', onHidden);
+      window.addEventListener('pageshow', () => handleAppResume('pageshow'));
+      window.addEventListener('focus', () => handleAppResume('focus'));
+      window.addEventListener('online', () => handleAppResume('online'));
+      getTg()?.onEvent?.('deactivated', onHidden);
+      getTg()?.onEvent?.('activated', () => handleAppResume('activated'));
+      document.addEventListener('focusout', schedulePendingRefresh);
       window.addEventListener('resize', positionManageMenu);
       window.addEventListener('scroll', positionManageMenu, true);
+    }
+
+    function setupViewport() {
+      const root = document.documentElement;
+      let stableHeight = window.innerHeight;
+      let width = window.innerWidth;
+      let frame = 0;
+      const update = () => {
+        frame = 0;
+        const viewport = window.visualViewport;
+        const tg = getTg();
+        const height = Math.round(Math.min(viewport?.height || window.innerHeight, tg?.viewportHeight || window.innerHeight));
+        const top = Math.round(viewport?.offsetTop || 0);
+        const editing = document.activeElement?.matches('input, textarea, [contenteditable="true"]');
+        if (width !== window.innerWidth || (!editing && height >= stableHeight - 100)) {
+          width = window.innerWidth;
+          stableHeight = Math.round(tg?.viewportStableHeight || window.innerHeight);
+        }
+        const keyboardOpen = stableHeight - height > 100;
+        root.style.setProperty('--visual-height', `${height}px`);
+        root.style.setProperty('--visual-top', `${top}px`);
+        root.style.setProperty('--stable-height', `${stableHeight}px`);
+        document.body.classList.toggle('keyboard-open', keyboardOpen);
+        if (editing && keyboardOpen) {
+          const input = document.activeElement;
+          const scroller = input.closest('.all-ex-sheet-card, .sheet-content, .sheet');
+          if (scroller) {
+            const rect = input.getBoundingClientRect();
+            const bounds = scroller.getBoundingClientRect();
+            const bottom = Math.min(bounds.bottom, top + height) - 12;
+            if (rect.bottom > bottom) scroller.scrollTop += rect.bottom - bottom;
+            else if (rect.top < bounds.top + 12) scroller.scrollTop -= bounds.top + 12 - rect.top;
+          }
+        }
+      };
+      const schedule = () => { if (!frame) frame = requestAnimationFrame(update); };
+      window.visualViewport?.addEventListener('resize', schedule);
+      window.visualViewport?.addEventListener('scroll', schedule);
+      window.addEventListener('resize', schedule);
+      document.addEventListener('focusin', schedule);
+      document.addEventListener('focusout', schedule);
+      getTg()?.onEvent?.('viewportChanged', schedule);
+      update();
     }
 
     function setManageMenu(open) {
@@ -13467,14 +13576,8 @@
     function setupAiCoachInputViewportBehavior() {
       const inputEl = document.getElementById('aiCoachInput');
       if (!inputEl) return;
-      const ensureVisible = () => {
-        requestAnimationFrame(() => {
-          inputEl.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'smooth' });
-        });
-      };
       inputEl.addEventListener('focus', () => {
         document.body.classList.add('ai-coach-input-focused');
-        ensureVisible();
       });
       inputEl.addEventListener('blur', () => {
         document.body.classList.remove('ai-coach-input-focused');
@@ -15150,26 +15253,34 @@
         teams.offset = teams.offset + teams.limit;
         runUiAction('Не удалось загрузить таблицу команд', () => loadTeamLeaderboard());
       });
-      document.getElementById('editorClose').addEventListener('click', async () => {
+      document.getElementById('editorClose').addEventListener('click', () => runUiAction('Не удалось сохранить изменения', async () => {
         await flushInlineNumberInput();
         if (state.editor?.open && state.editor?.source === 'all_exercises' && state.editor?.ueId) {
           await closeAllExerciseEditorToSheet();
           return;
         }
         closeEditor();
-      });
-      document.getElementById('editorAddSet').addEventListener('click', async () => {
+      }));
+      document.getElementById('editorAddSet').addEventListener('click', () => runUiAction('Не удалось добавить подход', async () => {
+        const ueId = state.editor.ueId;
         await flushInlineNumberInput();
-        queueExerciseAction(state.editor.ueId, () => addSet(state.editor.ueId, { toastOnSave: true }));
-      });
-      document.getElementById('editorRemoveSet').addEventListener('click', () => queueExerciseAction(state.editor.ueId, () => removeSet(state.editor.ueId)));
+        await queueExerciseAction(ueId, () => addSet(ueId, { toastOnSave: true }));
+      }));
+      document.getElementById('editorRemoveSet').addEventListener('click', () => runUiAction('Не удалось удалить подход', async () => {
+        const ueId = state.editor.ueId;
+        await flushInlineNumberInput();
+        await queueExerciseAction(ueId, () => removeSet(ueId));
+      }));
       document.getElementById('sheet').addEventListener('click', (e) => {
         if (e.target.id !== 'sheet') return;
         if (state.editor?.open && state.editor?.source === 'all_exercises' && state.editor?.ueId) {
           runUiAction('Не удалось сохранить заметку', () => closeAllExerciseEditorToSheet());
           return;
         }
-        closeEditor();
+        runUiAction('Не удалось сохранить изменения', async () => {
+          await flushInlineNumberInput();
+          closeEditor();
+        });
       });
       document.querySelectorAll('.sheet-handle').forEach((handle) => {
         handle.addEventListener('click', (e) => {
@@ -15190,7 +15301,10 @@
               if (state.editor?.open && state.editor?.source === 'all_exercises' && state.editor?.ueId) {
                 runUiAction('Не удалось сохранить заметку', () => closeAllExerciseEditorToSheet());
               } else {
-                closeEditor();
+                runUiAction('Не удалось сохранить изменения', async () => {
+                  await flushInlineNumberInput();
+                  closeEditor();
+                });
               }
               break;
             case 'manageExerciseSheet': closeManageAddSheet(); break;
@@ -15217,7 +15331,8 @@
         ctx.data = { ...(ctx.data || {}), current_note: value };
         if (state.editor.noteTimer) clearTimeout(state.editor.noteTimer);
         setNoteStatus('Сохраняем…');
-        state.editor.noteTimer = setTimeout(() => saveExerciseNote(state.editor.ueId, value), 250);
+        const ueId = state.editor.ueId;
+        state.editor.noteTimer = setTimeout(() => { state.editor.noteTimer = null; saveExerciseNote(ueId, value); }, 250);
       });
       document.addEventListener('pointerdown', (e) => {
         if (!e.target.closest('#manageMenu') && !e.target.closest('#manageExerciseBtn')) setManageMenu(false);
@@ -15250,11 +15365,6 @@
       // Extract user id if possible (not a substitute for initData signature, but useful)
       const unsafeUserId = tg?.initDataUnsafe?.user?.id ?? null;
       if (unsafeUserId) state.userId = unsafeUserId;
-
-      // Quick health ping via our API prefix (so it goes through nginx /gymapi/)
-      try {
-        await apiFetch('/gymapi/health', { silent: true });
-      } catch (_) {}
 
       // If opened inside Telegram but initData is empty -> show an on-screen fatal with diagnostics
       // (Otherwise the app silently does nothing and you keep getting a blank "Сегодня")
@@ -15462,38 +15572,64 @@
     }
 
     function buildControlBlock(label, field, value, primary = false) {
+      const ueId = state.editor.ueId;
+      const setNo = state.editor.selectedSet;
+      const source = getExerciseActionSource(ueId);
+      const date = source === 'all_exercises' ? getAllExercisesDate() : getIsoDate();
+      const incUrl = getEditorActionUrl(ueId, 'set/inc_last', date);
+      const addUrl = getEditorActionUrl(ueId, 'set/add', date);
+      const dataField = { kg: 'weight_kg', reps: 'reps', sec: 'seconds' }[field];
+      const selectedRow = () => {
+        const sets = state.exercises.get(ueId)?.sets || [];
+        return sets.find((row) => row.set_no === setNo) || sets[sets.length - 1];
+      };
+      const currentValue = () => Number((selectedRow() || ensureDraft(ueId))[dataField] || 0);
+      const saveValue = (nextValue, delta = null, targetSetNo = selectedRow()?.set_no) => queueExerciseAction(ueId, async () => {
+        let selected = targetSetNo == null ? selectedRow() : state.exercises.get(ueId)?.sets.find((row) => row.set_no === targetSetNo);
+        if (targetSetNo != null && !selected) throw new Error('Подход уже удалён');
+        if (!selected) {
+          const data = await apiFetch(addUrl, { method: 'POST', body: { ...ensureDraft(ueId) } });
+          applySetsUpdate(ueId, data.sets);
+          selected = selectedRow();
+        }
+        if (!selected) throw new Error('Подход не найден');
+        const current = Number(selected[dataField] || 0);
+        const change = delta ?? (nextValue - current);
+        if (!change) return;
+        const data = await apiFetch(incUrl, { method: 'POST', body: { field, delta: change, set_no: selected.set_no } });
+        applySetsUpdate(ueId, data.sets);
+        if (source === 'all_exercises') scheduleAllExercisesMetaRefresh();
+      });
       const block = document.createElement('div');
       block.className = 'control-block' + (primary ? ' primary' : '');
-      const head = document.createElement('div'); head.className = 'control-head'; head.innerHTML = `<span>${label}</span>`;
-      const valueEl = document.createElement('div'); valueEl.className = 'control-value'; valueEl.textContent = value;
-      valueEl.tabIndex = 0;
-      valueEl.setAttribute('role', 'button');
-      valueEl.style.cursor = 'text';
-      attachInlineNumberHandler(valueEl, () => {
-        const current = Number(value || 0);
-        return {
-          value: current,
-          min: 0,
-          max: field === 'kg' ? 500 : (field === 'sec' ? 3600 : 200),
-          step: 1,
-          decimals: field === 'kg' ? 1 : 0,
-          inputMode: field === 'kg' ? 'decimal' : 'numeric',
-          onCommit: (next) => {
-            const delta = next - current;
-            if (!delta) return;
-            runUiAction('Не удалось изменить значение сета', () => queueExerciseAction(state.editor.ueId, () => incSet(state.editor.ueId, field, delta)));
-          }
-        };
-      });
+      const head = document.createElement('div'); head.className = 'control-head'; head.textContent = label;
+      const valueEl = document.createElement('div'); valueEl.className = 'control-value';
+      attachInlineNumberHandler(valueEl, () => ({
+        label,
+        value: currentValue(),
+        min: 0,
+        max: field === 'kg' ? 500 : (field === 'sec' ? 3600 : 200),
+        decimals: field === 'kg' ? 1 : 0,
+        inputMode: field === 'kg' ? 'decimal' : 'numeric',
+        onCommit: (next) => saveValue(next),
+      }));
       const actions = document.createElement('div'); actions.className = 'control-actions';
-      const minus = document.createElement('button'); minus.className = 'circle-btn'; minus.textContent = '−'; minus.addEventListener('click', () => queueExerciseAction(state.editor.ueId, () => incSet(state.editor.ueId, field, -1)));
-      const plus = document.createElement('button'); plus.className = 'circle-btn'; plus.textContent = '+'; plus.addEventListener('click', () => queueExerciseAction(state.editor.ueId, () => incSet(state.editor.ueId, field, 1)));
-      actions.append(minus, valueEl, plus);
+      const stepButton = (text, delta) => {
+        const button = document.createElement('button');
+        button.type = 'button'; button.className = 'circle-btn'; button.textContent = text;
+        button.addEventListener('click', () => runUiAction('Не удалось изменить подход', async () => {
+          await flushInlineNumberInput();
+          await saveValue(null, delta);
+        }));
+        return button;
+      };
+      actions.append(stepButton('−', -1), valueEl, stepButton('+', 1));
       block.append(head, actions);
       return block;
     }
 
     function setActiveTab(tab) {
+      if (state.editor.tab !== tab) delete document.getElementById('controlsGrid').dataset.controlsKey;
       state.editor.tab = tab;
       document.querySelectorAll('#editorTabs .seg-btn').forEach((btn) => {
         btn.classList.toggle('active', btn.dataset.tab === tab);
@@ -15819,6 +15955,12 @@
         }
 
         const grid = document.getElementById('controlsGrid');
+        const controlsKey = `${exercise.user_exercise_id}:${state.editor.source}:${state.editor.selectedSet ?? 'last'}`;
+        if (grid.dataset.controlsKey === controlsKey && grid.querySelector('.inline-num-input')) {
+          syncNumberControls(grid);
+          return;
+        }
+        grid.dataset.controlsKey = controlsKey;
         grid.innerHTML = '';
         const isDuration = isDurationExercise(exercise.name);
         const selectedRow = exercise.sets.find((s) => s.set_no === state.editor.selectedSet);
@@ -15888,14 +16030,27 @@
 
     function openEditor(ueId, source = "today") {
       triggerHaptic();
+      document.body.classList.add('exercise-modal-open');
+      delete document.getElementById('controlsGrid').dataset.controlsKey;
       state.editor = { open: true, ueId, source, selectedSet: null, tab: 'sets', noteTimer: null, noteStatusTimer: null, flashSet: null, flashTimer: null, scrollTarget: null };
       setActiveTab('sets');
       renderEditor();
       setFinishFabVisible(false);
     }
 
+    function flushEditorNote() {
+      if (!state.editor.noteTimer || !state.editor.ueId) return;
+      clearTimeout(state.editor.noteTimer);
+      state.editor.noteTimer = null;
+      const ueId = state.editor.ueId;
+      const value = document.getElementById('noteArea')?.value || '';
+      return saveExerciseNote(ueId, value);
+    }
+
     function closeEditor() {
-      if (state.editor.noteTimer) clearTimeout(state.editor.noteTimer);
+      flushInlineNumberInput().catch(() => {});
+      flushEditorNote();
+      document.body.classList.remove('exercise-modal-open');
       if (state.editor.noteStatusTimer) clearTimeout(state.editor.noteStatusTimer);
       if (state.editor.flashTimer) clearTimeout(state.editor.flashTimer);
       state.editor = { open: false, ueId: null, selectedSet: null, tab: 'sets', noteTimer: null, noteStatusTimer: null, flashSet: null, flashTimer: null, scrollTarget: null };
@@ -15906,6 +16061,7 @@
       const noteArea = document.getElementById('noteArea');
       if (noteArea) noteArea.value = '';
       setFinishFabVisible(true);
+      schedulePendingRefresh();
     }
 
     async function init() {
@@ -15927,16 +16083,18 @@
       loadTimerPillPosition();
       bindTimer();
       setupVisibilityRefresh();
+      setupViewport();
       runUiAction('Не удалось проверить статус оплаты', () => checkPendingRubPaymentStatus());
       updateActingBanner();
       applyHeaderWidgetVisibility();
       if (!state.isTelegram) { handleRouteFromHash(); return; }
-      runUiAction('Не удалось загрузить тренировочные системы', () => loadSystems());
+      const systemsReady = loadSystems();
       scheduleDeferredAction(() => loadSubscriptionOverview());
       state.startDayIndex = getDayIndexFromUrl();
       runUiAction('Не удалось загрузить данные тренерского режима', () => loadTrainerOverview());
       const onboardingActive = await checkOnboardingStatus();
       if (!onboardingActive) {
+        await systemsReady;
         await loadToday();
         scheduleDeferredAction(() => refreshProductivitySummary());
         runUiAction('Не удалось загрузить экран настроек', () => ensureSettingsOverviewLoaded({ refreshExercises: true }));
