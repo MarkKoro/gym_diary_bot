@@ -1,10 +1,12 @@
 import atexit
+import asyncio
 import importlib
 import os
 import tempfile
 import unittest
 from datetime import datetime, timedelta, UTC
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 
 tmp_db = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
@@ -67,6 +69,37 @@ class SubscriptionDbTests(unittest.IsolatedAsyncioTestCase):
         self.assertAlmostEqual(
             info["expires_at"].timestamp(), second_expiry.timestamp(), delta=1
         )
+
+    async def test_telegram_payment_retries_extend_subscription_only_once(self):
+        user_id = await db.get_or_create_user(7002, 'payment_retry')
+        plan_code, plan = next(iter(bot.SUBSCRIPTION_PLANS.items()))
+        payment = SimpleNamespace(invoice_payload=f'setsubstars:{user_id}:{plan_code}', telegram_payment_charge_id='charge-one', currency='XTR', total_amount=100)
+        await db.create_payment_record(user_id, 'telegram', 100, 'XTR', 'pending', payload={'plan': plan_code}, external_id=payment.invoice_payload)
+        message = SimpleNamespace(successful_payment=payment, reply_text=AsyncMock())
+        update = SimpleNamespace(message=message)
+        await asyncio.gather(*(bot.successful_payment_handler(update, None) for _ in range(3)))
+        first = await db.get_active_subscription(user_id)
+        self.assertAlmostEqual((first['expires_at']-datetime.now(UTC)).total_seconds(), plan['days']*86400, delta=10)
+        self.assertEqual(message.reply_text.await_count, 1)
+        import webapp_backend as backend
+        for _ in range(3):
+            status = await backend.subscription_payment_status(payment.invoice_payload, SimpleNamespace(user_id=user_id))
+            self.assertEqual(status['status'], 'succeeded')
+            self.assertFalse(status['activated'])
+        self.assertEqual((await db.get_active_subscription(user_id))['expires_at'], first['expires_at'])
+        async with db.connect_db() as conn:
+            self.assertEqual((await (await conn.execute('SELECT COUNT(*) FROM payments WHERE external_id=?', ('telegram:charge-one',))).fetchone())[0], 1)
+            self.assertEqual((await (await conn.execute("SELECT SUM(amount) FROM payments WHERE user_id=? AND status='paid'", (user_id,))).fetchone())[0], 100)
+        payment.telegram_payment_charge_id = 'charge-two'
+        await bot.successful_payment_handler(update, None)
+        second = await db.get_active_subscription(user_id)
+        self.assertAlmostEqual((second['expires_at']-first['expires_at']).total_seconds(), plan['days']*86400, delta=1)
+        self.assertEqual(message.reply_text.await_count, 2)
+
+    async def test_malformed_payment_payload_does_not_grant_subscription(self):
+        message = SimpleNamespace(successful_payment=SimpleNamespace(invoice_payload='websub:not-a-user:month'), reply_text=AsyncMock())
+        await bot.successful_payment_handler(SimpleNamespace(message=message), None)
+        message.reply_text.assert_not_awaited()
 
     async def test_list_broadcast_targets_filters_admins_and_subscription(self):
         active_user = await db.get_or_create_user(7100, "with_sub")
