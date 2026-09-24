@@ -4350,7 +4350,7 @@
       const daysHtml = (lb.profile.days || []).map((day) => {
         const exercises = (day.exercises || []).map((ex) => `
           <div class="leader-ex-item">
-            <span>${ex.name}</span>
+            <span>${escapeHtml(ex.name)}</span>
             <span class="timer-hint">сеты ${ex.avg_sets || 0} · повт ${ex.avg_reps || 0}</span>
           </div>
         `).join('') || '<div class="timer-hint">Нет упражнений</div>';
@@ -4609,7 +4609,7 @@
         <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:10px;" id="teamMyActions">
           <button class="btn" data-action="team-copy-code" data-code="${escapeHtml(my.join_code || '')}">Скопировать код</button>
           <button class="btn ${teams.busy.leave ? 'btn-disabled' : ''}" ${teams.busy.leave ? 'disabled' : ''} data-action="team-leave">Покинуть</button>
-          ${(my.role === 'captain' && Number(my.owner_user_id || 0) === Number(state.userId || 0)) ? `<button class="btn ${teams.busy.deleteTeam ? 'btn-disabled' : ''}" ${teams.busy.deleteTeam ? 'disabled' : ''} data-action="team-delete" data-team-id="${my.team_id}">Удалить команду</button>` : ''}
+          ${(Number(my.owner_user_id || 0) === Number(state.userId || 0)) ? `<button class="btn ${teams.busy.deleteTeam ? 'btn-disabled' : ''}" ${teams.busy.deleteTeam ? 'disabled' : ''} data-action="team-delete" data-team-id="${my.team_id}">Удалить команду</button>` : ''}
           ${my.role === 'captain' ? `${!parseOpenTeamFlag(my.is_open) ? `<button class="btn" data-action="team-requests-open">Заявки${Number(teams.requests.pendingCount || 0) > 0 ? ' (' + Number(teams.requests.pendingCount) + ')' : ''}</button>` : ''}<button class="btn" data-action="team-style-open">Стиль</button><button class="btn" data-action="team-roles-open">Роли</button>` : ''}
         </div>
       `;
@@ -4778,7 +4778,7 @@
       const my = teams.my;
       const profileMarkup = renderLeaderProfileMarkup(lb);
       const isCaptain = my && my.role === 'captain';
-      const canDeleteTeam = !!(isCaptain && Number(my?.owner_user_id || 0) === Number(state.userId || 0));
+      const canDeleteTeam = !!(my && Number(my.owner_user_id || 0) === Number(state.userId || 0));
       const isMyProfileOpen = Boolean(my && teams.view === 'profile' && Number(teams.selectedTeamId || 0) === Number(my.team_id || 0));
       const selectedProfile = teams.profile || {};
       const selectedTeam = selectedProfile.team || {};
@@ -7672,12 +7672,12 @@
             <div class="trainee-card">
               <div class="trainee-card-header">
                 <div>
-                  <div class="trainee-card-title">${trainee.display_name}</div>
+                  <div class="trainee-card-title">${escapeHtml(trainee.display_name)}</div>
                   <div class="trainee-card-subtitle">Право менять план: ${trainee.can_edit_plan ? 'Вкл' : 'Выкл'}</div>
                 </div>
               </div>
               <div class="trainee-card-actions">
-                <button class="trainee-action-btn" data-action="trainee-open" data-trainee-id="${trainee.trainee_user_id}" data-trainee-name="${trainee.display_name}" data-can-edit="${canEdit}">
+                <button class="trainee-action-btn" data-action="trainee-open" data-trainee-id="${trainee.trainee_user_id}" data-trainee-name="${escapeHtml(trainee.display_name)}" data-can-edit="${canEdit}">
                   Открыть дневник
                 </button>
                 <button class="trainee-action-btn secondary" data-action="trainee-rename" data-link-id="${trainee.link_id}">
@@ -7792,7 +7792,7 @@
         ? `
           <div class="settings-row trainer-code-block">
             <div class="label">Ваш код тренера</div>
-            <div class="settings-code">${trainerCode}</div>
+            <div class="settings-code">${escapeHtml(trainerCode)}</div>
             <div class="trainer-code-actions">
               <button class="btn small-btn secondary" data-action="trainer-copy-code">Скопировать</button>
             </div>
@@ -7810,7 +7810,7 @@
                   (req) => `
                     <div class="list-row">
                       <div class="list-text">
-                        <div class="label">${req.display_name}</div>
+                        <div class="label">${escapeHtml(req.display_name)}</div>
                         <div class="list-subtitle">Запрос на связь</div>
                       </div>
                       <div class="list-actions">
@@ -7836,7 +7836,7 @@
                   (trainee) => `
                     <div class="list-row">
                       <div class="list-text">
-                        <div class="label">${trainee.display_name}</div>
+                        <div class="label">${escapeHtml(trainee.display_name)}</div>
                         <div class="list-subtitle">Право менять план: ${trainee.can_edit_plan ? 'Вкл' : 'Выкл'}</div>
                       </div>
                       <div class="list-actions">
@@ -7879,7 +7879,7 @@
             <div class="settings-list">
               <div class="list-row">
                 <div class="list-text">
-                  <div class="label">${link.display_name}</div>
+                  <div class="label">${escapeHtml(link.display_name)}</div>
                   <div class="list-subtitle">Право тренера менять план: ${link.can_edit_plan ? 'Вкл' : 'Выкл'}</div>
                 </div>
                 <div class="list-actions">
@@ -7929,13 +7929,13 @@
 
     function renderMeasurementsSection() {
       const measurements = state.settings.measurements || {};
-      if (measurements.loading) {
+      if (measurements.loading && !measurements.loaded) {
         return '<div class="loading">Загружаем замеры…</div>';
       }
       const categories = measurements.categories || [];
       const categoryOptions = categories
         .filter((category) => category.code !== 'custom')
-        .map((category) => `<option value="${category.code}">${category.name}</option>`)
+        .map((category) => `<option value="${category.code}">${escapeHtml(category.name)}</option>`)
         .join('');
       const categoryBlocks = categories
         .map((category) => {
@@ -7956,7 +7956,7 @@
                 <div class="measurement-item">
                   <div class="measurement-head">
                     <div>
-                      <div class="measurement-name">${item.name}</div>
+                      <div class="measurement-name">${escapeHtml(item.name)}</div>
                       <div class="measurement-value">${latestLabel}</div>
                       ${meta}
                     </div>
@@ -7975,7 +7975,7 @@
           return `
             <div class="card measurement-card ${expanded ? '' : 'collapsed'}" data-category="${category.code}">
               <button class="measurement-card-head" data-action="measurement-toggle" data-code="${category.code}" aria-expanded="${expanded}">
-                <div class="measurement-card-title">${category.name}</div>
+                <div class="measurement-card-title">${escapeHtml(category.name)}</div>
                 <div class="measurement-card-toggle">
                   <span>${expanded ? 'Скрыть' : 'Развернуть'}</span>
                   <span class="measurement-count-badge">${toggleCount}</span>
@@ -7995,10 +7995,10 @@
       })));
       const deleteCategoryOptions = categories
         .filter((category) => !['body', 'composition', 'circumference', 'performance', 'custom'].includes(category.code))
-        .map((category) => `<option value="category:${category.code}">Категория: ${category.name}</option>`)
+        .map((category) => `<option value="category:${category.code}">Категория: ${escapeHtml(category.name)}</option>`)
         .join('');
       const deleteMeasurementOptions = customItems
-        .map((item) => `<option value="measurement:${item.code}">Замер: ${item.name}${item.categoryName ? ` (${item.categoryName})` : ''}</option>`)
+        .map((item) => `<option value="measurement:${item.code}">Замер: ${escapeHtml(item.name)}${item.categoryName ? ` (${escapeHtml(item.categoryName)})` : ''}</option>`)
         .join('');
       const deleteOptions = `${deleteCategoryOptions}${deleteMeasurementOptions}`;
       const formBody = formView === 'category'
@@ -8538,7 +8538,7 @@
           (group) => `
             <div class="list-row">
               <div class="list-text">
-                <div class="label">${group.name}</div>
+                <div class="label">${escapeHtml(group.name)}</div>
                 <div class="list-subtitle">Пользовательская группа</div>
               </div>
               <button class="btn small-btn danger" data-action="delete-group" data-code="${group.code}">Удалить</button>
@@ -8760,7 +8760,7 @@
         share: `
           <div class="card">
             <div class="card-title">Поделиться результатом</div>
-            <div class="settings-pre">${shareText}</div>
+            <div class="settings-pre">${escapeHtml(shareText)}</div>
             <div class="settings-actions">
               <button class="btn small-btn" data-action="share-copy">Скопировать текст</button>
               <button class="btn small-btn" data-action="share-shuffle">Сменить упражнения</button>
@@ -9138,7 +9138,7 @@
               : buildMeasurementChart(history.entries || []);
             return `
               <button class="measurement-overview-card" data-action="measurement-history" data-code="${item.code}">
-                <div class="measurement-overview-title">${item.name}</div>
+                <div class="measurement-overview-title">${escapeHtml(item.name)}</div>
                 <div class="measurement-overview-meta">${latestLabel}${deltaLabel}</div>
                 <div class="measurement-overview-chart">${chart}</div>
               </button>
@@ -9784,12 +9784,11 @@
         try {
           const resp = await apiFetch(`/gymapi/settings/exercises/${exerciseId}/move`, { method: 'POST', body: JSON.stringify({ muscle_group: muscleGroup }) });
           const oldId = Number(exerciseId);
-          const newId = Number(resp?.id || oldId);
-          const list = state.settings.customExercises || [];
-          const item = list.find((ex) => Number(ex.exercise_id) === oldId);
-          if (item) {
-            item.exercise_id = newId;
-            item.muscle_group = muscleGroup;
+          const newId = Number(resp?.exercise_id || resp?.id || oldId);
+          target.dataset.customExerciseMove = String(newId);
+          for (const list of [state.settings.customExercises, state.settings.manageableExercises]) {
+            const item = (list || []).find((ex) => Number(ex.exercise_id) === oldId);
+            if (item) { item.exercise_id = newId; item.muscle_group = muscleGroup; }
           }
           if (state.currentRoute === 'allExercises') {
         const st = allExercisesState();
@@ -14856,7 +14855,9 @@
           return;
         }
         if (action === 'team-leave') {
-          if (!confirm('Покинуть команду?')) return;
+          if (!confirm(state.settings.productivity.teams.my?.role === 'captain'
+            ? 'Покинуть команду? Капитаном станет полковник, а если его нет — участник с наибольшим стажем в команде.'
+            : 'Покинуть команду?')) return;
           runUiAction('Не удалось выйти из команды', () => actionTeamLeave());
           return;
         }
@@ -15149,7 +15150,9 @@
           return;
         }
         if (action === 'team-leave') {
-          if (!confirm('Покинуть команду?')) return;
+          if (!confirm(state.settings.productivity.teams.my?.role === 'captain'
+            ? 'Покинуть команду? Капитаном станет полковник, а если его нет — участник с наибольшим стажем в команде.'
+            : 'Покинуть команду?')) return;
           runUiAction('Не удалось выйти из команды', () => actionTeamLeave());
           return;
         }
