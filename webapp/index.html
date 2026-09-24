@@ -11639,7 +11639,7 @@
         });
         return pending;
       };
-      input.addEventListener('focus', () => { focusValue = input.value; });
+      input.addEventListener('focus', () => { focusValue = input.value; input.select(); });
       input.addEventListener('input', () => {
         editVersion += 1;
         saving = false;
@@ -11647,7 +11647,7 @@
         const raw = input.value.trim().replace(',', '.');
         if (raw !== '' && Number.isFinite(Number(raw))) getOptions().onInput?.(parse());
       });
-      input.addEventListener('click', (event) => event.stopPropagation());
+      input.addEventListener('click', (event) => { event.stopPropagation(); input.select(); });
       input.addEventListener('blur', () => { input._commit().catch(() => {}); });
       input.addEventListener('keydown', (event) => {
         if (event.key === 'Enter') { event.preventDefault(); input.blur(); }
