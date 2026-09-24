@@ -5778,8 +5778,10 @@
     }
 
     function setTimerPresetFromUI(){
-      const m = Number(document.getElementById('timerMinVal').textContent)||0;
-      const s = Number(document.getElementById('timerSecVal').textContent)||0;
+      const minEl = document.getElementById('timerMinVal');
+      const secEl = document.getElementById('timerSecVal');
+      const m = Math.max(0, Math.min(10, Number(minEl.querySelector('input')?.value ?? minEl.textContent) || 0));
+      const s = Math.max(0, Math.min(59, Number(secEl.querySelector('input')?.value ?? secEl.textContent) || 0));
       const total = clampTimer(m*60 + s);
       timerState.preset = total;
       if (!timerState.running) timerState.remaining = total;
@@ -5790,8 +5792,12 @@
       const total = clampTimer(timerState.preset);
       const m = Math.floor(total/60);
       const s = total%60;
-      document.getElementById('timerMinVal').textContent = String(m);
-      document.getElementById('timerSecVal').textContent = String(s);
+      for (const [id, value] of [['timerMinVal', m], ['timerSecVal', s]]) {
+        const el = document.getElementById(id);
+        const input = el.querySelector('input');
+        if (input) input.value = String(value);
+        else el.textContent = String(value);
+      }
     }
 
     function refreshRemainingFromEnd(){
@@ -6011,9 +6017,11 @@
       const secValEl = document.getElementById('timerSecVal');
 
       function bump(el, delta, max){
-        let v = Number(el.textContent)||0;
+        const input = el.querySelector('input');
+        let v = Number(input?.value ?? el.textContent)||0;
         v = Math.max(0, Math.min(max, v + delta));
-        el.textContent = String(v);
+        if (input) input.value = String(v);
+        else el.textContent = String(v);
       }
 
       minMinus.addEventListener('click', ()=>{ bump(minValEl, -1, 10); setTimerPresetFromUI(); });
@@ -6022,24 +6030,16 @@
       secMinus.addEventListener('click', ()=>{ bump(secValEl, -5, 59); setTimerPresetFromUI(); });
       secPlus.addEventListener('click',  ()=>{ bump(secValEl, +5, 59); setTimerPresetFromUI(); });
 
-      // tap-to-type using existing beginInlineNumberEdit() helper from previous step
-      minValEl.addEventListener('click', (e)=>{
-        e.stopPropagation();
-        beginInlineNumberEdit(minValEl, {
-          value: Number(minValEl.textContent)||0,
-          min: 0, max: 10, step: 1, decimals: 0, inputMode: 'numeric',
-          onCommit: (v)=>{ minValEl.textContent = String(v); setTimerPresetFromUI(); }
-        });
-      });
-
-      secValEl.addEventListener('click', (e)=>{
-        e.stopPropagation();
-        beginInlineNumberEdit(secValEl, {
-          value: Number(secValEl.textContent)||0,
-          min: 0, max: 59, step: 1, decimals: 0, inputMode: 'numeric',
-          onCommit: (v)=>{ secValEl.textContent = String(v); setTimerPresetFromUI(); }
-        });
-      });
+      for (const [el, max, label, value] of [
+        [minValEl, 10, 'Минуты отдыха', () => Math.floor(timerState.preset / 60)],
+        [secValEl, 59, 'Секунды отдыха', () => timerState.preset % 60],
+      ]) {
+        attachInlineNumberHandler(el, () => ({
+          value: value(), min: 0, max, decimals: 0, label,
+          onInput: setTimerPresetFromUI, onCommit: setTimerPresetFromUI,
+        }));
+        el.querySelector('input').style.font = 'inherit';
+      }
 
       // actions
       document.getElementById('timerStartBtn').addEventListener('click', () => timerStartPause({ closeSheet: true }));
