@@ -4,6 +4,7 @@ import importlib
 import os
 import tempfile
 import unittest
+from types import SimpleNamespace
 from datetime import UTC, datetime, timedelta
 from unittest.mock import patch
 
@@ -143,6 +144,70 @@ class TeamAchievementRegressionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await ach._fetch_team_metrics(team['team_id']))['night_sessions_28'], 1)
         await db.set_user_timezone(self.uid, 'UTC')
         self.assertEqual((await ach._fetch_team_metrics(team['team_id']))['night_sessions_28'], 0)
+
+    async def test_system_operations_reject_other_users_system_without_changes(self):
+        other = await db.get_or_create_user(9300, 'private')
+        own_system = await db.get_active_training_system_id(self.uid)
+        other_system = await db.get_active_training_system_id(other)
+        await db.create_training_system(self.uid, 'Spare')
+        async with db.connect_db() as conn:
+            await conn.execute('INSERT OR REPLACE INTO training_system_days(system_id,day_index,label,is_active) VALUES(?,1,?,1)', (other_system, 'Private day'))
+            await conn.commit()
+        for method in (db.apply_system_to_current_plan, db.sync_current_plan_to_system, db.sync_reminders_to_system):
+            with self.assertRaisesRegex(ValueError, 'system_not_found'):
+                await method(self.uid, other_system)
+        self.assertFalse(await db.delete_training_system(self.uid, other_system))
+        self.assertEqual(await db.get_active_training_system_id(self.uid), own_system)
+        async with db.connect_db() as conn:
+            row = await (await conn.execute('SELECT label FROM training_system_days WHERE system_id=? AND day_index=1', (other_system,))).fetchone()
+            self.assertEqual(row[0], 'Private day')
+
+    async def test_invalid_active_system_is_repaired_to_own_system(self):
+        other = await db.get_or_create_user(9301, 'private2')
+        other_system = await db.get_active_training_system_id(other)
+        async with db.connect_db() as conn:
+            await conn.execute('UPDATE users SET active_system_id=? WHERE id=?', (other_system, self.uid))
+            await conn.commit()
+        actual = await db.get_active_training_system_id(self.uid)
+        self.assertNotEqual(actual, other_system)
+        self.assertIn(actual, [row['id'] for row in await db.list_training_systems(self.uid)])
+
+    async def test_fewer_workout_days_preserve_historical_exercise_completions(self):
+        await db.set_workouts_per_week(self.uid, 4)
+        ex = await db.get_or_create_exercise('History exercise', 'chest', self.uid)
+        await db.add_user_exercise(self.uid, 4, ex)
+        session = await db.get_or_create_today_session(self.uid, datetime.now(UTC).date().isoformat(), 4, 0)
+        async with db.connect_db() as conn:
+            ue = (await (await conn.execute('SELECT id FROM user_exercises WHERE user_id=? AND exercise_id=? AND day_index=4', (self.uid, ex))).fetchone())[0]
+            await conn.execute('INSERT INTO session_exercises(session_id,user_exercise_id,is_done) VALUES(?,?,1)', (session, ue))
+            await conn.commit()
+        await db.set_workouts_per_week(self.uid, 2)
+        async with db.connect_db() as conn:
+            row = await (await conn.execute('SELECT is_done FROM session_exercises WHERE session_id=? AND user_exercise_id=?', (session, ue))).fetchone()
+            self.assertEqual(row, (1,))
+
+    async def test_reminders_validate_before_writing_and_roll_back_on_failure(self):
+        import webapp_backend as backend
+        await db.set_workouts_per_week(self.uid, 3)
+        ctx = SimpleNamespace(user_id=self.uid)
+        original = {'enabled': True, 'timezone': 'UTC', 'reminders': [{'day_no': 1, 'dow': 1, 'hour': 9, 'minute': 0}]}
+        await backend.settings_update_reminders(original, ctx)
+        with self.assertRaises(backend.HTTPException):
+            await backend.settings_update_reminders({'enabled': False, 'timezone': 'Europe/Moscow', 'reminders': ['bad']}, ctx)
+        self.assertEqual(await db.list_user_reminders(self.uid), [(1, 1, 9, 0)])
+        self.assertTrue(await db.get_user_notifications_enabled(self.uid))
+        async with db.connect_db() as conn:
+            await conn.execute("CREATE TRIGGER fail_reminder_insert BEFORE INSERT ON training_system_reminders BEGIN SELECT RAISE(ABORT, 'test failure'); END")
+            await conn.commit()
+        try:
+            with self.assertRaises(Exception):
+                await backend.settings_update_reminders({**original, 'enabled': False, 'reminders': [{'day_no': 2, 'dow': 2, 'hour': 10, 'minute': 0}]}, ctx)
+            self.assertEqual(await db.list_user_reminders(self.uid), [(1, 1, 9, 0)])
+            self.assertTrue(await db.get_user_notifications_enabled(self.uid))
+        finally:
+            async with db.connect_db() as conn:
+                await conn.execute('DROP TRIGGER fail_reminder_insert')
+                await conn.commit()
 
 
 if __name__ == "__main__":
