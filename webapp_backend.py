@@ -358,7 +358,7 @@ async def _create_telegram_subscription_invoice_link(
     if not plan:
         raise HTTPException(status_code=400, detail='Неизвестный тариф')
 
-    payload = f'websub:{user_id}:{plan_code}:{method}'
+    payload = f'websub:{user_id}:{plan_code}:{method}:{uuid.uuid4().hex}'
     body = {
         'title': f"Подписка — {plan['title']}",
         'description': 'Подписка на умный дневник тренировок Progressor.',
@@ -5419,14 +5419,17 @@ async def settings_trainer_request_decision(
     status = str(link[3] or "")
     if status != "pending":
         raise HTTPException(status_code=400, detail="Request already processed")
+    if decision not in {"accept", "decline"}:
+        raise HTTPException(status_code=400, detail="Unsupported decision")
+    try:
+        changed = await update_trainer_link_status(int(link[0]), "accepted" if decision == "accept" else "declined")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if not changed:
+        raise HTTPException(status_code=409, detail="Request already processed")
     if decision == "accept":
-        await update_trainer_link_status(int(link[0]), "accepted")
         await _evaluate_achievements(int(link[1]))
         await _evaluate_achievements(int(link[2]))
-    elif decision == "decline":
-        await update_trainer_link_status(int(link[0]), "declined")
-    else:
-        raise HTTPException(status_code=400, detail="Unsupported decision")
     return {"ok": True}
 
 
@@ -5450,15 +5453,18 @@ async def settings_trainer_link(
     existing = await get_latest_trainer_link_for_trainee(user_id)
     if existing and str(existing[2]) in {"pending", "accepted"}:
         raise HTTPException(status_code=400, detail="Link already exists")
-    await create_trainer_request(int(trainer_id), user_id, can_edit_plan=False)
+    try:
+        await create_trainer_request(int(trainer_id), user_id, can_edit_plan=False)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"ok": True}
 
 
 @app.post("/settings/trainer/detach")
 async def settings_trainer_detach(ctx: AuthCtx = Depends(get_auth_ctx)):
     user_id = ctx.user_id
-    link = await get_active_trainer_link_for_trainee(user_id)
-    if not link:
+    link = await get_latest_trainer_link_for_trainee(user_id)
+    if not link or str(link[2]) not in {"pending", "accepted", "trainer_disabled"}:
         return {"ok": True, "removed": False}
     await update_trainer_link_status(int(link[0]), "removed")
     return {"ok": True, "removed": True}
@@ -6388,9 +6394,13 @@ async def subscription_payment_status(payment_id: str, ctx: AuthCtx = Depends(ge
     provider = str(record.get('provider') or '')
     if provider == 'telegram':
         status = str(record.get('status') or '')
-        if status == 'paid':
+        if status in {'paid', 'paid_invoice'}:
             status = 'succeeded'
-        data = {'provider': 'telegram', 'status': status}
+        # Telegram's successful_payment handler grants the subscription once per charge.
+        # Polling an invoice must never grant those days again.
+        subscription = await db.get_active_subscription(user_id) if status == 'succeeded' else None
+        expires = subscription.get('expires_at') if subscription else None
+        return {'ok': True, 'status': status, 'activated': False, 'expires_at': expires.isoformat() if expires else None}
     else:
         data = await _yookassa_get_payment(payment_id)
         status = str(data.get('status') or '')
