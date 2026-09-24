@@ -1770,7 +1770,17 @@ async def ensure_training_system_defaults(user_id: int) -> int:
             raise RuntimeError('User not found')
         active_id = row[1]
         if active_id:
-            return int(active_id)
+            cur = await db.execute("SELECT 1 FROM training_systems WHERE id=? AND user_id=?", (active_id, user_id))
+            if await cur.fetchone():
+                return int(active_id)
+        await db.execute("BEGIN IMMEDIATE")
+        cur = await db.execute(
+            "SELECT s.id FROM users u JOIN training_systems s ON s.id=u.active_system_id AND s.user_id=u.id WHERE u.id=?",
+            (user_id,),
+        )
+        current = await cur.fetchone()
+        if current:
+            return int(current[0])
         cur = await db.execute(
             "SELECT id FROM training_systems WHERE user_id=? ORDER BY id LIMIT 1",
             (user_id,),
@@ -1879,6 +1889,10 @@ async def upsert_training_system_exercise_source(system_id: int, day_index: int,
 
 async def sync_current_plan_to_system(user_id: int, system_id: int):
     async with connect_db() as db:
+        await db.execute("BEGIN IMMEDIATE")
+        cur = await db.execute("SELECT 1 FROM training_systems WHERE id=? AND user_id=?", (system_id, user_id))
+        if not await cur.fetchone():
+            raise ValueError("system_not_found")
         await db.execute("DELETE FROM training_system_days WHERE system_id=?", (system_id,))
         await db.execute("DELETE FROM training_system_exercises WHERE system_id=?", (system_id,))
         cur = await db.execute(
@@ -1904,6 +1918,10 @@ async def sync_current_plan_to_system(user_id: int, system_id: int):
 
 async def sync_reminders_to_system(user_id: int, system_id: int):
     async with connect_db() as db:
+        await db.execute("BEGIN IMMEDIATE")
+        cur = await db.execute("SELECT 1 FROM training_systems WHERE id=? AND user_id=?", (system_id, user_id))
+        if not await cur.fetchone():
+            raise ValueError("system_not_found")
         await db.execute("DELETE FROM training_system_reminders WHERE system_id=?", (system_id,))
         cur = await db.execute(
             "SELECT day_no, dow, hour, minute FROM user_reminders WHERE user_id=?",
@@ -1919,6 +1937,10 @@ async def sync_reminders_to_system(user_id: int, system_id: int):
 
 async def apply_system_to_current_plan(user_id: int, system_id: int):
     async with connect_db() as db:
+        await db.execute("BEGIN IMMEDIATE")
+        cur = await db.execute("SELECT 1 FROM training_systems WHERE id=? AND user_id=?", (system_id, user_id))
+        if not await cur.fetchone():
+            raise ValueError("system_not_found")
         await db.execute("UPDATE users SET active_system_id=? WHERE id=?", (system_id, user_id))
         await db.execute("DELETE FROM user_days WHERE user_id=?", (user_id,))
         await db.execute("UPDATE user_exercises SET is_archived=1 WHERE user_id=?", (user_id,))
@@ -2038,6 +2060,10 @@ async def delete_training_system(user_id: int, system_id: int):
     active_id = await get_active_training_system_id(user_id)
     deleted_at = datetime.now(UTC).isoformat()
     async with connect_db() as db:
+        await db.execute("BEGIN IMMEDIATE")
+        cur = await db.execute("SELECT 1 FROM training_systems WHERE id=? AND user_id=?", (system_id, user_id))
+        if not await cur.fetchone():
+            return False
         cur = await db.execute("SELECT COUNT(*) FROM training_systems WHERE user_id=?", (user_id,))
         total = int((await cur.fetchone())[0] or 0)
         if total <= 1:
@@ -2507,15 +2533,9 @@ async def set_workouts_per_week(user_id: int, n: int) -> list[tuple[int, int, in
                 (user_id, i, label, is_active),
             )
 
-        removed_ue_ids: list[int] = []
         if removed_days:
             placeholders = ",".join("?" for _ in removed_days)
             day_params: tuple = tuple(removed_days)
-            cur = await db.execute(
-                f"SELECT id FROM user_exercises WHERE user_id=? AND day_index IN ({placeholders}) AND is_archived=0",
-                (user_id, *day_params),
-            )
-            removed_ue_ids = [int(r[0]) for r in await cur.fetchall() if r and r[0] is not None]
             await db.execute(
                 f"UPDATE user_exercises SET is_archived=1 WHERE user_id=? AND day_index IN ({placeholders}) AND is_archived=0",
                 (user_id, *day_params),
@@ -2526,13 +2546,6 @@ async def set_workouts_per_week(user_id: int, n: int) -> list[tuple[int, int, in
             )
             # Историю (sets/running_entries/sessions/day_completion_history) не удаляем,
             # сохраняем статистику навсегда.
-        if removed_ue_ids:
-            ue_placeholders = ",".join("?" for _ in removed_ue_ids)
-            await db.execute(
-                f"DELETE FROM session_exercises WHERE user_exercise_id IN ({ue_placeholders})",
-                tuple(removed_ue_ids),
-            )
-        await db.commit()
 
         removed: list[tuple[int, int, int, int]] = []
         cur = await db.execute(
@@ -2561,7 +2574,7 @@ async def set_workouts_per_week(user_id: int, n: int) -> list[tuple[int, int, in
                 "DELETE FROM user_reminders WHERE id=?",
                 ((row_id,) for row_id in to_delete),
             )
-            await db.commit()
+        await db.commit()
         return removed
 
 async def list_exercises_by_group(group: str, user_id: int, include_catalog: bool = False):
