@@ -4,6 +4,7 @@ import json
 from datetime import datetime, timedelta, timezone, UTC
 import secrets
 from contextlib import asynccontextmanager
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from typing import Optional, Sequence
 from settings import DB_PATH, DB_POOL_SIZE
 from kb_catalog import KB_CATEGORY_DEFINITION, KB_EXERCISE_NAMES
@@ -417,10 +418,24 @@ async def _seed_exercise_muscles_defaults(db):
 # Ограничиваем число одновременных операций с базой
 _db_semaphore = asyncio.BoundedSemaphore(DB_POOL_SIZE)
 
+def _local_date(timestamp, tz_name):
+    try:
+        moment = datetime.fromisoformat(str(timestamp))
+        if moment.tzinfo is None:
+            moment = moment.replace(tzinfo=UTC)
+        try:
+            zone = ZoneInfo(tz_name or "UTC")
+        except (ZoneInfoNotFoundError, ValueError, TypeError):
+            zone = UTC
+        return moment.astimezone(zone).date().isoformat()
+    except (TypeError, ValueError, OverflowError):
+        return None
+
 @asynccontextmanager
 async def connect_db():
     async with _db_semaphore:
         async with aiosqlite.connect(DB_PATH) as db:
+            await db.create_function("local_date", 2, _local_date, deterministic=True)
             yield db
 
 
@@ -3895,9 +3910,21 @@ async def create_payment_record(
     external_id: str | None = None,
     provider_charge_id: str | None = None,
     project_key: str | None = None,
+    deduplicate: bool = False,
 ) -> int:
     payload_json = json.dumps(payload or {}, ensure_ascii=False)
     async with connect_db() as db:
+        if deduplicate:
+            if not external_id:
+                raise ValueError("Missing payment id")
+            await db.execute("BEGIN IMMEDIATE")
+            existing = await (await db.execute(
+                "SELECT id, user_id, provider, amount, currency, project_key FROM payments WHERE external_id=? LIMIT 1", (external_id,)
+            )).fetchone()
+            if existing:
+                if (int(existing[1]), existing[2], int(existing[3]), existing[4], existing[5] or '') != (int(user_id), provider, int(amount), currency, project_key or ''):
+                    raise ValueError("Payment identity mismatch")
+                return int(existing[0])
         await db.execute(
             """
             INSERT INTO payments(
@@ -5628,6 +5655,7 @@ async def get_user_team(user_id: int) -> dict | None:
 async def leave_team(user_id: int) -> None:
     now = _now_utc_iso()
     async with connect_db() as db:
+        await db.execute("BEGIN IMMEDIATE")
         cur = await db.execute(
             "SELECT team_id FROM team_members WHERE user_id=? AND left_at IS NULL LIMIT 1",
             (user_id,),
@@ -5643,8 +5671,23 @@ async def leave_team(user_id: int) -> None:
             (now, user_id),
         )
         if team_id:
+            await _ensure_team_captain(db, team_id)
             await _delete_team_if_empty(db, team_id)
         await db.commit()
+
+
+async def _ensure_team_captain(db, team_id: int) -> None:
+    """Keep a nonempty team manageable after its captain leaves."""
+    captain = await (await db.execute(
+        "SELECT 1 FROM team_members WHERE team_id=? AND left_at IS NULL AND role='captain' LIMIT 1", (team_id,)
+    )).fetchone()
+    if captain:
+        return
+    successor = await (await db.execute(
+        "SELECT user_id FROM team_members WHERE team_id=? AND left_at IS NULL ORDER BY CASE WHEN role='colonel' THEN 0 ELSE 1 END, joined_at, user_id LIMIT 1", (team_id,)
+    )).fetchone()
+    if successor:
+        await db.execute("UPDATE team_members SET role='captain' WHERE team_id=? AND user_id=? AND left_at IS NULL", (team_id, successor[0]))
 
 
 async def _delete_team_if_empty(db, team_id: int) -> bool:
@@ -5722,6 +5765,7 @@ async def remove_team_member(team_id: int, captain_user_id: int, member_user_id:
         raise ValueError("cannot_remove_self")
     now = _now_utc_iso()
     async with connect_db() as db:
+        await db.execute("BEGIN IMMEDIATE")
         if not actor_is_admin:
             cur = await db.execute(
                 """
@@ -5745,6 +5789,7 @@ async def remove_team_member(team_id: int, captain_user_id: int, member_user_id:
         )
         if not cur.rowcount:
             raise ValueError("member_not_found")
+        await _ensure_team_captain(db, team_id)
         await _delete_team_if_empty(db, team_id)
         await db.commit()
 
@@ -6172,11 +6217,12 @@ async def fetch_team_leaderboard(limit: int = 10, offset: int = 0):
             completed_sessions AS (
                 SELECT s.id, s.user_id, s.date, s.day_index, s.system_id
                 FROM sessions s
+                JOIN users session_user ON session_user.id=s.user_id
                 JOIN day_completion_history dch
                   ON dch.user_id = s.user_id
                  AND dch.day_index = s.day_index
                  AND dch.system_id = s.system_id
-                 AND date(dch.completed_at) = s.date
+                 AND local_date(dch.completed_at, session_user.tz) = s.date
                 GROUP BY s.id
             ),
             recent_sessions AS (
@@ -6385,11 +6431,12 @@ async def fetch_team_profile(team_id: int, viewer_user_id: int, *, include_membe
                 WITH completed_sessions AS (
                     SELECT s.id, s.user_id, s.date, s.day_index, s.system_id
                     FROM sessions s
+                    JOIN users session_user ON session_user.id=s.user_id
                     JOIN day_completion_history dch
                       ON dch.user_id = s.user_id
                      AND dch.day_index = s.day_index
                      AND dch.system_id = s.system_id
-                     AND date(dch.completed_at) = s.date
+                     AND local_date(dch.completed_at, session_user.tz) = s.date
                     GROUP BY s.id
                 ),
                 recent_sessions AS (
@@ -7411,26 +7458,35 @@ async def set_trainer_accepting_requests(user_id: int, accepting: bool) -> None:
 
 async def reactivate_trainer_links(trainer_user_id: int) -> list[int]:
     async with connect_db() as db:
+        await db.execute("BEGIN IMMEDIATE")
+        premium = await (await db.execute("SELECT 1 FROM subscriptions WHERE user_id=? AND status='active' AND julianday(expires_at)>julianday('now') LIMIT 1", (trainer_user_id,))).fetchone()
+        count = (await (await db.execute("SELECT COUNT(*) FROM trainer_links WHERE trainer_user_id=? AND status='accepted'", (trainer_user_id,))).fetchone())[0]
+        limit = -1 if premium else max(0, 5 - count)
         cur = await db.execute(
             """
-            SELECT trainee_user_id
-            FROM trainer_links
-            WHERE trainer_user_id = ?
-              AND status = 'trainer_disabled'
+            SELECT tl.id, tl.trainee_user_id
+            FROM trainer_links tl
+            WHERE tl.trainer_user_id = ?
+              AND tl.status = 'trainer_disabled'
+              AND tl.id = (SELECT MAX(previous.id) FROM trainer_links previous
+                WHERE previous.trainer_user_id=tl.trainer_user_id AND previous.trainee_user_id=tl.trainee_user_id AND previous.status='trainer_disabled')
+              AND NOT EXISTS (
+                SELECT 1 FROM trainer_links active
+                WHERE active.status IN ('pending','accepted')
+                  AND (active.trainee_user_id=tl.trainee_user_id
+                    OR (active.trainer_user_id=tl.trainee_user_id AND active.trainee_user_id=tl.trainer_user_id))
+              )
+            ORDER BY tl.id
+            LIMIT ?
             """,
-            (trainer_user_id,),
+            (trainer_user_id, limit),
         )
         rows = await cur.fetchall()
-        trainee_ids = [int(row[0]) for row in rows if row and row[0] is not None]
+        trainee_ids = [int(row[1]) for row in rows]
         if trainee_ids:
-            await db.execute(
-                """
-                UPDATE trainer_links
-                SET status = 'accepted'
-                WHERE trainer_user_id = ?
-                  AND status = 'trainer_disabled'
-                """,
-                (trainer_user_id,),
+            await db.executemany(
+                "UPDATE trainer_links SET status='accepted' WHERE id=?",
+                [(row[0],) for row in rows],
             )
             await db.commit()
         return trainee_ids
@@ -7443,7 +7499,7 @@ async def get_trainer_link(trainer_user_id: int, trainee_user_id: int):
             SELECT id, status, can_edit_plan, trainer_label, trainee_label
             FROM trainer_links
             WHERE trainer_user_id = ? AND trainee_user_id = ?
-            ORDER BY created_at DESC
+            ORDER BY created_at DESC, id DESC
             LIMIT 1
             """,
             (trainer_user_id, trainee_user_id),
@@ -7458,7 +7514,7 @@ async def get_active_trainer_link_for_trainee(trainee_user_id: int):
             SELECT id, trainer_user_id, status, can_edit_plan, trainer_label, trainee_label
             FROM trainer_links
             WHERE trainee_user_id = ? AND status = 'accepted'
-            ORDER BY created_at DESC
+            ORDER BY created_at DESC, id DESC
             LIMIT 1
             """,
             (trainee_user_id,),
@@ -7473,7 +7529,7 @@ async def get_latest_trainer_link_for_trainee(trainee_user_id: int):
             SELECT id, trainer_user_id, status, can_edit_plan, trainer_label, trainee_label
             FROM trainer_links
             WHERE trainee_user_id = ?
-            ORDER BY created_at DESC
+            ORDER BY created_at DESC, id DESC
             LIMIT 1
             """,
             (trainee_user_id,),
@@ -7485,6 +7541,26 @@ async def create_trainer_request(
     trainer_user_id: int, trainee_user_id: int, *, can_edit_plan: bool = False
 ):
     async with connect_db() as db:
+        await db.execute("BEGIN IMMEDIATE")
+        if trainer_user_id == trainee_user_id:
+            raise ValueError("Нельзя отправить заявку самому себе")
+        trainer = await (await db.execute("SELECT is_trainer, trainer_accepts_requests FROM users WHERE id=?", (trainer_user_id,))).fetchone()
+        if not trainer or not trainer[0] or not trainer[1]:
+            raise ValueError("Тренер сейчас не принимает заявки")
+        existing = await (await db.execute(
+            "SELECT id, trainer_user_id FROM trainer_links WHERE trainee_user_id=? AND status IN ('pending','accepted') ORDER BY id DESC LIMIT 1",
+            (trainee_user_id,),
+        )).fetchone()
+        if existing:
+            if int(existing[1]) == trainer_user_id:
+                return int(existing[0])
+            raise ValueError("Уже есть тренер или заявка другому тренеру")
+        reverse = await (await db.execute(
+            "SELECT 1 FROM trainer_links WHERE trainer_user_id=? AND trainee_user_id=? AND status IN ('pending','accepted')",
+            (trainee_user_id, trainer_user_id),
+        )).fetchone()
+        if reverse:
+            raise ValueError("Этот пользователь уже связан с вами как подопечный")
         created_at = _now_iso()
         cur = await db.execute(
             """
@@ -7569,11 +7645,33 @@ async def count_trainer_trainees(trainer_user_id: int) -> int:
 
 async def update_trainer_link_status(link_id: int, status: str):
     async with connect_db() as db:
-        await db.execute(
+        await db.execute("BEGIN IMMEDIATE")
+        row = await (await db.execute("SELECT trainer_user_id, trainee_user_id, status FROM trainer_links WHERE id=?", (link_id,))).fetchone()
+        if not row:
+            return False
+        trainer_id, trainee_id, current = row
+        if status in {"accepted", "declined", "rejected"} and current != "pending":
+            return False
+        if status == "accepted":
+            trainer = await (await db.execute("SELECT is_trainer FROM users WHERE id=?", (trainer_id,))).fetchone()
+            if not trainer or not trainer[0]:
+                raise ValueError("Тренерский режим выключен")
+            other = await (await db.execute(
+                "SELECT 1 FROM trainer_links WHERE id<>? AND status IN ('pending','accepted') AND (trainee_user_id=? OR (trainer_user_id=? AND trainee_user_id=?)) LIMIT 1",
+                (link_id, trainee_id, trainee_id, trainer_id),
+            )).fetchone()
+            if other:
+                raise ValueError("У подопечного уже есть другая активная связь")
+            premium = await (await db.execute("SELECT 1 FROM subscriptions WHERE user_id=? AND status='active' AND julianday(expires_at)>julianday('now') LIMIT 1", (trainer_id,))).fetchone()
+            count = (await (await db.execute("SELECT COUNT(*) FROM trainer_links WHERE trainer_user_id=? AND status='accepted'", (trainer_id,))).fetchone())[0]
+            if not premium and count >= 5:
+                raise ValueError("Лимит подопечных достигнут (5)")
+        cur = await db.execute(
             "UPDATE trainer_links SET status = ? WHERE id = ?",
             (status, link_id),
         )
         await db.commit()
+        return cur.rowcount > 0
 
 
 async def deactivate_trainer_links(
@@ -7667,6 +7765,7 @@ async def set_exercise_muscle_group(exercise_id: int, muscle_group: str | None):
 
 async def set_exercise_muscle_group_for_user(user_id: int, exercise_id: int, muscle_group: str | None) -> int:
     async with connect_db() as db:
+        await db.execute("BEGIN IMMEDIATE")
         cur = await db.execute(
             "SELECT name, created_by_user_id FROM exercises WHERE id=? LIMIT 1",
             (int(exercise_id),),
@@ -7700,18 +7799,65 @@ async def set_exercise_muscle_group_for_user(user_id: int, exercise_id: int, mus
                 (ex_name, muscle_group, int(user_id)),
             )
             new_exercise_id = int(cur.lastrowid)
+            await db.execute(
+                "INSERT OR IGNORE INTO exercise_muscles(exercise_id,muscle_code,weight_pct) SELECT ?,muscle_code,weight_pct FROM exercise_muscles WHERE exercise_id=?",
+                (new_exercise_id, exercise_id),
+            )
+        collisions = await (await db.execute(
+            "SELECT old.id, existing.id FROM user_exercises old JOIN user_exercises existing ON existing.user_id=old.user_id AND existing.day_index=old.day_index WHERE old.user_id=? AND old.exercise_id=? AND existing.exercise_id=?",
+            (user_id, exercise_id, new_exercise_id),
+        )).fetchall()
+        for retained_id, duplicate_id in collisions:
+            # Keep the original row id so an open exercise continues to refer to it.
+            sessions = await (await db.execute("SELECT DISTINCT session_id FROM sets WHERE user_exercise_id=?", (duplicate_id,))).fetchall()
+            for (session_id,) in sessions:
+                offset = (await (await db.execute("SELECT COALESCE(MAX(set_no),0) FROM sets WHERE session_id=? AND user_exercise_id=?", (session_id, retained_id))).fetchone())[0]
+                await db.execute("UPDATE sets SET user_exercise_id=?, set_no=set_no+? WHERE session_id=? AND user_exercise_id=?", (retained_id, offset, session_id, duplicate_id))
+            await db.execute(
+                """INSERT INTO session_exercises(session_id,user_exercise_id,is_done,is_microcycle,done_at,last_reps,last_seconds,last_weight,note)
+                SELECT session_id,?,is_done,is_microcycle,done_at,last_reps,last_seconds,last_weight,note FROM session_exercises WHERE user_exercise_id=?
+                ON CONFLICT(session_id,user_exercise_id) DO UPDATE SET
+                  is_done=MAX(COALESCE(session_exercises.is_done,0),COALESCE(excluded.is_done,0)),
+                  is_microcycle=MAX(COALESCE(session_exercises.is_microcycle,0),COALESCE(excluded.is_microcycle,0)),
+                  done_at=MAX(COALESCE(session_exercises.done_at,''),COALESCE(excluded.done_at,'')),
+                  last_reps=COALESCE(session_exercises.last_reps,excluded.last_reps),
+                  last_seconds=COALESCE(session_exercises.last_seconds,excluded.last_seconds),
+                  last_weight=COALESCE(session_exercises.last_weight,excluded.last_weight),
+                  note=CASE WHEN COALESCE(session_exercises.note,'')='' THEN excluded.note
+                    WHEN COALESCE(excluded.note,'')='' OR session_exercises.note=excluded.note THEN session_exercises.note
+                    ELSE session_exercises.note || char(10) || excluded.note END""",
+                (retained_id, duplicate_id),
+            )
+            await db.execute("DELETE FROM session_exercises WHERE user_exercise_id=?", (duplicate_id,))
+            await db.execute("UPDATE running_entries SET user_exercise_id=? WHERE user_exercise_id=?", (retained_id, duplicate_id))
+            await db.execute("UPDATE user_exercises SET is_archived=MIN(is_archived,(SELECT is_archived FROM user_exercises WHERE id=?)) WHERE id=?", (duplicate_id, retained_id))
+            await db.execute("DELETE FROM user_exercises WHERE id=?", (duplicate_id,))
         await db.execute(
             "UPDATE user_exercises SET exercise_id=? WHERE user_id=? AND exercise_id=?",
             (new_exercise_id, int(user_id), int(exercise_id)),
         )
         await db.execute(
-            "UPDATE exercise_notes SET exercise_id=? WHERE user_id=? AND exercise_id=?",
+            """INSERT INTO exercise_notes(user_id,exercise_id,note,updated_at)
+            SELECT user_id,?,note,updated_at FROM exercise_notes WHERE user_id=? AND exercise_id=?
+            ON CONFLICT(user_id,exercise_id) DO UPDATE SET
+              note=CASE WHEN COALESCE(exercise_notes.note,'')='' THEN excluded.note
+                WHEN COALESCE(excluded.note,'')='' OR exercise_notes.note=excluded.note THEN exercise_notes.note
+                ELSE exercise_notes.note || char(10) || excluded.note END,
+              updated_at=MAX(COALESCE(exercise_notes.updated_at,''),COALESCE(excluded.updated_at,''))""",
             (new_exercise_id, int(user_id), int(exercise_id)),
         )
         await db.execute(
-            "UPDATE user_exercise_muscles SET exercise_id=? WHERE user_id=? AND exercise_id=?",
+            "INSERT OR IGNORE INTO user_exercise_muscles(user_id,exercise_id,muscle_code,weight_pct) SELECT user_id,?,muscle_code,weight_pct FROM user_exercise_muscles WHERE user_id=? AND exercise_id=?",
             (new_exercise_id, int(user_id), int(exercise_id)),
         )
+        for table in ('exercise_notes', 'user_exercise_muscles'):
+            await db.execute(f"DELETE FROM {table} WHERE user_id=? AND exercise_id=?", (user_id, exercise_id))
+        await db.execute("INSERT OR IGNORE INTO exercise_baseline(user_id,day_index,exercise_id,sets,reps,seconds,weight_kg) SELECT user_id,day_index,?,sets,reps,seconds,weight_kg FROM exercise_baseline WHERE user_id=? AND exercise_id=?", (new_exercise_id, user_id, exercise_id))
+        await db.execute("DELETE FROM exercise_baseline WHERE user_id=? AND exercise_id=?", (user_id, exercise_id))
+        await db.execute("UPDATE running_entries SET exercise_id=? WHERE user_id=? AND exercise_id=?", (new_exercise_id, user_id, exercise_id))
+        for table, columns in (('training_system_exercises', ''), ('training_system_exercise_sources', ',source_payload')):
+            await db.execute(f"INSERT OR IGNORE INTO {table}(system_id,day_index,exercise_id{columns}) SELECT system_id,day_index,?{columns} FROM {table} WHERE exercise_id=? AND system_id IN (SELECT id FROM training_systems WHERE user_id=?)", (new_exercise_id, exercise_id, user_id))
+            await db.execute(f"DELETE FROM {table} WHERE exercise_id=? AND system_id IN (SELECT id FROM training_systems WHERE user_id=?)", (exercise_id, user_id))
         await db.commit()
         return new_exercise_id
 
