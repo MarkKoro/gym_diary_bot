@@ -124,6 +124,11 @@ async def _fetch_team_metrics(team_id: int) -> dict:
         JOIN sessions s ON s.user_id = tm.user_id
         WHERE tm.team_id=? AND tm.left_at IS NULL
           AND s.date >= date('now', '-7 day')
+          AND EXISTS (
+              SELECT 1 FROM day_completion_history d
+              WHERE d.user_id=s.user_id AND d.system_id=s.system_id
+                AND d.day_index=s.day_index AND date(d.completed_at)=s.date
+          )
         """
         active_members_7d = int((await (await conn.execute(active_members_q, (team_id,))).fetchone())[0] or 0)
 
@@ -133,6 +138,11 @@ async def _fetch_team_metrics(team_id: int) -> dict:
             SUM(CASE WHEN s.date >= date('now', '-28 day') THEN 1 ELSE 0 END)
         FROM team_members tm
         LEFT JOIN sessions s ON s.user_id = tm.user_id
+          AND EXISTS (
+              SELECT 1 FROM day_completion_history d
+              WHERE d.user_id=s.user_id AND d.system_id=s.system_id
+                AND d.day_index=s.day_index AND date(d.completed_at)=s.date
+          )
         WHERE tm.team_id=? AND tm.left_at IS NULL
         """
         sessions_row = await (await conn.execute(sessions_q, (team_id,))).fetchone()
@@ -168,14 +178,30 @@ async def _fetch_team_metrics(team_id: int) -> dict:
         ).fetchall()
 
         night_q = """
-            SELECT COUNT(*)
+            SELECT MIN(dch.completed_at), u.tz
             FROM day_completion_history dch
             JOIN team_members tm ON tm.user_id = dch.user_id
+            JOIN users u ON u.id = dch.user_id
             WHERE tm.team_id=? AND tm.left_at IS NULL
               AND dch.completed_at >= datetime('now', '-28 day')
-              AND (CAST(strftime('%H', dch.completed_at) AS INTEGER) >= 23 OR CAST(strftime('%H', dch.completed_at) AS INTEGER) <= 4)
+            GROUP BY dch.user_id, dch.system_id, dch.day_index, date(dch.completed_at)
         """
-        night_sessions_28 = int((await (await conn.execute(night_q, (team_id,))).fetchone() or [0])[0] or 0)
+        night_rows = await (await conn.execute(night_q, (team_id,))).fetchall()
+
+    night_sessions_28 = 0
+    for completed_at, tz_name in night_rows:
+        try:
+            dt = datetime.fromisoformat(str(completed_at))
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=UTC)
+            try:
+                tz = ZoneInfo(tz_name or "UTC")
+            except Exception:
+                tz = ZoneInfo("UTC")
+            local_hour = dt.astimezone(tz).hour
+            night_sessions_28 += int(local_hour >= 23 or local_hour <= 4)
+        except (TypeError, ValueError):
+            continue
 
     top1_streak_days = 0
     expected_day = datetime.now(UTC).date()
@@ -216,10 +242,7 @@ async def _fetch_metrics(user_id: int) -> dict:
         q = "SELECT COUNT(*) FROM sets st JOIN sessions s ON s.id=st.session_id WHERE s.user_id=? AND COALESCE(st.is_warmup,0)=0"
         sets_non_warmup = int((await (await conn.execute(q, (user_id,))).fetchone())[0] or 0)
 
-        q = "SELECT COUNT(*) FROM day_completion_history WHERE user_id=?"
-        day_done_total = int((await (await conn.execute(q, (user_id,))).fetchone())[0] or 0)
-
-        q = "SELECT completed_at FROM day_completion_history WHERE user_id=? ORDER BY completed_at ASC"
+        q = "SELECT system_id, day_index, completed_at FROM day_completion_history WHERE user_id=? ORDER BY completed_at ASC"
         completed_rows = await (await conn.execute(q, (user_id,))).fetchall()
 
         q = """
@@ -244,7 +267,7 @@ async def _fetch_metrics(user_id: int) -> dict:
         active_user_exercises = int((await (await conn.execute(q, (user_id,))).fetchone())[0] or 0)
 
         q = "SELECT COALESCE(leaderboard_visible,1) FROM users WHERE id=?"
-        leaderboard_visible = bool(int((await (await conn.execute(q, (user_id,))).fetchone() or [1])[0] or 1))
+        leaderboard_visible = bool(int((await (await conn.execute(q, (user_id,))).fetchone() or [1])[0]))
 
         q = """
         SELECT COUNT(*)
@@ -254,7 +277,7 @@ async def _fetch_metrics(user_id: int) -> dict:
             SELECT 1 FROM day_completion_history d
             WHERE d.user_id=? AND d.system_id=ce.target_system_id
             GROUP BY d.system_id
-            HAVING COUNT(*) >= 3
+            HAVING COUNT(DISTINCT date(d.completed_at)) >= 3
           )
         """
         copied_plan_3days = int((await (await conn.execute(q, (user_id, user_id))).fetchone())[0] or 0)
@@ -306,18 +329,23 @@ async def _fetch_metrics(user_id: int) -> dict:
                 captain_recruits_count = int((await (await conn.execute(q, (team_id,))).fetchone())[0] or 0)
 
     local_dates: list[datetime] = []
-    for (iso_ts,) in completed_rows:
+    completed_days = set()
+    for system_id, day_index, iso_ts in completed_rows:
         try:
             dt = datetime.fromisoformat(str(iso_ts))
         except Exception:
             continue
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=UTC)
-        local_dates.append(dt.astimezone(tz))
+        local_dt = dt.astimezone(tz)
+        completion_key = (system_id, day_index, local_dt.date())
+        if completion_key not in completed_days:
+            completed_days.add(completion_key)
+            local_dates.append(local_dt)
 
     return {
         "sets_non_warmup": sets_non_warmup,
-        "day_done_total": day_done_total,
+        "day_done_total": len(completed_days),
         "local_completions": local_dates,
         "variety_week": variety_week,
         "volume": volume,
@@ -340,6 +368,7 @@ async def _fetch_metrics(user_id: int) -> dict:
         "captain_recruits_count": captain_recruits_count,
         "team_joined_at": team_joined_at_raw,
         "team_night_sessions_28": int(t["night_sessions_28"]) if team_id is not None else 0,
+        "team_metrics": t if team_id is not None else None,
     }
 
 
@@ -366,9 +395,9 @@ def _has_comeback_14(local_completions: list[datetime]) -> bool:
     return False
 
 
-async def evaluate_team(team_id: int) -> dict:
+async def evaluate_team(team_id: int, *, metrics: dict | None = None) -> dict:
     existing_team = set(await db.list_team_achievements(team_id))
-    m = await _fetch_team_metrics(team_id)
+    m = metrics if metrics is not None else await _fetch_team_metrics(team_id)
 
     checks = {
         "t_foundation": m["members_count"] >= 1,
@@ -451,7 +480,7 @@ async def evaluate(user_id: int) -> dict:
     }
 
     if m["team_id"] is not None:
-        await evaluate_team(int(m["team_id"]))
+        await evaluate_team(int(m["team_id"]), metrics=m.get("team_metrics"))
 
     newly: list[str] = []
     now_iso = datetime.now(UTC).isoformat()
