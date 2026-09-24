@@ -10109,8 +10109,8 @@
       }
       if (normalized === 'achievements') {
         renderAchievementsScreen();
-        if (!state.achievements.loaded && !state.achievements.loading) loadAchievementsOverview();
-        else markAchievementsAsSeen();
+        if (!state.achievements.loading) loadAchievementsOverview();
+        markAchievementsAsSeen();
       }
       if (normalized === 'settings') {
         const pendingView = state.settings.pendingView || 'menu';
