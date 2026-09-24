@@ -2506,7 +2506,9 @@ async def complete_day(
     user_id = ctx.user_id
     await _validate_day(user_id, day_index)
     target_date = _parse_date_param(date)
-    completed_at = datetime.combine(target_date, time.min, tzinfo=UTC).isoformat()
+    zone = resolve_user_zone(await get_user_timezone(user_id))
+    local_now = datetime.now(zone)
+    completed_at = datetime.combine(target_date, local_now.timetz()).astimezone(UTC).isoformat()
     active_system_id = await get_active_training_system_id(user_id)
     await mark_day_completed(user_id, day_index, completed_at, active_system_id)
     await mark_copy_trained(user_id, active_system_id, completed_at)
@@ -5762,6 +5764,7 @@ async def teams_me(ctx: AuthCtx = Depends(get_auth_ctx)):
             "bg_code": team.get("bg_code"),
             "emblem_code": team.get("emblem_code"),
             "role": team["role"],
+            "owner_user_id": int(team["owner_user_id"]),
         }
     }
 
@@ -5793,7 +5796,11 @@ async def teams_create(payload: dict = Body(default_factory=dict), ctx: AuthCtx 
         return False
 
     is_open = _parse_bool_flag(payload.get('is_open', False))
-    team = await create_team(user_id, raw_name, is_open=is_open)
+    try:
+        team = await create_team(user_id, raw_name, is_open=is_open)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    await _evaluate_achievements(user_id)
     return {'ok': True, 'team': team}
 
 
@@ -5997,15 +6004,18 @@ async def teams_leaderboard(
     await upsert_team_daily_scores(day_utc, top_for_snapshot)
 
     newly_unlocked_map: dict[int, list[str]] = {}
-    for team_item in top_for_snapshot:
-        team_id = int(team_item['team_id'])
+    me_team = await get_user_team(int(ctx.user_id))
+    my_team_id = int(me_team['team_id']) if me_team else None
+    # Only evaluate teams needed by this response; keep ranking history for the full top.
+    evaluation_ids = {int(item['team_id']) for item in page}
+    if my_team_id:
+        evaluation_ids.add(my_team_id)
+    for team_id in sorted(evaluation_ids):
         eval_payload = await evaluate_team(team_id)
         newly = [str(c) for c in eval_payload.get('newly_unlocked_team_codes', [])]
         if newly:
             newly_unlocked_map[team_id] = newly
 
-    me_team = await get_user_team(int(ctx.user_id))
-    my_team_id = int(me_team['team_id']) if me_team else None
     my_item = next((item for item in full if my_team_id and int(item['team_id']) == my_team_id), None)
 
     my_allowed = None
@@ -6074,11 +6084,7 @@ async def teams_leaderboard(
         'my_team_id': my_team_id,
     }
     if newly_unlocked_map:
-        response['teams_newly_unlocked'] = {
-            int(item['team_id']): newly_unlocked_map[int(item['team_id'])]
-            for item in page
-            if int(item['team_id']) in newly_unlocked_map
-        }
+        response['teams_newly_unlocked'] = newly_unlocked_map
     return response
 
 
@@ -6089,6 +6095,7 @@ async def teams_style_options(ctx: AuthCtx = Depends(get_auth_ctx)):
         raise HTTPException(status_code=403, detail='captain_only')
 
     team_id = int(me_team['team_id'])
+    await evaluate_team(team_id)
     earned = set(await list_team_achievements(team_id))
     allowed_raw = team_style_options_for_codes(earned)
     allowed = {
