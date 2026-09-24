@@ -122,12 +122,13 @@ async def _fetch_team_metrics(team_id: int) -> dict:
         SELECT COUNT(DISTINCT tm.user_id)
         FROM team_members tm
         JOIN sessions s ON s.user_id = tm.user_id
+        JOIN users u ON u.id = tm.user_id
         WHERE tm.team_id=? AND tm.left_at IS NULL
           AND s.date >= date('now', '-7 day')
           AND EXISTS (
               SELECT 1 FROM day_completion_history d
               WHERE d.user_id=s.user_id AND d.system_id=s.system_id
-                AND d.day_index=s.day_index AND date(d.completed_at)=s.date
+                AND d.day_index=s.day_index AND local_date(d.completed_at, u.tz)=s.date
           )
         """
         active_members_7d = int((await (await conn.execute(active_members_q, (team_id,))).fetchone())[0] or 0)
@@ -137,11 +138,12 @@ async def _fetch_team_metrics(team_id: int) -> dict:
             SUM(CASE WHEN s.date >= date('now', '-7 day') THEN 1 ELSE 0 END),
             SUM(CASE WHEN s.date >= date('now', '-28 day') THEN 1 ELSE 0 END)
         FROM team_members tm
+        JOIN users u ON u.id = tm.user_id
         LEFT JOIN sessions s ON s.user_id = tm.user_id
           AND EXISTS (
               SELECT 1 FROM day_completion_history d
               WHERE d.user_id=s.user_id AND d.system_id=s.system_id
-                AND d.day_index=s.day_index AND date(d.completed_at)=s.date
+                AND d.day_index=s.day_index AND local_date(d.completed_at, u.tz)=s.date
           )
         WHERE tm.team_id=? AND tm.left_at IS NULL
         """
@@ -184,7 +186,7 @@ async def _fetch_team_metrics(team_id: int) -> dict:
             JOIN users u ON u.id = dch.user_id
             WHERE tm.team_id=? AND tm.left_at IS NULL
               AND dch.completed_at >= datetime('now', '-28 day')
-            GROUP BY dch.user_id, dch.system_id, dch.day_index, date(dch.completed_at)
+            GROUP BY dch.user_id, dch.system_id, dch.day_index, local_date(dch.completed_at, u.tz)
         """
         night_rows = await (await conn.execute(night_q, (team_id,))).fetchall()
 
@@ -299,8 +301,9 @@ async def _fetch_metrics(user_id: int) -> dict:
         accepted_trainer_links = int((await (await conn.execute(q, (user_id,))).fetchone())[0] or 0)
 
         q = """
-        SELECT tm.team_id, tm.role, tm.joined_at
+        SELECT tm.team_id, tm.role, tm.joined_at, t.owner_user_id
         FROM team_members tm
+        JOIN teams t ON t.id=tm.team_id
         WHERE tm.user_id=? AND tm.left_at IS NULL
         LIMIT 1
         """
@@ -361,6 +364,7 @@ async def _fetch_metrics(user_id: int) -> dict:
         "accepted_trainer_links": accepted_trainer_links,
         "team_id": team_id,
         "team_role": team_role,
+        "team_is_founder": bool(team_row and int(team_row[3]) == user_id),
         "team_members_count": team_members_count,
         "team_best_rank_7": team_best_rank_7,
         "team_top1_streak_days": team_top1_streak_days,
@@ -466,7 +470,7 @@ async def evaluate(user_id: int) -> dict:
         "day_done_50": m["day_done_total"] >= 50,
         "night_shift": any(d.hour >= 23 or d.hour <= 4 for d in m["local_completions"]),
         "team_joined": m["team_id"] is not None,
-        "team_founder": m["team_role"] == "captain",
+        "team_founder": m["team_is_founder"],
         "team_full_roster": m["team_id"] is not None and m["team_members_count"] >= 8,
         "team_top10_week": m["team_best_rank_7"] is not None and m["team_best_rank_7"] <= 10,
         "team_top3_week": m["team_best_rank_7"] is not None and m["team_best_rank_7"] <= 3,
