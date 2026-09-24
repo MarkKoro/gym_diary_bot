@@ -5179,6 +5179,9 @@ async def settings_workouts_per_week(
         value = 0
     value = max(1, min(7, value))
     await set_workouts_per_week(user_id, value)
+    active_system_id = await get_active_training_system_id(user_id)
+    await sync_current_plan_to_system(user_id, active_system_id)
+    await sync_reminders_to_system(user_id, active_system_id)
     wpw, active_days = await _load_user_settings(user_id)
     return {
         "ok": True,
@@ -5203,16 +5206,9 @@ async def settings_custom_group_delete(
                 UPDATE exercises
                 SET muscle_group='none'
                 WHERE LOWER(COALESCE(muscle_group, ''))=?
-                  AND (
-                    created_by_user_id=?
-                    OR EXISTS (
-                      SELECT 1
-                      FROM user_exercises ue
-                      WHERE ue.exercise_id=exercises.id AND ue.user_id=?
-                    )
-                  )
+                  AND created_by_user_id=?
                 """,
-                (normalized, int(user_id), int(user_id)),
+                (normalized, int(user_id)),
             )
             affected_exercises = int(cur.rowcount or 0)
             await conn.commit()
@@ -5226,33 +5222,59 @@ async def settings_update_reminders(
 ):
     user_id = ctx.user_id
     enabled = payload.get("enabled", True)
-    await set_user_notifications_enabled(user_id, bool(enabled))
+    if not isinstance(enabled, bool):
+        raise HTTPException(status_code=400, detail="Некорректное состояние уведомлений")
     timezone = str(payload.get("timezone") or "").strip()
     if timezone and timezone not in ALLOWED_REMINDER_TIMEZONES:
         timezone = "UTC"
     if not timezone:
         timezone = "UTC"
-    await set_user_timezone(user_id, timezone)
     reminders = payload.get("reminders") or []
-    await clear_user_reminders(user_id)
+    if not isinstance(reminders, list):
+        raise HTTPException(status_code=400, detail="Некорректное расписание")
+    clean_reminders = []
+    seen_days = set()
     for reminder in reminders:
         if not isinstance(reminder, dict):
-            continue
+            raise HTTPException(status_code=400, detail="Некорректное напоминание")
         try:
             day_no = int(reminder.get("day_no", 0))
             dow = int(reminder.get("dow", 0))
             hour = int(reminder.get("hour", 0))
             minute = int(reminder.get("minute", 0))
         except (TypeError, ValueError):
-            continue
-        if day_no <= 0:
-            continue
-        if not 0 <= dow <= 6:
-            continue
+            raise HTTPException(status_code=400, detail="Некорректное напоминание")
+        if not 1 <= day_no <= 7 or not 0 <= dow <= 6 or day_no in seen_days:
+            raise HTTPException(status_code=400, detail="Некорректный день напоминания")
+        seen_days.add(day_no)
         hour, minute = normalize_reminder_time(hour, minute)
-        await add_user_reminder(user_id, dow, hour, minute, day_no=day_no)
-    await set_app_meta("reminders_updated_at", datetime.now(UTC).isoformat())
-    await sync_reminders_to_system(user_id, await get_active_training_system_id(user_id))
+        clean_reminders.append((day_no, dow, hour, minute))
+    await ensure_training_system_defaults(user_id)
+    async with db.connect_db() as conn:
+        await conn.execute("BEGIN IMMEDIATE")
+        row = await (await conn.execute(
+            "SELECT s.id FROM users u JOIN training_systems s ON s.id=u.active_system_id AND s.user_id=u.id WHERE u.id=?",
+            (user_id,),
+        )).fetchone()
+        if not row:
+            raise HTTPException(status_code=409, detail="Система тренировок изменилась. Повтори сохранение.")
+        system_id = int(row[0])
+        await conn.execute("UPDATE users SET notifications_enabled=?, tz=? WHERE id=?", (int(enabled), timezone, user_id))
+        await conn.execute("DELETE FROM user_reminders WHERE user_id=?", (user_id,))
+        await conn.execute("DELETE FROM training_system_reminders WHERE system_id=?", (system_id,))
+        await conn.executemany(
+            "INSERT INTO user_reminders(user_id, day_no, dow, hour, minute) VALUES(?,?,?,?,?)",
+            [(user_id, *item) for item in clean_reminders],
+        )
+        await conn.executemany(
+            "INSERT INTO training_system_reminders(system_id, day_no, dow, hour, minute) VALUES(?,?,?,?,?)",
+            [(system_id, *item) for item in clean_reminders],
+        )
+        await conn.execute(
+            "INSERT INTO app_meta(key,value) VALUES('reminders_updated_at',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            (datetime.now(UTC).isoformat(),),
+        )
+        await conn.commit()
     return {"ok": True}
 
 
@@ -5626,7 +5648,10 @@ async def systems_select(system_id: int, ctx: AuthCtx = Depends(get_auth_ctx)):
     user_id = ctx.user_id
     await sync_current_plan_to_system(user_id, await get_active_training_system_id(user_id))
     await sync_reminders_to_system(user_id, await get_active_training_system_id(user_id))
-    await apply_system_to_current_plan(user_id, int(system_id))
+    try:
+        await apply_system_to_current_plan(user_id, int(system_id))
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail='system_not_found') from exc
     return {'ok': True}
 
 
