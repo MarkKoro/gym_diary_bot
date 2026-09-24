@@ -5485,8 +5485,16 @@ async def create_team(owner_user_id: int, name: str, is_open: bool = False) -> d
         raise ValueError("team_name_required")
 
     async with connect_db() as db:
+        await db.execute("BEGIN IMMEDIATE")
+        cur = await db.execute(
+            "SELECT 1 FROM team_members WHERE user_id=? AND left_at IS NULL LIMIT 1",
+            (owner_user_id,),
+        )
+        if await cur.fetchone():
+            raise ValueError("already_in_team")
         now = _now_utc_iso()
         for _ in range(10):
+            await db.execute("SAVEPOINT create_team_attempt")
             join_code = _generate_team_join_code()
             try:
                 cur = await db.execute(
@@ -5515,7 +5523,9 @@ async def create_team(owner_user_id: int, name: str, is_open: bool = False) -> d
                     "emblem_code": None,
                 }
             except aiosqlite.IntegrityError:
-                await db.rollback()
+                # Retain the write lock and membership check when retrying a code collision.
+                await db.execute("ROLLBACK TO create_team_attempt")
+                await db.execute("RELEASE create_team_attempt")
                 continue
     raise RuntimeError("team_join_code_generation_failed")
 
@@ -5733,6 +5743,7 @@ async def set_team_member_role(team_id: int, captain_user_id: int, member_user_i
     if safe_role == "captain":
         raise ValueError("captain_role_locked")
     async with connect_db() as db:
+        await db.execute("BEGIN IMMEDIATE")
         if not actor_is_admin:
             cur = await db.execute(
                 """
@@ -5745,6 +5756,15 @@ async def set_team_member_role(team_id: int, captain_user_id: int, member_user_i
             )
             if not await cur.fetchone():
                 raise ValueError("not_team_captain")
+        cur = await db.execute(
+            "SELECT role FROM team_members WHERE team_id=? AND user_id=? AND left_at IS NULL",
+            (team_id, member_user_id),
+        )
+        member = await cur.fetchone()
+        if not member:
+            raise ValueError("member_not_found")
+        if member[0] == "captain":
+            raise ValueError("captain_role_locked")
         cur = await db.execute(
             """
             UPDATE team_members
@@ -5761,6 +5781,10 @@ async def set_team_member_role(team_id: int, captain_user_id: int, member_user_i
 async def create_or_get_join_request(team_id: int, user_id: int) -> dict:
     now = _now_utc_iso()
     async with connect_db() as db:
+        await db.execute("BEGIN IMMEDIATE")
+        cur = await db.execute("SELECT 1 FROM teams WHERE id=?", (team_id,))
+        if not await cur.fetchone():
+            raise ValueError("team_not_found")
         cur = await db.execute(
             "SELECT 1 FROM team_members WHERE user_id=? AND left_at IS NULL LIMIT 1",
             (user_id,),
@@ -5948,6 +5972,7 @@ async def _get_captain_team_for_request(db, request_id: int, captain_user_id: in
 async def accept_team_request(request_id: int, captain_user_id: int) -> dict:
     now = _now_utc_iso()
     async with connect_db() as db:
+        await db.execute("BEGIN IMMEDIATE")
         row = await _get_captain_team_for_request(db, request_id, captain_user_id)
         if not row:
             raise ValueError("not_team_captain")
@@ -6078,6 +6103,10 @@ def _clamp_0_100(value: float) -> int:
 async def join_team_direct(team_id: int, user_id: int) -> None:
     now = _now_utc_iso()
     async with connect_db() as db:
+        await db.execute("BEGIN IMMEDIATE")
+        cur = await db.execute("SELECT 1 FROM teams WHERE id=?", (team_id,))
+        if not await cur.fetchone():
+            raise ValueError("team_not_found")
         cur = await db.execute(
             "SELECT 1 FROM team_members WHERE user_id=? AND left_at IS NULL LIMIT 1",
             (user_id,),
