@@ -210,6 +210,7 @@ from db import (
     grant_subscription_days,
     degrant_subscription_days,
     create_payment_record,
+    finalize_payment_subscription_idempotent,
     update_payment_status,
     list_exercise_weight_progress,
     clear_trainer_requests,
@@ -8591,7 +8592,7 @@ async def on_subscription_choose(update: Update, context: ContextTypes.DEFAULT_T
         return
 
     if payment_method == "stars":
-        payload = f"setsubstars:{db_user_id}:{plan_code}"
+        payload = f"setsubstars:{db_user_id}:{plan_code}:{secrets.token_hex(8)}"
         currency = "XTR"
         amount = plan_amount_stars(plan["amount_rub"])
         prices = [LabeledPrice(label=f"{title} · Stars", amount=amount)]
@@ -8718,7 +8719,7 @@ async def start_subscription_payment_stars(
         await q.answer("Тариф не найден.", show_alert=True)
         return
     stars_amount = plan_amount_stars(plan['amount_rub'])
-    payload = f"setsubstars:{user_id}:{plan_code}"
+    payload = f"setsubstars:{user_id}:{plan_code}:{secrets.token_hex(8)}"
     try:
         user_info = await find_user_by_id(user_id)
         if not user_info:
@@ -9870,11 +9871,15 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         can_edit_request = bool(
             context.user_data.get(TRAINER_PENDING_CAN_EDIT_KEY, False)
         )
-        await create_trainer_request(
-            trainer_id,
-            user_id,
-            can_edit_plan=can_edit_request,
-        )
+        try:
+            await create_trainer_request(trainer_id, user_id, can_edit_plan=can_edit_request)
+        except ValueError as exc:
+            await _render_trainer_link_message(
+                context, user_id, target if isinstance(target, tuple) else None,
+                str(exc), prompt_for_code=True,
+                chat_id=update.effective_chat.id if update.effective_chat else None,
+            )
+            return
         context.user_data.pop(TRAINER_PENDING_CAN_EDIT_KEY, None)
         await try_delete(update.message)
         trainer_record = await find_user_by_id(trainer_id)
@@ -11231,7 +11236,14 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             message="Нельзя: пользователь уже с вами в обратной связи",
                         )
                         return
-                    await update_trainer_link_status(link_id, "accepted")
+                    try:
+                        changed = await update_trainer_link_status(link_id, "accepted")
+                    except ValueError as exc:
+                        await _render_trainer_overview(q, context, actor_user_id, message=str(exc))
+                        return
+                    if not changed:
+                        await _render_trainer_overview(q, context, actor_user_id, message="Заявка уже обработана")
+                        return
                     if context.user_data.get(TRAINER_REQUESTS_VIEW_KEY):
                         await _render_trainer_requests_view(
                             q, context, actor_user_id, message="Заявка принята"
@@ -11242,7 +11254,9 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         )
                     return
                 if req_action == "decline":
-                    await update_trainer_link_status(link_id, "rejected")
+                    if not await update_trainer_link_status(link_id, "rejected"):
+                        await _render_trainer_overview(q, context, actor_user_id, message="Заявка уже обработана")
+                        return
                     if context.user_data.get(TRAINER_REQUESTS_VIEW_KEY):
                         await _render_trainer_requests_view(
                             q, context, actor_user_id, message="Заявка отклонена"
@@ -14557,30 +14571,49 @@ async def successful_payment_handler(update: Update, context: ContextTypes.DEFAU
     user_id_str = parts[1]
     plan_code = parts[2]
 
+    try:
+        parsed_user_id = int(user_id_str)
+    except (TypeError, ValueError):
+        return
     if prefix == "sub":
-        tg_user_id = int(user_id_str)
+        tg_user_id = parsed_user_id
         user_info = await find_user_by_tg_id(tg_user_id)
         if not user_info:
             return
         user_id = user_info[0]
     else:
-        user_id = int(user_id_str)
+        user_id = parsed_user_id
 
     plan = SUBSCRIPTION_PLANS.get(plan_code)
     if not plan:
         return
 
+    charge_id = str(payment.telegram_payment_charge_id or '').strip()
+    if not charge_id:
+        logger.error("Successful Telegram payment has no charge id")
+        return
+    external_id = f"telegram:{charge_id}"
+    await create_payment_record(
+        user_id=user_id, provider="telegram", amount=payment.total_amount,
+        currency=payment.currency, status="paid", external_id=external_id,
+        provider_charge_id=charge_id, project_key="telegram", deduplicate=True,
+        payload={"invoice_payload": payload, "plan_code": plan_code},
+    )
+    result = await finalize_payment_subscription_idempotent(
+        external_id=external_id, user_id=user_id, expected_project_key="telegram",
+        days=plan["days"], plan_code=plan_code, source="telegram_successful_payment",
+    )
+    if not result.get("ok"):
+        logger.error("Telegram payment finalization failed: %s", result.get("reason"))
+        return
     await update_payment_status(
         payload,
-        "paid",
-        {"paid_at": datetime.utcnow().isoformat(timespec="seconds"), "currency": payment.currency, "total_amount": payment.total_amount},
+        "paid_invoice",
+        {"plan": plan_code, "charge_external_id": external_id, "paid_at": datetime.now(timezone.utc).isoformat(timespec="seconds"), "currency": payment.currency, "total_amount": payment.total_amount},
     )
 
-    await grant_subscription_days(
-        user_id=user_id,
-        days=plan["days"],
-        plan=plan_code,
-    )
+    if result.get("already_finalized"):
+        return
 
     await update.message.reply_text(
         f"✅ Оплата получена. Подписка активна на {plan['days']} дней."
