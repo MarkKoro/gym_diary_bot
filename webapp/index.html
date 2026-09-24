@@ -5474,10 +5474,14 @@
 
     async function loadSystems() {
       const systems = state.settings.systems;
+      const owner = activeOwnerContextKey();
+      const requestId = systems.requestId = (systems.requestId || 0) + 1;
+      const isCurrent = () => systems === state.settings.systems && owner === activeOwnerContextKey() && requestId === systems.requestId;
       systems.loading = true;
       renderSystemsHub();
       try {
         const data = await apiFetch('/gymapi/systems');
+        if (!isCurrent()) return;
         systems.activeSystemId = data.active_system_id;
         systems.items = data.systems || [];
         const active = (systems.items || []).find((it) => Number(it.id) === Number(systems.activeSystemId));
@@ -5485,8 +5489,10 @@
         state.subscription.active = !!data.has_subscription;
         if (data.systems_limit?.requires_resolution) renderSystemsLimitSheet(data.systems_limit);
       } catch (e) {
+        if (!isCurrent()) return;
         toast('Не удалось загрузить системы');
       } finally {
+        if (!isCurrent()) return;
         systems.loading = false;
         renderSystemsHub();
         applyTrainingTint();
@@ -7730,6 +7736,10 @@
     }
 
     function resetScopedCachesForActorSwitch() {
+      state.settings.loaded = false;
+      state.settings.loading = false;
+      state.settings.requestId = (state.settings.requestId || 0) + 1;
+      state.settings.share = { ...state.settings.share, loading: false, loaded: false, text: '', copyText: '', requestId: (state.settings.share.requestId || 0) + 1 };
       state.settings.measurements = {
         ...state.settings.measurements,
         loading: false,
@@ -7739,6 +7749,8 @@
         categories: [],
         itemsByCode: {},
         history: {},
+        overviewLoading: false,
+        loadPromise: null,
         expanded: {},
         menuOpen: false,
         formView: null,
@@ -8422,12 +8434,18 @@
       }
     }
 
-    function renderSettings() {
+    function renderSettings({ background = false } = {}) {
       const container = document.getElementById('settingsContent');
       if (!container) return;
       const s = state.settings;
       const trainer = s.trainer || {};
       const view = s.view || 'menu';
+      if (background && container.dataset.view === view && container.dataset.owner === activeOwnerContextKey()
+        && ((view === 'notifications' && container.dataset.loaded === 'true')
+          || (container.contains(document.activeElement) && document.activeElement?.matches('input, textarea, select')))) return;
+      container.dataset.view = view;
+      container.dataset.owner = activeOwnerContextKey();
+      container.dataset.loaded = String(!!s.loaded);
       const ui = s.ui || { showProductivityButton: true, showSystemButton: true, tintEnabled: true, tintMode: 'sides', tintGlyphEnabled: false };
       const backButton = '<button class="btn small-btn settings-back" data-action="settings-back">← К списку настроек</button>';
       if (view === 'menu') {
@@ -8718,7 +8736,7 @@
             </div>
             <div class="settings-row settings-panel">
               <div class="label">Уведомления</div>
-              <div class="settings-pill">Статус: ${s.notificationsEnabled ? 'включены' : 'выключены'}</div>
+              <div class="settings-pill" data-notifications-status>Статус: ${s.notificationsEnabled ? 'включены' : 'выключены'}</div>
               <div class="settings-actions">
                 <button class="btn small-btn" data-action="toggle-notifications">
                   ${s.notificationsEnabled ? 'Выключить' : 'Включить'}
@@ -8727,7 +8745,7 @@
             </div>
             <div class="settings-row settings-panel" id="timezonePanel">
               <div class="label">Часовой пояс</div>
-              <div class="hint">Используется для времени уведомлений: ${timezoneLabel}</div>
+              <div class="hint" data-timezone-hint>Используется для времени уведомлений: ${timezoneLabel}</div>
               <select class="settings-select" data-settings-timezone>${timezoneOptions}</select>
             </div>
             <div class="settings-list settings-panel">${remindersHtml}</div>
@@ -8793,27 +8811,36 @@
       }
     }
 
-    async function loadSettingsOverview() {
+    async function loadSettingsOverview({ background = false } = {}) {
+      const owner = activeOwnerContextKey();
+      const remindersRevision = state.settings.remindersRevision || 0;
+      const requestId = state.settings.requestId = (state.settings.requestId || 0) + 1;
+      const isCurrent = () => owner === activeOwnerContextKey() && requestId === state.settings.requestId;
       state.settings.loading = true;
-      renderSettings();
+      renderSettings({ background });
       try {
         const previousDays = state.settings.days || [];
         const data = await apiFetch('/gymapi/settings/overview');
+        if (!isCurrent()) return;
         state.settings.workoutsPerWeek = data.workouts_per_week || 0;
         state.settings.days = mergeDayLabels(previousDays, data.days || []);
         state.settings.customGroups = data.custom_groups || [];
         state.settings.customExercises = data.custom_exercises || [];
         state.settings.manageableExercises = data.manageable_exercises || data.custom_exercises || [];
-        state.settings.reminders = data.reminders || [];
-        state.settings.notificationsEnabled = data.notifications_enabled !== false;
+        if (remindersRevision === (state.settings.remindersRevision || 0) && !state.settings.remindersSaving) {
+          state.settings.reminders = data.reminders || [];
+          state.settings.notificationsEnabled = data.notifications_enabled !== false;
+          state.settings.timezone = data.timezone || '';
+        }
         state.settings.leaderboardVisible = data.leaderboard_visible !== false;
-        state.settings.timezone = data.timezone || '';
         state.settings.loaded = true;
       } catch (e) {
+        if (!isCurrent()) return;
         toast('Не удалось загрузить настройки');
       } finally {
+        if (!isCurrent()) return;
         state.settings.loading = false;
-        renderSettings();
+        renderSettings({ background });
       }
     }
 
@@ -8826,10 +8853,13 @@
     }
 
     async function loadTrainerOverview() {
+      const requestId = state.settings.trainer.requestId = (state.settings.trainer.requestId || 0) + 1;
+      const isCurrent = () => requestId === state.settings.trainer.requestId;
       state.settings.trainer.loading = true;
-      renderSettings();
+      if (state.settings.view === 'trainer') renderSettings({ background: true });
       try {
         const data = await apiFetch('/gymapi/settings/trainer');
+        if (!isCurrent()) return;
         const link = data.link && data.link.status && data.link.status !== 'none'
           ? data.link
           : null;
@@ -8851,33 +8881,41 @@
         }
         updateTraineeButtonVisibility();
       } catch (e) {
+        if (!isCurrent()) return;
         toast('Не удалось загрузить тренерские настройки');
         state.settings.trainer.loading = false;
       } finally {
-        renderSettings();
+        if (isCurrent() && state.settings.view === 'trainer') renderSettings({ background: true });
       }
     }
 
     async function loadShareResults(randomize = false) {
+      const owner = activeOwnerContextKey();
+      const requestId = state.settings.share.requestId = (state.settings.share.requestId || 0) + 1;
+      const isCurrent = () => owner === activeOwnerContextKey() && requestId === state.settings.share.requestId;
       state.settings.share.loading = true;
-      renderSettings();
+      if (state.settings.view === 'share') renderSettings();
       try {
         const suffix = randomize ? '?randomize=1' : '';
         const data = await apiFetch(`/gymapi/settings/share${suffix}`);
+        if (!isCurrent()) return;
         state.settings.share.text = data.text || '';
         state.settings.share.copyText = data.copy_text || data.text || '';
         state.settings.share.loaded = true;
       } catch (e) {
+        if (!isCurrent()) return;
         toast('Не удалось загрузить текст шеринга');
       } finally {
+        if (!isCurrent()) return;
         state.settings.share.loading = false;
-        renderSettings();
+        if (state.settings.view === 'share') renderSettings();
       }
     }
 
     async function loadMeasurementsOverview({ force = false } = {}) {
       const measurements = state.settings.measurements;
       const ownerContextKey = activeOwnerContextKey();
+      const isCurrent = () => measurements === state.settings.measurements && ownerContextKey === activeOwnerContextKey();
       if (measurements.ownerContextKey && measurements.ownerContextKey !== ownerContextKey) {
         measurements.loaded = false;
         measurements.categories = [];
@@ -8885,11 +8923,18 @@
         measurements.history = {};
         measurements.expanded = {};
       }
-      if (measurements.loading || (measurements.loaded && !force)) return;
+      if (measurements.loading) {
+        await measurements.loadPromise;
+        if (force && isCurrent()) return loadMeasurementsOverview({ force: true });
+        return;
+      }
+      if (measurements.loaded && !force) return;
       measurements.loading = true;
       renderMeasurementsView();
+      measurements.loadPromise = (async () => {
       try {
         const data = await apiFetch('/gymapi/measurements/overview');
+        if (!isCurrent()) return;
         measurements.categories = data.categories || [];
         measurements.lastUpdate = data.last_update || '';
         measurements.itemsByCode = {};
@@ -8907,42 +8952,62 @@
         measurements.loaded = true;
         measurements.ownerContextKey = ownerContextKey;
       } catch (e) {
+        if (!isCurrent()) return;
         toast('Не удалось загрузить замеры');
       } finally {
+        if (!isCurrent()) return;
         measurements.loading = false;
         renderMeasurementsView();
       }
+      })();
+      return measurements.loadPromise;
     }
 
     async function loadMeasurementHistory(code) {
       const measurements = state.settings.measurements;
       if (!code) return;
-      measurements.history[code] = { loading: true, entries: [], item: null };
-      renderMeasurementSheet();
+      const owner = activeOwnerContextKey();
+      const entry = { loading: true, entries: [], item: null };
+      measurements.history[code] = entry;
+      const isCurrent = () => measurements === state.settings.measurements && owner === activeOwnerContextKey() && measurements.history[code] === entry;
+      if (measurements.sheet.mode !== 'entry' && !measurements.overviewLoading) renderMeasurementSheet();
       try {
         const data = await apiFetch(`/gymapi/measurements/history/${encodeURIComponent(code)}`);
-        measurements.history[code] = {
+        if (!isCurrent()) return;
+        Object.assign(entry, {
           loading: false,
           entries: data.entries || [],
           item: data.item || null,
-        };
+        });
       } catch (e) {
-        measurements.history[code] = { loading: false, entries: [], item: null };
+        if (!isCurrent()) return;
+        Object.assign(entry, { loading: false, entries: [], item: null });
         toast('Не удалось загрузить историю');
       } finally {
-        renderMeasurementSheet();
+        if (isCurrent() && measurements.sheet.mode !== 'entry' && !measurements.overviewLoading) renderMeasurementSheet();
       }
     }
 
     async function loadAllMeasurementHistories() {
       const measurements = state.settings.measurements;
+      const owner = activeOwnerContextKey();
+      const isCurrent = () => measurements === state.settings.measurements && owner === activeOwnerContextKey();
+      if (measurements.overviewLoading) return;
       const codes = Object.keys(measurements.itemsByCode || {});
       if (!codes.length) return;
       measurements.overviewLoading = true;
-      renderMeasurementSheet();
-      await Promise.all(codes.map((code) => loadMeasurementHistory(code)));
-      measurements.overviewLoading = false;
-      renderMeasurementSheet();
+      if (measurements.sheet.mode !== 'entry') renderMeasurementSheet();
+      try {
+        let next = 0;
+        await Promise.all(Array.from({ length: Math.min(4, codes.length) }, async () => {
+          while (isCurrent() && next < codes.length) {
+            await loadMeasurementHistory(codes[next++]);
+          }
+        }));
+      } finally {
+        measurements.overviewLoading = false;
+        if (isCurrent() && measurements.sheet.mode !== 'entry') renderMeasurementSheet();
+      }
     }
 
     function openMeasurementsOverview() {
@@ -8954,10 +9019,13 @@
       renderMeasurementSheet();
       document.getElementById('measurementSheet')?.classList.add('show');
       document.body.classList.add('drawer-open');
-      if (!measurements.loaded) {
-        runUiAction('Не удалось загрузить раздел замеров', () => loadMeasurementsOverview());
-      }
-      runUiAction('Не удалось загрузить историю замеров', () => loadAllMeasurementHistories());
+      const owner = activeOwnerContextKey();
+      runUiAction('Не удалось загрузить историю замеров', async () => {
+        await loadMeasurementsOverview();
+        if (measurements === state.settings.measurements && owner === activeOwnerContextKey() && measurements.sheet.mode === 'overview') {
+          await loadAllMeasurementHistories();
+        }
+      });
     }
 
     function openMeasurementSheet(mode, code) {
@@ -9200,18 +9268,36 @@
           || state.settings.timezone
           || 'UTC'
       );
-      await apiFetch('/gymapi/settings/reminders', {
-        method: 'POST',
-        body: JSON.stringify({
-          enabled: state.settings.notificationsEnabled,
-          timezone,
-          reminders,
-        }),
-      });
+      const settings = state.settings;
+      const owner = activeOwnerContextKey();
+      const actingUserId = state.acting?.userId || null;
+      const body = JSON.stringify({ enabled: settings.notificationsEnabled, timezone, reminders });
+      const key = `${owner}:${body}`;
+      if (settings.remindersSaveKey === key && settings.remindersSavePromise) return settings.remindersSavePromise;
+      const revision = settings.remindersRevision = (settings.remindersRevision || 0) + 1;
+      settings.remindersSaving = true;
+      settings.remindersSaveKey = key;
       state.settings.timezone = timezone;
       state.settings.reminders = reminders;
-      toast('Уведомления сохранены ✅');
-      renderSettings();
+      const status = document.querySelector('[data-notifications-status]');
+      if (status) status.textContent = `Статус: ${settings.notificationsEnabled ? 'включены' : 'выключены'}`;
+      const toggle = document.querySelector('[data-action="toggle-notifications"]');
+      if (toggle) toggle.textContent = settings.notificationsEnabled ? 'Выключить' : 'Включить';
+      const hint = document.querySelector('[data-timezone-hint]');
+      if (hint) hint.textContent = `Используется для времени уведомлений: ${formatTimezoneLabel(timezone)}`;
+      const previous = settings.remindersSavePromise || Promise.resolve();
+      const pending = previous.catch(() => {}).then(() => apiFetch('/gymapi/settings/reminders', { method: 'POST', body, actingUserId }));
+      settings.remindersSavePromise = pending;
+      try {
+        await pending;
+        if (revision === settings.remindersRevision && owner === activeOwnerContextKey()) toast('Уведомления сохранены ✅');
+      } finally {
+        if (revision === settings.remindersRevision) {
+          settings.remindersSaving = false;
+          settings.remindersRevision += 1;
+          settings.remindersSaveKey = null;
+        }
+      }
     }
 
     async function handleMeasurementAction(action, target) {
@@ -9324,6 +9410,7 @@
     function setupSettingsHandlers() {
       const container = document.getElementById('settingsContent');
       if (!container) return;
+      const saveReminders = () => saveRemindersFromUI().catch((err) => reportActionError('Не удалось сохранить уведомления', err));
       container.addEventListener('click', async (event) => {
         const target = event.target.closest('[data-action]');
         if (!target) return;
@@ -9718,18 +9805,18 @@
         const timezoneTarget = event.target.closest('[data-settings-timezone]');
         if (timezoneTarget) {
           state.settings.timezone = timezoneTarget.value;
-          await saveRemindersFromUI();
+          await saveReminders();
           return;
         }
         const reminderTarget = event.target.closest('[data-reminder-dow], [data-reminder-time]');
         if (reminderTarget) {
-          await saveRemindersFromUI();
+          await saveReminders();
         }
       });
       container.addEventListener('blur', async (event) => {
         const reminderTarget = event.target.closest('[data-reminder-time]');
         if (!reminderTarget) return;
-        await saveRemindersFromUI();
+        await saveReminders();
       }, true);
     }
 
@@ -9803,33 +9890,49 @@
           return;
         }
         if (action === 'measurement-save') {
+          if (target.disabled) return;
+          const measurements = state.settings.measurements;
+          const owner = activeOwnerContextKey();
           const input = document.getElementById('measurementValueInput');
           const value = (input?.value || '').trim();
           if (!value) {
             toast('Введите значение');
             return;
           }
-          await apiFetch('/gymapi/measurements/entry', {
-            method: 'POST',
-            body: JSON.stringify({ metric: code, value }),
-          });
-          if (input) input.value = '';
-          toast('Замер сохранён ✅');
-          await loadMeasurementsOverview({ force: true });
-          openMeasurementSheet('history', code);
+          target.disabled = true;
+          try {
+            await apiFetch('/gymapi/measurements/entry', {
+              method: 'POST',
+              body: JSON.stringify({ metric: code, value }),
+            });
+            if (measurements !== state.settings.measurements || owner !== activeOwnerContextKey()) return;
+            measurements.history = {};
+            toast('Замер сохранён ✅');
+            await loadMeasurementsOverview({ force: true });
+            if (measurements === state.settings.measurements && measurements.sheet === sheetState && sheetState.mode === 'entry' && sheetState.code === code) {
+              openMeasurementSheet('history', code);
+            }
+          } catch (err) {
+            reportActionError('Не удалось сохранить замер', err);
+          } finally {
+            target.disabled = false;
+          }
         }
       });
     }
 
     async function loadLibraryGroups() {
-      state.library.loading = true;
+      const library = state.library;
+      const owner = activeOwnerContextKey();
+      const requestId = library.listRequestId = (library.listRequestId || 0) + 1;
+      const isCurrent = () => library === state.library && owner === activeOwnerContextKey() && requestId === library.listRequestId;
+      library.loading = true;
       renderLibrary();
       try {
         const data = await apiFetch('/gymapi/library/groups', { silent: true });
-        state.library.groups = data.groups || [];
+        if (isCurrent()) library.groups = data.groups || [];
       } finally {
-        state.library.loading = false;
-        renderLibrary();
+        if (isCurrent()) { library.loading = false; renderLibrary(); }
       }
     }
 
@@ -9844,12 +9947,19 @@
 
     async function loadGroupExercises() {
       if (!state.library.selectedGroup) return;
-      state.library.loading = true;
+      const library = state.library;
+      const owner = activeOwnerContextKey();
+      const groupCode = library.selectedGroup.code;
+      const requestId = library.listRequestId = (library.listRequestId || 0) + 1;
+      const isCurrent = () => library === state.library && owner === activeOwnerContextKey() && requestId === library.listRequestId && groupCode === library.selectedGroup?.code;
+      library.loading = true;
       renderLibrary();
-      const data = await apiFetch(`/gymapi/library/group/${state.library.selectedGroup.code}/exercises`, { silent: true });
-      state.library.exercises = data.items || [];
-      state.library.loading = false;
-      renderLibrary();
+      try {
+        const data = await apiFetch(`/gymapi/library/group/${encodeURIComponent(groupCode)}/exercises`, { silent: true });
+        if (isCurrent()) library.exercises = data.items || [];
+      } finally {
+        if (isCurrent()) { library.loading = false; renderLibrary(); }
+      }
     }
 
     async function openExercise(ex) {
@@ -9863,14 +9973,16 @@
     }
 
     async function loadLibraryBindGroups() {
-      state.library.bindLoading = true;
+      const library = state.library;
+      const owner = activeOwnerContextKey();
+      const isCurrent = () => library === state.library && owner === activeOwnerContextKey();
+      library.bindLoading = true;
       renderLibrary();
       try {
         const data = await apiFetch('/gymapi/catalog/groups', { silent: true });
-        state.library.bindGroups = (data.groups || []).filter((group) => normalizeMuscleKey(group.code) !== 'none');
+        if (isCurrent()) library.bindGroups = (data.groups || []).filter((group) => normalizeMuscleKey(group.code) !== 'none');
       } finally {
-        state.library.bindLoading = false;
-        renderLibrary();
+        if (isCurrent()) { library.bindLoading = false; renderLibrary(); }
       }
     }
 
@@ -9935,13 +10047,18 @@
     }
 
     async function loadExerciseHistory(exerciseId) {
-      state.library.historyLoading = true;
+      const library = state.library;
+      const owner = activeOwnerContextKey();
+      const requestId = library.historyRequestId = (library.historyRequestId || 0) + 1;
+      const isCurrent = () => library === state.library && owner === activeOwnerContextKey() && requestId === library.historyRequestId && Number(library.currentExerciseId) === Number(exerciseId);
+      library.historyLoading = true;
       renderLibrary();
       const cache = state.library.historyCache[exerciseId] || { all: null };
       try {
         if (!cache.all) {
           cache.all = await apiFetch(`/gymapi/exercise/${exerciseId}/history?range=all`, { silent: true });
         }
+        if (!isCurrent()) return;
         const data = cache.all;
         state.library.historyCache[exerciseId] = cache;
         if (data?.is_running) {
@@ -9960,11 +10077,11 @@
           setLibraryHistoryIndex(exerciseId, Math.min(Math.max(desired, 0), sessions.length - 1));
         }
       } catch (e) {
+        if (!isCurrent()) return;
         state.library.history = cache.all || null;
         throw e;
       } finally {
-        state.library.historyLoading = false;
-        renderLibrary();
+        if (isCurrent()) { library.historyLoading = false; renderLibrary(); }
       }
     }
 
@@ -10117,7 +10234,7 @@
         state.settings.view = pendingView;
         state.settings.pendingView = null;
         renderSettings();
-        if (!state.settings.loading) loadSettingsOverview();
+        if (!state.settings.loading) loadSettingsOverview({ background: true });
         if (!state.settings.trainer.loading) loadTrainerOverview();
         if (!state.settings.share.loading) loadShareResults();
         if (pendingView === 'measurements') {
@@ -10831,7 +10948,7 @@
       if (typeof path === 'string' && path.startsWith('/gymapi/')) {
         path = apiPrefix + path.slice('/gymapi'.length);
       }
-      const { silent = false, fetchOptions = null, timeoutMs = 15000, ...direct } = options || {};
+      const { silent = false, fetchOptions = null, timeoutMs = 15000, actingUserId = state.acting?.userId, ...direct } = options || {};
 
       // Merge headers from both layers
       const headers = new Headers();
@@ -10844,8 +10961,8 @@
       if (state.initData) headers.set('X-Telegram-InitData', state.initData);
       const actingExcluded = typeof path === 'string'
         && (path.startsWith('/gymapi/settings/trainer') || path.startsWith('/gymapi_prod/settings/trainer'));
-      if (state.acting?.userId && !actingExcluded) {
-        headers.set('X-Acting-User', String(state.acting.userId));
+      if (actingUserId && !actingExcluded) {
+        headers.set('X-Acting-User', String(actingUserId));
       }
 
       // Merge init (direct overrides fetchOptions)
