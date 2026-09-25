@@ -3,9 +3,9 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Progressor — оплата завершена</title>
+  <title>Progressor — возвращение в Telegram</title>
   <style>
-    body { font-family: -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif; background:#10131a; color:#fff; margin:0; display:grid; place-items:center; min-height:100vh; padding:20px; }
+    body { font-family: -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif; background:#10131a; color:#fff; margin:0; display:grid; place-items:center; min-height:100vh; min-height:100svh; box-sizing:border-box; padding:20px; }
     .box { text-align:center; opacity:.95; max-width:420px; }
     .btn { display:inline-block; margin-top:14px; padding:12px 16px; border-radius:12px; background:#2e7cf8; color:#fff; text-decoration:none; font-weight:700; }
     .hint { color:rgba(255,255,255,.75); font-size:14px; margin-top:8px; }
@@ -13,23 +13,31 @@
 </head>
 <body>
   <div class="box">
-    <h3>Платёж завершён</h3>
+    <h3>Вернуться в Telegram</h3>
     <p>Вернитесь в Telegram-бота, чтобы продолжить работу в WebApp и увидеть статус подписки.</p>
     <a id="openBotLink" class="btn" href="https://t.me" target="_blank" rel="noopener noreferrer">Открыть бота в Telegram</a>
     <p class="hint">Если кнопка не сработала — откройте Telegram вручную и зайдите в ваш бот Progressor.</p>
   </div>
   <script>
     (function () {
+      function telegramLink(raw) {
+        try {
+          var url = new URL(String(raw || '').trim());
+          if (url.protocol !== 'https:' || url.hostname !== 't.me' || url.username || url.password || url.port) return '';
+          if (!/^\/[A-Za-z0-9_]{5,32}\/?$/.test(url.pathname)) return '';
+          return url.href;
+        } catch (_) { return ''; }
+      }
       var fallback = '';
       try {
         var params = new URLSearchParams(window.location.search || '');
-        var fromQuery = String(params.get('bot_link') || '').trim();
+        var fromQuery = telegramLink(params.get('bot_link'));
         if (fromQuery) fallback = fromQuery;
       } catch (_) {}
       if (!fallback) {
         try {
           var hashParams = new URLSearchParams((window.location.hash || '').replace(/^#/, ''));
-          var fromHash = String(hashParams.get('bot_link') || '').trim();
+          var fromHash = telegramLink(hashParams.get('bot_link'));
           if (fromHash) fallback = fromHash;
         } catch (_) {}
       }

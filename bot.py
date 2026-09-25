@@ -8054,6 +8054,9 @@ async def ai_pass_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     if not message or not user:
         return
+    if user.id not in ADMIN_IDS:
+        await message.reply_text("Команда доступна только администратору.")
+        return
     user_id = await get_or_create_user(user.id, user.username)
     removed = await reset_ai_coach_quota(user_id)
     await message.reply_text(
@@ -9042,6 +9045,8 @@ async def prompt_day_mode(q, context, user_id: int, day: int):
 async def wizard_router(
     update: Update, q, data: str, user_id: int, context: ContextTypes.DEFAULT_TYPE
 ):
+    if not await require_edit_allowed(q, context):
+        return
     message = getattr(q, "message", None)
     chat = getattr(message, "chat", None) if message else None
     chat_id = getattr(chat, "id", None) if chat else getattr(message, "chat_id", None)
@@ -9801,10 +9806,14 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     actor_user_id = await get_or_create_user(u.id, u.username)
     acting_user_id = context.user_data.get("acting_user_id")
-    if acting_user_id:
-        user_id = int(acting_user_id)
-    else:
-        user_id = actor_user_id
+    user_id = await resolve_target_user_id(context, actor_user_id)
+    if acting_user_id and user_id == actor_user_id:
+        clear_linear_state(context.user_data)
+        if update.message:
+            await update.message.reply_text("Доступ к дневнику подопечного закрыт. Откройте нужный дневник заново.")
+        return
+    if not await ensure_can_edit_from_message(context, update):
+        return
     if context.user_data.get(TRAINER_CODE_INPUT_KEY):
         if not update.message or update.message.text is None:
             return
@@ -10112,7 +10121,6 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
                 remember_message(chat_id, msg_id)
             return
-        await grant_subscription_days(user_id, days, plan="gift_code")
         context.user_data.pop(GIFT_CODE_INPUT_KEY, None)
         if chat_id and msg_id:
             menu_text, menu_kb, _ = await compose_main_menu(user_id)
@@ -11288,6 +11296,8 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 return
 
         if data.startswith("ib:"):
+            if not await require_edit_allowed(q, context):
+                return
             parts = data.split(":")
             if len(parts) < 3:
                 return

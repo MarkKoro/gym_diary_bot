@@ -3,7 +3,7 @@ import aiosqlite
 import json
 from datetime import datetime, timedelta, timezone, UTC
 import secrets
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, nullcontext
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from typing import Optional, Sequence
 from settings import DB_PATH, DB_POOL_SIZE
@@ -3406,8 +3406,12 @@ async def clear_user_reminders(user_id: int):
 
 async def wipe_user(user_id: int):
     async with connect_db() as db:
-        await db.execute("BEGIN")
+        await db.execute("BEGIN IMMEDIATE")
         try:
+            for table in ('training_system_exercise_sources', 'training_system_exercises', 'training_system_reminders', 'training_system_days'):
+                await db.execute(f"DELETE FROM {table} WHERE system_id IN (SELECT id FROM training_systems WHERE user_id=?)", (user_id,))
+            for table in ('training_system_cosmetics', 'training_systems', 'day_completion_history', 'exercise_notes', 'user_exercise_muscles', 'user_achievements'):
+                await db.execute(f"DELETE FROM {table} WHERE user_id=?", (user_id,))
             await db.execute("DELETE FROM running_entries WHERE user_id=?", (user_id,))
             await db.execute("DELETE FROM session_exercises WHERE session_id IN (SELECT id FROM sessions WHERE user_id=?)", (user_id,))
             await db.execute("DELETE FROM session_exercises WHERE user_exercise_id IN (SELECT id FROM user_exercises WHERE user_id=?)", (user_id,))
@@ -3434,6 +3438,7 @@ async def wipe_user(user_id: int):
                 SET
                     tz='UTC',
                     workouts_per_week=NULL,
+                    active_system_id=NULL,
                     day_finish_total=0,
                     subscription_prompt_total=0,
                     notifications_enabled=1,
@@ -3829,13 +3834,17 @@ async def grant_subscription_days(
     user_id: int,
     days: int,
     plan: str = "manual",
+    *,
+    connection=None,
 ) -> datetime:
     if days <= 0:
         raise ValueError("days must be positive")
-    await cleanup_expired_subscriptions(user_id)
     now = datetime.now(UTC)
     base = now
-    async with connect_db() as db:
+    async with (nullcontext(connection) if connection is not None else connect_db()) as db:
+        if connection is None:
+            await db.execute("BEGIN IMMEDIATE")
+        await db.execute("UPDATE subscriptions SET status='expired' WHERE user_id=? AND status='active' AND expires_at < ?", (user_id, now.isoformat()))
         cur = await db.execute(
             "SELECT expires_at FROM subscriptions WHERE user_id=? AND status='active' ORDER BY expires_at DESC LIMIT 1",
             (user_id,),
@@ -3844,6 +3853,8 @@ async def grant_subscription_days(
         if row and row[0]:
             try:
                 candidate = datetime.fromisoformat(row[0])
+                if candidate.tzinfo is None:
+                    candidate = candidate.replace(tzinfo=UTC)
             except ValueError:
                 candidate = now
             if candidate > base:
@@ -3862,7 +3873,8 @@ async def grant_subscription_days(
                 "active",
             ),
         )
-        await db.commit()
+        if connection is None:
+            await db.commit()
     return expires_at
 
 
@@ -3872,6 +3884,7 @@ async def degrant_subscription_days(user_id: int, days: int) -> datetime | None:
     await cleanup_expired_subscriptions(user_id)
     now = datetime.now(UTC)
     async with connect_db() as db:
+        await db.execute("BEGIN IMMEDIATE")
         cur = await db.execute(
             "SELECT id, expires_at FROM subscriptions WHERE user_id=? AND status='active' ORDER BY expires_at DESC LIMIT 1",
             (user_id,),
@@ -3882,6 +3895,8 @@ async def degrant_subscription_days(user_id: int, days: int) -> datetime | None:
         sub_id, expires_at_raw = row
         try:
             expires_at = datetime.fromisoformat(expires_at_raw)
+            if expires_at.tzinfo is None:
+                expires_at = expires_at.replace(tzinfo=UTC)
         except (TypeError, ValueError):
             expires_at = now
         reduced_expires_at = expires_at - timedelta(days=days)
@@ -3893,8 +3908,8 @@ async def degrant_subscription_days(user_id: int, days: int) -> datetime | None:
             await db.commit()
             return None
         await db.execute(
-            "UPDATE subscriptions SET expires_at=? WHERE id=?",
-            (reduced_expires_at.isoformat(), sub_id),
+            "UPDATE subscriptions SET expires_at=? WHERE user_id=? AND status='active' AND expires_at>?",
+            (reduced_expires_at.isoformat(), user_id, reduced_expires_at.isoformat()),
         )
         await db.commit()
     return reduced_expires_at
@@ -4039,6 +4054,7 @@ async def redeem_gift_code_with_status(code: str, user_id: int) -> tuple[str, in
         return ("empty", None)
     async with connect_db() as db:
         await _ensure_gift_codes_schema(db)
+        await db.execute("BEGIN IMMEDIATE")
         cur = await db.execute(
             "SELECT id, days FROM gift_codes WHERE code=? LIMIT 1",
             (normalized_code,),
@@ -4059,6 +4075,7 @@ async def redeem_gift_code_with_status(code: str, user_id: int) -> tuple[str, in
         if (mark.rowcount or 0) <= 0:
             await db.rollback()
             return ("already_used", None)
+        await grant_subscription_days(user_id, days, plan="gift_code", connection=db)
         await db.commit()
         return ("ok", days)
 
@@ -7861,47 +7878,73 @@ async def set_exercise_muscle_group_for_user(user_id: int, exercise_id: int, mus
         await db.commit()
         return new_exercise_id
 
-async def hard_delete_user_owned_exercise(user_id: int, exercise_id: int) -> bool:
-    async with aiosqlite.connect(DB_PATH) as db:
-        owner_row = await (await db.execute(
-            "SELECT created_by_user_id FROM exercises WHERE id=?",
-            (exercise_id,),
-        )).fetchone()
-        if not owner_row:
-            return False
-        owner_id = int(owner_row[0] or 0)
-        # Base/system exercises are not deletable: user can only delete non-base exercises.
-        if owner_id == 0:
-            return False
-        ue_rows = await (await db.execute(
-            "SELECT id FROM user_exercises WHERE user_id=? AND exercise_id=?",
+async def _remove_exercise_for_user_in_transaction(conn, user_id: int, exercise_id: int) -> dict:
+    """Remove only this user's data; keep shared catalog rows while referenced."""
+    user_id, exercise_id = int(user_id), int(exercise_id)
+    row = await (await conn.execute(
+        "SELECT IFNULL(created_by_user_id,0) FROM exercises WHERE id=?", (exercise_id,),
+    )).fetchone()
+    result = {"ok": True, "exercise_id": exercise_id, "removed_mode": "already_absent",
+              "deleted_sets": 0, "deleted_session_links": 0, "deleted_user_links": 0, "hidden": False}
+    if not row:
+        return result
+    for table, counter in (('sets', 'deleted_sets'), ('session_exercises', 'deleted_session_links')):
+        cur = await conn.execute(
+            f"DELETE FROM {table} WHERE user_exercise_id IN (SELECT id FROM user_exercises WHERE user_id=? AND exercise_id=?)",
             (user_id, exercise_id),
-        )).fetchall()
-        ue_ids = [int(row[0]) for row in (ue_rows or []) if row and row[0] is not None]
-        if not ue_ids:
+        )
+        result[counter] = cur.rowcount
+    await conn.execute(
+        "DELETE FROM running_entries WHERE user_id=? AND (exercise_id=? OR user_exercise_id IN (SELECT id FROM user_exercises WHERE user_id=? AND exercise_id=?))",
+        (user_id, exercise_id, user_id, exercise_id),
+    )
+    cur = await conn.execute("DELETE FROM user_exercises WHERE user_id=? AND exercise_id=?", (user_id, exercise_id))
+    result['deleted_user_links'] = cur.rowcount
+    for table in ('exercise_notes', 'user_exercise_muscles', 'exercise_baseline'):
+        await conn.execute(f"DELETE FROM {table} WHERE user_id=? AND exercise_id=?", (user_id, exercise_id))
+    for table in ('training_system_exercises', 'training_system_exercise_sources'):
+        await conn.execute(
+            f"DELETE FROM {table} WHERE exercise_id=? AND system_id IN (SELECT id FROM training_systems WHERE user_id=?)",
+            (exercise_id, user_id),
+        )
+    deleted = False
+    if int(row[0]) == user_id:
+        # Saved but currently inactive programs also own references to this row.
+        references = ('user_exercises', 'training_system_exercises', 'training_system_exercise_sources',
+                      'exercise_baseline', 'running_entries', 'exercise_notes', 'user_exercise_muscles')
+        condition = ' AND '.join(f'NOT EXISTS (SELECT 1 FROM {table} WHERE exercise_id=?)' for table in references)
+        cur = await conn.execute(
+            f"DELETE FROM exercises WHERE id=? AND created_by_user_id=? AND {condition}",
+            (exercise_id, user_id, *([exercise_id] * len(references))),
+        )
+        deleted = cur.rowcount > 0
+    if deleted:
+        result['removed_mode'] = 'hard_delete_owned'
+        await conn.execute("DELETE FROM hidden_catalog_exercises WHERE exercise_id=?", (exercise_id,))
+        await conn.execute("DELETE FROM exercise_muscles WHERE exercise_id=?", (exercise_id,))
+    else:
+        # Even an owned row retained for another user must disappear from this catalog.
+        result['removed_mode'] = 'hide_shared'
+        result['hidden'] = True
+        await conn.execute(
+            "INSERT OR REPLACE INTO hidden_catalog_exercises(user_id,exercise_id,hidden_at) VALUES(?,?,?)",
+            (user_id, exercise_id, _now_utc_iso()),
+        )
+    return result
+
+
+async def hard_delete_user_owned_exercise(user_id: int, exercise_id: int) -> bool:
+    async with connect_db() as conn:
+        await conn.execute("BEGIN IMMEDIATE")
+        owner = await (await conn.execute("SELECT IFNULL(created_by_user_id,0) FROM exercises WHERE id=?", (exercise_id,))).fetchone()
+        if not owner or not int(owner[0]):
             return False
-        if ue_ids:
-            placeholders = ",".join("?" for _ in ue_ids)
-            await db.execute(f"DELETE FROM sets WHERE user_exercise_id IN ({placeholders})", tuple(ue_ids))
-            await db.execute(f"DELETE FROM session_exercises WHERE user_exercise_id IN ({placeholders})", tuple(ue_ids))
-            await db.execute(f"DELETE FROM running_entries WHERE user_exercise_id IN ({placeholders})", tuple(ue_ids))
-            await db.execute(f"DELETE FROM user_exercises WHERE id IN ({placeholders})", tuple(ue_ids))
-        await db.execute("DELETE FROM exercise_notes WHERE user_id=? AND exercise_id=?", (user_id, exercise_id))
-        await db.execute("DELETE FROM user_exercise_muscles WHERE user_id=? AND exercise_id=?", (user_id, exercise_id))
-        if owner_id == int(user_id):
-            ref_row = await (await db.execute(
-                "SELECT 1 FROM user_exercises WHERE exercise_id=? LIMIT 1",
-                (int(exercise_id),),
-            )).fetchone()
-            if not ref_row:
-                await db.execute(
-                    "DELETE FROM exercises WHERE id=? AND created_by_user_id=?",
-                    (int(exercise_id), int(user_id)),
-                )
-        await db.commit()
+        linked = await (await conn.execute("SELECT 1 FROM user_exercises WHERE user_id=? AND exercise_id=? LIMIT 1", (user_id, exercise_id))).fetchone()
+        if int(owner[0]) != int(user_id) and not linked:
+            return False
+        await _remove_exercise_for_user_in_transaction(conn, user_id, exercise_id)
+        await conn.commit()
         return True
-
-
 
 
 def normalize_exercise_group_for_ui(value: str | None) -> str:
@@ -8113,130 +8156,54 @@ async def list_all_exercises_done_today(user_id: int, iso_date: str):
         "max_seconds": int(r[7] or 0),
         "max_weight_kg": float(r[8] or 0),
     } for r in (rows or [])]
-async def clear_group_exercises_for_user(user_id: int, group_code: str) -> int:
-    normalized = str(group_code or "").strip().lower() or "other"
-    removed_links = 0
-    removed_owned_exercises = 0
-    async with aiosqlite.connect(DB_PATH) as db:
-        cur = await db.execute(
-            """
-            SELECT DISTINCT e.id, IFNULL(e.created_by_user_id, 0) AS owner_id
-            FROM user_exercises ue
-            JOIN exercises e ON e.id=ue.exercise_id
-            WHERE ue.user_id=?
-              AND ue.is_archived=0
-              AND LOWER(COALESCE(NULLIF(TRIM(e.muscle_group), ''), 'none')) IN (?, 'none')
-            """,
+async def clear_group_exercises_for_user(user_id: int, group_code: str) -> tuple[int, int]:
+    normalized = normalize_exercise_group_for_ui(group_code)
+    async with connect_db() as conn:
+        await conn.execute("BEGIN IMMEDIATE")
+        rows = await (await conn.execute(
+            """SELECT DISTINCT e.id FROM user_exercises ue JOIN exercises e ON e.id=ue.exercise_id
+               WHERE ue.user_id=? AND ue.is_archived=0
+                 AND COALESCE(NULLIF(NULLIF(LOWER(TRIM(e.muscle_group)),''),'none'),'other')=?""",
             (int(user_id), normalized),
-        )
-        rows = await cur.fetchall()
-        exercise_ids = [int(row[0]) for row in (rows or []) if row and row[0] is not None]
-        # Only non-base exercises are deletable by clear action.
-        owned_ids = [int(row[0]) for row in (rows or []) if row and int(row[1] or 0) == int(user_id)]
-        if not exercise_ids:
-            return 0, 0
-        placeholders = ",".join("?" for _ in exercise_ids)
-        ue_cur = await db.execute(
-            f"SELECT id FROM user_exercises WHERE user_id=? AND exercise_id IN ({placeholders})",
-            (int(user_id), *exercise_ids),
-        )
-        ue_rows = await ue_cur.fetchall()
-        ue_ids = [int(row[0]) for row in (ue_rows or []) if row and row[0] is not None]
-
-        if ue_ids:
-            ue_ph = ",".join("?" for _ in ue_ids)
-            await db.execute(f"DELETE FROM sets WHERE user_exercise_id IN ({ue_ph})", tuple(ue_ids))
-            await db.execute(f"DELETE FROM session_exercises WHERE user_exercise_id IN ({ue_ph})", tuple(ue_ids))
-            await db.execute(f"DELETE FROM running_entries WHERE user_exercise_id IN ({ue_ph})", tuple(ue_ids))
-            await db.execute(f"DELETE FROM user_exercises WHERE id IN ({ue_ph})", tuple(ue_ids))
-            removed_links += len(ue_ids)
-
-        await db.execute(
-            f"DELETE FROM exercise_notes WHERE user_id=? AND exercise_id IN ({placeholders})",
-            (int(user_id), *exercise_ids),
-        )
-        await db.execute(
-            f"DELETE FROM user_exercise_muscles WHERE user_id=? AND exercise_id IN ({placeholders})",
-            (int(user_id), *exercise_ids),
-        )
-
-        for ex_id in owned_ids:
-            ref_cur = await db.execute("SELECT 1 FROM user_exercises WHERE exercise_id=? LIMIT 1", (int(ex_id),))
-            ref = await ref_cur.fetchone()
-            if ref:
-                continue
-            await db.execute("DELETE FROM exercises WHERE id=? AND created_by_user_id=?", (int(ex_id), int(user_id)))
-            removed_owned_exercises += 1
-
-        await db.commit()
-    return removed_links, removed_owned_exercises
+        )).fetchall()
+        removed_links = removed_owned = 0
+        for (exercise_id,) in rows:
+            result = await _remove_exercise_for_user_in_transaction(conn, user_id, exercise_id)
+            removed_links += result['deleted_user_links']
+            removed_owned += int(result['removed_mode'] == 'hard_delete_owned')
+        await conn.commit()
+        return removed_links, removed_owned
 
 
 async def remove_exercise_for_user(user_id: int, exercise_id: int) -> dict:
-    async with aiosqlite.connect(DB_PATH) as db:
-        owner_row = await (await db.execute("SELECT IFNULL(created_by_user_id,0) FROM exercises WHERE id=?", (int(exercise_id),))).fetchone()
-        if not owner_row:
-            return {"ok": True, "exercise_id": int(exercise_id), "removed_mode": "already_absent", "deleted_sets": 0, "deleted_session_links": 0, "deleted_user_links": 0, "hidden": False}
-        owner_id = int(owner_row[0] or 0)
-        ue_rows = await (await db.execute("SELECT id FROM user_exercises WHERE user_id=? AND exercise_id=?", (int(user_id), int(exercise_id)))).fetchall()
-        ue_ids = [int(r[0]) for r in (ue_rows or []) if r and r[0] is not None]
-        deleted_sets = deleted_session_links = deleted_user_links = 0
-        ph = ",".join("?" for _ in ue_ids)
-        if ue_ids:
-            cur = await db.execute(f"DELETE FROM sets WHERE user_exercise_id IN ({ph})", tuple(ue_ids))
-            deleted_sets = int(cur.rowcount or 0)
-            cur = await db.execute(f"DELETE FROM session_exercises WHERE user_exercise_id IN ({ph})", tuple(ue_ids))
-            deleted_session_links = int(cur.rowcount or 0)
-            await db.execute(f"DELETE FROM running_entries WHERE user_exercise_id IN ({ph})", tuple(ue_ids))
-            cur = await db.execute(f"DELETE FROM user_exercises WHERE id IN ({ph})", tuple(ue_ids))
-            deleted_user_links = int(cur.rowcount or 0)
-        await db.execute("DELETE FROM exercise_notes WHERE user_id=? AND exercise_id=?", (int(user_id), int(exercise_id)))
-        await db.execute("DELETE FROM user_exercise_muscles WHERE user_id=? AND exercise_id=?", (int(user_id), int(exercise_id)))
-        hidden = False
-        mode = "hard_delete_owned" if owner_id == int(user_id) else "hide_shared"
-        if owner_id == int(user_id):
-            ref = await (await db.execute("SELECT 1 FROM user_exercises WHERE exercise_id=? LIMIT 1", (int(exercise_id),))).fetchone()
-            if not ref:
-                await db.execute("DELETE FROM exercises WHERE id=? AND created_by_user_id=?", (int(exercise_id), int(user_id)))
-            await db.execute("DELETE FROM hidden_catalog_exercises WHERE user_id=? AND exercise_id=?", (int(user_id), int(exercise_id)))
-        else:
-            await db.execute(
-                "INSERT OR REPLACE INTO hidden_catalog_exercises(user_id, exercise_id, hidden_at) VALUES(?,?,?)",
-                (int(user_id), int(exercise_id), _now_utc_iso()),
-            )
-            hidden = True
-        await db.commit()
-        return {"ok": True, "exercise_id": int(exercise_id), "removed_mode": mode, "deleted_sets": deleted_sets, "deleted_session_links": deleted_session_links, "deleted_user_links": deleted_user_links, "hidden": hidden}
+    async with connect_db() as conn:
+        await conn.execute("BEGIN IMMEDIATE")
+        result = await _remove_exercise_for_user_in_transaction(conn, user_id, exercise_id)
+        await conn.commit()
+        return result
 
 
 async def clear_non_base_group_exercises_for_user(user_id: int) -> dict:
-    async with aiosqlite.connect(DB_PATH) as db:
-        cur = await db.execute("SELECT id FROM exercises WHERE IFNULL(created_by_user_id,0)=?", (int(user_id),))
-        custom_ids = [int(r[0]) for r in await cur.fetchall() if r and r[0] is not None]
-        if not custom_ids:
-            return {"ok": True, "removed_owned_exercises": 0, "removed_owned_sets": 0, "hidden_shared_exercises": 0, "remaining_visible_non_base": 0}
-        placeholders = ",".join("?" for _ in custom_ids)
-        ue_ids = [int(r[0]) for r in await (await db.execute(f"SELECT id FROM user_exercises WHERE exercise_id IN ({placeholders})", tuple(custom_ids))).fetchall()]
-        removed_sets = 0
-        if ue_ids:
-            ph=",".join("?" for _ in ue_ids)
-            cur = await db.execute(f"DELETE FROM sets WHERE user_exercise_id IN ({ph})", tuple(ue_ids))
-            removed_sets = int(cur.rowcount or 0)
-            await db.execute(f"DELETE FROM session_exercises WHERE user_exercise_id IN ({ph})", tuple(ue_ids))
-            await db.execute(f"DELETE FROM running_entries WHERE user_exercise_id IN ({ph})", tuple(ue_ids))
-            await db.execute(f"DELETE FROM user_exercises WHERE id IN ({ph})", tuple(ue_ids))
-        await db.execute(f"DELETE FROM exercise_notes WHERE exercise_id IN ({placeholders})", tuple(custom_ids))
-        await db.execute(f"DELETE FROM user_exercise_muscles WHERE exercise_id IN ({placeholders})", tuple(custom_ids))
-        await db.execute(f"DELETE FROM exercises WHERE created_by_user_id=? AND id IN ({placeholders})", (int(user_id), *custom_ids))
-        await db.execute(
-            "INSERT OR REPLACE INTO hidden_catalog_exercises(user_id, exercise_id, hidden_at) "
-            "SELECT ?, id, ? FROM exercises WHERE IFNULL(created_by_user_id,0) NOT IN (0, ?) AND IFNULL(created_by_user_id,0)<>?",
-            (int(user_id), _now_utc_iso(), int(user_id), int(user_id)),
-        )
-        await db.commit()
-    stats, items = await list_all_exercise_groups_for_user(user_id, datetime.now().date().isoformat())
-    remaining_non_base = sum(1 for it in items if not bool(it.get("is_base")))
-    return {"ok": True, "removed_owned_exercises": len(custom_ids), "removed_owned_sets": removed_sets, "hidden_shared_exercises": 0, "remaining_visible_non_base": remaining_non_base}
+    async with connect_db() as conn:
+        await conn.execute("BEGIN IMMEDIATE")
+        rows = await (await conn.execute(
+            """SELECT e.id, e.created_by_user_id FROM exercises e
+               WHERE IFNULL(e.created_by_user_id,0)<>0 AND (
+                 e.created_by_user_id=? OR
+                 EXISTS (SELECT 1 FROM user_exercises ue WHERE ue.user_id=? AND ue.exercise_id=e.id) OR
+                 EXISTS (SELECT 1 FROM training_system_exercises tse JOIN training_systems ts ON ts.id=tse.system_id
+                         WHERE ts.user_id=? AND tse.exercise_id=e.id))""",
+            (int(user_id), int(user_id), int(user_id)),
+        )).fetchall()
+        removed_owned = removed_sets = hidden_shared = 0
+        for exercise_id, owner_id in rows:
+            result = await _remove_exercise_for_user_in_transaction(conn, user_id, exercise_id)
+            removed_owned += int(owner_id == int(user_id))
+            removed_sets += result['deleted_sets']
+            hidden_shared += int(owner_id != int(user_id) and result['hidden'])
+        await conn.commit()
+    return {"ok": True, "removed_owned_exercises": removed_owned, "removed_owned_sets": removed_sets,
+            "hidden_shared_exercises": hidden_shared, "remaining_visible_non_base": 0}
 
 
 async def resolve_exercise_muscles(user_id: int, exercise_ids: Sequence[int]):
@@ -8592,8 +8559,8 @@ async def fetch_productivity_leaderboard(limit: int = 10, offset: int = 0):
     return paged, total, ranked
 
 
-async def fetch_public_training_plan(user_id: int):
-    async with connect_db() as db:
+async def fetch_public_training_plan(user_id: int, *, connection=None):
+    async with (nullcontext(connection) if connection is not None else connect_db()) as db:
         days_cur = await db.execute(
             """
             SELECT day_index, label
@@ -8739,21 +8706,33 @@ async def copy_training_system_from_user(source_user_id: int, target_user_id: in
             return None
         return value if value > 0 else None
 
-    async with connect_db() as db:
+    async def unique_name(db, preferred):
+        name, suffix = preferred, 2
+        while await (await db.execute("SELECT 1 FROM training_systems WHERE user_id=? AND LOWER(name)=LOWER(?)", (target_user_id, name))).fetchone():
+            name = f"{preferred} ({suffix})"
+            suffix += 1
+        return name
+
+    async def copy_in_transaction(db):
         systems_cur = await db.execute(
             "SELECT id, name, color FROM training_systems WHERE user_id=? ORDER BY id",
             (source_user_id,),
         )
         systems = await systems_cur.fetchall()
+        if source_system_id is not None and not any(int(row[0]) == int(source_system_id) for row in systems):
+            raise ValueError('system_not_found')
         if not systems:
+            day_map = await fetch_public_training_plan(source_user_id, connection=db)
+            if not any(day.get('exercises') for day in day_map):
+                return {"system_id": None, "days": 0, "exercises": 0}
             now = datetime.now(UTC).isoformat()
             fallback_name = (fallback_system_name or "").strip() or "Скопированная система"
+            fallback_name = await unique_name(db, fallback_name)
             cur = await db.execute(
                 "INSERT INTO training_systems(user_id, name, color, created_at) VALUES(?,?,?,?)",
                 (target_user_id, fallback_name, "#2ea6ff", now),
             )
             new_system_id = int(cur.lastrowid)
-            day_map = await fetch_public_training_plan(source_user_id)
             ex_count = 0
             for day in day_map:
                 day_index = int(day.get("day_index") or 0)
@@ -8792,12 +8771,10 @@ async def copy_training_system_from_user(source_user_id: int, target_user_id: in
                     )
                     ex_count += 1
             if ex_count == 0:
+                await db.execute("DELETE FROM training_system_days WHERE system_id=?", (new_system_id,))
                 await db.execute("DELETE FROM training_systems WHERE id=?", (new_system_id,))
-                await db.commit()
                 return {"system_id": None, "days": 0, "exercises": 0}
-            await db.commit()
-            await apply_system_to_current_plan(target_user_id, new_system_id)
-            return {"system_id": int(new_system_id), "days": len(day_map), "exercises": ex_count}
+            return {"system_id": int(new_system_id), "source_system_id": 0, "days": len(day_map), "exercises": ex_count}
 
         selected = None
         if source_system_id is not None:
@@ -8846,6 +8823,8 @@ async def copy_training_system_from_user(source_user_id: int, target_user_id: in
             (selected_system_id,),
         )
         source_exercises = await ex_cur.fetchall()
+        if not source_exercises:
+            return {"system_id": None, "source_system_id": selected_system_id, "days": 0, "exercises": 0}
 
         source_meta_cur = await db.execute(
             """
@@ -8864,27 +8843,12 @@ async def copy_training_system_from_user(source_user_id: int, target_user_id: in
                 source_meta_map[(int(day_no), int(ex_id))] = {}
 
         now = datetime.now(UTC).isoformat()
-        existing_target_cur = await db.execute(
-            "SELECT id FROM training_systems WHERE user_id=? AND LOWER(name)=LOWER(?) LIMIT 1",
-            (target_user_id, name),
+        name = await unique_name(db, name)
+        cur = await db.execute(
+            "INSERT INTO training_systems(user_id, name, color, created_at) VALUES(?,?,?,?)",
+            (target_user_id, name, color, now),
         )
-        existing_target_row = await existing_target_cur.fetchone()
-        if existing_target_row:
-            new_system_id = int(existing_target_row[0])
-            await db.execute(
-                "UPDATE training_systems SET color=?, created_at=? WHERE id=? AND user_id=?",
-                (color, now, new_system_id, target_user_id),
-            )
-            await db.execute("DELETE FROM training_system_exercise_sources WHERE system_id=?", (new_system_id,))
-            await db.execute("DELETE FROM training_system_exercises WHERE system_id=?", (new_system_id,))
-            await db.execute("DELETE FROM training_system_reminders WHERE system_id=?", (new_system_id,))
-            await db.execute("DELETE FROM training_system_days WHERE system_id=?", (new_system_id,))
-        else:
-            cur = await db.execute(
-                "INSERT INTO training_systems(user_id, name, color, created_at) VALUES(?,?,?,?)",
-                (target_user_id, name, color, now),
-            )
-            new_system_id = int(cur.lastrowid)
+        new_system_id = int(cur.lastrowid)
 
         custom_groups_cache: dict[str, str] = {}
 
@@ -9037,7 +9001,7 @@ async def copy_training_system_from_user(source_user_id: int, target_user_id: in
                     "INSERT OR IGNORE INTO exercises(name, muscle_group, created_by_user_id) VALUES(?, ?, 0)",
                     (normalized_name, normalized_group),
                 )
-                ex_id = int(cur_new.lastrowid or 0)
+                ex_id = int(cur_new.lastrowid or 0) if cur_new.rowcount else 0
                 if ex_id <= 0:
                     cur_retry = await db.execute(
                         "SELECT id FROM exercises WHERE LOWER(name)=LOWER(?) AND created_by_user_id=0 LIMIT 1",
@@ -9074,7 +9038,7 @@ async def copy_training_system_from_user(source_user_id: int, target_user_id: in
                 "INSERT OR IGNORE INTO exercises(name, muscle_group, created_by_user_id) VALUES(?, ?, ?)",
                 (normalized_name, normalized_group, int(target_user_id)),
             )
-            ex_id = int(cur_new.lastrowid or 0)
+            ex_id = int(cur_new.lastrowid or 0) if cur_new.rowcount else 0
             if ex_id <= 0:
                 cur_retry = await db.execute(
                     """
@@ -9183,6 +9147,12 @@ async def copy_training_system_from_user(source_user_id: int, target_user_id: in
                     (new_system_id, day_index, f"День {day_index}", 1 if day_index <= 3 else 0),
                 )
 
+        return {"system_id": int(new_system_id), "source_system_id": selected_system_id, "days": day_count, "exercises": ex_count}
+
+    async with connect_db() as db:
+        await db.execute("BEGIN IMMEDIATE")
+        result = await copy_in_transaction(db)
         await db.commit()
-    await apply_system_to_current_plan(target_user_id, new_system_id)
-    return {"system_id": int(new_system_id), "days": day_count, "exercises": ex_count}
+    if result.get('system_id'):
+        await apply_system_to_current_plan(target_user_id, result['system_id'])
+    return result

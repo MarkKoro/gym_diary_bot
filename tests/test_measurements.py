@@ -56,6 +56,35 @@ class MeasurementDbTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         await db.init_db()
 
+    async def test_ai_context_reads_current_measurement_codes(self):
+        import webapp_backend as backend
+        user = await db.get_or_create_user(901, 'ai_measurements')
+        async with db.connect_db() as conn:
+            await conn.executemany('INSERT INTO user_measurements(user_id,metric,value,created_at) VALUES(?,?,?,?)', [(user, code, value, stamp) for code in ('body_weight', 'waist_navel', 'resting_hr') for value, stamp in ((70, '2026-09-23'), (72, '2026-09-24'))])
+            await conn.commit()
+        context = await backend._build_ai_context_payload(user)
+        trends = {item['metric']: item['delta'] for item in context['measurement_trends']}
+        self.assertEqual(trends, {'body_weight': 2, 'waist_navel': 2, 'resting_hr': 2})
+
+    async def test_anatomy_rejects_non_finite_percentages_without_changing_saved_data(self):
+        import webapp_backend as backend
+        user = await db.get_or_create_user(902, 'anatomy_validation')
+        exercise = await db.get_or_create_exercise('Anatomy validation', 'chest')
+        await db.add_user_exercise(user, 1, exercise)
+        ctx = SimpleNamespace(user_id=user)
+        valid = {'items': [{'muscle_code': 'chest', 'weight_pct': 100}]}
+        await backend.update_exercise_anatomy(exercise, valid, ctx)
+        for value in ('NaN', 'Infinity', '-Infinity'):
+            with self.subTest(value=value), self.assertRaises(backend.HTTPException):
+                await backend.update_exercise_anatomy(exercise, {'items': [{'muscle_code': 'chest', 'weight_pct': value}]}, ctx)
+        self.assertEqual(await db.get_user_anatomy(user, exercise), [('chest', 100)])
+
+    def test_numeric_helpers_do_not_propagate_non_finite_values(self):
+        import webapp_backend as backend
+        for value in ('NaN', 'Infinity', '-Infinity', None, 'bad'):
+            self.assertEqual(backend._to_int(value, 7), 7)
+            self.assertEqual(backend._to_float(value, 7.5), 7.5)
+
     async def asyncTearDown(self):
         async with db.connect_db() as conn:
             for table in (

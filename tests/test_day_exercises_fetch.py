@@ -325,5 +325,138 @@ class TrainerAndCaptainRegressionTests(unittest.IsolatedAsyncioTestCase):
             self.assertIsNotNone(await (await conn.execute('SELECT 1 FROM user_exercises WHERE user_id=? AND exercise_id=?', (self.other, shared))).fetchone())
 
 
+class ProgramCopyRegressionTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        await db.init_db()
+        offset = sorted(name for name in dir(self) if name.startswith('test_')).index(self._testMethodName) * 10
+        self.source = await db.get_or_create_user(9910 + offset, 'copy_source')
+        self.target = await db.get_or_create_user(9911 + offset, 'copy_target')
+        self.source_system = await db.get_active_training_system_id(self.source)
+        self.target_system = await db.get_active_training_system_id(self.target)
+        self.source_ex = await db.get_or_create_exercise('Copy source exercise', 'chest', self.source)
+        self.target_ex = await db.get_or_create_exercise('Keep personal exercise', 'legs', self.target)
+        async with db.connect_db() as conn:
+            for user in (self.source, self.target):
+                await conn.execute('DELETE FROM training_system_exercises WHERE system_id IN (SELECT id FROM training_systems WHERE user_id=?)', (user,))
+            await conn.execute("UPDATE training_systems SET name='Matching name' WHERE id IN (?,?)", (self.source_system, self.target_system))
+            await conn.executemany('INSERT INTO training_system_exercises(system_id,day_index,exercise_id) VALUES(?,1,?)', [(self.source_system, self.source_ex), (self.target_system, self.target_ex)])
+            await conn.commit()
+
+    async def test_copy_preserves_same_named_personal_program_and_reports_source(self):
+        results = await asyncio.gather(*(db.copy_training_system_from_user(self.source, self.target) for _ in range(2)))
+        self.assertEqual(len({r['system_id'] for r in results}), 2)
+        for result in results:
+            self.assertNotEqual(result['system_id'], self.target_system)
+            self.assertEqual(result['source_system_id'], self.source_system)
+        async with db.connect_db() as conn:
+            self.assertEqual(await (await conn.execute('SELECT exercise_id FROM training_system_exercises WHERE system_id=?', (self.target_system,))).fetchall(), [(self.target_ex,)])
+            names = await (await conn.execute('SELECT name FROM training_systems WHERE user_id=?', (self.target,))).fetchall()
+            self.assertEqual(len(names), len(set(names)))
+
+    async def test_invalid_or_empty_source_does_not_replace_current_program(self):
+        with self.assertRaisesRegex(ValueError, 'system_not_found'):
+            await db.copy_training_system_from_user(self.source, self.target, self.target_system)
+        async with db.connect_db() as conn:
+            await conn.execute('DELETE FROM training_system_exercises WHERE system_id=?', (self.source_system,))
+            await conn.commit()
+        result = await db.copy_training_system_from_user(self.source, self.target, self.source_system)
+        self.assertIsNone(result['system_id'])
+        self.assertEqual(await db.get_active_training_system_id(self.target), self.target_system)
+
+    async def test_legacy_copy_works_with_single_connection_and_leaves_no_empty_system(self):
+        legacy = await db.get_or_create_user(9912, 'legacy_copy')
+        await db.set_workouts_per_week(legacy, 1)
+        await db.add_user_exercise(legacy, 1, self.source_ex)
+        async with db.connect_db() as conn:
+            await conn.execute('DELETE FROM training_systems WHERE user_id=?', (legacy,))
+            await conn.commit()
+        with patch.object(db, '_db_semaphore', asyncio.BoundedSemaphore(1)):
+            result = await asyncio.wait_for(db.copy_training_system_from_user(legacy, self.target), 3)
+        self.assertIsNotNone(result['system_id'])
+        self.assertGreater(result['exercises'], 0)
+        async with db.connect_db() as conn:
+            await conn.execute('DELETE FROM user_exercises WHERE user_id=?', (legacy,))
+            before = (await (await conn.execute('SELECT COUNT(*) FROM training_system_days')).fetchone())[0]
+            await conn.commit()
+        self.assertIsNone((await db.copy_training_system_from_user(legacy, self.target))['system_id'])
+        async with db.connect_db() as conn:
+            self.assertEqual((await (await conn.execute('SELECT COUNT(*) FROM training_system_days')).fetchone())[0], before)
+
+
+class ExerciseDeletionRegressionTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        await db.init_db()
+        self.owner = await db.get_or_create_user(9900, 'deletion_owner')
+        self.other = await db.get_or_create_user(9901, 'deletion_recipient')
+
+    async def seed_shared_exercise(self, name, *, saved_only=False):
+        exercise = await db.get_or_create_exercise(name, 'other', self.owner)
+        systems = {}
+        for user in (self.owner, self.other):
+            systems[user] = await db.get_active_training_system_id(user)
+            if user == self.owner or not saved_only:
+                await db.add_user_exercise(user, 1, exercise)
+            async with db.connect_db() as conn:
+                await conn.execute('INSERT OR IGNORE INTO training_system_exercises(system_id,day_index,exercise_id) VALUES(?,1,?)', (systems[user], exercise))
+                await conn.execute('INSERT OR IGNORE INTO training_system_exercise_sources(system_id,day_index,exercise_id,source_payload) VALUES(?,1,?,?)', (systems[user], exercise, '{}'))
+                await conn.execute('INSERT INTO exercise_baseline(user_id,day_index,exercise_id,sets,reps) VALUES(?,1,?,1,10)', (user, exercise))
+                await conn.execute('INSERT INTO exercise_notes(user_id,exercise_id,note) VALUES(?,?,?)', (user, exercise, f'note {user}'))
+                await conn.execute('INSERT INTO user_exercise_muscles(user_id,exercise_id,muscle_code,weight_pct) VALUES(?,?,?,100)', (user, exercise, 'chest'))
+                if user == self.owner or not saved_only:
+                    ue = (await (await conn.execute('SELECT id FROM user_exercises WHERE user_id=? AND exercise_id=? AND day_index=1', (user, exercise))).fetchone())[0]
+                    await conn.execute('INSERT INTO sets(session_id,user_exercise_id,set_no,reps) VALUES(0,?,1,10)', (ue,))
+                    await conn.execute('INSERT INTO session_exercises(session_id,user_exercise_id,is_done) VALUES(0,?,1)', (ue,))
+                    await conn.execute('INSERT INTO running_entries(user_id,user_exercise_id,exercise_id) VALUES(?,?,?)', (user, ue, exercise))
+                await conn.commit()
+        return exercise, systems
+
+    async def assert_only_owner_removed(self, exercise, systems, *, saved_only=False):
+        async with db.connect_db() as conn:
+            self.assertIsNotNone(await (await conn.execute('SELECT id FROM exercises WHERE id=?', (exercise,))).fetchone())
+            for table in ('user_exercises', 'exercise_notes', 'user_exercise_muscles', 'exercise_baseline', 'running_entries'):
+                self.assertEqual((await (await conn.execute(f'SELECT COUNT(*) FROM {table} WHERE user_id=? AND exercise_id=?', (self.owner, exercise))).fetchone())[0], 0, table)
+                expected = 0 if saved_only and table in ('user_exercises', 'running_entries') else (2 if table == 'user_exercises' else 1)
+                self.assertEqual((await (await conn.execute(f'SELECT COUNT(*) FROM {table} WHERE user_id=? AND exercise_id=?', (self.other, exercise))).fetchone())[0], expected, table)
+            for table in ('training_system_exercises', 'training_system_exercise_sources'):
+                self.assertIsNone(await (await conn.execute(f'SELECT 1 FROM {table} WHERE system_id=? AND exercise_id=?', (systems[self.owner], exercise))).fetchone(), table)
+                self.assertIsNotNone(await (await conn.execute(f'SELECT 1 FROM {table} WHERE system_id=? AND exercise_id=?', (systems[self.other], exercise))).fetchone(), table)
+            if not saved_only:
+                for table in ('sets', 'session_exercises'):
+                    self.assertEqual((await (await conn.execute(f'SELECT COUNT(*) FROM {table} t JOIN user_exercises ue ON ue.id=t.user_exercise_id WHERE ue.user_id=? AND ue.exercise_id=?', (self.other, exercise))).fetchone())[0], 1, table)
+        self.assertNotIn(exercise, [r[0] for r in await db.list_visible_catalog_exercises_for_user(self.owner)])
+
+    async def test_bulk_delete_preserves_other_users_history(self):
+        exercise, systems = await self.seed_shared_exercise('Bulk shared deletion')
+        await db.clear_non_base_group_exercises_for_user(self.owner)
+        await self.assert_only_owner_removed(exercise, systems)
+
+    async def test_individual_delete_preserves_other_saved_program(self):
+        exercise, systems = await self.seed_shared_exercise('Saved-only deletion', saved_only=True)
+        await db.remove_exercise_for_user(self.owner, exercise)
+        await self.assert_only_owner_removed(exercise, systems, saved_only=True)
+
+    async def test_hard_delete_cannot_restore_from_saved_system(self):
+        exercise, systems = await self.seed_shared_exercise('Hard shared deletion')
+        self.assertTrue(await db.hard_delete_user_owned_exercise(self.owner, exercise))
+        await self.assert_only_owner_removed(exercise, systems)
+        await db.apply_system_to_current_plan(self.owner, systems[self.owner])
+        async with db.connect_db() as conn:
+            self.assertIsNone(await (await conn.execute('SELECT 1 FROM user_exercises WHERE user_id=? AND exercise_id=? AND is_archived=0', (self.owner, exercise))).fetchone())
+
+    async def test_group_clear_preserves_other_users_and_clears_saved_links(self):
+        exercise, systems = await self.seed_shared_exercise('Group shared deletion')
+        await db.clear_group_exercises_for_user(self.owner, 'other')
+        await self.assert_only_owner_removed(exercise, systems)
+
+    async def test_bulk_clear_works_for_shared_exercises_without_own_catalog(self):
+        viewer = await db.get_or_create_user(9902, 'shared_only')
+        exercise = await db.get_or_create_exercise('Shared only bulk deletion', 'other', self.other)
+        await db.add_user_exercise(viewer, 1, exercise)
+        await db.clear_non_base_group_exercises_for_user(viewer)
+        async with db.connect_db() as conn:
+            self.assertIsNone(await (await conn.execute('SELECT 1 FROM user_exercises WHERE user_id=? AND exercise_id=?', (viewer, exercise))).fetchone())
+            self.assertIsNotNone(await (await conn.execute('SELECT 1 FROM exercises WHERE id=?', (exercise,))).fetchone())
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -9,7 +9,7 @@ import uuid
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 from dataclasses import dataclass
 from datetime import UTC, datetime, date, time, timedelta
-from math import sqrt
+from math import sqrt, isfinite
 from typing import Optional
 from zoneinfo import ZoneInfo
 from fastapi import Body, Depends, FastAPI, Header, HTTPException, Request, Response
@@ -499,13 +499,14 @@ def _format_num(value: float | int | None) -> str:
 def _to_int(value: object, default: int = 0) -> int:
     try:
         return int(float(value))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return default
 
 
 def _to_float(value: object, default: float = 0.0) -> float:
     try:
-        return float(value)
+        number = float(value)
+        return number if isfinite(number) else default
     except (TypeError, ValueError):
         return default
 
@@ -1022,7 +1023,7 @@ async def _build_ai_context_payload(user_id: int) -> dict:
 
     catalog_items, catalog_by_id, catalog_by_name, catalog_groups = await _build_ai_catalog_lookup(user_id, day_snapshots)
 
-    measurement_codes = ['weight', 'waist', 'chest', 'hips', 'biceps', 'thigh', 'run_5k', 'resting_pulse']
+    measurement_codes = ['body_weight', 'waist_navel', 'chest', 'hips', 'bicep_flexed', 'thigh_upper', 'run_5k', 'resting_hr']
     measurement_trends: list[dict] = []
     for code in measurement_codes:
         hist = await fetch_measurement_history(user_id, code, limit=2)
@@ -3634,7 +3635,7 @@ async def update_exercise_anatomy(
             raise HTTPException(status_code=400, detail="Некорректный процент")
         if code not in ANATOMY_MUSCLE_CODES:
             raise HTTPException(status_code=400, detail="Некорректная группа")
-        if pct <= 0:
+        if not isfinite(pct) or pct <= 0:
             raise HTTPException(status_code=400, detail="Процент должен быть больше нуля")
         if code in seen_codes:
             raise HTTPException(status_code=400, detail="Дубликаты не допускаются")
@@ -6328,12 +6329,17 @@ async def leaderboard_productivity_copy(
         fallback_name = ((leader_row[2] or '').strip() if len(leader_row) > 2 else '') or f'athlete_{int(leader_user_id)}'
     had_sub = await _has_active_subscription(int(user_id))
     previous_system_id = await get_active_training_system_id(int(user_id))
-    result = await copy_training_system_from_user(
-        int(leader_user_id),
-        int(user_id),
-        source_system_id,
-        fallback_system_name=fallback_name,
-    )
+    try:
+        result = await copy_training_system_from_user(
+            int(leader_user_id),
+            int(user_id),
+            source_system_id,
+            fallback_system_name=fallback_name,
+        )
+    except ValueError as exc:
+        if str(exc) == 'system_not_found':
+            raise HTTPException(status_code=404, detail='Система для копирования не найдена') from exc
+        raise
     if not result.get('system_id'):
         raise HTTPException(status_code=400, detail='У лидера нет системы для копирования')
     await clone_system_cosmetics(int(user_id), previous_system_id, int(result.get('system_id')))

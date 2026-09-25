@@ -56,6 +56,8 @@ def verify_and_parse_init_data(
     received_hash: Optional[str] = None
 
     for k, v in pairs:
+        if k in data or (k == "hash" and received_hash is not None):
+            raise InitDataError("duplicate initData field")
         if k == "hash":
             received_hash = v
         else:
@@ -63,6 +65,8 @@ def verify_and_parse_init_data(
 
     if not received_hash:
         raise InitDataError("hash is missing in initData")
+    if len(received_hash) != 64 or any(c not in "0123456789abcdef" for c in received_hash):
+        raise InitDataError("hash format is invalid")
 
     # Build data_check_string: keys sorted, "k=v" joined with "\n", excluding hash
     data_check_string = "\n".join(f"{k}={data[k]}" for k in sorted(data.keys()))
@@ -93,6 +97,8 @@ def verify_and_parse_init_data(
     if max_age_sec is not None and max_age_sec > 0:
         if auth_date < now_ts - max_age_sec:
             raise InitDataError("initData is too old")
+    if auth_date > now_ts + 60:
+        raise InitDataError("auth_date is in the future")
 
     # user field is JSON
     if "user" not in data:
@@ -103,11 +109,14 @@ def verify_and_parse_init_data(
     except Exception as e:
         raise InitDataError("user JSON parse failed") from e
 
-    if "id" not in user_obj:
+    if not isinstance(user_obj, dict) or "id" not in user_obj:
         raise InitDataError("user.id is missing")
+    user_id = user_obj["id"]
+    if type(user_id) is not int or user_id <= 0:
+        raise InitDataError("user.id is invalid")
 
     user = TelegramWebAppUser(
-        id=int(user_obj["id"]),
+        id=user_id,
         username=user_obj.get("username"),
         first_name=user_obj.get("first_name"),
         last_name=user_obj.get("last_name"),

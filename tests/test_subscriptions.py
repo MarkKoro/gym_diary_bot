@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from datetime import datetime, timedelta, UTC
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 
 tmp_db = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
@@ -21,6 +21,71 @@ import db  # noqa: E402
 importlib.reload(db)
 import bot  # noqa: E402
 importlib.reload(bot)
+
+
+class InitDataValidationTests(unittest.TestCase):
+    def signed(self, user, auth_date=1000):
+        import hashlib
+        import hmac
+        import json
+        from urllib.parse import urlencode
+        data = {'auth_date': str(auth_date), 'user': json.dumps(user)}
+        secret = hmac.new(b'WebAppData', b'test-token', hashlib.sha256).digest()
+        data['hash'] = hmac.new(secret, '\n'.join(f'{k}={v}' for k, v in sorted(data.items())).encode(), hashlib.sha256).hexdigest()
+        return urlencode(data)
+
+    def test_valid_signed_data_and_expired_or_future_data(self):
+        from telegram_webapp_auth import verify_and_parse_init_data, InitDataError
+        self.assertEqual(verify_and_parse_init_data(self.signed({'id': 123}), 'test-token', now_ts=1000).user.id, 123)
+        for timestamp in (0, 2000):
+            with self.assertRaises(InitDataError):
+                verify_and_parse_init_data(self.signed({'id': 123}, timestamp), 'test-token', now_ts=1000, max_age_sec=100)
+
+    def test_invalid_user_shapes_raise_auth_error(self):
+        from telegram_webapp_auth import verify_and_parse_init_data, InitDataError
+        for user in (None, 123, [], {}, {'id': None}, {'id': True}, {'id': 0}, {'id': -1}, {'id': 1.5}, {'id': '123'}):
+            with self.subTest(user=user), self.assertRaises(InitDataError):
+                verify_and_parse_init_data(self.signed(user), 'test-token', now_ts=1000)
+
+    def test_invalid_or_duplicate_hash_rejected_cleanly(self):
+        from telegram_webapp_auth import verify_and_parse_init_data, InitDataError
+        for data in ('hash=я', 'hash=' + 'z'*64, self.signed({'id': 123}) + '&hash=abc', self.signed({'id': 123}) + '&user=null'):
+            with self.subTest(data=data), self.assertRaises(InitDataError):
+                verify_and_parse_init_data(data, 'test-token', now_ts=1000)
+
+
+class AdminCommandTests(unittest.IsolatedAsyncioTestCase):
+    async def test_text_input_rechecks_revoked_or_read_only_trainer_permission(self):
+        for link in (None, (1, 'accepted', 0)):
+            with self.subTest(link=link):
+                message = SimpleNamespace(reply_text=AsyncMock(), text='42')
+                update = SimpleNamespace(message=message, effective_user=SimpleNamespace(id=123, username='trainer'))
+                context = SimpleNamespace(user_data={'acting_user_id': 2, 'acting_can_edit': True})
+                with patch.object(bot, 'require_subscription', new_callable=AsyncMock, return_value=True), patch.object(bot, 'get_or_create_user', new_callable=AsyncMock, return_value=1), patch.object(bot, 'get_trainer_link', new_callable=AsyncMock, return_value=link):
+                    await bot.text_router(update, context)
+                message.reply_text.assert_awaited_once()
+                self.assertFalse(context.user_data.get('acting_can_edit'))
+
+    async def test_wizard_cannot_change_read_only_trainee_settings(self):
+        q = SimpleNamespace(answer=AsyncMock())
+        context = SimpleNamespace(user_data={'acting_user_id': 2, 'acting_can_edit': False})
+        with patch.object(bot, 'set_workouts_per_week', new_callable=AsyncMock) as write:
+            await bot.wizard_router(None, q, 'wiz:week:set:5', 2, context)
+            write.assert_not_awaited()
+        q.answer.assert_awaited_once()
+
+    async def test_ai_quota_reset_requires_admin(self):
+        message = SimpleNamespace(reply_text=AsyncMock())
+        update = SimpleNamespace(effective_message=message, effective_user=SimpleNamespace(id=123, username='ordinary'))
+        with patch.object(bot, 'ADMIN_IDS', {999}), patch.object(bot, 'reset_ai_coach_quota', new_callable=AsyncMock) as reset, patch.object(bot, 'get_or_create_user', new_callable=AsyncMock) as get_user:
+            await bot.ai_pass_command(update, None)
+            reset.assert_not_awaited()
+            get_user.assert_not_awaited()
+            update.effective_user.id = 999
+            get_user.return_value = 42
+            reset.return_value = 2
+            await bot.ai_pass_command(update, None)
+            reset.assert_awaited_once_with(42)
 
 
 class _FakeBot:
@@ -69,6 +134,36 @@ class SubscriptionDbTests(unittest.IsolatedAsyncioTestCase):
         self.assertAlmostEqual(
             info["expires_at"].timestamp(), second_expiry.timestamp(), delta=1
         )
+
+    async def test_concurrent_grants_accumulate_and_degrant_caps_old_active_rows(self):
+        user = await db.get_or_create_user(7003, 'grant_race')
+        await asyncio.gather(*(db.grant_subscription_days(user, 30) for _ in range(2)))
+        before = await db.get_active_subscription(user)
+        self.assertAlmostEqual((before['expires_at'] - datetime.now(UTC)).total_seconds(), 60*86400, delta=10)
+        reduced = await db.degrant_subscription_days(user, 45)
+        self.assertEqual((await db.get_active_subscription(user))['expires_at'], reduced)
+        self.assertAlmostEqual((reduced - datetime.now(UTC)).total_seconds(), 15*86400, delta=10)
+
+    async def test_gift_redemption_is_atomic_and_cannot_extend_twice(self):
+        user = await db.get_or_create_user(7004, 'gift_owner')
+        await db.create_gift_code('AUDIT-GIFT-ATOMIC', 30)
+        async with db.connect_db() as conn:
+            await conn.execute("CREATE TRIGGER fail_gift_grant BEFORE INSERT ON subscriptions BEGIN SELECT RAISE(ABORT, 'test grant failure'); END")
+            await conn.commit()
+        try:
+            with self.assertRaises(Exception):
+                await db.redeem_gift_code_with_status('AUDIT-GIFT-ATOMIC', user)
+            async with db.connect_db() as conn:
+                self.assertIsNone((await (await conn.execute("SELECT used_by_user_id FROM gift_codes WHERE code='AUDIT-GIFT-ATOMIC'")).fetchone())[0])
+        finally:
+            async with db.connect_db() as conn:
+                await conn.execute('DROP TRIGGER fail_gift_grant')
+                await conn.commit()
+        results = await asyncio.gather(*(db.redeem_gift_code_with_status('audit-gift-atomic', user) for _ in range(3)))
+        self.assertEqual(results.count(('ok', 30)), 1)
+        self.assertEqual(results.count(('already_used', None)), 2)
+        active = await db.get_active_subscription(user)
+        self.assertAlmostEqual((active['expires_at'] - datetime.now(UTC)).total_seconds(), 30*86400, delta=10)
 
     async def test_telegram_payment_retries_extend_subscription_only_once(self):
         user_id = await db.get_or_create_user(7002, 'payment_retry')
