@@ -2,6 +2,7 @@ import asyncio
 import aiosqlite
 import json
 import hashlib
+import math
 from datetime import datetime, timedelta, timezone, UTC
 import secrets
 from contextlib import asynccontextmanager, nullcontext
@@ -878,7 +879,6 @@ async def _has_unique_index(
     return False
 
 
-
 async def _ensure_day_completions_system_scope(db) -> None:
     cur = await db.execute("PRAGMA table_info(day_completions)")
     cols = await cur.fetchall()
@@ -911,63 +911,64 @@ async def _ensure_sessions_unique_by_day_and_system(db) -> None:
     desired = ("user_id", "date", "day_index", "system_id")
     if await _has_unique_index(db, "sessions", desired):
         return
+    await db.commit()
+    foreign_keys = (await (await db.execute("PRAGMA foreign_keys")).fetchone())[0]
     await db.execute("PRAGMA foreign_keys=OFF")
-    await db.execute("BEGIN")
+    await db.execute("BEGIN IMMEDIATE")
     try:
-        await db.execute("ALTER TABLE sessions RENAME TO sessions_old")
-        await db.execute(
-            """
-            CREATE TABLE sessions(
+        # Rebuild without renaming the referenced table: SQLite rewrites child
+        # foreign keys when a parent is renamed, even with enforcement disabled.
+        await db.execute("""
+            CREATE TABLE sessions_new(
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER,
-                date TEXT,
-                day_index INTEGER,
+                user_id INTEGER, date TEXT, day_index INTEGER,
                 system_id INTEGER NOT NULL DEFAULT 0,
                 UNIQUE(user_id, date, day_index, system_id)
             )
-            """
-        )
-        await db.execute(
-            """
-            INSERT INTO sessions(id, user_id, date, day_index, system_id)
-            SELECT id, user_id, date, day_index, COALESCE(system_id, 0) FROM sessions_old
-            """
-        )
-        await db.execute("DROP TABLE sessions_old")
-    except Exception:
-        await db.execute("ROLLBACK")
+        """)
+        await db.execute("""
+            INSERT INTO sessions_new(id,user_id,date,day_index,system_id)
+            SELECT id,user_id,date,day_index,COALESCE(system_id,0) FROM sessions
+        """)
+        await db.execute("DROP TABLE sessions")
+        await db.execute("ALTER TABLE sessions_new RENAME TO sessions")
+        await db.commit()
+    except BaseException:
+        await db.rollback()
         raise
-    else:
-        await db.execute("COMMIT")
     finally:
-        await db.execute("PRAGMA foreign_keys=ON")
+        await db.execute(f"PRAGMA foreign_keys={int(foreign_keys)}")
 
 
 async def _ensure_exercises_user_scope(db) -> None:
-    has_scope = await _column_exists(db, "exercises", "created_by_user_id")
-    if not has_scope:
-        await db.execute("ALTER TABLE exercises RENAME TO exercises_old")
-        await db.execute(
-            """
-            CREATE TABLE exercises(
+    if await _column_exists(db, "exercises", "created_by_user_id"):
+        await db.execute("UPDATE exercises SET created_by_user_id=0 WHERE created_by_user_id IS NULL")
+        return
+    await db.commit()
+    foreign_keys = (await (await db.execute("PRAGMA foreign_keys")).fetchone())[0]
+    await db.execute("PRAGMA foreign_keys=OFF")
+    await db.execute("BEGIN IMMEDIATE")
+    try:
+        await db.execute("""
+            CREATE TABLE exercises_new(
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT,
-                muscle_group TEXT,
+                name TEXT, muscle_group TEXT,
                 created_by_user_id INTEGER NOT NULL DEFAULT 0,
                 UNIQUE(name, created_by_user_id)
             )
-            """
-        )
-        await db.execute(
-            """
-            INSERT INTO exercises(id, name, muscle_group, created_by_user_id)
-            SELECT id, name, muscle_group, 0
-            FROM exercises_old
-            """
-        )
-        await db.execute("DROP TABLE exercises_old")
-    else:
-        await db.execute("UPDATE exercises SET created_by_user_id=0 WHERE created_by_user_id IS NULL")
+        """)
+        await db.execute("""
+            INSERT INTO exercises_new(id,name,muscle_group,created_by_user_id)
+            SELECT id,name,muscle_group,0 FROM exercises
+        """)
+        await db.execute("DROP TABLE exercises")
+        await db.execute("ALTER TABLE exercises_new RENAME TO exercises")
+        await db.commit()
+    except BaseException:
+        await db.rollback()
+        raise
+    finally:
+        await db.execute(f"PRAGMA foreign_keys={int(foreign_keys)}")
 
 
 async def _migrate_duration_metrics(db) -> None:
@@ -1217,30 +1218,6 @@ async def init_db():
             created_at TEXT DEFAULT CURRENT_TIMESTAMP
         );
 
-        CREATE INDEX IF NOT EXISTS idx_measurements_user_metric
-            ON user_measurements(user_id, metric, created_at);
-        CREATE INDEX IF NOT EXISTS idx_running_entries_session
-            ON running_entries(session_id, user_exercise_id);
-        CREATE INDEX IF NOT EXISTS idx_running_entries_user
-            ON running_entries(user_id, user_exercise_id, created_at DESC);
-        CREATE INDEX IF NOT EXISTS idx_user_measurement_custom_user
-            ON user_measurement_custom(user_id, created_at DESC);
-        CREATE INDEX IF NOT EXISTS idx_user_measurement_categories_user
-            ON user_measurement_categories(user_id, created_at DESC);
-        CREATE INDEX IF NOT EXISTS idx_user_exercises_user_exercise_day_archived
-            ON user_exercises(user_id, exercise_id, day_index, is_archived);
-        CREATE INDEX IF NOT EXISTS idx_user_exercises_user_day_archived
-            ON user_exercises(user_id, day_index, is_archived);
-        CREATE INDEX IF NOT EXISTS idx_sets_session_user_warmup_setno
-            ON sets(session_id, user_exercise_id, is_warmup, set_no);
-        CREATE INDEX IF NOT EXISTS idx_sets_user_session_warmup
-            ON sets(user_exercise_id, session_id, is_warmup);
-        CREATE INDEX IF NOT EXISTS idx_session_exercises_session_user_done
-            ON session_exercises(session_id, user_exercise_id, is_done);
-        CREATE INDEX IF NOT EXISTS idx_sessions_user_date_day
-            ON sessions(user_id, date, day_index);
-        CREATE INDEX IF NOT EXISTS idx_exercises_owner_group_name
-            ON exercises(created_by_user_id, muscle_group, name);
 
         CREATE TABLE IF NOT EXISTS user_muscle_groups(
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1248,7 +1225,7 @@ async def init_db():
             name TEXT,
             UNIQUE(user_id, name)
         );
-        
+
         CREATE TABLE IF NOT EXISTS hidden_catalog_exercises(
             user_id INTEGER NOT NULL,
             exercise_id INTEGER NOT NULL,
@@ -1325,8 +1302,6 @@ async def init_db():
             created_at TEXT NOT NULL
         );
 
-        CREATE INDEX IF NOT EXISTS idx_ai_coach_requests_user_created
-            ON ai_coach_requests(user_id, created_at);
 
         CREATE TABLE IF NOT EXISTS training_systems(
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1439,23 +1414,7 @@ async def init_db():
             UNIQUE(team_id, day_utc)
         );
 
-        CREATE UNIQUE INDEX IF NOT EXISTS idx_team_members_active_user
-            ON team_members(user_id)
-            WHERE left_at IS NULL;
 
-        CREATE UNIQUE INDEX IF NOT EXISTS idx_team_members_captain
-            ON team_members(team_id)
-            WHERE role='captain' AND left_at IS NULL;
-
-        CREATE UNIQUE INDEX IF NOT EXISTS idx_team_requests_pending
-            ON team_join_requests(team_id, user_id)
-            WHERE status='pending';
-
-        CREATE INDEX IF NOT EXISTS idx_team_members_team_active
-            ON team_members(team_id, left_at);
-
-        CREATE INDEX IF NOT EXISTS idx_team_requests_team_status
-            ON team_join_requests(team_id, status, created_at);
         """)
         schema = _SchemaColumnCache(db)
         await schema.add_column_if_missing("users", "system", "system TEXT")
@@ -1689,6 +1648,48 @@ async def init_db():
         await _seed_exercises(db, WORKOUT_EXERCISES, update_group=False)
         await _ensure_muscle_map_schema(db)
         await _seed_exercise_muscles_defaults(db)
+        # Legacy columns and rebuilt tables must exist before their indexes.
+        await db.executescript("""
+CREATE INDEX IF NOT EXISTS idx_measurements_user_metric
+            ON user_measurements(user_id, metric, created_at);
+CREATE INDEX IF NOT EXISTS idx_running_entries_session
+            ON running_entries(session_id, user_exercise_id);
+CREATE INDEX IF NOT EXISTS idx_running_entries_user
+            ON running_entries(user_id, user_exercise_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_user_measurement_custom_user
+            ON user_measurement_custom(user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_user_measurement_categories_user
+            ON user_measurement_categories(user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_user_exercises_user_exercise_day_archived
+            ON user_exercises(user_id, exercise_id, day_index, is_archived);
+CREATE INDEX IF NOT EXISTS idx_user_exercises_user_day_archived
+            ON user_exercises(user_id, day_index, is_archived);
+CREATE INDEX IF NOT EXISTS idx_sets_session_user_warmup_setno
+            ON sets(session_id, user_exercise_id, is_warmup, set_no);
+CREATE INDEX IF NOT EXISTS idx_sets_user_session_warmup
+            ON sets(user_exercise_id, session_id, is_warmup);
+CREATE INDEX IF NOT EXISTS idx_session_exercises_session_user_done
+            ON session_exercises(session_id, user_exercise_id, is_done);
+CREATE INDEX IF NOT EXISTS idx_sessions_user_date_day
+            ON sessions(user_id, date, day_index);
+CREATE INDEX IF NOT EXISTS idx_exercises_owner_group_name
+            ON exercises(created_by_user_id, muscle_group, name);
+CREATE INDEX IF NOT EXISTS idx_ai_coach_requests_user_created
+            ON ai_coach_requests(user_id, created_at);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_team_members_active_user
+            ON team_members(user_id)
+            WHERE left_at IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_team_members_captain
+            ON team_members(team_id)
+            WHERE role='captain' AND left_at IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_team_requests_pending
+            ON team_join_requests(team_id, user_id)
+            WHERE status='pending';
+CREATE INDEX IF NOT EXISTS idx_team_members_team_active
+            ON team_members(team_id, left_at);
+CREATE INDEX IF NOT EXISTS idx_team_requests_team_status
+            ON team_join_requests(team_id, status, created_at);
+        """)
         await db.commit()
 
 def _generate_trainer_code_value() -> str:
@@ -1779,7 +1780,6 @@ async def ensure_default_plan(user_id: int):
             except Exception:
                 pass
         await db.commit()
-
 
 
 async def ensure_training_system_defaults(user_id: int) -> int:
@@ -1937,6 +1937,27 @@ async def sync_current_plan_to_system(user_id: int, system_id: int, *, connectio
                 "INSERT OR IGNORE INTO training_system_exercises(system_id, day_index, exercise_id) VALUES(?,?,?)",
                 (system_id, int(day_index), int(exercise_id)),
             )
+        # Baselines belong to the saved program even when the exercise/day is
+        # shared with another program. Keep source notes alongside the snapshot.
+        rows = await (await db.execute("""
+            SELECT ue.day_index, ue.exercise_id, b.id, b.sets, b.reps, b.seconds, b.weight_kg, src.source_payload
+            FROM user_exercises ue
+            LEFT JOIN exercise_baseline b ON b.user_id=ue.user_id AND b.day_index=ue.day_index AND b.exercise_id=ue.exercise_id
+            LEFT JOIN training_system_exercise_sources src ON src.system_id=? AND src.day_index=ue.day_index AND src.exercise_id=ue.exercise_id
+            WHERE ue.user_id=? AND ue.is_archived=0
+        """, (system_id, user_id))).fetchall()
+        for day_index, exercise_id, baseline_id, sets, reps, seconds, weight, source_json in rows:
+            try:
+                payload = json.loads(source_json or '{}')
+            except (ValueError, TypeError):
+                payload = {}
+            if not isinstance(payload, dict):
+                payload = {}
+            payload['baseline'] = [sets, reps, seconds, weight] if baseline_id is not None else None
+            await db.execute("""
+                INSERT INTO training_system_exercise_sources(system_id,day_index,exercise_id,source_payload) VALUES(?,?,?,?)
+                ON CONFLICT(system_id,day_index,exercise_id) DO UPDATE SET source_payload=excluded.source_payload
+            """, (system_id, day_index, exercise_id, json.dumps(payload, ensure_ascii=False)))
         if connection is None:
             await db.commit()
 
@@ -1960,6 +1981,19 @@ async def sync_reminders_to_system(user_id: int, system_id: int, *, connection=N
             )
         if connection is None:
             await db.commit()
+
+
+async def select_training_system(user_id: int, system_id: int) -> None:
+    async with connect_db() as conn:
+        await conn.execute('BEGIN IMMEDIATE')
+        if not await (await conn.execute('SELECT 1 FROM training_systems WHERE id=? AND user_id=?', (system_id,user_id))).fetchone():
+            raise ValueError('system_not_found')
+        current = await (await conn.execute('SELECT active_system_id FROM users WHERE id=?', (user_id,))).fetchone()
+        if current and current[0]:
+            await sync_current_plan_to_system(user_id,int(current[0]),connection=conn)
+            await sync_reminders_to_system(user_id,int(current[0]),connection=conn)
+        await apply_system_to_current_plan(user_id,system_id,connection=conn)
+        await conn.commit()
 
 
 async def apply_system_to_current_plan(user_id: int, system_id: int, *, connection=None):
@@ -2005,17 +2039,29 @@ async def apply_system_to_current_plan(user_id: int, system_id: int, *, connecti
 
         sources_cur = await db.execute(
             """
-            SELECT exercise_id, source_payload
-            FROM training_system_exercise_sources
-            WHERE system_id=?
+            SELECT src.day_index, src.exercise_id, src.source_payload
+            FROM training_system_exercise_sources src
+            JOIN training_system_exercises e ON e.system_id=src.system_id AND e.day_index=src.day_index AND e.exercise_id=src.exercise_id
+            WHERE src.system_id=?
             """,
             (system_id,),
         )
-        for source_exercise_id, source_payload in await sources_cur.fetchall():
+        for source_day, source_exercise_id, source_payload in await sources_cur.fetchall():
             try:
                 payload = json.loads(source_payload or "{}")
             except Exception:
                 payload = {}
+            if not isinstance(payload, dict):
+                continue
+            baseline = payload.get('baseline')
+            if isinstance(baseline, list) and len(baseline) == 4:
+                await db.execute("""
+                    INSERT INTO exercise_baseline(user_id,day_index,exercise_id,sets,reps,seconds,weight_kg)
+                    VALUES(?,?,?,?,?,?,?) ON CONFLICT(user_id,day_index,exercise_id) DO UPDATE SET
+                    sets=excluded.sets,reps=excluded.reps,seconds=excluded.seconds,weight_kg=excluded.weight_kg
+                """, (user_id, source_day, source_exercise_id, *baseline))
+            elif 'baseline' in payload and baseline is None:
+                await db.execute('DELETE FROM exercise_baseline WHERE user_id=? AND day_index=? AND exercise_id=?', (user_id, source_day, source_exercise_id))
             source_note = str(payload.get("note") or "").strip()
             if not source_note:
                 continue
@@ -2177,27 +2223,30 @@ async def create_training_system(
 
 async def rename_training_system(user_id: int, system_id: int, name: str):
     async with connect_db() as db:
-        await db.execute(
+        changed = await db.execute(
             "UPDATE training_systems SET name=? WHERE id=? AND user_id=?",
             ((name or '').strip() or 'Система', system_id, user_id),
         )
         await db.commit()
+        return changed.rowcount > 0
 
 
 async def set_training_system_color(user_id: int, system_id: int, color: str):
     async with connect_db() as db:
-        await db.execute(
+        changed = await db.execute(
             "UPDATE training_systems SET color=? WHERE id=? AND user_id=?",
             ((color or '#2ea6ff').strip(), system_id, user_id),
         )
         await db.commit()
+        return changed.rowcount > 0
 
 
 async def delete_training_system(user_id: int, system_id: int):
-    active_id = await get_active_training_system_id(user_id)
     deleted_at = datetime.now(UTC).isoformat()
     async with connect_db() as db:
         await db.execute("BEGIN IMMEDIATE")
+        active_row = await (await db.execute("SELECT active_system_id FROM users WHERE id=?", (user_id,))).fetchone()
+        active_id = int(active_row[0] or 0) if active_row else 0
         cur = await db.execute("SELECT 1 FROM training_systems WHERE id=? AND user_id=?", (system_id, user_id))
         if not await cur.fetchone():
             return False
@@ -2232,6 +2281,8 @@ async def delete_training_system(user_id: int, system_id: int):
             """,
             (deleted_at, system_id, user_id),
         )
+        await db.execute("DELETE FROM training_system_exercise_sources WHERE system_id=?", (system_id,))
+        await db.execute("DELETE FROM training_system_cosmetics WHERE system_id=? AND user_id=?", (system_id, user_id))
         await db.execute("DELETE FROM training_system_reminders WHERE system_id=?", (system_id,))
         await db.execute("DELETE FROM training_system_exercises WHERE system_id=?", (system_id,))
         await db.execute("DELETE FROM training_system_days WHERE system_id=?", (system_id,))
@@ -2243,7 +2294,6 @@ async def delete_training_system(user_id: int, system_id: int):
                 await db.execute("UPDATE users SET active_system_id=? WHERE id=?", (int(row[0]), user_id))
         await db.commit()
     return True
-
 
 
 async def count_user_training_systems(user_id: int) -> int:
@@ -2263,6 +2313,9 @@ async def list_user_training_system_ids(user_id: int) -> list[int]:
 async def prune_user_training_systems(user_id: int, keep_system_id: int) -> None:
     keep_system_id = int(keep_system_id)
     async with connect_db() as db:
+        await db.execute('BEGIN IMMEDIATE')
+        if not await (await db.execute('SELECT 1 FROM training_systems WHERE id=? AND user_id=?', (keep_system_id, user_id))).fetchone():
+            raise ValueError('system_not_found')
         cur = await db.execute("SELECT id FROM training_systems WHERE user_id=? AND id<>?", (user_id, keep_system_id))
         rows = await cur.fetchall()
         remove_ids = [int(r[0]) for r in rows]
@@ -2272,6 +2325,17 @@ async def prune_user_training_systems(user_id: int, keep_system_id: int) -> None
             return
         placeholders = ','.join('?' for _ in remove_ids)
         params = tuple(remove_ids)
+        deleted_at = datetime.now(UTC).isoformat()
+        await db.execute(f"""
+            INSERT OR REPLACE INTO training_systems_archive(system_id,user_id,name,color,deleted_at)
+            SELECT id,user_id,name,color,? FROM training_systems WHERE id IN ({placeholders}) AND user_id=?
+        """, (deleted_at,*params,user_id))
+        await db.execute(f"""
+            INSERT OR REPLACE INTO training_system_days_archive(system_id,day_index,label,deleted_at)
+            SELECT system_id,day_index,label,? FROM training_system_days WHERE system_id IN ({placeholders})
+        """, (deleted_at,*params))
+        await db.execute(f"DELETE FROM training_system_exercise_sources WHERE system_id IN ({placeholders})", params)
+        await db.execute(f"DELETE FROM training_system_cosmetics WHERE system_id IN ({placeholders}) AND user_id=?", (*params, user_id))
         await db.execute(f"DELETE FROM training_system_reminders WHERE system_id IN ({placeholders})", params)
         await db.execute(f"DELETE FROM training_system_exercises WHERE system_id IN ({placeholders})", params)
         await db.execute(f"DELETE FROM training_system_days WHERE system_id IN ({placeholders})", params)
@@ -2311,11 +2375,12 @@ async def get_or_create_today_session(
         if row:
             return row[0]
         await db.execute(
-            "INSERT INTO sessions(user_id, date, day_index, system_id) VALUES(?,?,?,?)",
+            "INSERT OR IGNORE INTO sessions(user_id, date, day_index, system_id) VALUES(?,?,?,?)",
             (user_id, date_str, day_index, resolved_system_id),
         )
         await db.commit()
-        cur = await db.execute("SELECT last_insert_rowid()")
+        cur = await db.execute("SELECT id FROM sessions WHERE user_id=? AND date=? AND day_index=? AND system_id=?",
+            (user_id, date_str, day_index, resolved_system_id))
         return (await cur.fetchone())[0]
 
 async def get_session_for_day(
@@ -2528,45 +2593,23 @@ async def get_session_last_values(
         return reps_val, seconds_val, weight_val
 
 async def inc_last_set(user_ex_id: int, session_id: int, field: str, delta: float):
-    assert field in ("reps", "seconds", "weight_kg")
+    if field not in ("reps", "seconds", "weight_kg") or not math.isfinite(float(delta)):
+        raise ValueError('invalid_set_value')
     async with connect_db() as db:
-        cur = await db.execute(
-            """
-            SELECT id, reps, seconds, weight_kg
-            FROM sets
-            WHERE session_id=? AND user_exercise_id=?
-            ORDER BY set_no DESC
-            """,
+        await db.execute('BEGIN IMMEDIATE')
+        row = await (await db.execute(
+            'SELECT id,reps,seconds,weight_kg FROM sets WHERE session_id=? AND user_exercise_id=? ORDER BY set_no DESC LIMIT 1',
             (session_id, user_ex_id),
-        )
-        rows = await cur.fetchall()
-        if not rows:
-            await db.execute(
-                """
-                INSERT INTO sets(session_id, user_exercise_id, set_no, reps, seconds, weight_kg, is_warmup)
-                VALUES(?,?,?,?,?,?,0)
-                """,
-                (session_id, user_ex_id, 1, 0, 0, 0.0),
-            )
-            await db.commit()
-            return await inc_last_set(user_ex_id, session_id, field, delta)
-        if field == "reps":
-            current = rows[0][1]
-            new_val = max(int(current + delta), 0)
-        elif field == "seconds":
-            current = rows[0][2]
-            new_val = max(int(current + delta), 0)
-        else:
-            current = rows[0][3]
-            new_val = max(float(current + delta), 0.0)
-        await db.executemany(
-            f"UPDATE sets SET {field}=? WHERE id=?",
-            [(new_val, r[0]) for r in rows],
-        )
-        reps_val = new_val if field == "reps" else rows[0][1]
-        seconds_val = new_val if field == "seconds" else rows[0][2]
-        weight_val = new_val if field == "weight_kg" else rows[0][3]
-        await _upsert_session_defaults(db, session_id, user_ex_id, reps_val, seconds_val, weight_val)
+        )).fetchone()
+        if row is None:
+            inserted = await db.execute('INSERT INTO sets(session_id,user_exercise_id,set_no,reps,seconds,weight_kg,is_warmup) VALUES(?,?,1,0,0,0,0)', (session_id, user_ex_id))
+            row = (inserted.lastrowid, 0, 0, 0.0)
+        index = {'reps': 1, 'seconds': 2, 'weight_kg': 3}[field]
+        value = max(0, float(row[index] or 0) + float(delta))
+        if field != 'weight_kg':
+            value = int(value)
+        await db.execute(f'UPDATE sets SET {field}=? WHERE id=?', (value, row[0]))
+        await _refresh_session_defaults(db, session_id, user_ex_id)
         await db.commit()
 
 async def apply_sets_template(
@@ -2609,8 +2652,10 @@ async def apply_sets_template(
         await db.commit()
 
 async def inc_specific_set(user_ex_id: int, session_id: int, set_no: int, field: str, delta: float):
-    assert field in ("reps", "seconds", "weight_kg")
+    if field not in ("reps", "seconds", "weight_kg") or not math.isfinite(float(delta)):
+        raise ValueError("invalid_set_value")
     async with connect_db() as db:
+        await db.execute("BEGIN IMMEDIATE")
         cur = await db.execute(
             """
             SELECT id, reps, seconds, weight_kg
@@ -5119,7 +5164,10 @@ async def add_set(
     weight: float = 0.0,
     is_warmup: bool = False,
 ):
+    if any(not math.isfinite(float(v)) or float(v) < 0 for v in (reps, seconds, weight)):
+        raise ValueError("invalid_set_value")
     async with connect_db() as db:
+        await db.execute("BEGIN IMMEDIATE")
         cur = await db.execute(
             "SELECT COALESCE(MAX(set_no),0)+1 FROM sets WHERE session_id=? AND user_exercise_id=?",
             (session_id, user_ex_id),
@@ -5138,6 +5186,7 @@ async def add_set(
 
 async def remove_last_set(user_ex_id: int, session_id: int):
     async with connect_db() as db:
+        await db.execute("BEGIN IMMEDIATE")
         cur = await db.execute(
             """
             SELECT id, reps, seconds, weight_kg
@@ -5164,6 +5213,7 @@ async def remove_last_set(user_ex_id: int, session_id: int):
 
 async def toggle_last_set_warmup(user_ex_id: int, session_id: int):
     async with connect_db() as db:
+        await db.execute("BEGIN IMMEDIATE")
         cur = await db.execute(
             "SELECT id, is_warmup FROM sets WHERE session_id=? AND user_exercise_id=? ORDER BY set_no DESC LIMIT 1",
             (session_id, user_ex_id),
@@ -8095,8 +8145,6 @@ async def list_visible_catalog_exercises_for_user(user_id: int):
         return await cur.fetchall()
 
 
-
-
 async def list_visible_catalog_exercises_for_user_in_group(user_id: int, group_code: str, query: str | None = None):
     normalized = normalize_exercise_group_for_ui(group_code)
     items = await list_visible_catalog_exercises_for_user(user_id)
@@ -8173,8 +8221,6 @@ async def list_all_exercises_in_group_for_user(user_id: int, group_code: str, is
     normalized = normalize_exercise_group_for_ui(group_code)
     items = await build_effective_exercise_index_for_user(user_id, iso_date)
     return [it for it in items if it['effective_group']==normalized]
-
-
 
 
 async def list_all_exercises_in_group_for_user_with_last_sets(user_id: int, group_code: str, iso_date: str) -> list[dict]:

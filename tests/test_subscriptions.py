@@ -74,6 +74,66 @@ class AdminCommandTests(unittest.IsolatedAsyncioTestCase):
             write.assert_not_awaited()
         q.answer.assert_awaited_once()
 
+    async def test_stale_or_foreign_exercise_callbacks_do_not_read_or_write_training(self):
+        for payload in ('ex:done:1:999', 'run:history:1:999', 'lib:ex:core:999', 'obsolete:button'):
+            q = SimpleNamespace(data=payload, answer=AsyncMock(), message=SimpleNamespace(chat_id=123, message_id=1))
+            update = SimpleNamespace(callback_query=q, effective_user=SimpleNamespace(id=123, username='viewer'))
+            context = SimpleNamespace(user_data={})
+            with patch.object(bot, 'require_subscription', AsyncMock(return_value=True)), patch.object(bot, 'get_or_create_user', AsyncMock(return_value=1)), patch.object(bot, 'get_user_exercise_info', AsyncMock(return_value=(2, 1))), patch.object(bot, 'load_ui_preferences', AsyncMock()), patch.object(bot, 'compose_main_menu', AsyncMock(return_value=('Menu', None, None))), patch.object(bot, 'show_screen', AsyncMock()), patch.object(bot, 'get_or_create_today_session', AsyncMock()) as write, patch.object(bot, 'show_library_exercise_view', AsyncMock()) as view:
+                await bot.menu_router(update, context)
+                write.assert_not_awaited()
+                view.assert_not_awaited()
+
+    async def test_revoked_trainer_callback_cannot_fall_back_to_mutating_own_diary(self):
+        q = SimpleNamespace(data='set:days_count:7', answer=AsyncMock(), message=SimpleNamespace(chat_id=123, message_id=1))
+        update = SimpleNamespace(callback_query=q, effective_user=SimpleNamespace(id=123, username='trainer'))
+        context = SimpleNamespace(user_data={'acting_user_id': 2, 'acting_can_edit': True})
+        with patch.object(bot, 'get_or_create_user', AsyncMock(return_value=1)), patch.object(bot, 'get_trainer_link', AsyncMock(return_value=None)), patch.object(bot, 'set_workouts_per_week', AsyncMock()) as write:
+            await bot.menu_router(update, context)
+            write.assert_not_awaited()
+
+    async def test_old_wizard_add_without_group_does_not_mutate_first(self):
+        q = SimpleNamespace(answer=AsyncMock(), message=SimpleNamespace(chat_id=123, message_id=1))
+        with patch.object(bot, 'toggle_user_exercise', AsyncMock()) as write:
+            await bot.wizard_router(None, q, 'wiz:day:1:ex:add:10', 1, SimpleNamespace(user_data={}))
+            write.assert_not_awaited()
+
+    async def test_text_for_deleted_exercise_is_rejected_before_writing(self):
+        message = SimpleNamespace(text='42', reply_text=AsyncMock())
+        update = SimpleNamespace(message=message, effective_user=SimpleNamespace(id=123, username='viewer'))
+        context = SimpleNamespace(user_data={bot.EXERCISE_NOTE_INPUT_KEY: {'day': 1, 'ue_id': 999}})
+        with patch.object(bot, 'require_subscription', AsyncMock(return_value=True)), patch.object(bot, 'get_or_create_user', AsyncMock(return_value=1)), patch.object(bot, 'get_user_exercise_info', AsyncMock(return_value=None)), patch.object(bot, 'set_exercise_persistent_note', AsyncMock()) as write:
+            await bot.text_router(update, context)
+            write.assert_not_awaited()
+        self.assertNotIn(bot.EXERCISE_NOTE_INPUT_KEY, context.user_data)
+        message.reply_text.assert_awaited_once()
+
+    async def test_broadcast_double_tap_does_not_start_second_delivery(self):
+        entered, release = asyncio.Event(), asyncio.Event()
+        async def deliver(*args):
+            entered.set()
+            await release.wait()
+        q = SimpleNamespace(data='broadcast:send', answer=AsyncMock(), message=SimpleNamespace(chat_id=123))
+        state = {'text': 'Test', 'step': 'await_confirm'}
+        context = SimpleNamespace(user_data={bot.BROADCAST_STATE_KEY: state})
+        with patch.object(bot, 'execute_broadcast', AsyncMock(side_effect=deliver)) as send:
+            first = asyncio.create_task(bot.handle_broadcast_callback(q, context))
+            await entered.wait()
+            await bot.handle_broadcast_callback(q, context)
+            release.set()
+            await first
+            self.assertEqual(send.await_count, 1)
+
+    async def test_broadcast_rate_limit_retries_only_failed_recipient(self):
+        from telegram.error import RetryAfter, Forbidden
+        q = SimpleNamespace(message=SimpleNamespace(chat_id=999), answer=AsyncMock())
+        sender = AsyncMock(side_effect=[RetryAfter(1), None, Forbidden('blocked')])
+        context = SimpleNamespace(user_data={}, bot=SimpleNamespace(send_message=sender))
+        with patch.object(bot, 'list_broadcast_targets', AsyncMock(return_value=[(101, 1), (102, 2)])), patch.object(bot.asyncio, 'sleep', AsyncMock()), patch.object(bot, 'send_main_message', AsyncMock()) as summary:
+            await bot.execute_broadcast(q, context, {'text': 'Test'})
+        self.assertEqual([c.args[0] for c in sender.await_args_list], [101, 101, 102])
+        self.assertIn('Доставлено: 1', summary.await_args.args[2])
+
     async def test_ai_quota_reset_requires_admin(self):
         message = SimpleNamespace(reply_text=AsyncMock())
         update = SimpleNamespace(effective_message=message, effective_user=SimpleNamespace(id=123, username='ordinary'))

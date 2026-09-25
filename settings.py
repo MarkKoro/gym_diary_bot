@@ -1,4 +1,5 @@
 import os
+import logging
 from dotenv import load_dotenv
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -6,6 +7,17 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 # Явно загружаем .env рядом с кодом проекта.
 # Это стабильно работает даже если процесс запущен не из корня репозитория.
 load_dotenv(os.path.join(BASE_DIR, ".env"))
+
+def _env_int(name: str, default: int, minimum: int, maximum: int) -> int:
+    try:
+        value = int(os.getenv(name, str(default)))
+        if minimum <= value <= maximum:
+            return value
+    except (TypeError, ValueError):
+        pass
+    logging.getLogger(__name__).warning('Invalid %s; using default %s', name, default)
+    return default
+
 
 TG_TOKEN = os.getenv("TG_TOKEN")
 YK_TOKEN = os.getenv("YK_TOKEN")
@@ -19,7 +31,7 @@ YOOKASSA_SHOP_ID = os.getenv("YOOKASSA_SHOP_ID", "")
 YOOKASSA_SECRET_KEY = os.getenv("YOOKASSA_SECRET_KEY", "")
 DB_PATH = os.getenv("DB_PATH", "./gymdiary.db")
 SUPPORT_DEEPLINK = os.getenv("SUPPORT_DEEPLINK", "https://t.me/ObotizactiaSuppBot?start")
-TRIAL_DAYS = int(os.getenv("TRIAL_DAYS", "0"))
+TRIAL_DAYS = _env_int("TRIAL_DAYS", 0, 0, 36500)
 # Публичная ссылка на бота для шеринга прогресса
 BOT_PUBLIC_LINK = os.getenv("BOT_PUBLIC_LINK", "")
 # Канал, на который надо подписаться перед использованием бота
@@ -27,9 +39,9 @@ SUBSCRIPTION_CHAT = os.getenv("SUBSCRIPTION_CHAT")
 # Ссылка для подписки
 JOIN_URL = os.getenv("JOIN_URL", "https://t.me/obotization")
 # Размера пула HTTP-соединений к Telegram API
-TG_POOL_SIZE = int(os.getenv("TG_POOL_SIZE", "10"))
+TG_POOL_SIZE = _env_int("TG_POOL_SIZE", 10, 1, 256)
 # Количество одновременных операций с SQLite
-DB_POOL_SIZE = int(os.getenv("DB_POOL_SIZE", "5"))
+DB_POOL_SIZE = _env_int("DB_POOL_SIZE", 5, 1, 64)
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY") or os.getenv("OPENAI_KEY")
 OPENAI_MODEL = os.getenv("OPENAI_MODEL")
 

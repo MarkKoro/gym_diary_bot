@@ -809,6 +809,9 @@ TIMEZONES = [
 ]
 
 def tz_select_kb(page: int = 0, per_page: int = 6):
+    per_page = max(1, int(per_page))
+    total_pages = max(1, (len(TIMEZONES) + per_page - 1) // per_page)
+    page = max(0, min(int(page), total_pages - 1))
     start = page * per_page
     end = start + per_page
     rows = []

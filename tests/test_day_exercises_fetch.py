@@ -595,3 +595,114 @@ class AiPlanAtomicityTests(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ApiInputMatrixTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        import webapp_backend as api
+        self.api = api
+        await db.init_db()
+        uid = await db.get_or_create_user(98200, 'api-matrix')
+        self.ctx = SimpleNamespace(user_id=uid, tg_id=98200, actor_user_id=uid, username='api-matrix', read_only=False, acting=False)
+        api.app.dependency_overrides[api.get_auth_ctx] = lambda: self.ctx
+        self.addCleanup(api.app.dependency_overrides.clear)
+
+    async def test_all_protected_routes_reject_missing_auth(self):
+        import httpx
+        import re
+        self.api.app.dependency_overrides.clear()
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=self.api.app, raise_app_exceptions=False), base_url='http://test') as client:
+            checked = 0
+            for route in self.api.app.routes:
+                if not any(p.call in (self.api.get_auth_ctx, self.api.get_tg_init_data) for p in getattr(getattr(route, 'dependant', None), 'dependencies', [])):
+                    continue
+                path = re.sub(r'{[^}]+}', '1', route.path)
+                for method in route.methods - {'HEAD', 'OPTIONS'}:
+                    response = await client.request(method, path, json={})
+                    with self.subTest(method=method, path=path):
+                        self.assertIn(response.status_code, (401,403), response.text)
+                    checked += 1
+            self.assertGreaterEqual(checked, 119)
+
+    async def test_payload_routes_reject_malformed_scalar_fields_before_side_effects(self):
+        import ast
+        import httpx
+        import inspect
+        import re
+        import socket
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=self.api.app, raise_app_exceptions=False), base_url='http://test') as client:
+            checked = 0
+            with patch.object(socket.socket, 'connect', side_effect=AssertionError('unexpected network')):
+                for route in self.api.app.routes:
+                    endpoint = getattr(route, 'endpoint', None)
+                    if endpoint is None or 'payload' not in inspect.signature(endpoint).parameters:
+                        continue
+                    node = ast.parse(inspect.getsource(inspect.unwrap(endpoint)))
+                    keys = {n.args[0].value for n in ast.walk(node) if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) and isinstance(n.func.value, ast.Name) and n.func.value.id=='payload' and n.func.attr=='get' and n.args and isinstance(n.args[0],ast.Constant)}
+                    if not keys:
+                        continue
+                    path = re.sub(r'{[^}]+}', '9999999', route.path)
+                    response = await client.request(next(iter(route.methods)), path, json={k:{'bad':'shape'} for k in keys})
+                    with self.subTest(path=path):
+                        self.assertLess(response.status_code, 500, response.text)
+                    checked += 1
+            self.assertGreaterEqual(checked, 36)
+
+    async def test_invalid_numbers_are_rejected_without_writes(self):
+        import httpx
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=self.api.app, raise_app_exceptions=False), base_url='http://test') as client:
+            for value in ('NaN','Infinity','1e999',{},[],True,'1.5'):
+                response = await client.post('/systems', json={'name':'Bad number','workouts_per_week':value})
+                with self.subTest(value=value):
+                    self.assertEqual(response.status_code,400,response.text)
+
+
+class ProgramBaselineIsolationTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        await db.init_db()
+        index = sorted(n for n in dir(self) if n.startswith('test_')).index(self._testMethodName)
+        self.uid = await db.get_or_create_user(98300+index,'program-baselines')
+        self.a = await db.ensure_training_system_defaults(self.uid)
+        self.b = await db.create_training_system(self.uid,'Other baseline program')
+        self.ex = await db.get_or_create_exercise('Shared exercise','chest',self.uid)
+
+    async def test_program_switch_restores_each_baseline_and_preserves_source_note(self):
+        await db.apply_system_to_current_plan(self.uid,self.a)
+        await db.add_user_exercise(self.uid,1,self.ex)
+        await db.set_baseline(self.uid,1,self.ex,3,10,0,20)
+        await db.upsert_training_system_exercise_source(self.a,1,self.ex,{'note':'Imported note','source_user_id':999})
+        await db.sync_current_plan_to_system(self.uid,self.a)
+        await db.apply_system_to_current_plan(self.uid,self.b)
+        await db.add_user_exercise(self.uid,1,self.ex)
+        await db.set_baseline(self.uid,1,self.ex,5,6,0,50)
+        await db.sync_current_plan_to_system(self.uid,self.b)
+        await db.apply_system_to_current_plan(self.uid,self.a)
+        self.assertEqual(await db.get_baseline(self.uid,1,self.ex),(3,10,0,20))
+        await db.apply_system_to_current_plan(self.uid,self.b)
+        self.assertEqual(await db.get_baseline(self.uid,1,self.ex),(5,6,0,50))
+        source = await db.fetch_training_system_exercise_sources(self.a,1)
+        self.assertEqual(source[self.ex]['note'],'Imported note')
+
+    async def test_foreign_keep_cannot_delete_programs_and_prune_keeps_history_labels(self):
+        other = await db.get_or_create_user(98401,'other-program-owner')
+        foreign = await db.ensure_training_system_defaults(other)
+        before = await db.list_user_training_system_ids(self.uid)
+        with self.assertRaisesRegex(ValueError,'system_not_found'):
+            await db.prune_user_training_systems(self.uid,foreign)
+        self.assertEqual(await db.list_user_training_system_ids(self.uid),before)
+        await db.prune_user_training_systems(self.uid,self.a)
+        async with db.connect_db() as conn:
+            archived = await (await conn.execute('SELECT name FROM training_systems_archive WHERE system_id=?',(self.b,))).fetchone()
+        self.assertEqual(archived,('Other baseline program',))
+
+    async def test_foreign_rename_and_color_report_missing_without_award(self):
+        from unittest.mock import AsyncMock
+        from fastapi import HTTPException
+        import webapp_backend as api
+        ctx = SimpleNamespace(user_id=self.uid)
+        with patch.object(api,'log_user_event',new_callable=AsyncMock) as event:
+            for handler,payload in ((api.systems_rename,{'name':'Foreign'}),(api.systems_color,{'color':'#ffffff'})):
+                with self.assertRaises(HTTPException) as caught:
+                    await handler(99999999,payload,ctx)
+                self.assertEqual(caught.exception.status_code,404)
+            event.assert_not_awaited()

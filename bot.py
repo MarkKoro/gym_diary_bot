@@ -120,6 +120,7 @@ from settings import (
     INSTRUCTION_URL,
 )
 from db import (
+    get_user_exercise_info,
     init_db,
     connect_db,
     get_or_create_user,
@@ -1839,6 +1840,16 @@ def get_acting_context_line(
     if label:
         return f"Сейчас вы смотрите {subject} подопечного: {label}."
     return f"Сейчас вы смотрите {subject} подопечного."
+
+
+async def _owns_active_exercise(user_id: int, day: int, ue_id: int) -> bool:
+    return await get_user_exercise_info(ue_id) == (int(user_id), int(day))
+
+
+async def _require_available_catalog_exercise(user_id: int, exercise_id: int) -> None:
+    info = await get_exercise_details(exercise_id)
+    if not info or int(info[2] or 0) not in (0, int(user_id)):
+        raise ValueError('exercise_not_available')
 
 
 async def require_edit_allowed(q: CallbackQuery, context: ContextTypes.DEFAULT_TYPE) -> bool:
@@ -3826,6 +3837,7 @@ async def start_instant_baseline(
         values[3] = 0.0
     info = {
         "source": source,
+        "user_id": user_id,
         "day": day,
         "group": group,
         "exercise_id": exercise_id,
@@ -4101,6 +4113,9 @@ async def apply_fill_changes(
     state: FillEditorState,
     prefs: UiPreferences,
 ):
+    if not await _owns_active_exercise(user_id, state.day, state.ue_id):
+        await q.answer('Упражнение больше недоступно. Откройте дневник заново.', show_alert=True)
+        return
     today_str = await get_user_local_date(user_id)
     system_id = await _active_system_id(user_id)
     session_id = await get_or_create_today_session(user_id, today_str, state.day, system_id=system_id)
@@ -4264,6 +4279,9 @@ async def handle_fill_callback(
     parts = data.split(":")
     if not state or len(parts) < 3:
         await q.answer()
+        return
+    if not await _owns_active_exercise(user_id, state.day, state.ue_id):
+        await q.answer('Упражнение больше недоступно.', show_alert=True)
         return
     mode = parts[1]
     if mode != "flex":
@@ -8507,7 +8525,14 @@ async def handle_broadcast_callback(q, context: ContextTypes.DEFAULT_TYPE):
         await safe_update_screen(q, context, "Рассылка отменена.")
         return
     if data == "broadcast:send":
-        await execute_broadcast(q, context, state)
+        if state.get('sending'):
+            await q.answer('Рассылка уже выполняется.', show_alert=True)
+            return
+        state['sending'] = True
+        try:
+            await execute_broadcast(q, context, state)
+        finally:
+            state.pop('sending', None)
         return
 
 
@@ -9401,8 +9426,14 @@ async def wizard_router(
                     return
                 if action == "add":
                     ex_id = int(parts[5])
+                    groups = context.user_data.get('group_list') or []
+                    group_index = int(context.user_data.get('group_idx', 0))
+                    if not 0 <= group_index < len(groups):
+                        await q.answer('Выбор упражнений устарел. Выберите группу заново.', show_alert=True)
+                        return
+                    await _require_available_catalog_exercise(user_id, ex_id)
+                    group = groups[group_index]
                     added = await toggle_user_exercise(user_id, day, ex_id)
-                    group = context.user_data["group_list"][context.user_data["group_idx"]]
                     if added:
                         async def edit_instant(text, kb):
                             await show_screen(q, context, text, kb, user_id)
@@ -9814,6 +9845,22 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     if not await ensure_can_edit_from_message(context, update):
         return
+    if context.user_data.get('_input_owner', user_id) != user_id:
+        clear_linear_state(context.user_data)
+        await update.message.reply_text('Дневник изменился. Откройте нужное поле заново.')
+        return
+    for input_key in (FOR_TIME_INPUT_KEY, EXERCISE_NOTE_INPUT_KEY, RUNNING_INPUT_KEY):
+        pending = context.user_data.get(input_key)
+        if isinstance(pending, dict) and not await _owns_active_exercise(user_id, int(pending.get('day') or 0), int(pending.get('ue_id') or 0)):
+            context.user_data.pop(input_key, None)
+            await update.message.reply_text('Упражнение больше недоступно. Откройте дневник заново.')
+            return
+    for input_key in (AMRAP_SCHEME_KEY, LIBRARY_CUSTOM_KEY, 'awaiting_group_name'):
+        pending = context.user_data.get(input_key)
+        if isinstance(pending, tuple) and pending[-1] != user_id:
+            context.user_data.pop(input_key, None)
+            await update.message.reply_text('Дневник изменился. Откройте нужное поле заново.')
+            return
     if context.user_data.get(TRAINER_CODE_INPUT_KEY):
         if not update.message or update.message.text is None:
             return
@@ -10744,20 +10791,31 @@ async def photo_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q: CallbackQuery | None = None
+    target_user_id: int | None = None
     try:
         q = update.callback_query
-        await q.answer()
+        if q is None or getattr(q, 'message', None) is None:
+            return
+        with contextlib.suppress(TelegramError):
+            await q.answer()
         data = q.data or ""
-        preserve_keys: set[str] | None = None
+        preserve_keys: set[str] = set()
         if data.startswith("broadcast:"):
-            preserve_keys = {BROADCAST_STATE_KEY}
+            preserve_keys.add(BROADCAST_STATE_KEY)
+        if data.startswith('day:add:') or data.startswith('ib:day:'):
+            preserve_keys.add('add_group')
         clear_linear_state(context.user_data, preserve_keys)
         user = update.effective_user
         if user is None:
             return
         actor_user_id = await get_or_create_user(user.id, user.username)
         context.user_data["is_admin_actor"] = bool(user.id in ADMIN_IDS)
+        previous_acting = context.user_data.get('acting_user_id')
         target_user_id = await resolve_target_user_id(context, actor_user_id)
+        if previous_acting and target_user_id == actor_user_id:
+            await q.answer('Доступ к дневнику подопечного закрыт. Откройте дневник заново.', show_alert=True)
+            return
+        context.user_data['_input_owner'] = target_user_id
         if data == MAIL_RETURN_CALLBACK:
             chat = getattr(q, "message", None)
             chat_id = getattr(chat, "chat_id", None)
@@ -11302,7 +11360,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if len(parts) < 3:
                 return
             info = context.user_data.get(INSTANT_BASE_KEY)
-            if not info or info.get("source") != parts[1]:
+            if not info or info.get("source") != parts[1] or info.get('user_id', target_user_id) != target_user_id:
                 context.user_data.pop(INSTANT_BASE_KEY, None)
                 await q.answer()
                 return
@@ -12613,6 +12671,8 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if action == "ex":
                 group = parts[2]
                 ue_id = int(parts[3])
+                if not await _owns_active_exercise(target_user_id, 0, ue_id):
+                    raise ValueError('stale_exercise')
                 await show_library_exercise_view(q, target_user_id, group, ue_id, context)
                 return
             if action == "delmenu":
@@ -12712,6 +12772,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 if sub == "ex":
                     group = parts[3]
                     ex_id = int(parts[4])
+                    await _require_available_catalog_exercise(target_user_id, ex_id)
                     await toggle_user_exercise(target_user_id, 0, ex_id)
                     requested_page = get_kb_page(context, "lib", group)
                     await show_library_add_exercises_view(
@@ -12773,6 +12834,8 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             action = parts[1] if len(parts) > 1 else ""
             day = int(parts[2]) if len(parts) > 2 else 0
             ue_id = int(parts[3]) if len(parts) > 3 else 0
+            if not await _owns_active_exercise(target_user_id, day, ue_id):
+                raise ValueError('stale_exercise')
             if action != "history":
                 if not await require_edit_allowed(q, context):
                     return
@@ -13657,7 +13720,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     return
                 if sub == "add":
                     if target_group is None:
-                        existing_groups = {g for _, _, g, _, _ in ex_rows}
+                        existing_groups = {row[2] for row in ex_rows}
                         kb = day_add_group_kb(
                             day, custom, existing_groups, context=context
                         )
@@ -13764,7 +13827,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 today_str = await get_user_local_date(target_user_id)
                 target_system_id = await _active_system_id(target_user_id)
                 ex_rows = await fetch_day_exercises(target_user_id, day, today_str, system_id=target_system_id)
-                existing_groups = {g for _, _, g, _, _ in ex_rows}
+                existing_groups = {row[2] for row in ex_rows}
                 custom = await get_custom_groups(target_user_id, context)
                 await show_screen(
                     q,
@@ -13824,7 +13887,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     today_str = await get_user_local_date(target_user_id)
                     target_system_id = await _active_system_id(target_user_id)
                     ex_rows = await fetch_day_exercises(target_user_id, day, today_str, system_id=target_system_id)
-                    existing_groups = {g for _, _, g, _, _ in ex_rows}
+                    existing_groups = {row[2] for row in ex_rows}
                     custom = await get_custom_groups(target_user_id, context)
                     kb = day_add_group_kb(
                         day, custom, existing_groups, context=context
@@ -13848,6 +13911,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     if group:
                         selected_ids = set(await list_user_exercise_ids(target_user_id, day, group))
                     existed = bool(group and ex_id in selected_ids)
+                    await _require_available_catalog_exercise(target_user_id, ex_id)
                     await add_user_exercise(target_user_id, day, ex_id)
                     suppress_completed_day_warning(context, target_user_id, day)
                     if not existed:
@@ -13969,9 +14033,12 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             action = parts[1]
             day = int(parts[2])
             ue_id = int(parts[3])
+            if not await _owns_active_exercise(target_user_id, day, ue_id):
+                raise ValueError('stale_exercise')
             is_library = day == 0
             mutating_ex_actions = {
                 "note",
+                "amrapscheme",
                 "fill",
                 "addset",
                 "delset",
@@ -14527,6 +14594,9 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         )
                     await show_screen(q, context, text, kb, target_user_id)
                     return
+        if parts[0] != 'ex':
+            await q.answer('Эта кнопка устарела. Откройте меню заново.', show_alert=True)
+            return
         view = await render_exercise_view(
             target_user_id, day, ue_id, get_flex_selected(context, day, ue_id), prefs=prefs
         )
@@ -14542,9 +14612,9 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         await show_screen(q, context, view.text, kb, target_user_id)
         return
-    except (IndexError, ValueError) as exc:
+    except (IndexError, ValueError, KeyError, OverflowError) as exc:
         logger.warning("Malformed callback payload in menu_router: %s", exc)
-        if q is not None:
+        if q is not None and target_user_id is not None:
             with contextlib.suppress(TelegramError):
                 text, kb, _ = await compose_main_menu(target_user_id)
                 await show_screen(q, context, text, kb, target_user_id)
