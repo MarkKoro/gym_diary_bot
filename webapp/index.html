@@ -13609,6 +13609,7 @@
       state.aiCoach.requestId = (state.aiCoach.requestId || 0) + 1;
       state.aiCoach.loading = false;
       state.aiCoach.planContextKey = null;
+      state.aiCoach.applyOperation = null;
       state.aiCoach.hasResponse = false;
       state.aiCoach.answerText = '';
       state.aiCoach.summary = '';
@@ -14146,195 +14147,54 @@
       const ensureCurrentOwner = () => {
         if (owner !== activeOwnerContextKey() || requestId !== state.aiCoach.requestId) throw new Error('Дневник изменился. Применение остановлено.');
       };
-      const planFetch = async (path, options) => {
-        ensureCurrentOwner();
-        const result = await apiFetch(path, { ...options, actingUserId });
-        ensureCurrentOwner();
-        return result;
-      };
       const actions = getSelectedAiActions({ forceAll });
-      if (!actions.length) {
-        toast('Нет действий для применения');
+      if (!actions.length) { toast('Нет действий для применения'); return; }
+      const createAction = actions.find(a => a?.type === 'create_system');
+      const expectedDays = Number(state.aiCoach.expectedDays || createAction?.expected_days || 0);
+      if (createAction && expectedDays > 0 && createAction.days?.length !== expectedDays) {
+        toast(`Количество дней не совпадает с запросом. Система не применена.`);
         return;
       }
-      const createAction = actions.find((a) => a && String(a.type || '') === 'create_system');
-      const overlayTitle = createAction ? 'Добавляем новую систему…' : 'Применяем новую систему…';
+      const payload = { system_id: Number(state.settings.systems.activeSystemId || 0), expected_days: expectedDays, actions };
+      const signature = JSON.stringify([owner, requestId, payload]);
+      // Keep the same operation ID when the server saved the plan but its response was lost.
+      if (state.aiCoach.applyOperation?.signature !== signature) {
+        const id = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`;
+        state.aiCoach.applyOperation = { signature, id };
+      }
+      payload.request_id = state.aiCoach.applyOperation.id;
       state.aiCoach.applying = true;
-      setGlobalActionOverlay(true, overlayTitle);
+      setGlobalActionOverlay(true, createAction ? 'Добавляем новую систему…' : 'Сохраняем изменения…');
       updateAiCoachCounter();
       try {
-        if (createAction) {
-          const systemDays = Array.isArray(createAction.days) ? createAction.days : [];
-          const expectedDays = Number(state.aiCoach.expectedDays || createAction?.expected_days || 0);
-          if (expectedDays > 0 && systemDays.length !== expectedDays) {
-            toast(`ИИ вернул ${systemDays.length} день(дней) вместо ${expectedDays}. Система не применена.`);
-            return;
-          }
-          const daysCount = Math.max(1, Math.min(7, Number(systemDays.length || 3)));
-          const systemName = String(createAction.system_name || 'Система от ИИ').trim() || 'Система от ИИ';
-          const currentRoute = state.currentRoute;
-          const created = await planFetch('/gymapi/systems', { method: 'POST', body: JSON.stringify({ name: systemName, workouts_per_week: daysCount }) });
-          const newSystemId = Number(created?.system_id || 0);
-          if (!(newSystemId > 0)) throw new Error('Сервер не вернул созданную систему');
-          if (newSystemId > 0) await planFetch(`/gymapi/systems/${newSystemId}/select`, { method: 'POST' });
-
-          for (const day of systemDays) {
-            const dayIndex = Math.max(1, Math.min(7, Number(day?.day_index || 0)));
-            if (!dayIndex) continue;
-            const exList = Array.isArray(day?.exercises) ? day.exercises : [];
-            for (const ex of exList) {
-              const exName = String(ex?.exercise_name || ex?.name || '').trim();
-              const exId = Number(ex?.exercise_id || 0);
-              if (!exId && !exName) continue;
-              let resolvedId = exId > 0 ? exId : null;
-              let alreadyAdded = false;
-              if (!resolvedId && exName) {
-                const created = await planFetch(`/gymapi/catalog/exercise?day_index=${dayIndex}`, {
-                  method: 'POST',
-                  body: JSON.stringify({
-                    name: exName,
-                    muscle_group: String(ex?.muscle_group || ex?.group || 'other').trim().toLowerCase() || 'other',
-                  }),
-                });
-                resolvedId = Number(created?.exercise_id || 0) || null;
-                alreadyAdded = Boolean(resolvedId);
-              }
-              if (!resolvedId) continue;
-              if (!alreadyAdded) await planFetch(`/gymapi/day/${dayIndex}/exercise`, { method: 'POST', body: JSON.stringify({ exercise_id: resolvedId }) });
-              const targetExerciseId = Number(resolvedId || 0);
-              if (!targetExerciseId) continue;
-              const sets = Math.max(1, Number(ex?.sets || 1));
-              const reps = Math.max(0, Number(ex?.reps || 0));
-              const seconds = Math.max(0, Number(ex?.seconds || 0));
-              const weight = Math.max(0, Number(ex?.weight_kg || 0));
-              await planFetch(`/gymapi/day/${dayIndex}/exercise/${targetExerciseId}/baseline`, {
-                method: 'POST',
-                body: JSON.stringify({ sets, reps, seconds, weight_kg: weight }),
-              });
-              await planFetch(`/gymapi/day/${dayIndex}/exercise/${targetExerciseId}/ai_meta`, {
-                method: 'POST',
-                body: JSON.stringify({
-                  how_to: String(ex?.how_to || ''),
-                  sets,
-                  reps,
-                  seconds,
-                  weight_kg: weight,
-                  muscle_group: String(ex?.muscle_group || ex?.group || 'other'),
-                }),
-              });
-            }
-          }
-
-          await loadSystems();
-          if (currentRoute === 'today') await loadToday();
-          else await setRoute('today');
-          toast('Создана и заполнена новая система из предложения ИИ');
-          closeAiCoachSheet({ force: true });
-          return;
-        }
-
-        const grouped = new Map();
-        for (const action of actions) {
-          const di = Number(action?.day_index || state.dayIndex || 1);
-          if (!grouped.has(di)) grouped.set(di, []);
-          grouped.get(di).push(action);
-        }
-        for (const [dayIndex, items] of grouped.entries()) {
-          await loadSheet(dayIndex);
-          ensureCurrentOwner();
-          for (const action of items) {
-            const type = String(action?.type || '');
-            if (!type) continue;
-            const exName = String(action.exercise_name || action.new_exercise_name || '').trim();
-            const exId = Number(action.exercise_id || action.new_exercise_id || 0);
-            let target = Array.from(state.exercises.values()).find((x) => Number(x.exercise_id || 0) === exId);
-            if (!target && exName) target = Array.from(state.exercises.values()).find((x) => String(x.name || '').toLowerCase() === exName.toLowerCase());
-            if ((type === 'add_exercise' || type === 'replace_exercise') && !target) {
-              let resolvedId = exId > 0 ? exId : 0;
-              let alreadyAdded = false;
-              if (!resolvedId && exName) {
-                const created = await planFetch(`/gymapi/catalog/exercise?day_index=${dayIndex}`, {
-                  method: 'POST',
-                  body: JSON.stringify({
-                    name: exName,
-                    muscle_group: String(action.muscle_group || action.new_muscle_group || action.group || 'other').trim().toLowerCase() || 'other',
-                  }),
-                });
-                resolvedId = Number(created?.exercise_id || 0);
-                alreadyAdded = resolvedId > 0;
-              }
-              if (resolvedId > 0) {
-                if (!alreadyAdded) await planFetch(`/gymapi/day/${dayIndex}/exercise`, { method: 'POST', body: JSON.stringify({ exercise_id: resolvedId }) });
-                await loadSheet(dayIndex);
-                ensureCurrentOwner();
-                target = Array.from(state.exercises.values()).find((x) => Number(x.exercise_id || 0) === resolvedId)
-                  || Array.from(state.exercises.values()).find((x) => String(x.name || '').toLowerCase() === exName.toLowerCase());
-              }
-            }
-            if (type === 'replace_exercise') {
-              const oldExId = Number(action.old_exercise_id || 0);
-              const oldName = String(action.old_exercise_name || '').trim().toLowerCase();
-              const oldItem = Array.from(state.exercises.values()).find((x) => Number(x.exercise_id || 0) === oldExId)
-                || Array.from(state.exercises.values()).find((x) => String(x.name || '').toLowerCase() === oldName);
-              if (oldItem?.exercise_id) {
-                await planFetch(`/gymapi/day/${dayIndex}/exercise/${oldItem.exercise_id}/toggle`, { method: 'POST' });
-              }
-            }
-            if (type === 'remove_exercise') {
-              const oldName = String(action.old_exercise_name || '').trim();
-              const list = Array.from(state.exercises.values());
-              const oldItem = list.find((ex) => String(ex.name || '').trim() === oldName);
-              if (!oldItem?.exercise_id) {
-                toast(`Не найдено упражнение для удаления: ${oldName}`);
-                continue;
-              }
-              await planFetch(`/gymapi/day/${dayIndex}/exercise/${oldItem.exercise_id}/toggle`, { method: 'POST' });
-              continue;
-            }
-            const targetExerciseId = Number(target?.exercise_id || exId || 0);
-            if (!targetExerciseId) continue;
-            const sets = Math.max(1, Number(action.sets || 1));
-            const reps = Math.max(0, Number(action.reps || 0));
-            const seconds = Math.max(0, Number(action.seconds || 0));
-            const weight = Math.max(0, Number(action.weight_kg || 0));
-            await planFetch(`/gymapi/day/${dayIndex}/exercise/${targetExerciseId}/baseline`, {
-              method: 'POST',
-              body: JSON.stringify({ sets, reps, seconds, weight_kg: weight }),
-            });
-            await planFetch(`/gymapi/day/${dayIndex}/exercise/${targetExerciseId}/ai_meta`, {
-              method: 'POST',
-              body: JSON.stringify({
-                how_to: String(action.how_to || ''),
-                sets,
-                reps,
-                seconds,
-                weight_kg: weight,
-                muscle_group: String(action.muscle_group || action.new_muscle_group || action.group || 'other'),
-              }),
-            });
-          }
-        }
-        await loadSheet(state.dayIndex || 1);
+        const result = await apiFetch('/gymapi/ai/coach/apply', { method: 'POST', body: JSON.stringify(payload), actingUserId });
+        ensureCurrentOwner();
+        if (!result?.ok || !(Number(result.system_id) > 0)) throw new Error('Сервер не подтвердил сохранение');
+        state.settings.systems.activeSystemId = Number(result.system_id);
+        invalidateAllExerciseSessionCache();
+        state.lifecycle.dataVersion = Number(state.lifecycle.dataVersion || 0) + 1;
         const dayKey = getAiCoachDayKey();
         const applied = state.aiCoach.appliedByDay || {};
         for (const action of actions) {
-          const type = String(action?.type || '');
-          if (!['update_sets', 'replace_exercise', 'add_exercise'].includes(type)) continue;
-          const exName = String(action.exercise_name || action.new_exercise_name || '').trim().toLowerCase();
-          if (!exName) continue;
-          const key = `${dayKey}:${exName}`;
-          applied[key] = {
-            sets: Math.max(1, Number(action.sets || 1)),
-            reps: Math.max(0, Number(action.reps || 0)),
-            seconds: Math.max(0, Number(action.seconds || 0)),
-            weight_kg: Math.max(0, Number(action.weight_kg || 0)),
-          };
+          if (!['update_sets', 'replace_exercise', 'add_exercise'].includes(action?.type)) continue;
+          const name = String(action.exercise_name || action.new_exercise_name || '').trim().toLowerCase();
+          if (name) applied[`${dayKey}:${name}`] = { sets: action.sets, reps: action.reps, seconds: action.seconds, weight_kg: action.weight_kg };
         }
         state.aiCoach.appliedByDay = applied;
-        toast('Изменения применены');
+        state.aiCoach.parsed = null;
+        state.aiCoach.applyOperation = null;
         closeAiCoachSheet({ force: true });
+        toast(createAction ? 'Новая система сохранена' : 'Изменения сохранены');
+        try {
+          await loadSystems();
+          if (owner !== activeOwnerContextKey()) return;
+          if (state.currentRoute === 'today') await refreshTodayData({ keepDay: !createAction });
+          else await setRoute('today');
+        } catch (refreshError) {
+          if (owner === activeOwnerContextKey()) toast('Изменения сохранены. Не удалось обновить экран — откройте тренировку повторно.');
+        }
       } catch (e) {
-        toast(`Не удалось применить изменения: ${normalizeError(e).split('\n')[0].slice(0, 100)}`);
+        if (owner === activeOwnerContextKey()) toast(`Не удалось подтвердить сохранение: ${normalizeError(e).split('\n')[0].slice(0, 100)}. Можно повторить.`);
         throw e;
       } finally {
         state.aiCoach.applying = false;

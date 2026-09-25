@@ -119,9 +119,101 @@ class SubscriptionDbTests(unittest.IsolatedAsyncioTestCase):
 
     async def asyncTearDown(self):
         async with db.connect_db() as conn:
-            for table in ("subscriptions", "payments", "users"):
+            for table in ("referral_attributions", "referral_first_seen", "referral_profiles", "ai_coach_requests", "subscriptions", "payments", "users"):
                 await conn.execute(f"DELETE FROM {table}")
             await conn.commit()
+
+    async def test_failed_ai_requests_refund_only_their_own_quota(self):
+        import webapp_backend as backend
+        user = await db.get_or_create_user(8090, 'ai_quota')
+        await db.grant_subscription_days(user, 30)
+        successful = await db.consume_ai_coach_quota(user, 'mistakes_analysis')
+        context = {'user_profile': {}, 'day_snapshots': []}
+        for provider_result in (RuntimeError('network unavailable'), {'parsed': {}}, {'parsed': {'summary': 'No plan', 'action_plan': {'actions': []}}}):
+            provider = AsyncMock(side_effect=provider_result) if isinstance(provider_result, Exception) else AsyncMock(return_value=provider_result)
+            with patch.object(backend, '_build_ai_context_payload', AsyncMock(return_value=context)), patch.object(backend, '_call_openai_chat', provider):
+                with self.assertRaises(Exception):
+                    await backend.ai_coach_query({'mode': 'new_system', 'message': 'make a plan'}, SimpleNamespace(user_id=user))
+                self.assertEqual(provider.await_count, 1)
+            self.assertEqual((await db.get_ai_coach_quota(user))['usage']['day'], 1)
+        await db.release_ai_coach_quota(user+999, successful['request_id'])
+        self.assertEqual((await db.get_ai_coach_quota(user))['usage']['day'], 1)
+
+    async def test_yookassa_pending_poll_preserves_long_plan(self):
+        import webapp_backend as backend
+        for handler in (backend.subscription_payment_status, backend.payment_yookassa_status):
+            user = await db.get_or_create_user(8100 + len(handler.__name__), handler.__name__)
+            payment_id = handler.__name__
+            await db.create_payment_record(user, 'yookassa', 60000, 'RUB', 'pending',
+                payload={'plan': '6m', 'plan_id': '6m'}, external_id=payment_id, project_key=backend.PROJECT_KEY)
+            ctx = SimpleNamespace(user_id=user)
+            with patch.object(backend, '_yookassa_get_payment', AsyncMock(side_effect=[{'status': 'pending'}, {'status': 'succeeded'}, {'status': 'succeeded'}])):
+                await handler(payment_id, ctx)
+                await handler(payment_id, ctx)
+                await handler(payment_id, ctx)
+            sub = await db.get_active_subscription(user)
+            self.assertAlmostEqual((sub['expires_at'] - datetime.now(UTC)).total_seconds(), 180*86400, delta=5)
+            record = await db.get_payment_by_external_id(payment_id)
+            self.assertEqual(record['payload']['granted_days'], 180)
+
+    async def test_legacy_yookassa_metadata_plan_is_recovered(self):
+        import webapp_backend as backend
+        user = await db.get_or_create_user(8190, 'legacy_plan')
+        await db.create_payment_record(user, 'yookassa', 100000, 'RUB', 'pending',
+            payload={'metadata': {'plan_id': '12m'}}, external_id='legacy-plan', project_key=backend.PROJECT_KEY)
+        with patch.object(backend, '_yookassa_get_payment', AsyncMock(return_value={'status': 'succeeded'})):
+            await backend.subscription_payment_status('legacy-plan', SimpleNamespace(user_id=user))
+        sub = await db.get_active_subscription(user)
+        self.assertAlmostEqual((sub['expires_at'] - datetime.now(UTC)).total_seconds(), 365*86400, delta=5)
+
+    async def test_referral_profiles_and_first_attribution_are_concurrent_safe(self):
+        users = [await db.get_or_create_user(8200+i, f'ref{i}') for i in range(4)]
+        profiles = await asyncio.gather(*(db.create_or_update_referral_profile(u, 'Same name') for u in users))
+        self.assertEqual(len({p['slug'] for p in profiles}), 4)
+        same = await asyncio.gather(*(db.create_or_update_referral_profile(users[0], 'Новое имя') for _ in range(3)))
+        self.assertEqual({p['slug'] for p in same}, {profiles[0]['slug']})
+        invited = await db.get_or_create_user(8299, 'invited')
+        results = await asyncio.gather(*(db.assign_referral_attribution(invited, p['user_id'], p['slug']) for p in profiles))
+        self.assertEqual(sum(results), 1)
+        self.assertFalse(await db.assign_referral_attribution(users[0], users[1], 'missing-profile'))
+
+    async def test_referral_links_support_russian_names_and_escape_html(self):
+        user = await db.get_or_create_user(8300, 'russian')
+        profile = await db.create_or_update_referral_profile(user, 'Миша <спорт>')
+        self.assertRegex(profile['slug'], r'^[a-zA-Z0-9_-]+$')
+        async with db.connect_db() as conn:
+            await conn.execute('UPDATE referral_profiles SET slug=? WHERE user_id=?', ('старое-имя', user))
+            await conn.commit()
+        text, markup = await bot.build_referral_screen(user)
+        self.assertIn('Миша &lt;спорт&gt;', text)
+        from urllib.parse import urlparse, parse_qs
+        payload = parse_qs(urlparse(markup.inline_keyboard[0][0].copy_text.text).query)['start'][0]
+        self.assertRegex(payload, r'^[a-zA-Z0-9_-]{1,64}$')
+        self.assertEqual((await db.get_referrer_by_slug(payload[4:]))['user_id'], user)
+
+    async def test_referral_paid_days_exclude_gifts_and_invoice_duplicates(self):
+        referrer = await db.get_or_create_user(8400, 'referrer')
+        profile = await db.create_or_update_referral_profile(referrer, 'referrer')
+        paid, gift = [await db.get_or_create_user(8401+i, f'guest{i}') for i in range(2)]
+        for user in (paid, gift):
+            await db.assign_referral_attribution(user, referrer, profile['slug'])
+        await db.grant_subscription_days(gift, 365, plan='gift')
+        await db.grant_subscription_days(paid, 100, plan='manual')
+        for i in range(2):
+            invoice = f'websub:{paid}:1m:{i}'
+            await db.create_payment_record(paid, 'telegram', 100, 'XTR', 'paid', payload={'plan': '1m'}, external_id=invoice)
+            charge = f'telegram:ref-charge-{i}'
+            await db.create_payment_record(paid, 'telegram', 100, 'XTR', 'paid',
+                payload={'invoice_payload': invoice, 'plan_code': '1m'}, external_id=charge, project_key='telegram')
+            await db.finalize_payment_subscription_idempotent(external_id=charge, user_id=paid,
+                expected_project_key='telegram', days=30, plan_code='1m', source='test')
+        await db.create_payment_record(gift, 'yookassa', 60000, 'RUB', 'pending', payload={'plan': '6m'})
+        stats = await db.get_referral_stats(referrer)
+        self.assertEqual(stats['paid_users_total'], 1)
+        self.assertEqual(stats['paid_days_total'], 60)
+        self.assertEqual(stats['paid_days_month'], 60)
+        self.assertEqual(stats['revenue_stars_total'], 200)
+        self.assertEqual(stats['revenue_rub_total'], 0)
 
     async def test_grant_subscription_extends_current(self):
         user_id = await db.get_or_create_user(7001, "active_user")

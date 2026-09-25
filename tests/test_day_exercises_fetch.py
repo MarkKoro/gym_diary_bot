@@ -458,5 +458,140 @@ class ExerciseDeletionRegressionTests(unittest.IsolatedAsyncioTestCase):
             self.assertIsNotNone(await (await conn.execute('SELECT 1 FROM exercises WHERE id=?', (exercise,))).fetchone())
 
 
+class AiPlanAtomicityTests(unittest.IsolatedAsyncioTestCase):
+    sequence = 0
+
+    async def asyncSetUp(self):
+        import webapp_backend as backend
+        self.backend = backend
+        await db.init_db()
+        type(self).sequence += 1
+        self.uid = await db.get_or_create_user(95000+self.sequence, 'ai_plan_test')
+        await db.set_workouts_per_week(self.uid, 3)
+        self.sid = await db.ensure_training_system_defaults(self.uid)
+        await db.grant_subscription_days(self.uid, 30)
+        self.ctx = SimpleNamespace(user_id=self.uid)
+
+    def new_plan(self, request_id='test-ai-create-request-1'):
+        return {'request_id': request_id, 'system_id': self.sid, 'expected_days': 2, 'actions': [{
+            'type': 'create_system', 'system_name': 'AI regression plan', 'days': [
+                {'day_index': 2, 'title': 'Strength', 'exercises': [{'exercise_name': 'AI squat', 'sets': 3, 'reps': 8, 'weight_kg': 40}]},
+                {'day_index': 5, 'title': 'Core', 'exercises': [{'exercise_name': 'AI plank', 'sets': 2, 'reps': 0, 'seconds': 60}]},
+            ]}]}
+
+    async def test_concurrent_retry_creates_one_complete_system_and_preserves_duration(self):
+        import copy
+        existing = await db.create_training_system(self.uid, 'AI regression plan')
+        payload = self.new_plan()
+        results = await asyncio.gather(*(self.backend.ai_coach_apply(copy.deepcopy(payload), self.ctx) for _ in range(3)))
+        self.assertEqual(len({r['system_id'] for r in results}), 1)
+        self.assertEqual(sum(not r['already_applied'] for r in results), 1)
+        created = results[0]['system_id']
+        self.assertNotEqual(created, existing)
+        async with db.connect_db() as conn:
+            days = await (await conn.execute('SELECT day_index FROM user_days WHERE user_id=? AND is_active=1 ORDER BY day_index', (self.uid,))).fetchall()
+            self.assertEqual(days, [(2,), (5,)])
+            row = await (await conn.execute('SELECT b.reps,b.seconds FROM exercise_baseline b JOIN exercises e ON e.id=b.exercise_id WHERE b.user_id=? AND e.name=? AND b.day_index=5', (self.uid, 'AI plank'))).fetchone()
+            self.assertEqual(row, (0, 60))
+            saved = await (await conn.execute('SELECT COUNT(*) FROM training_system_exercises WHERE system_id=? AND day_index>0', (created,))).fetchone()
+            self.assertEqual(saved[0], 2)
+            self.assertEqual((await (await conn.execute('SELECT COUNT(*) FROM training_system_exercise_sources WHERE system_id=?', (created,))).fetchone())[0], 2)
+        # A receipt remains safe to retry even after switching away from the new plan.
+        await db.apply_system_to_current_plan(self.uid, self.sid)
+        self.assertTrue((await self.backend.ai_coach_apply(payload, self.ctx))['already_applied'])
+        self.assertEqual(await db.get_active_training_system_id(self.uid), self.sid)
+
+    async def test_mid_apply_failure_rolls_back_every_write_and_can_retry(self):
+        async with db.connect_db() as conn:
+            await conn.execute("CREATE TRIGGER reject_ai_source BEFORE INSERT ON training_system_exercise_sources BEGIN SELECT RAISE(ABORT, 'test failure'); END")
+            await conn.commit()
+        try:
+            with self.assertRaises(Exception):
+                await self.backend.ai_coach_apply(self.new_plan(), self.ctx)
+        finally:
+            async with db.connect_db() as conn:
+                await conn.execute('DROP TRIGGER reject_ai_source')
+                await conn.commit()
+        self.assertEqual(await db.get_active_training_system_id(self.uid), self.sid)
+        async with db.connect_db() as conn:
+            for sql in ('SELECT COUNT(*) FROM training_systems WHERE user_id=?', 'SELECT COUNT(*) FROM exercise_baseline WHERE user_id=?', 'SELECT COUNT(*) FROM exercises WHERE created_by_user_id=?'):
+                count = (await (await conn.execute(sql, (self.uid,))).fetchone())[0]
+                self.assertEqual(count, 1 if 'training_systems' in sql else 0)
+            self.assertIsNone(await (await conn.execute('SELECT 1 FROM app_meta WHERE key=?', (f'ai_apply:{self.uid}:test-ai-create-request-1',))).fetchone())
+        self.assertTrue((await self.backend.ai_coach_apply(self.new_plan(), self.ctx))['ok'])
+
+    async def test_changed_or_foreign_system_and_conflicting_retry_are_rejected(self):
+        from fastapi import HTTPException
+        other = await db.get_or_create_user(95999, 'other_ai_owner')
+        foreign = await db.ensure_training_system_defaults(other)
+        payload = self.new_plan()
+        payload['system_id'] = foreign
+        with self.assertRaises(HTTPException) as err:
+            await self.backend.ai_coach_apply(payload, self.ctx)
+        self.assertEqual(err.exception.status_code, 409)
+        payload = self.new_plan()
+        await self.backend.ai_coach_apply(payload, self.ctx)
+        payload['actions'][0]['system_name'] = 'Changed'
+        with self.assertRaises(HTTPException):
+            await self.backend.ai_coach_apply(payload, self.ctx)
+        payload['request_id'] = 'test-ai-new-request-2'
+        with self.assertRaises(HTTPException):
+            await self.backend.ai_coach_apply(payload, self.ctx)
+
+    async def test_replacement_retry_does_not_toggle_back_or_delete_history(self):
+        old = await db.get_or_create_exercise('AI old exercise', 'other', self.uid)
+        await db.add_user_exercise(self.uid, 1, old)
+        async with db.connect_db() as conn:
+            ue = (await (await conn.execute('SELECT id FROM user_exercises WHERE user_id=? AND day_index=1 AND exercise_id=?', (self.uid, old))).fetchone())[0]
+        session = await db.get_or_create_today_session(self.uid, '2026-09-25', 1, self.sid)
+        await db.add_set(session, ue, 8, 0, 40)
+        payload = {'request_id': 'ai-replace-regression-1', 'system_id': self.sid, 'actions': [{'type': 'replace_exercise', 'day_index': 1, 'old_exercise_name': 'AI old exercise', 'new_exercise_name': 'AI new exercise', 'sets': 4, 'reps': 10}]}
+        await self.backend.ai_coach_apply(payload, self.ctx)
+        await self.backend.ai_coach_apply(payload, self.ctx)
+        async with db.connect_db() as conn:
+            self.assertEqual((await (await conn.execute('SELECT is_archived FROM user_exercises WHERE id=?', (ue,))).fetchone())[0], 1)
+            self.assertEqual((await (await conn.execute('SELECT COUNT(*) FROM sets WHERE user_exercise_id=?', (ue,))).fetchone())[0], 1)
+            self.assertIsNone(await (await conn.execute('SELECT 1 FROM training_system_exercises WHERE system_id=? AND day_index=1 AND exercise_id=?', (self.sid, old))).fetchone())
+        # Invalid later actions must undo earlier additions too.
+        bad = {'request_id': 'ai-invalid-regression-2', 'system_id': self.sid, 'actions': [
+            {'type': 'add_exercise', 'day_index': 1, 'exercise_name': 'Must roll back'},
+            {'type': 'remove_exercise', 'day_index': 1, 'old_exercise_name': 'Missing'},
+        ]}
+        with self.assertRaises(Exception):
+            await self.backend.ai_coach_apply(bad, self.ctx)
+        async with db.connect_db() as conn:
+            self.assertIsNone(await (await conn.execute('SELECT 1 FROM exercises WHERE created_by_user_id=? AND name=?', (self.uid, 'Must roll back'))).fetchone())
+
+    async def test_apply_works_with_one_database_connection(self):
+        with patch.object(db, '_db_semaphore', asyncio.BoundedSemaphore(1)):
+            result = await asyncio.wait_for(self.backend.ai_coach_apply(self.new_plan(), self.ctx), 5)
+        self.assertTrue(result['ok'])
+        await db.wipe_user(self.uid)
+        async with db.connect_db() as conn:
+            self.assertIsNone(await (await conn.execute('SELECT 1 FROM app_meta WHERE key LIKE ?', (f'ai_apply:{self.uid}:%',))).fetchone())
+
+    async def test_baseline_api_keeps_zero_reps_for_timed_exercise(self):
+        exercise = await db.get_or_create_exercise('Timed regression', 'core', self.uid)
+        await self.backend.set_day_exercise_baseline(1, exercise, {'sets': 2, 'reps': 0, 'seconds': 60, 'weight_kg': 0}, self.ctx)
+        self.assertEqual(await db.get_baseline(self.uid, 1, exercise), (2, 0, 60, 0.0))
+
+    async def test_malformed_and_duplicate_plan_days_are_rejected_without_writes(self):
+        from fastapi import HTTPException
+        import copy
+        base = self.new_plan()
+        cases = []
+        for days in ([], [None], [base['actions'][0]['days'][0]]*2):
+            item = copy.deepcopy(base)
+            item['actions'][0]['days'] = days
+            cases.append(item)
+        item = copy.deepcopy(base)
+        item['actions'][0]['days'][0]['exercises'] *= 2
+        cases.append(item)
+        for payload in cases:
+            with self.subTest(payload=payload), self.assertRaises(HTTPException):
+                await self.backend.ai_coach_apply(payload, self.ctx)
+        self.assertEqual(await db.get_active_training_system_id(self.uid), self.sid)
+
+
 if __name__ == "__main__":
     unittest.main()

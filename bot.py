@@ -2637,9 +2637,9 @@ async def build_referral_screen(user_id: int) -> tuple[str, InlineKeyboardMarkup
         month_end = stats.get("month_end") or "—"
         text = (
             "Реферальная программа\n\n"
-            f"Имя в ссылке: {profile['display_name']}\n"
+            f"Имя в ссылке: {escape(profile['display_name'])}\n"
             "Скопируйте ссылку ниже и отправьте её другу в Telegram.\n"
-            f"<code>{link}</code>\n\n"
+            f"<code>{escape(link)}</code>\n\n"
             f"👥 Пришло пользователей: всего {stats['invited_total']}, за месяц {stats['invited_month']}\n"
             f"💳 Оплатили: всего {stats['paid_users_total']}, за месяц {stats['paid_users_month']}\n"
             f"📆 Куплено дней подписки: всего {stats['paid_days_total']}, за месяц {stats['paid_days_month']}\n\n"

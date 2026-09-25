@@ -632,10 +632,7 @@ def _sanitize_ai_action(action: dict, *, max_day_index: int) -> dict | None:
         return max(lo, min(hi, x))
 
     def _clamp_float(v, lo, hi, default):
-        try:
-            x = float(v)
-        except Exception:
-            x = float(default)
+        x = _to_float(v, float(default))
         return max(lo, min(hi, x))
 
     def _norm_name(v, max_len=120):
@@ -825,8 +822,8 @@ def _sanitize_ai_action_plan(plan: dict | None, mode: str, *, workouts_per_week:
         return {"actions": []}, [{"code": "invalid_action_plan", "detail": "Пустой или невалидный JSON action_plan от AI."}]
 
     raw_actions = plan.get("actions") if isinstance(plan.get("actions"), list) else []
-    max_day_index = active_day_count if int(active_day_count or 0) > 0 else 7
-    max_day_index = max(1, min(7, int(max_day_index)))
+    # Day indices need not be contiguous (for example, only days 2 and 5 are active).
+    max_day_index = 7
 
     clean_actions: list[dict] = []
     for a in raw_actions:
@@ -2457,10 +2454,10 @@ async def set_day_exercise_baseline(
     await _validate_day(user_id, day_index)
     await _require_catalog_exercise(user_id, exercise_id)
 
-    sets = int(payload.get("sets") or 3)
-    reps = int(payload.get("reps") or 10)
-    seconds = int(payload.get("seconds") or 0)
-    weight_kg = float(payload.get("weight_kg") or 0)
+    sets = max(1, min(100, _to_int(payload.get("sets"), 3)))
+    reps = max(0, min(10000, _to_int(payload.get("reps"), 10)))
+    seconds = max(0, min(86400, _to_int(payload.get("seconds"), 0)))
+    weight_kg = max(0.0, min(10000.0, _to_float(payload.get("weight_kg"))))
 
     # normalize: reps XOR seconds
     if reps > 0 and seconds > 0:
@@ -6390,6 +6387,16 @@ async def subscription_payment_start(payload: dict = Body(default_factory=dict),
     }
 
 
+def _purchased_subscription_plan(record: dict) -> tuple[str, dict]:
+    payload = record.get('payload') or {}
+    metadata = payload.get('metadata') if isinstance(payload.get('metadata'), dict) else {}
+    code = str(payload.get('plan_id') or payload.get('plan') or payload.get('plan_code') or metadata.get('plan_id') or metadata.get('plan') or '')
+    plan = SUBSCRIPTION_PLANS.get(code)
+    if not plan:
+        raise HTTPException(status_code=409, detail='Не удалось определить оплаченный тариф')
+    return code, plan
+
+
 @app.get('/subscription/payment/{payment_id}/status')
 async def subscription_payment_status(payment_id: str, ctx: AuthCtx = Depends(get_auth_ctx)):
     user_id = int(ctx.user_id)
@@ -6415,9 +6422,7 @@ async def subscription_payment_status(payment_id: str, ctx: AuthCtx = Depends(ge
     activated = False
     expires_at_iso = None
     if status == 'succeeded':
-        payload_data = record.get('payload') or {}
-        plan_code = str(payload_data.get('plan') or '1m')
-        plan = SUBSCRIPTION_PLANS.get(plan_code) or SUBSCRIPTION_PLANS['1m']
+        plan_code, plan = _purchased_subscription_plan(record)
         result = await db.finalize_payment_subscription_idempotent(
             external_id=payment_id,
             user_id=user_id,
@@ -6483,9 +6488,7 @@ async def payment_yookassa_status(payment_id: str, ctx: AuthCtx = Depends(get_au
     if status != 'succeeded':
         return result
 
-    payload_data = record.get('payload') or {}
-    plan_code = str(payload_data.get('plan_id') or payload_data.get('plan') or '1m')
-    plan = SUBSCRIPTION_PLANS.get(plan_code) or SUBSCRIPTION_PLANS['1m']
+    plan_code, plan = _purchased_subscription_plan(record)
     finalize = await db.finalize_payment_subscription_idempotent(
         external_id=payment_id,
         user_id=user_id,
@@ -6596,6 +6599,53 @@ def _format_ai_quota_reset_at(reset_at: str | None, tz_name: str | None) -> str:
     return local_dt.strftime('%d.%m.%Y %H:%M')
 
 
+@app.post('/ai/coach/apply')
+async def ai_coach_apply(payload: dict = Body(...), ctx: AuthCtx = Depends(get_auth_ctx)):
+    if not await db.get_active_subscription(ctx.user_id):
+        raise HTTPException(status_code=403, detail='AI доступен только при активной подписке')
+    request_id = str(payload.get('request_id') or '')
+    system_id = _to_int(payload.get('system_id'))
+    raw_actions = payload.get('actions')
+    if not re.fullmatch(r'[A-Za-z0-9_-]{16,80}', request_id) or system_id <= 0:
+        raise HTTPException(status_code=400, detail='Неверный идентификатор операции или системы')
+    if not isinstance(raw_actions, list) or not 1 <= len(raw_actions) <= 60:
+        raise HTTPException(status_code=400, detail='Пустой или слишком большой план')
+    actions = []
+    for raw in raw_actions:
+        clean = _sanitize_ai_action(raw, max_day_index=7)
+        if clean is None:
+            raise HTTPException(status_code=400, detail='Некорректное действие плана')
+        if clean['type'] == 'create_system':
+            days = raw.get('days')
+            if len(raw_actions) != 1 or not isinstance(days, list) or not 1 <= len(days) <= 7 or len(days) != len(clean['days']):
+                raise HTTPException(status_code=400, detail='Некорректные дни программы')
+            expected = _to_int(payload.get('expected_days'))
+            if expected and expected != len(days):
+                raise HTTPException(status_code=400, detail='Количество дней не совпадает с запросом')
+            by_day = {d['day_index']: d for d in clean['days']}
+            for day in days:
+                normalized = by_day.get(_to_int(day.get('day_index')))
+                exercises = day.get('exercises')
+                if normalized is None or not isinstance(exercises, list) or not 1 <= len(exercises) <= 40 or len(exercises) != len(normalized['exercises']):
+                    raise HTTPException(status_code=400, detail='Некорректные упражнения программы')
+                names = [e['exercise_name'].casefold() for e in normalized['exercises']]
+                if len(names) != len(set(names)):
+                    raise HTTPException(status_code=400, detail='Упражнение повторяется в одном дне')
+        elif _to_int(raw.get('day_index')) != clean['day_index']:
+            raise HTTPException(status_code=400, detail='Некорректный день программы')
+        actions.append(clean)
+    try:
+        return await db.apply_ai_training_plan(ctx.user_id, system_id, request_id, actions)
+    except ValueError as exc:
+        details = {
+            'system_changed': 'Система изменилась. Запросите новое предложение ИИ.',
+            'request_conflict': 'Этот запрос уже использован для другого плана.',
+            'exercise_not_found': 'Упражнение изменилось или удалено. Обновите предложение ИИ.',
+            'day_not_active': 'День тренировки больше не активен. Обновите предложение ИИ.',
+        }
+        raise HTTPException(status_code=409, detail=details.get(str(exc), 'Некорректный план')) from exc
+
+
 @app.post('/ai/coach/query')
 async def ai_coach_query(payload: dict = Body(default_factory=dict), ctx: AuthCtx = Depends(get_auth_ctx)):
     user_id = ctx.user_id
@@ -6624,6 +6674,17 @@ async def ai_coach_query(payload: dict = Body(default_factory=dict), ctx: AuthCt
                 detail += f' Следующий доступ: {reset_text}.'
         raise HTTPException(status_code=429, detail=detail)
 
+    completed = False
+    try:
+        result = await _run_ai_coach_query(user_id, mode, user_message, payload, quota_state)
+        completed = bool(result.get('ok'))
+        return result
+    finally:
+        if not completed:
+            await db.release_ai_coach_quota(user_id, quota_state['request_id'])
+
+
+async def _run_ai_coach_query(user_id: int, mode: str, user_message: str, payload: dict, quota_state: dict):
     rejected_variants = payload.get('rejected_variants')
     rejected_list: list[str] = []
     if isinstance(rejected_variants, list):
@@ -6658,11 +6719,7 @@ async def ai_coach_query(payload: dict = Body(default_factory=dict), ctx: AuthCt
 
     # --- OpenAI call (mode-aware) ---
     system_prompt = _build_ai_system_prompt(mode, requested_days=requested_days)
-    try:
-        result = await _call_openai_chat(system_prompt, user_prompt, mode=mode, requested_days=requested_days)
-    except TypeError:
-        # если _call_openai_chat еще старой сигнатуры
-        result = await _call_openai_chat(system_prompt, user_prompt)
+    result = await _call_openai_chat(system_prompt, user_prompt, mode=mode, requested_days=requested_days)
 
     # --- Parse structured root ---
     parsed_root = None
@@ -6673,6 +6730,9 @@ async def ai_coach_query(payload: dict = Body(default_factory=dict), ctx: AuthCt
         # fallback на старый путь
         raw_text = (result.get("text") if isinstance(result, dict) else "") or ""
         parsed_root = _extract_json_block(raw_text) or {}
+
+    if not parsed_root:
+        raise HTTPException(status_code=502, detail='ИИ вернул пустой ответ. Попытка не списана.')
 
     parsed_action_plan = parsed_root.get("action_plan") if isinstance(parsed_root.get("action_plan"), dict) else {"actions": []}
     if mode == "new_system" and not (parsed_action_plan.get("actions") if isinstance(parsed_action_plan, dict) else None):
@@ -6731,6 +6791,9 @@ async def ai_coach_query(payload: dict = Body(default_factory=dict), ctx: AuthCt
                 "expected_days": requested_days,
                 "action_plan_warnings": plan_warnings,
             }
+
+    if mode != 'mistakes_analysis' and not sanitized_plan.get('actions'):
+        raise HTTPException(status_code=502, detail='ИИ не вернул применимый план. Попытка не списана.')
 
     return {
         "ok": True,

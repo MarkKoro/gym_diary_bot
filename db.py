@@ -1,6 +1,7 @@
 import asyncio
 import aiosqlite
 import json
+import hashlib
 from datetime import datetime, timedelta, timezone, UTC
 import secrets
 from contextlib import asynccontextmanager, nullcontext
@@ -605,7 +606,7 @@ async def consume_ai_coach_quota(user_id: int, mode: str, now: datetime | None =
                 **state,
             }
 
-        await db.execute(
+        inserted = await db.execute(
             "INSERT INTO ai_coach_requests(user_id, mode, created_at) VALUES(?,?,?)",
             (user_id, str(mode or "unknown"), _iso_utc(now_utc)),
         )
@@ -613,8 +614,15 @@ async def consume_ai_coach_quota(user_id: int, mode: str, now: datetime | None =
         updated_state = await _fetch_ai_coach_quota_state(db, user_id, now_utc)
         return {
             "ok": True,
+            "request_id": int(inserted.lastrowid),
             **updated_state,
         }
+
+
+async def release_ai_coach_quota(user_id: int, request_id: int) -> None:
+    async with connect_db() as db:
+        await db.execute("DELETE FROM ai_coach_requests WHERE id=? AND user_id=?", (request_id, user_id))
+        await db.commit()
 
 
 async def reset_ai_coach_quota(user_id: int) -> int:
@@ -1902,9 +1910,10 @@ async def upsert_training_system_exercise_source(system_id: int, day_index: int,
         await db.commit()
 
 
-async def sync_current_plan_to_system(user_id: int, system_id: int):
-    async with connect_db() as db:
-        await db.execute("BEGIN IMMEDIATE")
+async def sync_current_plan_to_system(user_id: int, system_id: int, *, connection=None):
+    async with (nullcontext(connection) if connection is not None else connect_db()) as db:
+        if connection is None:
+            await db.execute("BEGIN IMMEDIATE")
         cur = await db.execute("SELECT 1 FROM training_systems WHERE id=? AND user_id=?", (system_id, user_id))
         if not await cur.fetchone():
             raise ValueError("system_not_found")
@@ -1928,12 +1937,14 @@ async def sync_current_plan_to_system(user_id: int, system_id: int):
                 "INSERT OR IGNORE INTO training_system_exercises(system_id, day_index, exercise_id) VALUES(?,?,?)",
                 (system_id, int(day_index), int(exercise_id)),
             )
-        await db.commit()
+        if connection is None:
+            await db.commit()
 
 
-async def sync_reminders_to_system(user_id: int, system_id: int):
-    async with connect_db() as db:
-        await db.execute("BEGIN IMMEDIATE")
+async def sync_reminders_to_system(user_id: int, system_id: int, *, connection=None):
+    async with (nullcontext(connection) if connection is not None else connect_db()) as db:
+        if connection is None:
+            await db.execute("BEGIN IMMEDIATE")
         cur = await db.execute("SELECT 1 FROM training_systems WHERE id=? AND user_id=?", (system_id, user_id))
         if not await cur.fetchone():
             raise ValueError("system_not_found")
@@ -1947,12 +1958,14 @@ async def sync_reminders_to_system(user_id: int, system_id: int):
                 "INSERT OR REPLACE INTO training_system_reminders(system_id, day_no, dow, hour, minute) VALUES(?,?,?,?,?)",
                 (system_id, int(day_no), int(dow), int(hour), int(minute)),
             )
-        await db.commit()
+        if connection is None:
+            await db.commit()
 
 
-async def apply_system_to_current_plan(user_id: int, system_id: int):
-    async with connect_db() as db:
-        await db.execute("BEGIN IMMEDIATE")
+async def apply_system_to_current_plan(user_id: int, system_id: int, *, connection=None):
+    async with (nullcontext(connection) if connection is not None else connect_db()) as db:
+        if connection is None:
+            await db.execute("BEGIN IMMEDIATE")
         cur = await db.execute("SELECT 1 FROM training_systems WHERE id=? AND user_id=?", (system_id, user_id))
         if not await cur.fetchone():
             raise ValueError("system_not_found")
@@ -2026,7 +2039,116 @@ async def apply_system_to_current_plan(user_id: int, system_id: int):
                 "INSERT INTO user_reminders(user_id, dow, hour, minute, day_no) VALUES(?,?,?,?,?)",
                 (user_id, int(dow), int(hour), int(minute), int(day_no)),
             )
-        await db.commit()
+        if connection is None:
+            await db.commit()
+
+
+async def apply_ai_training_plan(user_id: int, source_system_id: int, request_id: str, actions: list[dict]) -> dict:
+    """Apply a normalized plan and its retry receipt in the same transaction."""
+    fingerprint = hashlib.sha256(json.dumps([source_system_id, actions], sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+    receipt_key = f"ai_apply:{user_id}:{request_id}"
+    async with connect_db() as conn:
+        await conn.execute("BEGIN IMMEDIATE")
+        receipt = await (await conn.execute('SELECT value FROM app_meta WHERE key=?', (receipt_key,))).fetchone()
+        if receipt:
+            saved = json.loads(receipt[0])
+            if saved['fingerprint'] != fingerprint:
+                raise ValueError('request_conflict')
+            return {**saved['result'], 'already_applied': True}
+        current = await (await conn.execute(
+            'SELECT u.active_system_id FROM users u JOIN training_systems s ON s.id=u.active_system_id AND s.user_id=u.id WHERE u.id=?', (user_id,)
+        )).fetchone()
+        if not current or int(current[0]) != source_system_id:
+            raise ValueError('system_changed')
+        if not actions or len(actions) > 60:
+            raise ValueError('invalid_plan')
+        creates = [a for a in actions if a['type'] == 'create_system']
+        if creates and len(actions) != 1:
+            raise ValueError('invalid_plan')
+        await sync_current_plan_to_system(user_id, source_system_id, connection=conn)
+        system_id = source_system_id
+        if creates:
+            await sync_reminders_to_system(user_id, source_system_id, connection=conn)
+            create = creates[0]
+            name = base = create['system_name']
+            suffix = 2
+            while await (await conn.execute('SELECT 1 FROM training_systems WHERE user_id=? AND name=?', (user_id, name))).fetchone():
+                name = f'{base} ({suffix})'
+                suffix += 1
+            inserted = await conn.execute('INSERT INTO training_systems(user_id,name,color,created_at) VALUES(?,?,?,?)',
+                (user_id, name, '#2ea6ff', datetime.now(UTC).isoformat()))
+            system_id = int(inserted.lastrowid)
+            day_map = {d['day_index']: d for d in create['days']}
+            for di in range(1, 8):
+                day = day_map.get(di)
+                await conn.execute('INSERT INTO training_system_days(system_id,day_index,label,is_active) VALUES(?,?,?,?)',
+                    (system_id, di, (day.get('title') if day else '') or f'День {di}', int(day is not None)))
+            await apply_system_to_current_plan(user_id, system_id, connection=conn)
+            actions = [dict(ex, type='add_exercise', day_index=day['day_index']) for day in create['days'] for ex in day['exercises']]
+        active_days = {int(r[0]) for r in await (await conn.execute('SELECT day_index FROM user_days WHERE user_id=? AND is_active=1', (user_id,))).fetchall()}
+        catalog_rows = await (await conn.execute(
+            'SELECT id,name FROM exercises WHERE created_by_user_id IN (0,?) ORDER BY created_by_user_id', (user_id,)
+        )).fetchall()
+        catalog = {str(name).strip().casefold(): int(ex_id) for ex_id, name in catalog_rows}
+        for action in actions:
+            di, kind = int(action['day_index']), action['type']
+            if di not in active_days:
+                raise ValueError('day_not_active')
+            rows = await (await conn.execute(
+                'SELECT e.id,e.name FROM user_exercises ue JOIN exercises e ON e.id=ue.exercise_id WHERE ue.user_id=? AND ue.day_index=? AND ue.is_archived=0', (user_id, di)
+            )).fetchall()
+            current_exercises = {str(name).strip().casefold(): int(ex_id) for ex_id, name in rows}
+            old_id = None
+            if kind in {'remove_exercise', 'replace_exercise'}:
+                old_id = current_exercises.get(action['old_exercise_name'].casefold())
+                if old_id is None:
+                    raise ValueError('exercise_not_found')
+            if kind != 'remove_exercise':
+                name = action.get('exercise_name') or action.get('new_exercise_name')
+                key = name.casefold()
+                if kind == 'update_sets':
+                    ex_id = current_exercises.get(key)
+                    if ex_id is None:
+                        raise ValueError('exercise_not_found')
+                else:
+                    ex_id = current_exercises.get(key) or catalog.get(key)
+                    if ex_id is None:
+                        group = action.get('muscle_group') or 'other'
+                        if group.startswith('u') and group[1:].isdigit():
+                            owned_group = await (await conn.execute('SELECT 1 FROM user_muscle_groups WHERE id=? AND user_id=?', (int(group[1:]), user_id))).fetchone()
+                            if not owned_group:
+                                raise ValueError('invalid_group')
+                        inserted = await conn.execute('INSERT INTO exercises(name,muscle_group,created_by_user_id) VALUES(?,?,?)', (name, group, user_id))
+                        ex_id = int(inserted.lastrowid)
+                        catalog[key] = ex_id
+                    for target_day in (0, di):
+                        await conn.execute("""INSERT INTO user_exercises(user_id,exercise_id,day_index,is_archived) VALUES(?,?,?,0)
+                            ON CONFLICT(user_id,exercise_id,day_index) DO UPDATE SET is_archived=0""", (user_id, ex_id, target_day))
+                        await conn.execute('INSERT OR IGNORE INTO training_system_exercises(system_id,day_index,exercise_id) VALUES(?,?,?)', (system_id, target_day, ex_id))
+                    await conn.execute('DELETE FROM hidden_catalog_exercises WHERE user_id=? AND exercise_id=?', (user_id, ex_id))
+                await conn.execute("""INSERT INTO exercise_baseline(user_id,day_index,exercise_id,sets,reps,seconds,weight_kg) VALUES(?,?,?,?,?,?,?)
+                    ON CONFLICT(user_id,day_index,exercise_id) DO UPDATE SET sets=excluded.sets,reps=excluded.reps,seconds=excluded.seconds,weight_kg=excluded.weight_kg""",
+                    (user_id, di, ex_id, action['sets'], action['reps'], action['seconds'], action['weight_kg']))
+                old_source = await (await conn.execute('SELECT source_payload FROM training_system_exercise_sources WHERE system_id=? AND day_index=? AND exercise_id=?', (system_id, di, ex_id))).fetchone()
+                try:
+                    metadata = json.loads(old_source[0]) if old_source else {}
+                except (ValueError, TypeError):
+                    metadata = {}
+                metadata = metadata if isinstance(metadata, dict) else {}
+                metadata.update(source_kind='ai', how_to=action.get('how_to', ''), sets_count=action['sets'], reps=action['reps'], seconds=action['seconds'], weight_kg=action['weight_kg'], muscle_group=action.get('muscle_group', 'other'))
+                await conn.execute("""INSERT INTO training_system_exercise_sources(system_id,day_index,exercise_id,source_payload) VALUES(?,?,?,?)
+                    ON CONFLICT(system_id,day_index,exercise_id) DO UPDATE SET source_payload=excluded.source_payload""", (system_id, di, ex_id, json.dumps(metadata, ensure_ascii=False)))
+                if old_id == ex_id:
+                    old_id = None
+            if old_id is not None:
+                # Archive membership, preserving session/sets history and the personal library.
+                await conn.execute('UPDATE user_exercises SET is_archived=1 WHERE user_id=? AND day_index=? AND exercise_id=?', (user_id, di, old_id))
+                await conn.execute('DELETE FROM training_system_exercises WHERE system_id=? AND day_index=? AND exercise_id=?', (system_id, di, old_id))
+                await conn.execute('DELETE FROM training_system_exercise_sources WHERE system_id=? AND day_index=? AND exercise_id=?', (system_id, di, old_id))
+        result = {'ok': True, 'system_id': system_id, 'created': bool(creates), 'already_applied': False}
+        await conn.execute('INSERT INTO app_meta(key,value) VALUES(?,?)', (receipt_key, json.dumps({'fingerprint': fingerprint, 'result': result})))
+        await conn.commit()
+        return result
 
 
 async def create_training_system(
@@ -3408,6 +3530,7 @@ async def wipe_user(user_id: int):
     async with connect_db() as db:
         await db.execute("BEGIN IMMEDIATE")
         try:
+            await db.execute("DELETE FROM app_meta WHERE key LIKE ?", (f"ai_apply:{user_id}:%",))
             for table in ('training_system_exercise_sources', 'training_system_exercises', 'training_system_reminders', 'training_system_days'):
                 await db.execute(f"DELETE FROM {table} WHERE system_id IN (SELECT id FROM training_systems WHERE user_id=?)", (user_id,))
             for table in ('training_system_cosmetics', 'training_systems', 'day_completion_history', 'exercise_notes', 'user_exercise_muscles', 'user_achievements'):
@@ -3479,9 +3602,13 @@ async def list_all_user_tg_ids():
 
 
 def _normalize_referral_slug(name: str) -> str:
-    normalized = "".join(ch.lower() if ch.isalnum() else "-" for ch in (name or "").strip())
+    normalized = "".join(ch.lower() if ch.isascii() and ch.isalnum() else "-" for ch in (name or "").strip())
     normalized = "-".join(part for part in normalized.split("-") if part)
     return normalized[:40]
+
+
+def _valid_referral_slug(slug: str) -> bool:
+    return bool(slug) and len(slug) <= 60 and all(ch.isascii() and (ch.isalnum() or ch in "_-") for ch in slug)
 
 
 async def create_or_update_referral_profile(user_id: int, display_name: str) -> dict | None:
@@ -3493,12 +3620,13 @@ async def create_or_update_referral_profile(user_id: int, display_name: str) -> 
         base_slug = f"user-{user_id}"
     now_iso = datetime.now(UTC).isoformat()
     async with connect_db() as db:
+        await db.execute("BEGIN IMMEDIATE")
         cur = await db.execute(
             "SELECT slug FROM referral_profiles WHERE user_id=?",
             (user_id,),
         )
         existing = await cur.fetchone()
-        if existing and existing[0]:
+        if existing and _valid_referral_slug(str(existing[0] or "")):
             slug = str(existing[0])
             await db.execute(
                 "UPDATE referral_profiles SET display_name=?, updated_at=? WHERE user_id=?",
@@ -3523,6 +3651,7 @@ async def create_or_update_referral_profile(user_id: int, display_name: str) -> 
             """
             INSERT INTO referral_profiles(user_id, slug, display_name, created_at, updated_at)
             VALUES(?,?,?,?,?)
+            ON CONFLICT(user_id) DO UPDATE SET slug=excluded.slug, display_name=excluded.display_name, updated_at=excluded.updated_at
             """,
             (user_id, slug, cleaned_name[:80], now_iso, now_iso),
         )
@@ -3539,13 +3668,19 @@ async def get_referral_profile(user_id: int) -> dict | None:
         row = await cur.fetchone()
         if not row:
             return None
-        return {
+        profile = {
             "user_id": int(row[0]),
             "slug": str(row[1]),
             "display_name": str(row[2]),
             "created_at": row[3],
             "updated_at": row[4],
         }
+    if not _valid_referral_slug(profile["slug"]):
+        # Repair legacy Unicode payloads only; keep every working shared link stable.
+        repaired = await create_or_update_referral_profile(user_id, profile['display_name'])
+        if repaired:
+            profile.update(repaired)
+    return profile
 
 
 async def get_referrer_by_slug(slug: str) -> dict | None:
@@ -3565,6 +3700,13 @@ async def assign_referral_attribution(user_id: int, referrer_user_id: int, sourc
         return False
     now_iso = datetime.now(UTC).isoformat()
     async with connect_db() as db:
+        await db.execute("BEGIN IMMEDIATE")
+        profile = await (await db.execute(
+            "SELECT 1 FROM referral_profiles WHERE user_id=? AND slug=?",
+            (referrer_user_id, (source_slug or "").strip().lower()),
+        )).fetchone()
+        if not profile:
+            return False
         first_seen_cur = await db.execute(
             "SELECT user_id FROM referral_first_seen WHERE user_id=? LIMIT 1",
             (user_id,),
@@ -3607,101 +3749,68 @@ async def mark_referral_first_seen(user_id: int) -> None:
 
 async def get_referral_stats(referrer_user_id: int) -> dict:
     now = datetime.now(UTC)
-    month_start_dt = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-    if month_start_dt.month == 12:
-        month_end_dt = month_start_dt.replace(year=month_start_dt.year + 1, month=1)
-    else:
-        month_end_dt = month_start_dt.replace(month=month_start_dt.month + 1)
-    month_start = month_start_dt.isoformat()
-    month_end = month_end_dt.isoformat()
+    start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    end = start.replace(year=start.year+1, month=1) if start.month == 12 else start.replace(month=start.month+1)
     async with connect_db() as db:
-        cur_total = await db.execute(
-            "SELECT COUNT(*) FROM referral_attributions WHERE referrer_user_id=?",
+        invited = await (await db.execute(
+            "SELECT COUNT(*), COALESCE(SUM(created_at>=? AND created_at<?), 0) FROM referral_attributions WHERE referrer_user_id=?",
+            (start.isoformat(), end.isoformat(), referrer_user_id),
+        )).fetchone()
+        rows = await (await db.execute(
+            """SELECT p.user_id, p.amount, p.currency, COALESCE(p.finalized_at, p.created_at),
+                      p.payload_json, p.external_id, p.provider
+               FROM payments p JOIN referral_attributions ra ON ra.user_id=p.user_id
+               WHERE ra.referrer_user_id=? AND
+                 (LOWER(p.status)='paid' OR (LOWER(p.status)='succeeded' AND p.finalized_at IS NOT NULL))""",
             (referrer_user_id,),
-        )
-        total_invited = int((await cur_total.fetchone() or [0])[0] or 0)
-        cur_month = await db.execute(
-            "SELECT COUNT(*) FROM referral_attributions WHERE referrer_user_id=? AND created_at >= ?",
-            (referrer_user_id, month_start),
-        )
-        month_invited = int((await cur_month.fetchone() or [0])[0] or 0)
-        cur_paid_total = await db.execute(
-            """
-            SELECT COUNT(DISTINCT s.user_id), COALESCE(SUM(julianday(s.expires_at) - julianday(s.started_at)), 0)
-            FROM subscriptions s
-            JOIN referral_attributions ra ON ra.user_id = s.user_id
-            WHERE ra.referrer_user_id=?
-            """,
-            (referrer_user_id,),
-        )
-        paid_total_row = await cur_paid_total.fetchone()
-        total_paid_users = int((paid_total_row or [0, 0])[0] or 0)
-        total_paid_days = int(round(float((paid_total_row or [0, 0])[1] or 0)))
-        cur_paid_month = await db.execute(
-            """
-            SELECT COUNT(DISTINCT s.user_id), COALESCE(SUM(julianday(s.expires_at) - julianday(s.started_at)), 0)
-            FROM subscriptions s
-            JOIN referral_attributions ra ON ra.user_id = s.user_id
-            WHERE ra.referrer_user_id=? AND s.started_at >= ?
-            """,
-            (referrer_user_id, month_start),
-        )
-        paid_month_row = await cur_paid_month.fetchone()
-        month_paid_users = int((paid_month_row or [0, 0])[0] or 0)
-        month_paid_days = int(round(float((paid_month_row or [0, 0])[1] or 0)))
-        cur_money = await db.execute(
-            """
-            SELECT
-                COALESCE(SUM(CASE WHEN UPPER(COALESCE(p.currency, '')) = 'RUB' THEN p.amount ELSE 0 END), 0) AS rub_minor_total,
-                COALESCE(SUM(CASE WHEN UPPER(COALESCE(p.currency, '')) IN ('XTR', 'STAR', 'STARS') THEN p.amount ELSE 0 END), 0) AS stars_total,
-                COALESCE(SUM(
-                    CASE
-                        WHEN UPPER(COALESCE(p.currency, '')) = 'RUB'
-                         AND COALESCE(p.finalized_at, p.created_at) >= ?
-                         AND COALESCE(p.finalized_at, p.created_at) < ?
-                        THEN p.amount ELSE 0
-                    END
-                ), 0) AS rub_minor_month,
-                COALESCE(SUM(
-                    CASE
-                        WHEN UPPER(COALESCE(p.currency, '')) IN ('XTR', 'STAR', 'STARS')
-                         AND COALESCE(p.finalized_at, p.created_at) >= ?
-                         AND COALESCE(p.finalized_at, p.created_at) < ?
-                        THEN p.amount ELSE 0
-                    END
-                ), 0) AS stars_month
-            FROM payments p
-            JOIN referral_attributions ra ON ra.user_id = p.user_id
-            WHERE ra.referrer_user_id=?
-              AND (
-                    LOWER(COALESCE(p.status, '')) = 'paid'
-                    OR (
-                        LOWER(COALESCE(p.status, '')) = 'succeeded'
-                        AND p.finalized_at IS NOT NULL
-                    )
-              )
-            """,
-            (month_start, month_end, month_start, month_end, referrer_user_id),
-        )
-        money_row = await cur_money.fetchone()
-        rub_minor_total = int((money_row or [0, 0, 0, 0])[0] or 0)
-        stars_total = int((money_row or [0, 0, 0, 0])[1] or 0)
-        rub_minor_month = int((money_row or [0, 0, 0, 0])[2] or 0)
-        stars_month = int((money_row or [0, 0, 0, 0])[3] or 0)
-        return {
-            "invited_total": total_invited,
-            "invited_month": month_invited,
-            "paid_users_total": total_paid_users,
-            "paid_users_month": month_paid_users,
-            "paid_days_total": max(0, total_paid_days),
-            "paid_days_month": max(0, month_paid_days),
-            "revenue_rub_total": rub_minor_total / 100.0,
-            "revenue_rub_month": rub_minor_month / 100.0,
-            "revenue_stars_total": max(0, stars_total),
-            "revenue_stars_month": max(0, stars_month),
-            "month_start": month_start_dt.date().isoformat(),
-            "month_end": (month_end_dt - timedelta(days=1)).date().isoformat(),
-        }
+        )).fetchall()
+    payments = []
+    charged_invoices = set()
+    for user, amount, currency, paid_at, raw, external_id, provider in rows:
+        try:
+            payload = json.loads(raw or '{}')
+        except (ValueError, TypeError):
+            payload = {}
+        payload = payload if isinstance(payload, dict) else {}
+        if provider == 'telegram' and payload.get('invoice_payload'):
+            charged_invoices.add((user, str(payload['invoice_payload'])))
+        payments.append((user, int(amount or 0), str(currency or '').upper(), paid_at, payload, external_id, provider))
+    total_users, month_users = set(), set()
+    total_days = month_days = rub_total = rub_month = stars_total = stars_month = 0
+    for user, amount, currency, paid_at, payload, external_id, provider in payments:
+        if provider == 'telegram' and (user, external_id) in charged_invoices:
+            continue  # Legacy invoice + charge rows describe one sale.
+        if amount <= 0:
+            continue
+        metadata = payload.get('metadata') if isinstance(payload.get('metadata'), dict) else {}
+        plan = payload.get('plan_code') or payload.get('plan_id') or payload.get('plan') or metadata.get('plan_id') or metadata.get('plan')
+        if not plan:
+            parts = str(payload.get('invoice_payload') or external_id or '').split(':')
+            plan = parts[2] if len(parts) >= 3 and parts[0] in {'sub', 'websub', 'setsubstars'} else None
+        try:
+            days = max(0, int(payload.get('granted_days', {'1m': 30, '6m': 180, '12m': 365}.get(plan, 0))))
+        except (TypeError, ValueError, OverflowError):
+            days = 0
+        in_month = start.isoformat() <= str(paid_at or '') < end.isoformat()
+        total_users.add(user)
+        total_days += days
+        if in_month:
+            month_users.add(user)
+            month_days += days
+        if currency == 'RUB':
+            rub_total += amount
+            rub_month += amount if in_month else 0
+        elif currency in {'XTR', 'STAR', 'STARS'}:
+            stars_total += amount
+            stars_month += amount if in_month else 0
+    return {
+        'invited_total': int(invited[0]), 'invited_month': int(invited[1]),
+        'paid_users_total': len(total_users), 'paid_users_month': len(month_users),
+        'paid_days_total': total_days, 'paid_days_month': month_days,
+        'revenue_rub_total': rub_total/100.0, 'revenue_rub_month': rub_month/100.0,
+        'revenue_stars_total': stars_total, 'revenue_stars_month': stars_month,
+        'month_start': start.date().isoformat(), 'month_end': (end-timedelta(days=1)).date().isoformat(),
+    }
 
 
 async def list_referral_profiles(*, search: str | None = None, limit: int = 8, offset: int = 0) -> tuple[int, list[dict]]:
@@ -4080,22 +4189,30 @@ async def redeem_gift_code_with_status(code: str, user_id: int) -> tuple[str, in
         return ("ok", days)
 
 
-async def update_payment_status(
-    external_id: str,
-    status: str,
-    payload: dict | None = None,
-) -> None:
-    updates = ["status=?"]
-    params: list[object] = [status]
-    if payload is not None:
-        updates.append("payload_json=?")
-        params.append(json.dumps(payload, ensure_ascii=False))
-    params.append(external_id)
+async def update_payment_status(external_id: str, status: str, payload: dict | None = None) -> None:
     async with connect_db() as db:
-        await db.execute(
-            f"UPDATE payments SET {', '.join(updates)} WHERE external_id=?",
-            tuple(params),
-        )
+        await db.execute("BEGIN IMMEDIATE")
+        row = await (await db.execute(
+            "SELECT payload_json, status, finalized_at FROM payments WHERE external_id=?", (external_id,)
+        )).fetchone()
+        if not row:
+            return
+        try:
+            previous = json.loads(row[0] or '{}')
+        except (ValueError, TypeError):
+            previous = {}
+        previous = previous if isinstance(previous, dict) else {}
+        merged = {**previous, **(payload or {})}
+        # Provider polls must not erase the purchased plan or the actual granted duration.
+        for key in ('plan', 'plan_id', 'plan_code', 'granted_days'):
+            if key in previous:
+                merged[key] = previous[key]
+        if isinstance(previous.get('metadata'), dict):
+            merged['metadata'] = {**(merged.get('metadata') if isinstance(merged.get('metadata'), dict) else {}), **previous['metadata']}
+        if row[2] and status in {'pending', 'waiting_for_capture', 'created'}:
+            status = row[1]  # A delayed poll cannot regress a completed payment.
+        await db.execute('UPDATE payments SET status=?, payload_json=? WHERE external_id=?',
+            (status, json.dumps(merged, ensure_ascii=False), external_id))
         await db.commit()
 
 
@@ -4151,7 +4268,7 @@ async def finalize_payment_subscription_idempotent(
         await db.execute("BEGIN IMMEDIATE")
         cur = await db.execute(
             """
-            SELECT id, user_id, project_key, finalized_at
+            SELECT id, user_id, project_key, finalized_at, payload_json
             FROM payments
             WHERE external_id=?
             LIMIT 1
@@ -4162,7 +4279,7 @@ async def finalize_payment_subscription_idempotent(
         if not row:
             await db.rollback()
             return {"ok": False, "reason": "not_found"}
-        payment_row_id, payment_user_id, payment_project_key, finalized_at = row
+        payment_row_id, payment_user_id, payment_project_key, finalized_at, payload_json = row
         if int(payment_user_id or 0) != int(user_id):
             await db.rollback()
             return {"ok": False, "reason": "forbidden"}
@@ -4198,9 +4315,15 @@ async def finalize_payment_subscription_idempotent(
             "UPDATE subscriptions SET status='expired' WHERE user_id=? AND status='active' AND expires_at < ?",
             (user_id, now_dt.isoformat()),
         )
+        try:
+            payment_payload = json.loads(payload_json or '{}')
+        except (ValueError, TypeError):
+            payment_payload = {}
+        payment_payload = payment_payload if isinstance(payment_payload, dict) else {}
+        payment_payload.update(granted_days=max(1, int(days)), plan_code=plan_code)
         await db.execute(
-            "UPDATE payments SET finalized_at=?, finalization_source=? WHERE id=?",
-            (now_iso, source, payment_row_id),
+            "UPDATE payments SET finalized_at=?, finalization_source=?, payload_json=? WHERE id=?",
+            (now_iso, source, json.dumps(payment_payload, ensure_ascii=False), payment_row_id),
         )
         await db.commit()
         return {"ok": True, "already_finalized": False, "expires_at": expires_at}
