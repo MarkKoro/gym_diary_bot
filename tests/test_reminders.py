@@ -1,4 +1,5 @@
 import atexit
+import asyncio
 import importlib
 import os
 import sys
@@ -6,6 +7,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 
 from zoneinfo import ZoneInfo
 
@@ -82,6 +84,32 @@ class ReminderTests(unittest.IsolatedAsyncioTestCase):
             for table in ("user_reminders", "user_days", "users"):
                 await conn.execute(f"DELETE FROM {table}")
             await conn.commit()
+
+    async def test_repeated_wizard_time_does_not_fill_the_next_day(self):
+        user_id = await db.get_or_create_user(9600, 'wizard-repeat')
+        await db.set_workouts_per_week(user_id, 2)
+        context = SimpleNamespace(user_data={'workouts_per_week': 2, 'reminder_day': 1, 'selected_dow': 0, 'tz': 'UTC'}, application=None)
+        query = SimpleNamespace(message=None, answer=AsyncMock())
+        with patch.object(bot, 'show_screen', new=AsyncMock()), patch.object(bot, '_schedule_user_reminders', new=AsyncMock()), patch.object(bot, '_wizard_finish_show_tips', new=AsyncMock()), patch.object(bot, 'compose_main_menu', new=AsyncMock(return_value=('', None, None))):
+            await bot.wizard_router(None, query, 'wiz:remind:9:30', user_id, context)
+            self.assertEqual(context.user_data['reminder_day'], 2)
+            await bot.wizard_router(None, query, 'wiz:remind:9:30', user_id, context)
+            self.assertEqual(await db.list_user_reminders(user_id), [(1, 0, 9, 30)])
+            await bot.wizard_router(None, query, 'wiz:rday:3', user_id, context)
+            await bot.wizard_router(None, query, 'wiz:remind:18:45', user_id, context)
+            self.assertEqual(await db.list_user_reminders(user_id), [(1, 0, 9, 30), (2, 2, 18, 45)])
+
+    async def test_concurrent_wizard_callbacks_do_not_skip_a_reminder_day(self):
+        user_id = await db.get_or_create_user(9601, 'wizard-concurrent')
+        await db.set_workouts_per_week(user_id, 3)
+        context = SimpleNamespace(user_data={'workouts_per_week': 3, 'reminder_day': 1, 'selected_dow': 0, 'tz': 'UTC'}, application=None)
+        query = SimpleNamespace(message=None, answer=AsyncMock())
+        async def delayed_schedule(*args, **kwargs):
+            await asyncio.sleep(0.05)
+        with patch.object(bot, 'show_screen', new=AsyncMock()), patch.object(bot, '_schedule_user_reminders', new=AsyncMock(side_effect=delayed_schedule)), patch.object(bot, '_wizard_finish_show_tips', new=AsyncMock()), patch.object(bot, 'compose_main_menu', new=AsyncMock(return_value=('', None, None))):
+            await asyncio.gather(*(bot.wizard_router(None, query, 'wiz:remind:9:30', user_id, context) for _ in range(3)))
+        self.assertEqual(context.user_data['reminder_day'], 2)
+        self.assertEqual(await db.list_user_reminders(user_id), [(1, 0, 9, 30)])
 
     async def test_normalize_dow_preserves_zero_based_values(self):
         self.assertEqual(db.normalize_dow(0), 0)

@@ -211,6 +211,7 @@ from db import (
     grant_subscription_days,
     degrant_subscription_days,
     create_payment_record,
+    get_payment_by_external_id,
     finalize_payment_subscription_idempotent,
     update_payment_status,
     list_exercise_weight_progress,
@@ -9070,6 +9071,17 @@ async def prompt_day_mode(q, context, user_id: int, day: int):
 async def wizard_router(
     update: Update, q, data: str, user_id: int, context: ContextTypes.DEFAULT_TYPE
 ):
+    lock = user_locks[user_id]
+    if lock.locked():
+        await q.answer("Предыдущее действие ещё сохраняется.")
+        return
+    async with lock:
+        await _wizard_router_unlocked(update, q, data, user_id, context)
+
+
+async def _wizard_router_unlocked(
+    update: Update, q, data: str, user_id: int, context: ContextTypes.DEFAULT_TYPE
+):
     if not await require_edit_allowed(q, context):
         return
     message = getattr(q, "message", None)
@@ -9791,6 +9803,7 @@ async def wizard_router(
             if not await add_user_reminder(user_id, dow, hour, minute, day_no=day_no):
                 await q.answer("Не удалось сохранить напоминание.", show_alert=True)
                 return
+            context.user_data.pop("selected_dow", None)
             message = getattr(q, "message", None)
             chat_id = getattr(message, "chat_id", None)
             if chat_id is None and message is not None:
@@ -14628,10 +14641,41 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def precheckout_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Телеграм прислал pre-checkout — нужно подтвердить."""
-
+    """Подтвердить только сохранённый неоплаченный счёт с той же суммой."""
     query = update.pre_checkout_query
-    await query.answer(ok=True)
+    if not query:
+        return
+    valid = False
+    try:
+        payload = str(query.invoice_payload or '')
+        parts = payload.split(':')
+        if len(parts) >= 3 and parts[0] in {'sub', 'setsubstars', 'websub'} and parts[2] in SUBSCRIPTION_PLANS:
+            owner = int(parts[1])
+            if parts[0] == 'sub':
+                user_info = await find_user_by_tg_id(owner)
+                owner = user_info[0] if user_info else None
+            invoice = await get_payment_by_external_id(payload)
+            if invoice:
+                metadata = invoice.get('payload') or {}
+                valid = (
+                    owner == invoice['user_id']
+                    and invoice['provider'] == 'telegram'
+                    and invoice['status'] == 'pending'
+                    and not invoice.get('finalized_at')
+                    and isinstance(metadata, dict)
+                    and metadata.get('plan', metadata.get('plan_code')) == parts[2]
+                    and invoice['currency'] == query.currency
+                    and int(invoice['amount']) == query.total_amount
+                    and query.total_amount > 0
+                )
+    except (TypeError, ValueError, KeyError):
+        valid = False
+    except Exception:
+        logger.exception('Failed to validate Telegram pre-checkout')
+    if valid:
+        await query.answer(ok=True)
+    else:
+        await query.answer(ok=False, error_message='Не удалось подтвердить счёт. Откройте подписку и создайте новый счёт.')
 
 
 async def successful_payment_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):

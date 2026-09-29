@@ -364,6 +364,40 @@ class SubscriptionDbTests(unittest.IsolatedAsyncioTestCase):
         self.assertAlmostEqual((second['expires_at']-first['expires_at']).total_seconds(), plan['days']*86400, delta=1)
         self.assertEqual(message.reply_text.await_count, 2)
 
+    async def test_precheckout_requires_a_matching_pending_invoice(self):
+        user_id = await db.get_or_create_user(7030, 'checkout')
+        for prefix in ('setsubstars', 'websub', 'sub'):
+            owner = 7030 if prefix == 'sub' else user_id
+            payload = f'{prefix}:{owner}:1m:checkout'
+            await db.create_payment_record(user_id, 'telegram', 65, 'XTR', 'pending', payload={'plan': '1m'}, external_id=payload)
+            query = SimpleNamespace(invoice_payload=payload, currency='XTR', total_amount=65, answer=AsyncMock())
+            await bot.precheckout_handler(SimpleNamespace(pre_checkout_query=query), None)
+            query.answer.assert_awaited_once_with(ok=True)
+            for currency, amount in [('RUB', 65), ('XTR', 1)]:
+                query.currency, query.total_amount = currency, amount
+                query.answer.reset_mock()
+                await bot.precheckout_handler(SimpleNamespace(pre_checkout_query=query), None)
+                self.assertFalse(query.answer.await_args.kwargs['ok'])
+            query.currency, query.total_amount = 'XTR', 65
+            await db.update_payment_status(payload, 'paid_invoice')
+            query.answer.reset_mock()
+            await bot.precheckout_handler(SimpleNamespace(pre_checkout_query=query), None)
+            self.assertFalse(query.answer.await_args.kwargs['ok'])
+
+    async def test_precheckout_rejects_unknown_or_inconsistent_payload(self):
+        user_id = await db.get_or_create_user(7031, 'bad_checkout')
+        cases = [('garbage', None), (f'websub:{user_id}:1m:missing', None),
+                 (f'websub:{user_id}:missing:plan', '1m'),
+                 (f'websub:{user_id + 1}:1m:owner', '1m'),
+                 (f'websub:{user_id}:6m:plan', '1m')]
+        for payload, plan in cases:
+            if plan:
+                await db.create_payment_record(user_id, 'telegram', 65, 'XTR', 'pending', payload={'plan': plan}, external_id=payload)
+            query = SimpleNamespace(invoice_payload=payload, currency='XTR', total_amount=65, answer=AsyncMock())
+            await bot.precheckout_handler(SimpleNamespace(pre_checkout_query=query), None)
+            self.assertFalse(query.answer.await_args.kwargs['ok'], payload)
+            self.assertTrue(query.answer.await_args.kwargs['error_message'])
+
     async def test_malformed_payment_payload_does_not_grant_subscription(self):
         message = SimpleNamespace(successful_payment=SimpleNamespace(invoice_payload='websub:not-a-user:month'), reply_text=AsyncMock())
         await bot.successful_payment_handler(SimpleNamespace(message=message), None)
