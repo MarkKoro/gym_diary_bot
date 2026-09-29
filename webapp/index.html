@@ -13623,6 +13623,80 @@
       if (inputEl) inputEl.value = '';
     }
 
+    function pendingAiApplyStorageKey(owner = activeOwnerContextKey()) {
+      return `gym_diary_ai_apply_v1:${owner}`;
+    }
+
+    function storePendingAiApply(payload) {
+      try {
+        sessionStorage.setItem(pendingAiApplyStorageKey(), JSON.stringify({
+          owner: activeOwnerContextKey(), payload, mode: state.aiCoach.mode,
+        }));
+      } catch (_) { /* Storage may be unavailable in private WebViews. */ }
+    }
+
+    function clearPendingAiApply(owner, requestId) {
+      try {
+        const key = pendingAiApplyStorageKey(owner);
+        const saved = JSON.parse(sessionStorage.getItem(key) || 'null');
+        if (saved?.payload?.request_id === requestId) sessionStorage.removeItem(key);
+      } catch (_) {}
+    }
+
+    async function restorePendingAiApply() {
+      if (state.aiCoach.loading || state.aiCoach.applying || state.aiCoach.parsed) return;
+      const owner = activeOwnerContextKey();
+      let saved;
+      try { saved = JSON.parse(sessionStorage.getItem(pendingAiApplyStorageKey(owner)) || 'null'); } catch (_) { return; }
+      const payload = saved?.payload;
+      if (saved?.owner !== owner || !/^[A-Za-z0-9_-]{16,80}$/.test(payload?.request_id || '') || !Array.isArray(payload?.actions)) return;
+      const requestId = state.aiCoach.requestId = (state.aiCoach.requestId || 0) + 1;
+      const contextKey = aiCoachContextKey();
+      const isCurrent = () => owner === activeOwnerContextKey() && requestId === state.aiCoach.requestId && contextKey === aiCoachContextKey();
+      const { request_id: operationId, ...originalPayload } = payload;
+      state.aiCoach.loading = true;
+      if (Number(payload.system_id) === Number(state.settings.systems.activeSystemId)) {
+        state.aiCoach.mode = saved.mode || 'replace_exercises';
+        const modeEl = document.getElementById('aiCoachMode');
+        if (modeEl) modeEl.value = state.aiCoach.mode;
+        state.aiCoach.parsed = { actions: payload.actions };
+        state.aiCoach.decisions = Object.fromEntries(payload.actions.map((action, idx) => [getAiActionDecisionKey(action, idx), true]));
+        state.aiCoach.expectedDays = payload.expected_days;
+        state.aiCoach.planContextKey = contextKey;
+        state.aiCoach.applyOperation = { id: operationId, signature: JSON.stringify([owner, requestId, originalPayload]) };
+        state.aiCoach.hasResponse = true;
+        state.aiCoach.summary = 'Восстановлено предложение, сохранение которого ещё не было подтверждено.';
+      }
+      updateAiCoachCounter();
+      renderAiCoachResult();
+      try {
+        const status = await apiFetch(`/gymapi/ai/coach/apply/${encodeURIComponent(operationId)}`, { silent: true });
+        if (!isCurrent()) return;
+        if (status.found && status.result?.ok) {
+          clearPendingAiApply(owner, operationId);
+          resetAiCoachViewState();
+          state.aiCoach.hasResponse = true;
+          state.aiCoach.summary = 'Предыдущие изменения уже сохранены. Повторно применять их не нужно.';
+          invalidateAllExerciseSessionCache();
+          state.lifecycle.dataVersion = Number(state.lifecycle.dataVersion || 0) + 1;
+          await loadSystems();
+          if (owner === activeOwnerContextKey() && state.currentRoute === 'today') await refreshTodayData({ keepDay: true });
+        } else if (!state.aiCoach.parsed) {
+          state.aiCoach.hasResponse = true;
+          state.aiCoach.summary = 'Система изменилась. Для повтора откройте исходную систему.';
+        }
+      } catch (_) {
+        if (isCurrent()) toast('Не удалось проверить сохранение. Предложение сохранено для повтора.');
+      } finally {
+        if (owner === activeOwnerContextKey()) {
+          // resetAiCoachViewState increments requestId after a confirmed save.
+          if (requestId === state.aiCoach.requestId) state.aiCoach.loading = false;
+          updateAiCoachCounter();
+          renderAiCoachResult();
+        }
+      }
+    }
+
     function openAiCoachSheet() {
       const sheet = document.getElementById('aiCoachSheet');
       if (!sheet) return;
@@ -13636,6 +13710,7 @@
       updateAiCoachCounter();
       renderAiCoachResult();
       updateBackButton(state.currentRoute);
+      void restorePendingAiApply();
     }
 
     function closeAiCoachSheet({ force = false } = {}) {
@@ -13816,8 +13891,8 @@
             day_index: action.day_index,
             exercise_name: action.new_exercise_name,
             muscle_group: action.muscle_group || action.new_muscle_group || 'other',
-            sets: action.sets || 3,
-            reps: action.reps || 10,
+            sets: action.sets ?? 3,
+            reps: action.reps ?? 10,
             seconds: action.seconds || 0,
             weight_kg: action.weight_kg || 0,
             reason: action.reason || '',
@@ -14163,6 +14238,7 @@
         state.aiCoach.applyOperation = { signature, id };
       }
       payload.request_id = state.aiCoach.applyOperation.id;
+      storePendingAiApply(payload);
       state.aiCoach.applying = true;
       setGlobalActionOverlay(true, createAction ? 'Добавляем новую систему…' : 'Сохраняем изменения…');
       updateAiCoachCounter();
@@ -14170,6 +14246,7 @@
         const result = await apiFetch('/gymapi/ai/coach/apply', { method: 'POST', body: JSON.stringify(payload), actingUserId });
         ensureCurrentOwner();
         if (!result?.ok || !(Number(result.system_id) > 0)) throw new Error('Сервер не подтвердил сохранение');
+        clearPendingAiApply(owner, payload.request_id);
         state.settings.systems.activeSystemId = Number(result.system_id);
         invalidateAllExerciseSessionCache();
         state.lifecycle.dataVersion = Number(state.lifecycle.dataVersion || 0) + 1;
@@ -14188,8 +14265,8 @@
         try {
           await loadSystems();
           if (owner !== activeOwnerContextKey()) return;
-          if (state.currentRoute === 'today') await refreshTodayData({ keepDay: !createAction });
-          else await setRoute('today');
+          if (state.currentRoute !== 'today') navigateTo('today', true);
+          await refreshTodayData({ keepDay: !createAction });
         } catch (refreshError) {
           if (owner === activeOwnerContextKey()) toast('Изменения сохранены. Не удалось обновить экран — откройте тренировку повторно.');
         }

@@ -122,6 +122,43 @@ class DatabaseIntegrityTests(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(restored.execute('SELECT * FROM sets').fetchall(), conn.execute('SELECT * FROM sets').fetchall())
 
 
+class LeaderboardLoadTests(unittest.IsolatedAsyncioTestCase):
+    async def test_large_history_preserves_ranking_and_uses_history_index(self):
+        import time
+        from datetime import UTC, datetime, timedelta
+        with tempfile.TemporaryDirectory() as folder:
+            with patch.object(db,'DB_PATH',os.path.join(folder,'load.db')):
+                await db.init_db()
+                today=datetime.now(UTC)
+                async with db.connect_db() as conn:
+                    await conn.executemany('INSERT INTO users(id,tg_id,username,tz,leaderboard_visible) VALUES(?,?,?,?,1)',[(i,i,f'athlete-{i}','UTC') for i in range(1,201)])
+                    await conn.executemany("INSERT INTO teams(id,name,owner_user_id,join_code,created_at,updated_at) VALUES(?,?,?,?,?,?)",[(i,f'Team {i}',(i-1)*10+1,f'T{i}',today.isoformat(),today.isoformat()) for i in range(1,21)])
+                    await conn.executemany('INSERT INTO team_members(team_id,user_id,role,joined_at) VALUES(?,?,?,?)',[((i-1)//10+1,i,'captain' if (i-1)%10==0 else 'private',today.isoformat()) for i in range(1,201)])
+                    sessions=[];history=[];completed=[]
+                    for user in range(1,201):
+                        for offset in range(80):
+                            sid=(user-1)*80+offset+1
+                            stamp=(today-timedelta(days=offset)).isoformat()
+                            sessions.append((sid,user,stamp[:10],1,0))
+                            history.extend([(user,0,1,stamp)]*2)
+                            completed.append((sid,user,1))
+                    await conn.executemany('INSERT INTO sessions(id,user_id,date,day_index,system_id) VALUES(?,?,?,?,?)',sessions)
+                    await conn.executemany('INSERT INTO day_completion_history(user_id,system_id,day_index,completed_at) VALUES(?,?,?,?)',history)
+                    await conn.executemany('INSERT INTO session_exercises(session_id,user_exercise_id,is_done) VALUES(?,?,?)',completed)
+                    await conn.commit()
+                    plan=await (await conn.execute('EXPLAIN QUERY PLAN SELECT 1 FROM day_completion_history WHERE user_id=? AND system_id=? AND day_index=? AND local_date(completed_at,?)=?',(1,0,1,'UTC',today.date().isoformat()))).fetchall()
+                    self.assertTrue(any('SEARCH' in r[3] and 'idx_day_history_user_system_day_completed' in r[3] for r in plan))
+                start=time.perf_counter()
+                page,total,full=await db.fetch_team_leaderboard(10,0)
+                elapsed=time.perf_counter()-start
+                self.assertEqual(total,20)
+                self.assertEqual([r['team_id'] for r in page],list(range(1,11)))
+                self.assertTrue(all(r['sessions_7']==80 and r['sessions_28']==290 for r in full))
+                self.assertEqual([r['rank'] for r in full],list(range(1,21)))
+                self.assertTrue(all(0<=r['score']<=100 for r in full))
+                print(f'Load fixture: 200 users, 16000 sessions, 32000 completion rows; team ranking {elapsed:.3f}s')
+
+
 class SettingsValidationTests(unittest.TestCase):
     def test_invalid_pool_configuration_uses_safe_defaults(self):
         try:

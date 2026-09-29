@@ -6710,6 +6710,17 @@ def _format_ai_quota_reset_at(reset_at: str | None, tz_name: str | None) -> str:
     return local_dt.strftime('%d.%m.%Y %H:%M')
 
 
+@app.get('/ai/coach/apply/{request_id}')
+async def ai_coach_apply_status(request_id: str, ctx: AuthCtx = Depends(get_auth_ctx)):
+    if not re.fullmatch(r'[A-Za-z0-9_-]{16,80}', request_id):
+        raise HTTPException(status_code=400, detail='invalid_request_id')
+    raw = await db.get_app_meta(f'ai_apply:{ctx.user_id}:{request_id}')
+    if not raw:
+        return {'found': False}
+    saved = json.loads(raw)
+    return {'found': True, 'result': saved['result']}
+
+
 @app.post('/ai/coach/apply')
 @_validate_payload_input
 async def ai_coach_apply(payload: dict = Body(...), ctx: AuthCtx = Depends(get_auth_ctx)):
@@ -6774,7 +6785,7 @@ async def ai_coach_query(payload: dict = Body(default_factory=dict), ctx: AuthCt
         raise HTTPException(status_code=400, detail='Опиши, что хочешь улучшить')
 
     timezone = await get_user_timezone(user_id)
-    quota_state = await consume_ai_coach_quota(user_id, mode)
+    quota_state = await consume_ai_coach_quota(user_id, mode, reserve=True)
     if not quota_state.get('ok'):
         blocked_scope = str(quota_state.get('blocked_scope') or 'day')
         detail = 'Извините, вы превысили количество допустимых запросов за сегодня.'
@@ -6790,7 +6801,9 @@ async def ai_coach_query(payload: dict = Body(default_factory=dict), ctx: AuthCt
     completed = False
     try:
         result = await _run_ai_coach_query(user_id, mode, user_message, payload, quota_state)
-        completed = bool(result.get('ok'))
+        if result.get('ok'):
+            await db.complete_ai_coach_quota(user_id, quota_state['request_id'])
+            completed = True
         return result
     finally:
         if not completed:

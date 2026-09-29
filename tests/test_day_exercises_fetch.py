@@ -593,8 +593,7 @@ class AiPlanAtomicityTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await db.get_active_training_system_id(self.uid), self.sid)
 
 
-if __name__ == "__main__":
-    unittest.main()
+
 
 
 class ApiInputMatrixTests(unittest.IsolatedAsyncioTestCase):
@@ -647,6 +646,15 @@ class ApiInputMatrixTests(unittest.IsolatedAsyncioTestCase):
                         self.assertLess(response.status_code, 500, response.text)
                     checked += 1
             self.assertGreaterEqual(checked, 36)
+
+    async def test_ai_receipt_status_is_owner_scoped_and_read_only(self):
+        import json
+        token = 'test_receipt_1234567890'
+        result = {'ok':True,'system_id':999}
+        await db.set_app_meta(f'ai_apply:{self.ctx.user_id}:{token}',json.dumps({'result':result}))
+        self.assertEqual(await self.api.ai_coach_apply_status(token,self.ctx),{'found':True,'result':result})
+        other = SimpleNamespace(user_id=self.ctx.user_id+999)
+        self.assertEqual(await self.api.ai_coach_apply_status(token,other),{'found':False})
 
     async def test_invalid_numbers_are_rejected_without_writes(self):
         import httpx
@@ -706,3 +714,97 @@ class ProgramBaselineIsolationTests(unittest.IsolatedAsyncioTestCase):
                     await handler(99999999,payload,ctx)
                 self.assertEqual(caught.exception.status_code,404)
             event.assert_not_awaited()
+
+
+class AchievementCatalogIntegrationTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        await db.init_db()
+        self.uid = await db.get_or_create_user(98500+sorted(n for n in dir(self) if n.startswith('test_')).index(self._testMethodName),'achievement-catalog')
+        self.sid = await db.ensure_training_system_defaults(self.uid)
+        async with db.connect_db() as conn:
+            await conn.execute('UPDATE users SET leaderboard_visible=0,tz=? WHERE id=?',('UTC',self.uid))
+            await conn.commit()
+
+    async def test_empty_diary_has_no_training_or_team_awards(self):
+        import achievements_engine as ach
+        self.assertEqual((await ach.evaluate(self.uid))['earned_codes'],[])
+
+    async def test_every_catalog_award_can_be_earned_from_stored_training_data_once(self):
+        import achievements_engine as ach
+        now = datetime.now(UTC).replace(hour=4,minute=0,second=0,microsecond=0)
+        others = [await db.get_or_create_user(98600+i,f'achievement-member-{i}') for i in range(15)]
+        team = await db.create_team(self.uid,'Achievement catalog team',True)
+        tid = team['team_id']
+        await db.create_training_system(self.uid,'Catalog program 2')
+        await db.create_training_system(self.uid,'Catalog program 3')
+        exs = [await db.get_or_create_exercise(f'Catalog exercise {i}','chest',self.uid) for i in range(20)]
+        async with db.connect_db() as conn:
+            await conn.execute('UPDATE users SET leaderboard_visible=1 WHERE id=?',(self.uid,))
+            await conn.execute('UPDATE team_members SET joined_at=? WHERE user_id=?',((now-timedelta(days=31)).isoformat(),self.uid))
+            await conn.executemany('INSERT INTO team_members(team_id,user_id,role,joined_at) VALUES(?,?,?,?)',[(tid,u,'private',now.isoformat()) for u in others[:8]])
+            await conn.executemany('INSERT INTO team_daily_scores VALUES(?,?,?,?,?,?,?,?)',[(tid,(now-timedelta(days=i)).date().isoformat(),100,1,9,20,120,now.isoformat()) for i in range(30)])
+            session = None
+            for user in [self.uid,*others[:8]]:
+                offsets = [*range(49),63] if user==self.uid else range(12)
+                system = self.sid if user==self.uid else 0
+                for offset in offsets:
+                    stamp=now-timedelta(days=offset)
+                    cur=await conn.execute('INSERT INTO sessions(user_id,date,day_index,system_id) VALUES(?,?,?,?)',(user,stamp.date().isoformat(),1,system))
+                    if user==self.uid and offset==0: session=cur.lastrowid
+                    await conn.execute('INSERT INTO day_completion_history(user_id,system_id,day_index,completed_at) VALUES(?,?,1,?)',(user,system,stamp.isoformat()))
+            for ex in exs:
+                cur=await conn.execute('INSERT INTO user_exercises(user_id,exercise_id,day_index) VALUES(?,?,1)',(self.uid,ex))
+                await conn.execute('INSERT INTO session_exercises(session_id,user_exercise_id,is_done) VALUES(?,?,1)',(session,cur.lastrowid))
+                if ex==exs[0]: ue=cur.lastrowid
+            await conn.executemany('INSERT INTO sets(session_id,user_exercise_id,set_no,reps,weight_kg,is_warmup) VALUES(?,?,?,?,?,0)',[(session,ue,i+1,5,200) for i in range(500)])
+            await conn.execute('INSERT INTO running_entries(user_id,distance_km,is_draft) VALUES(?,42,0)',(self.uid,))
+            await conn.executemany('INSERT INTO user_events(user_id,event_type,created_at) VALUES(?,?,?)',[(self.uid,'rename',now.isoformat())]*5)
+            await conn.executemany("INSERT INTO trainer_links(trainer_user_id,trainee_user_id,status,created_at) VALUES(?,?,'accepted',?)",[(self.uid,others[0],now.isoformat()),(others[1],self.uid,now.isoformat())])
+            copies=[(self.uid,self.sid,u,10000+i,now.isoformat(),now.isoformat()) for i,u in enumerate(others)]
+            copies.append((others[0],10000,self.uid,self.sid,now.isoformat(),now.isoformat()))
+            await conn.executemany('INSERT INTO training_system_copy_events(source_user_id,source_system_id,target_user_id,target_system_id,copied_at,first_trained_at) VALUES(?,?,?,?,?,?)',copies)
+            await conn.commit()
+        result = await ach.evaluate(self.uid)
+        self.assertEqual(set(result['earned_codes']),set(ach.ACHIEVEMENTS_BY_CODE))
+        self.assertEqual(set(await db.list_team_achievements(tid)),set(ach.TEAM_ACHIEVEMENTS_BY_CODE))
+        again = await ach.evaluate(self.uid)
+        self.assertEqual(again['newly_unlocked_codes'],[])
+        self.assertEqual((await ach.evaluate_team(tid))['newly_unlocked_team_codes'],[])
+
+    async def test_copied_program_requires_three_local_dates(self):
+        import achievements_engine as ach
+        await db.set_user_timezone(self.uid,'Asia/Vladivostok')
+        async with db.connect_db() as conn:
+            await conn.execute('INSERT INTO training_system_copy_events(source_user_id,source_system_id,target_user_id,target_system_id,copied_at,first_trained_at) VALUES(1,1,?,?,?,?)',(self.uid,self.sid,'2026-01-01','2026-01-01'))
+            for stamp in ('2026-01-01T18:00:00+00:00','2026-01-02T01:00:00+00:00','2026-01-03T01:00:00+00:00'):
+                await conn.execute('INSERT INTO day_completion_history(user_id,system_id,day_index,completed_at) VALUES(?,?,1,?)',(self.uid,self.sid,stamp))
+            await conn.commit()
+        self.assertEqual((await ach._fetch_metrics(self.uid))['copied_plan_3days'],0)
+        await db.mark_day_completed(self.uid,1,'2026-01-04T01:00:00+00:00',self.sid)
+        self.assertEqual((await ach._fetch_metrics(self.uid))['copied_plan_3days'],1)
+
+
+class ProductivityWindowTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        await db.init_db()
+        self.uid=await db.get_or_create_user(98900+sorted(n for n in dir(self) if n.startswith('test_')).index(self._testMethodName),'ranking-window')
+
+    async def test_opening_an_empty_workout_does_not_count_as_training(self):
+        await db.get_or_create_today_session(self.uid,datetime.now(UTC).date().isoformat(),1,0)
+        _,_,full=await db.fetch_productivity_leaderboard()
+        row=next(x for x in full if x['user_id']==self.uid)
+        self.assertEqual((row['sessions_28'],row['training_days_28'],row['training_weeks_8']),(0,0,0))
+
+    async def test_old_activity_counts_in_eight_weeks_but_not_twenty_eight_days(self):
+        old=(datetime.now(UTC)-timedelta(days=45)).date().isoformat()
+        session=await db.get_or_create_today_session(self.uid,old,1,0)
+        async with db.connect_db() as conn:
+            await conn.execute('INSERT INTO session_exercises(session_id,user_exercise_id,is_done) VALUES(?,999999,1)',(session,))
+            await conn.commit()
+        _,_,full=await db.fetch_productivity_leaderboard()
+        row=next(x for x in full if x['user_id']==self.uid)
+        self.assertEqual((row['sessions_28'],row['training_days_28'],row['training_weeks_8']),(0,0,1))
+
+
+if __name__ == "__main__":
+    unittest.main()

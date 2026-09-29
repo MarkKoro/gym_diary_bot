@@ -279,10 +279,10 @@ async def _fetch_metrics(user_id: int) -> dict:
             SELECT 1 FROM day_completion_history d
             WHERE d.user_id=? AND d.system_id=ce.target_system_id
             GROUP BY d.system_id
-            HAVING COUNT(DISTINCT date(d.completed_at)) >= 3
+            HAVING COUNT(DISTINCT local_date(d.completed_at, ?)) >= 3
           )
         """
-        copied_plan_3days = int((await (await conn.execute(q, (user_id, user_id))).fetchone())[0] or 0)
+        copied_plan_3days = int((await (await conn.execute(q, (user_id, user_id, tz_name))).fetchone())[0] or 0)
 
         q = "SELECT COUNT(*) FROM trainer_links WHERE trainer_user_id=? AND status='accepted'"
         accepted_trainees = int((await (await conn.execute(q, (user_id,))).fetchone())[0] or 0)

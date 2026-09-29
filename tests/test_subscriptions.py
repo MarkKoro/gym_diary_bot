@@ -199,6 +199,27 @@ class SubscriptionDbTests(unittest.IsolatedAsyncioTestCase):
         await db.release_ai_coach_quota(user+999, successful['request_id'])
         self.assertEqual((await db.get_ai_coach_quota(user))['usage']['day'], 1)
 
+    async def test_crashed_ai_reservation_expires_but_completed_requests_remain(self):
+        user = await db.get_or_create_user(8089, 'ai-crash')
+        now = datetime.now(UTC)
+        completed = await db.consume_ai_coach_quota(user, 'mistakes_analysis', now)
+        abandoned = await db.consume_ai_coach_quota(user, 'mistakes_analysis', now, reserve=True)
+        self.assertTrue(completed['ok'] and abandoned['ok'])
+        self.assertEqual((await db.get_ai_coach_quota(user, now+timedelta(minutes=14)))['usage']['day'], 2)
+        self.assertEqual((await db.get_ai_coach_quota(user, now+timedelta(minutes=16)))['usage']['day'], 1)
+        await db.complete_ai_coach_quota(user+999, abandoned['request_id'])
+        self.assertEqual((await db.get_ai_coach_quota(user, now+timedelta(minutes=16)))['usage']['day'], 1)
+        await db.complete_ai_coach_quota(user, abandoned['request_id'])
+        self.assertEqual((await db.get_ai_coach_quota(user, now+timedelta(minutes=16)))['usage']['day'], 2)
+
+    async def test_successful_provider_result_confirms_reservation(self):
+        import webapp_backend as api
+        user = await db.get_or_create_user(8088, 'ai-success')
+        await db.grant_subscription_days(user,30)
+        with patch.object(api,'_run_ai_coach_query',AsyncMock(return_value={'ok':True})):
+            await api.ai_coach_query({'mode':'mistakes_analysis'},SimpleNamespace(user_id=user))
+        self.assertEqual((await db.get_ai_coach_quota(user, datetime.now(UTC)+timedelta(minutes=16)))['usage']['day'],1)
+
     async def test_yookassa_pending_poll_preserves_long_plan(self):
         import webapp_backend as backend
         for handler in (backend.subscription_payment_status, backend.payment_yookassa_status):

@@ -33,8 +33,7 @@ class KettlebellCatalogTests(unittest.TestCase):
             self.assertIn(name, KB_CATEGORY_LOOKUP)
 
 
-if __name__ == "__main__":
-    unittest.main()
+
 
 
 class KeyboardMatrixTests(unittest.TestCase):
@@ -102,3 +101,7 @@ class KeyboardMatrixTests(unittest.TestCase):
         for kind, mode, amrap, for_time in itertools.product(('reps','duration'),('compact','detailed'),(False,True),(False,True)):
             markup = kb.exercise_actions_kb('flex',True,kind,True,SimpleNamespace(mode=mode),day=1,ue_id=1,group='workout',is_amrap=amrap,is_for_time=for_time,back_callback='menu:root',context=SimpleNamespace(user_data={'acting_user_id':2,'acting_can_edit':False}))
             self.assertTrue(all(b.callback_data in ('ex:progress:1:1','menu:root') for row in markup.inline_keyboard for b in row))
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -495,6 +495,7 @@ def _generate_team_join_code() -> str:
 
 
 async def _fetch_ai_coach_quota_state(db, user_id: int, now_utc: datetime) -> dict:
+    pending_cutoff_iso = _iso_utc(now_utc - timedelta(minutes=15))
     day_cutoff = now_utc - timedelta(days=1)
     week_cutoff = now_utc - timedelta(days=7)
     month_cutoff = now_utc - timedelta(days=30)
@@ -510,9 +511,9 @@ async def _fetch_ai_coach_quota_state(db, user_id: int, now_utc: datetime) -> di
             SUM(CASE WHEN created_at >= ? THEN 1 ELSE 0 END) AS week_count,
             SUM(CASE WHEN created_at >= ? THEN 1 ELSE 0 END) AS month_count
         FROM ai_coach_requests
-        WHERE user_id = ?
+        WHERE user_id = ? AND (status <> 'pending' OR created_at >= ?)
         """,
-        (day_cutoff_iso, week_cutoff_iso, month_cutoff_iso, user_id),
+        (day_cutoff_iso, week_cutoff_iso, month_cutoff_iso, user_id, pending_cutoff_iso),
     )
     row = await cur.fetchone()
     day_count = int((row[0] if row and row[0] is not None else 0) or 0)
@@ -525,11 +526,11 @@ async def _fetch_ai_coach_quota_state(db, user_id: int, now_utc: datetime) -> di
             """
             SELECT created_at
             FROM ai_coach_requests
-            WHERE user_id = ? AND created_at >= ?
+            WHERE user_id = ? AND created_at >= ? AND (status <> 'pending' OR created_at >= ?)
             ORDER BY created_at ASC
             LIMIT 1
             """,
-            (user_id, week_cutoff_iso),
+            (user_id, week_cutoff_iso, pending_cutoff_iso),
         )
         row = await cur.fetchone()
         if row and row[0]:
@@ -542,11 +543,11 @@ async def _fetch_ai_coach_quota_state(db, user_id: int, now_utc: datetime) -> di
             """
             SELECT created_at
             FROM ai_coach_requests
-            WHERE user_id = ? AND created_at >= ?
+            WHERE user_id = ? AND created_at >= ? AND (status <> 'pending' OR created_at >= ?)
             ORDER BY created_at ASC
             LIMIT 1
             """,
-            (user_id, month_cutoff_iso),
+            (user_id, month_cutoff_iso, pending_cutoff_iso),
         )
         row = await cur.fetchone()
         if row and row[0]:
@@ -580,7 +581,7 @@ async def get_ai_coach_quota(user_id: int, now: datetime | None = None) -> dict:
         return await _fetch_ai_coach_quota_state(db, user_id, now_utc)
 
 
-async def consume_ai_coach_quota(user_id: int, mode: str, now: datetime | None = None) -> dict:
+async def consume_ai_coach_quota(user_id: int, mode: str, now: datetime | None = None, *, reserve: bool = False) -> dict:
     now_utc = (now or datetime.now(UTC)).astimezone(UTC)
     async with _pool.acquire() as db:
         await db.execute("BEGIN IMMEDIATE")
@@ -608,8 +609,8 @@ async def consume_ai_coach_quota(user_id: int, mode: str, now: datetime | None =
             }
 
         inserted = await db.execute(
-            "INSERT INTO ai_coach_requests(user_id, mode, created_at) VALUES(?,?,?)",
-            (user_id, str(mode or "unknown"), _iso_utc(now_utc)),
+            "INSERT INTO ai_coach_requests(user_id, mode, created_at, status) VALUES(?,?,?,?)",
+            (user_id, str(mode or "unknown"), _iso_utc(now_utc), "pending" if reserve else "completed"),
         )
         await db.commit()
         updated_state = await _fetch_ai_coach_quota_state(db, user_id, now_utc)
@@ -618,6 +619,12 @@ async def consume_ai_coach_quota(user_id: int, mode: str, now: datetime | None =
             "request_id": int(inserted.lastrowid),
             **updated_state,
         }
+
+
+async def complete_ai_coach_quota(user_id: int, request_id: int) -> None:
+    async with connect_db() as conn:
+        await conn.execute("UPDATE ai_coach_requests SET status='completed' WHERE id=? AND user_id=?", (request_id,user_id))
+        await conn.commit()
 
 
 async def release_ai_coach_quota(user_id: int, request_id: int) -> None:
@@ -1533,6 +1540,9 @@ async def init_db():
         await db.execute(
             "CREATE INDEX IF NOT EXISTS idx_ai_coach_requests_user_created ON ai_coach_requests(user_id, created_at)"
         )
+        await schema.add_column_if_missing(
+            "ai_coach_requests", "status", "status TEXT NOT NULL DEFAULT 'completed'"
+        )
         if not await schema.has_column("sessions", "system_id"):
             await db.execute("ALTER TABLE sessions ADD COLUMN system_id INTEGER")
         await db.execute("UPDATE sessions SET system_id=0 WHERE system_id IS NULL")
@@ -1672,6 +1682,10 @@ CREATE INDEX IF NOT EXISTS idx_session_exercises_session_user_done
             ON session_exercises(session_id, user_exercise_id, is_done);
 CREATE INDEX IF NOT EXISTS idx_sessions_user_date_day
             ON sessions(user_id, date, day_index);
+CREATE INDEX IF NOT EXISTS idx_day_history_user_system_day_completed
+            ON day_completion_history(user_id, system_id, day_index, completed_at);
+CREATE INDEX IF NOT EXISTS idx_day_history_user_completed
+            ON day_completion_history(user_id, completed_at);
 CREATE INDEX IF NOT EXISTS idx_exercises_owner_group_name
             ON exercises(created_by_user_id, muscle_group, name);
 CREATE INDEX IF NOT EXISTS idx_ai_coach_requests_user_created
@@ -6408,12 +6422,13 @@ async def fetch_team_leaderboard(limit: int = 10, offset: int = 0):
                 SELECT s.id, s.user_id, s.date, s.day_index, s.system_id
                 FROM sessions s
                 JOIN users session_user ON session_user.id=s.user_id
-                JOIN day_completion_history dch
-                  ON dch.user_id = s.user_id
-                 AND dch.day_index = s.day_index
-                 AND dch.system_id = s.system_id
-                 AND local_date(dch.completed_at, session_user.tz) = s.date
-                GROUP BY s.id
+                WHERE s.date >= date('now', '-56 day')
+                  AND EXISTS (SELECT 1 FROM team_users tu WHERE tu.user_id=s.user_id)
+                  AND EXISTS (
+                    SELECT 1 FROM day_completion_history dch
+                    WHERE dch.user_id=s.user_id AND dch.day_index=s.day_index AND dch.system_id=s.system_id
+                      AND local_date(dch.completed_at, session_user.tz)=s.date
+                  )
             ),
             recent_sessions AS (
                 SELECT s.user_id,
@@ -8616,11 +8631,16 @@ async def fetch_productivity_leaderboard(limit: int = 10, offset: int = 0):
             ),
             recent_sessions AS (
                 SELECT s.user_id,
-                       COUNT(*) AS sessions_28,
-                       COUNT(DISTINCT s.date) AS training_days_28,
+                       SUM(CASE WHEN s.date >= date('now', '-28 day') THEN 1 ELSE 0 END) AS sessions_28,
+                       COUNT(DISTINCT CASE WHEN s.date >= date('now', '-28 day') THEN s.date END) AS training_days_28,
                        COUNT(DISTINCT substr(s.date, 1, 8) || CAST(((CAST(substr(s.date, 9, 2) AS INTEGER)-1)/7) AS INTEGER)) AS training_weeks_8
                 FROM sessions s
                 WHERE s.date >= date('now', '-56 day')
+                  AND (
+                    EXISTS (SELECT 1 FROM sets activity_set WHERE activity_set.session_id=s.id)
+                    OR EXISTS (SELECT 1 FROM session_exercises activity_ex WHERE activity_ex.session_id=s.id AND activity_ex.is_done=1)
+                    OR EXISTS (SELECT 1 FROM running_entries activity_run WHERE activity_run.session_id=s.id AND COALESCE(activity_run.is_draft,1)=0)
+                  )
                 GROUP BY s.user_id
             ),
             set_stats AS (
