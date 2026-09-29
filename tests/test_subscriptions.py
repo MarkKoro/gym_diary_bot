@@ -92,6 +92,43 @@ class AdminCommandTests(unittest.IsolatedAsyncioTestCase):
             await bot.menu_router(update, context)
             write.assert_not_awaited()
 
+    async def test_old_baseline_ready_does_not_save_the_next_exercise(self):
+        q = SimpleNamespace(answer=AsyncMock(), message=None)
+        context = SimpleNamespace(user_data={'baseline_day': 1, 'baseline_user_id': 1, 'baseline_idx': 0, 'baseline_list': [(101, 'Squat', 'legs'), (102, 'Press', 'chest')], 'baseline_values': {101: [3, 8, 0, 40], 102: [3, 10, 0, 20]}})
+        def ready(markup):
+            return next(b.callback_data for row in markup.inline_keyboard for b in row if ':ready' in (b.callback_data or ''))
+        old = ready(bot.baseline_kb(1, 3, 8, 0, 40, user_id=1, exercise_id=101))
+        with patch.object(bot, 'set_baseline', AsyncMock()) as write, patch.object(bot, 'show_screen', AsyncMock()) as screen, patch.object(bot, 'finish_day', AsyncMock()):
+            await bot.wizard_router(None, q, old, 1, context)
+            current = ready(screen.await_args.args[3])
+            await bot.wizard_router(None, q, old, 1, context)
+            self.assertEqual(write.await_count, 1)
+            self.assertEqual(context.user_data['baseline_idx'], 1)
+            await bot.wizard_router(None, q, current, 1, context)
+            self.assertEqual([c.args[2] for c in write.await_args_list], [101, 102])
+
+    async def test_baseline_from_previous_diary_is_cleared_before_rendering_or_saving(self):
+        query = SimpleNamespace(answer=AsyncMock(), message=None)
+        context = SimpleNamespace(user_data={'baseline_user_id': 1, 'baseline_day': 1, 'baseline_idx': 0, 'baseline_list': [(101, 'Private exercise', 'legs')], 'baseline_values': {101: [3, 8, 0, 40]}})
+        with patch.object(bot, 'set_baseline', AsyncMock()) as write, patch.object(bot, 'show_screen', AsyncMock()) as screen:
+            await bot.wizard_router(None, query, 'wiz:base:ready', 2, context)
+            write.assert_not_awaited()
+            screen.assert_not_awaited()
+        self.assertNotIn('baseline_list', context.user_data)
+
+    async def test_old_instant_baseline_button_cannot_save_another_exercise(self):
+        info = {'source': 'day', 'user_id': 1, 'day': 1, 'exercise_id': 101, 'name': 'Squat', 'values': [3, 8, 0, 40], 'group': 'legs'}
+        _, markup = bot.instant_baseline_view(info)
+        old = next(b.callback_data for row in markup.inline_keyboard for b in row if ':ready' in (b.callback_data or ''))
+        info = {**info, 'exercise_id': 102, 'name': 'Press'}
+        q = SimpleNamespace(data=old, answer=AsyncMock(), message=SimpleNamespace(chat_id=123, message_id=1))
+        update = SimpleNamespace(callback_query=q, effective_user=SimpleNamespace(id=123, username='viewer'))
+        context = SimpleNamespace(user_data={bot.INSTANT_BASE_KEY: info})
+        with patch.object(bot, 'require_subscription', AsyncMock(return_value=True)), patch.object(bot, 'get_or_create_user', AsyncMock(return_value=1)), patch.object(bot, 'set_baseline', AsyncMock()) as write, patch.object(bot, 'show_screen', AsyncMock()), patch.object(bot, 'finish_instant_baseline', AsyncMock()):
+            await bot.menu_router(update, context)
+            write.assert_not_awaited()
+            self.assertEqual(context.user_data[bot.INSTANT_BASE_KEY]['exercise_id'], 102)
+
     async def test_old_wizard_add_without_group_does_not_mutate_first(self):
         q = SimpleNamespace(answer=AsyncMock(), message=SimpleNamespace(chat_id=123, message_id=1))
         with patch.object(bot, 'toggle_user_exercise', AsyncMock()) as write:

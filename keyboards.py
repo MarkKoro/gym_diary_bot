@@ -1,3 +1,4 @@
+import hashlib
 from typing import TYPE_CHECKING
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
@@ -602,6 +603,11 @@ def exercises_kb(
     )
     return InlineKeyboardMarkup(rows), page, total_pages
 
+def baseline_scope(user_id: int, day_index: int, exercise_id: int) -> str:
+    identity = f"{user_id}:{day_index}:{exercise_id}".encode('ascii')
+    return hashlib.sha256(identity).hexdigest()[:16]
+
+
 def baseline_kb(
     day_index: int,
     sets: int,
@@ -613,12 +619,16 @@ def baseline_kb(
     *,
     with_weight: bool = True,
     kind: str = "reps",
+    user_id: int | None = None,
+    exercise_id: int | None = None,
 ):
+    scope = f":at:{baseline_scope(user_id, day_index, exercise_id)}" if user_id is not None and exercise_id is not None else ""
+
     def btn(label: str, cb: str):
         return InlineKeyboardButton(label, callback_data=cb)
 
     def cb(*parts: str) -> str:
-        return ":".join((prefix, *parts))
+        return ":".join((prefix, *parts)) + scope
 
     rows = [
         [
@@ -681,7 +691,7 @@ def baseline_kb(
             [
                 btn(
                     dual("⏭ Пропустить настройку", "Пропустить настройку веса"),
-                    f"wiz:day:{day_index}:baseline:skip_all",
+                    f"wiz:day:{day_index}:baseline:skip_all{scope}",
                 )
             ]
         )

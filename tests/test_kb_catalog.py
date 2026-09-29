@@ -37,6 +37,17 @@ class KettlebellCatalogTests(unittest.TestCase):
 
 
 class KeyboardMatrixTests(unittest.TestCase):
+    def test_scoped_baseline_callbacks_fit_telegram_limit_and_separate_diaries(self):
+        from keyboards import baseline_kb
+        scopes = []
+        for user, day, exercise in [(1, 1, 2), (2, 1, 2), (1, 2, 2), (1, 1, 3), (2**63-1, 7, 2**63-1)]:
+            markup = baseline_kb(day, 3, 10, 60, 40, kind='duration', user_id=user, exercise_id=exercise)
+            callbacks = [button.callback_data for row in markup.inline_keyboard for button in row]
+            self.assertTrue(all(len(value.encode('utf-8')) <= 64 for value in callbacks))
+            scopes.append(next(value for value in callbacks if ':ready:' in value))
+            self.assertTrue(all(':at:' in value for value in callbacks))
+        self.assertEqual(len(set(scopes)), len(scopes))
+
     def test_all_builders_with_empty_full_and_read_only_data(self):
         import inspect
         from types import SimpleNamespace

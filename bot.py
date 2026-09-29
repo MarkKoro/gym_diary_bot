@@ -61,6 +61,7 @@ from keyboards import (
     muscle_groups_kb,
     exercises_kb,
     baseline_kb,
+    baseline_scope,
     day_done_kb,
     reminders_kb,
     reminder_time_kb,
@@ -3803,6 +3804,8 @@ def instant_baseline_view(info: dict) -> tuple[str, InlineKeyboardMarkup]:
         seconds,
         weight,
         prefix=f"ib:{info['source']}",
+        user_id=info["user_id"],
+        exercise_id=info["exercise_id"],
         include_skip_all=False,
         with_weight=with_weight,
         kind=kind,
@@ -9200,6 +9203,11 @@ async def _wizard_router_unlocked(
             )
             if not baseline_list:
                 return
+            if context.user_data.get("baseline_user_id") != user_id:
+                for key in ("baseline_day", "baseline_user_id", "baseline_list", "baseline_idx", "baseline_values", "baseline_done"):
+                    context.user_data.pop(key, None)
+                await q.answer("Дневник изменился. Откройте настройку упражнения заново.")
+                return
             ex_id, name, ex_group = baseline_list[idx]
             vals_map = context.user_data.setdefault("baseline_values", {})
             if ex_id not in vals_map:
@@ -9218,6 +9226,15 @@ async def _wizard_router_unlocked(
             if not with_weight:
                 values[3] = 0.0
             done = context.user_data.setdefault("baseline_done", [])
+            if not data.endswith(f":at:{baseline_scope(user_id, day, ex_id)}"):
+                await show_screen(
+                    q, context,
+                    render_baseline_progress(done, name, *values, with_weight=with_weight, kind=kind),
+                    baseline_kb(day, *values, with_weight=with_weight, kind=kind, user_id=user_id, exercise_id=ex_id),
+                    user_id,
+                )
+                await q.answer("Кнопки обновлены для текущего упражнения.")
+                return
             if action == "inc":
                 field = parts[3]
                 delta = float(parts[4])
@@ -9235,7 +9252,7 @@ async def _wizard_router_unlocked(
                     render_baseline_progress(
                         done, name, *values, with_weight=with_weight, kind=kind
                     ),
-                    baseline_kb(day, *values, with_weight=with_weight, kind=kind),
+                    baseline_kb(day, *values, with_weight=with_weight, kind=kind, user_id=user_id, exercise_id=ex_id),
                     user_id,
                 )
                 return
@@ -9284,6 +9301,8 @@ async def _wizard_router_unlocked(
                         baseline_kb(
                             day,
                             *values,
+                            user_id=user_id,
+                            exercise_id=ex_id,
                             with_weight=next_with_weight,
                             kind=next_kind,
                         ),
@@ -9331,6 +9350,8 @@ async def _wizard_router_unlocked(
                         baseline_kb(
                             day,
                             *values,
+                            user_id=user_id,
+                            exercise_id=ex_id,
                             with_weight=next_with_weight,
                             kind=next_kind,
                         ),
@@ -9369,6 +9390,8 @@ async def _wizard_router_unlocked(
                         baseline_kb(
                             day,
                             *values,
+                            user_id=user_id,
+                            exercise_id=ex_id,
                             with_weight=prev_with_weight,
                             kind=prev_kind,
                         ),
@@ -9506,6 +9529,7 @@ async def _wizard_router_unlocked(
                                 for ex_id, name, group_code in ex_rows
                             ]
                             context.user_data["baseline_day"] = day
+                            context.user_data["baseline_user_id"] = user_id
                             context.user_data["baseline_list"] = exs
                             context.user_data["baseline_idx"] = 0
                             context.user_data["baseline_values"] = {}
@@ -9539,6 +9563,8 @@ async def _wizard_router_unlocked(
                                 baseline_kb(
                                     day,
                                     *vals,
+                                    user_id=user_id,
+                                    exercise_id=ex_id,
                                     with_weight=first_with_weight,
                                     kind=first_kind,
                                 ),
@@ -9548,6 +9574,16 @@ async def _wizard_router_unlocked(
                             await finish_day(q, context, user_id, day)
                     return
             if parts[3] == "baseline" and parts[4] == "skip_all":
+                baseline_list = context.user_data.get("baseline_list", [])
+                idx = context.user_data.get("baseline_idx", 0)
+                if (
+                    not 0 <= idx < len(baseline_list)
+                    or context.user_data.get("baseline_user_id") != user_id
+                    or context.user_data.get("baseline_day") != day
+                    or not data.endswith(f":at:{baseline_scope(user_id, day, baseline_list[idx][0])}")
+                ):
+                    await q.answer("Откройте актуальную настройку упражнения.")
+                    return
                 context.user_data.pop("baseline_list", None)
                 context.user_data.pop("baseline_idx", None)
                 context.user_data.pop("baseline_day", None)
@@ -11376,6 +11412,11 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if not info or info.get("source") != parts[1] or info.get('user_id', target_user_id) != target_user_id:
                 context.user_data.pop(INSTANT_BASE_KEY, None)
                 await q.answer()
+                return
+            if not data.endswith(f":at:{baseline_scope(target_user_id, info['day'], info['exercise_id'])}"):
+                text, kb = instant_baseline_view(info)
+                await show_screen(q, context, text, kb, target_user_id)
+                await q.answer("Кнопки обновлены для текущего упражнения.")
                 return
             action = parts[2]
             values = info["values"]
