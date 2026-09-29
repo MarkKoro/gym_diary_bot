@@ -7145,6 +7145,9 @@ async def count_trained_copies_for_source_system(source_user_id: int, source_sys
 
 
 async def add_measurement_entry(user_id: int, metric: str, value: float, extra: str | None = None):
+    value = float(value)
+    if not math.isfinite(value) or abs(value) > 1_000_000_000_000:
+        raise ValueError("Invalid measurement value")
     async with connect_db() as db:
         await db.execute(
             """
@@ -7162,6 +7165,9 @@ async def update_last_measurement(
     value: float,
     extra: str | None = None,
 ) -> bool:
+    value = float(value)
+    if not math.isfinite(value) or abs(value) > 1_000_000_000_000:
+        raise ValueError("Invalid measurement value")
     async with connect_db() as db:
         cur = await db.execute(
             "SELECT id FROM user_measurements WHERE user_id=? AND metric=? ORDER BY created_at DESC LIMIT 1",

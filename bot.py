@@ -234,6 +234,7 @@ from db import (
     update_trainer_link_status,
     update_trainer_link_permissions,
     update_trainer_label,
+    update_trainee_label,
     set_trainer_accepting_requests,
     increment_day_finish_total,
     get_subscription_prompt_total,
@@ -1619,11 +1620,15 @@ def parse_duration_input(text: str) -> int:
         minutes, seconds = values
         if seconds >= 60:
             raise ValueError("seconds range")
-        return minutes * 60 + seconds
-    hours, minutes, seconds = values
-    if minutes >= 60 or seconds >= 60:
-        raise ValueError("time range")
-    return hours * 3600 + minutes * 60 + seconds
+        total = minutes * 60 + seconds
+    else:
+        hours, minutes, seconds = values
+        if minutes >= 60 or seconds >= 60:
+            raise ValueError("time range")
+        total = hours * 3600 + minutes * 60 + seconds
+    if total > 1_000_000_000_000:
+        raise ValueError("duration range")
+    return total
 
 
 def format_duration_value(seconds: int) -> str:
@@ -1675,16 +1680,26 @@ def format_running_line(distance_km: float, duration_sec: int, calories: int) ->
     return summary
 
 
+def _finite_input_number(value: object) -> float:
+    try:
+        number = float(value)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError("invalid number") from exc
+    if not math.isfinite(number) or abs(number) > 1_000_000_000_000:
+        raise ValueError("number out of range")
+    return number
+
+
 def clamp_running_distance(value: float) -> float:
-    return max(round(float(value), 2), 0.0)
+    return max(round(_finite_input_number(value), 2), 0.0)
 
 
 def clamp_running_duration(value: int) -> int:
-    return max(int(value), 0)
+    return max(int(_finite_input_number(value)), 0)
 
 
 def clamp_running_calories(value: int) -> int:
-    return max(int(value), 0)
+    return max(int(_finite_input_number(value)), 0)
 
 
 def parse_distance_input(text: str) -> float:
@@ -1695,7 +1710,7 @@ def parse_distance_input(text: str) -> float:
 
 def parse_calories_input(text: str) -> int:
     raw = text.strip()
-    value = int(float(raw.replace(",", ".")))
+    value = int(_finite_input_number(raw.replace(",", ".")))
     return clamp_running_calories(value)
 
 
@@ -3103,7 +3118,10 @@ def clear_linear_state(
     for key in list(user_data.keys()):
         if key.startswith("awaiting_") and key not in preserved:
             user_data.pop(key, None)
-    linear_keys = {"add_group", BROADCAST_STATE_KEY}
+    linear_keys = {
+        "add_group", BROADCAST_STATE_KEY, RUNNING_INPUT_KEY, MEASUREMENT_INPUT_KEY,
+        MEASUREMENT_CUSTOM_KEY, MEASUREMENT_CATEGORY_INPUT_KEY, LIBRARY_CUSTOM_KEY,
+    }
     for key in linear_keys:
         if key in preserved:
             continue
@@ -5483,10 +5501,10 @@ def parse_measurement_input(item: dict, text: str) -> tuple[float, str | None]:
         parts = raw.replace("/", " ").split()
         if len(parts) != 2:
             raise ValueError("bp format")
-        syst = int(round(float(parts[0])))
-        diast = int(round(float(parts[1])))
+        syst = int(round(_finite_input_number(parts[0])))
+        diast = int(round(_finite_input_number(parts[1])))
         return float(syst), str(diast)
-    value = float(raw)
+    value = _finite_input_number(raw)
     return value, None
 
 
@@ -9892,12 +9910,24 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if update.message:
             await update.message.reply_text("Доступ к дневнику подопечного закрыт. Откройте нужный дневник заново.")
         return
-    if not await ensure_can_edit_from_message(context, update):
+    editing_trainee_alias = bool(context.user_data.get(TRAINER_TRAINEE_LABEL_INPUT_KEY))
+    if not editing_trainee_alias and not await ensure_can_edit_from_message(context, update):
         return
     if context.user_data.get('_input_owner', user_id) != user_id:
         clear_linear_state(context.user_data)
         await update.message.reply_text('Дневник изменился. Откройте нужное поле заново.')
         return
+    for input_key in (RUNNING_INPUT_KEY, MEASUREMENT_INPUT_KEY, MEASUREMENT_CUSTOM_KEY, MEASUREMENT_CATEGORY_INPUT_KEY):
+        pending = context.user_data.get(input_key)
+        if isinstance(pending, dict):
+            try:
+                matches_owner = int(pending.get('target_user_id', user_id)) == user_id
+            except (TypeError, ValueError):
+                matches_owner = False
+            if not matches_owner:
+                clear_linear_state(context.user_data)
+                await update.message.reply_text('Дневник изменился. Откройте нужное поле заново.')
+                return
     for input_key in (FOR_TIME_INPUT_KEY, EXERCISE_NOTE_INPUT_KEY, RUNNING_INPUT_KEY):
         pending = context.user_data.get(input_key)
         if isinstance(pending, dict) and not await _owns_active_exercise(user_id, int(pending.get('day') or 0), int(pending.get('ue_id') or 0)):
@@ -10018,6 +10048,11 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except (TypeError, ValueError):
             context.user_data.pop(TRAINER_LABEL_INPUT_KEY, None)
             return
+        link = await get_active_trainer_link_for_trainee(user_id)
+        if not link or int(link[0]) != link_id:
+            context.user_data.pop(TRAINER_LABEL_INPUT_KEY, None)
+            await update.message.reply_text('Связь с тренером изменилась. Откройте настройки заново.')
+            return
         new_label = normalize_whitespace(update.message.text)
         if not new_label:
             new_label = None
@@ -10038,12 +10073,17 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except (TypeError, ValueError):
             context.user_data.pop(TRAINER_TRAINEE_LABEL_INPUT_KEY, None)
             return
+        link = await get_trainer_link(actor_user_id, user_id)
+        if not link or int(link[0]) != link_id or str(link[1]) != 'accepted':
+            context.user_data.pop(TRAINER_TRAINEE_LABEL_INPUT_KEY, None)
+            await update.message.reply_text('Связь с подопечным изменилась. Откройте настройки заново.')
+            return
         new_label = normalize_whitespace(update.message.text)
         if not new_label:
             new_label = None
         context.user_data.pop(TRAINER_TRAINEE_LABEL_INPUT_KEY, None)
         await try_delete(update.message)
-        await update_trainer_label(link_id, new_label)
+        await update_trainee_label(link_id, new_label)
         acting_id = context.user_data.get("acting_user_id")
         if not isinstance(acting_id, int):
             return
@@ -10354,6 +10394,11 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not entry_id:
             context.user_data.pop(RUNNING_INPUT_KEY, None)
             return
+        entry_row = await get_running_entry_by_id(entry_id)
+        if not entry_row or (entry_row[1], entry_row[2], entry_row[4]) != (user_id, int(running_state.get("ue_id", 0)), int(running_state.get("day", 0))):
+            context.user_data.pop(RUNNING_INPUT_KEY, None)
+            await update.message.reply_text('Запись бега изменилась. Откройте упражнение заново.')
+            return
         text_value = update.message.text
         try:
             if field == "distance":
@@ -10368,9 +10413,6 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 }
             elif field == "pace":
                 pace_seconds = clamp_running_duration(parse_duration_input(text_value))
-                entry_row = await get_running_entry_by_id(entry_id)
-                if not entry_row:
-                    raise ValueError
                 distance_value = float(entry_row[5] or 0.0)
                 safe_distance, new_duration = apply_pace_to_entry(
                     distance_value, pace_seconds
@@ -10853,6 +10895,8 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             preserve_keys.add(BROADCAST_STATE_KEY)
         if data.startswith('day:add:') or data.startswith('ib:day:'):
             preserve_keys.add('add_group')
+        if data == 'measure:add:category' or data.startswith('measure:add:custom:cat:'):
+            preserve_keys.add(MEASUREMENT_CUSTOM_KEY)
         clear_linear_state(context.user_data, preserve_keys)
         user = update.effective_user
         if user is None:
@@ -10863,6 +10907,11 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         target_user_id = await resolve_target_user_id(context, actor_user_id)
         if previous_acting and target_user_id == actor_user_id:
             await q.answer('Доступ к дневнику подопечного закрыт. Откройте дневник заново.', show_alert=True)
+            return
+        custom_input = context.user_data.get(MEASUREMENT_CUSTOM_KEY)
+        if isinstance(custom_input, dict) and custom_input.get('target_user_id') != target_user_id:
+            clear_linear_state(context.user_data)
+            await q.answer('Дневник изменился. Откройте нужное поле заново.', show_alert=True)
             return
         context.user_data['_input_owner'] = target_user_id
         if data == MAIL_RETURN_CALLBACK:
@@ -11132,16 +11181,16 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         trainee_id = int(parts[4])
                     except ValueError:
                         return
-                    if acting_id is None:
-                        acting_id = trainee_id
-                        context.user_data["acting_user_id"] = trainee_id
-                    if acting_id != trainee_id:
+                    if acting_id is not None and acting_id != trainee_id:
                         await q.answer("Недоступно.", show_alert=True)
                         return
                     link = await get_trainer_link(actor_user_id, trainee_id)
                     if not link or str(link[1]) != "accepted":
                         await q.answer("Связь недоступна.", show_alert=True)
                         return
+                    context.user_data["acting_user_id"] = trainee_id
+                    context.user_data["acting_can_edit"] = bool(link[2])
+                    context.user_data['_input_owner'] = trainee_id
                     link_id = int(link[0])
                     context.user_data[TRAINER_TRAINEE_LABEL_INPUT_KEY] = link_id
                     message = await show_screen(

@@ -4502,21 +4502,30 @@ def format_measurement_date(value: str, tz: ZoneInfo) -> str:
 
 
 def parse_measurement_input(item: dict, text: str) -> tuple[float, str | None]:
+    def number(value):
+        try:
+            parsed = float(value)
+        except (ValueError, TypeError, OverflowError) as exc:
+            raise ValueError("Некорректное число") from exc
+        if not isfinite(parsed) or abs(parsed) > 1_000_000_000_000:
+            raise ValueError("Значение выходит за допустимый диапазон")
+        return parsed
+
     raw = text.strip()
     if not raw:
         raise ValueError("empty")
     if item.get("type") == "duration":
         seconds = parse_duration_input(raw)
-        return float(seconds), ""
+        return number(seconds), ""
     raw = raw.replace(",", ".")
     if item.get("type") == "blood_pressure":
         parts = raw.replace("/", " ").split()
         if len(parts) != 2:
             raise ValueError("bp format")
-        syst = int(round(float(parts[0])))
-        diast = int(round(float(parts[1])))
+        syst = int(round(number(parts[0])))
+        diast = int(round(number(parts[1])))
         return float(syst), str(diast)
-    value = float(raw)
+    value = number(raw)
     return value, None
 
 

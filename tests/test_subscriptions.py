@@ -129,6 +129,81 @@ class AdminCommandTests(unittest.IsolatedAsyncioTestCase):
             write.assert_not_awaited()
             self.assertEqual(context.user_data[bot.INSTANT_BASE_KEY]['exercise_id'], 102)
 
+    async def test_menu_navigation_cancels_all_pending_text_forms(self):
+        keys = (bot.RUNNING_INPUT_KEY, bot.MEASUREMENT_INPUT_KEY, bot.MEASUREMENT_CUSTOM_KEY, bot.MEASUREMENT_CATEGORY_INPUT_KEY, bot.LIBRARY_CUSTOM_KEY)
+        context = SimpleNamespace(user_data={key: {'target_user_id': 1} for key in keys})
+        query = SimpleNamespace(data='noop', answer=AsyncMock(), message=SimpleNamespace(chat_id=123, message_id=1))
+        update = SimpleNamespace(callback_query=query, effective_user=SimpleNamespace(id=123, username='viewer'))
+        with patch.object(bot, 'require_subscription', AsyncMock(return_value=True)), patch.object(bot, 'get_or_create_user', AsyncMock(return_value=1)):
+            await bot.menu_router(update, context)
+        self.assertFalse(set(keys) & context.user_data.keys())
+
+    async def test_measurement_input_cannot_write_into_a_previous_diary(self):
+        context = SimpleNamespace(user_data={'_input_owner': 1, bot.MEASUREMENT_INPUT_KEY: {'target_user_id': 2, 'metric': 'body_weight', 'action': 'add'}})
+        message = SimpleNamespace(text='80', reply_text=AsyncMock())
+        update = SimpleNamespace(message=message, effective_user=SimpleNamespace(id=123, username='viewer'))
+        with patch.object(bot, 'require_subscription', AsyncMock(return_value=True)), patch.object(bot, 'get_or_create_user', AsyncMock(return_value=1)), patch.object(bot, 'try_delete', AsyncMock()), patch.object(bot, 'add_measurement_entry', AsyncMock()) as write:
+            await bot.text_router(update, context)
+            write.assert_not_awaited()
+        self.assertNotIn(bot.MEASUREMENT_INPUT_KEY, context.user_data)
+
+    async def test_trainer_renames_only_the_trainee_field_on_the_current_link(self):
+        for can_edit in (False, True):
+            context = SimpleNamespace(user_data={'acting_user_id': 2, 'acting_can_edit': can_edit, '_input_owner': 2, bot.TRAINER_TRAINEE_LABEL_INPUT_KEY: 55})
+            message = SimpleNamespace(text='Новое имя ученика', reply_text=AsyncMock())
+            update = SimpleNamespace(message=message, effective_user=SimpleNamespace(id=123, username='trainer'))
+            with patch.object(bot, 'require_subscription', AsyncMock(return_value=True)), patch.object(bot, 'get_or_create_user', AsyncMock(return_value=1)), patch.object(bot, 'get_trainer_link', AsyncMock(return_value=(55, 'accepted', int(can_edit)))), patch.object(bot, 'try_delete', AsyncMock()), patch.object(bot, 'update_trainer_label', AsyncMock()) as trainer_write, patch.object(bot, 'update_trainee_label', AsyncMock(), create=True) as trainee_write, patch.object(bot, 'refresh_trainer_manage_trainee_message', AsyncMock()):
+                await bot.text_router(update, context)
+                trainer_write.assert_not_awaited()
+                trainee_write.assert_awaited_once_with(55, 'Новое имя ученика')
+
+    async def test_trainer_alias_form_sets_its_owner_only_after_validating_the_link(self):
+        for link in (None, (55, 'accepted', 0)):
+            context = SimpleNamespace(user_data={})
+            query = SimpleNamespace(data='trainer:trainee:label:set:2', answer=AsyncMock(), message=SimpleNamespace(chat_id=123, message_id=1))
+            update = SimpleNamespace(callback_query=query, effective_user=SimpleNamespace(id=123, username='trainer'))
+            with patch.object(bot, 'require_subscription', AsyncMock(return_value=True)), patch.object(bot, 'get_or_create_user', AsyncMock(return_value=1)), patch.object(bot, '_fetch_trainer_profile', AsyncMock(return_value=(1, 'TR-TEST', 1))), patch.object(bot, 'get_trainer_link', AsyncMock(return_value=link)), patch.object(bot, 'show_screen', AsyncMock(return_value=None)):
+                await bot.menu_router(update, context)
+            if link:
+                self.assertEqual(context.user_data['acting_user_id'], 2)
+                self.assertEqual(context.user_data['_input_owner'], 2)
+                self.assertEqual(context.user_data[bot.TRAINER_TRAINEE_LABEL_INPUT_KEY], 55)
+                self.assertFalse(context.user_data['acting_can_edit'])
+            else:
+                self.assertNotIn('acting_user_id', context.user_data)
+                self.assertNotIn(bot.TRAINER_TRAINEE_LABEL_INPUT_KEY, context.user_data)
+
+    async def test_stale_trainer_alias_input_cannot_update_a_removed_link(self):
+        context = SimpleNamespace(user_data={bot.TRAINER_LABEL_INPUT_KEY: 55})
+        message = SimpleNamespace(text='Old link', reply_text=AsyncMock())
+        update = SimpleNamespace(message=message, effective_user=SimpleNamespace(id=123, username='viewer'))
+        with patch.object(bot, 'require_subscription', AsyncMock(return_value=True)), patch.object(bot, 'get_or_create_user', AsyncMock(return_value=1)), patch.object(bot, 'get_active_trainer_link_for_trainee', AsyncMock(return_value=(99, 3, 'accepted', 1, None, None))), patch.object(bot, 'try_delete', AsyncMock()), patch.object(bot, 'update_trainer_label', AsyncMock()) as write, patch.object(bot, 'refresh_trainee_trainer_settings_message', AsyncMock()):
+            await bot.text_router(update, context)
+            write.assert_not_awaited()
+        self.assertNotIn(bot.TRAINER_LABEL_INPUT_KEY, context.user_data)
+
+    async def test_custom_measurement_category_step_survives_its_own_buttons_only(self):
+        for command in ('measure:add:category', 'measure:add:custom:cat:body'):
+            context = SimpleNamespace(user_data={bot.MEASUREMENT_CUSTOM_KEY: {'target_user_id': 1, 'step': 'category', 'pending_name': 'Test metric', 'chat_id': 123, 'message_id': 1}})
+            user = SimpleNamespace(id=123, username='viewer')
+            query = SimpleNamespace(data=command, from_user=user, answer=AsyncMock(), message=SimpleNamespace(chat_id=123, message_id=1))
+            update = SimpleNamespace(callback_query=query, effective_user=user)
+            with patch.object(bot, 'require_subscription', AsyncMock(return_value=True)), patch.object(bot, 'get_or_create_user', AsyncMock(return_value=1)), patch.object(bot, 'show_screen', AsyncMock()), patch.object(bot, 'prompt_custom_measurement_value', AsyncMock()) as prompt:
+                await bot.menu_router(update, context)
+                if command == 'measure:add:category':
+                    self.assertEqual(context.user_data[bot.MEASUREMENT_CATEGORY_INPUT_KEY]['pending_name'], 'Test metric')
+                    self.assertEqual(context.user_data[bot.MEASUREMENT_CATEGORY_INPUT_KEY]['mode'], 'customplace')
+                else:
+                    prompt.assert_awaited_once_with(context, 1, 123, 1, 'measure:add', 'Test metric', 'body')
+
+    async def test_running_text_cannot_modify_an_entry_from_a_different_exercise(self):
+        context = SimpleNamespace(user_data={bot.RUNNING_INPUT_KEY: {'target_user_id': 1, 'day': 1, 'ue_id': 10, 'entry_id': 99, 'field': 'distance'}})
+        update = SimpleNamespace(message=SimpleNamespace(text='5', reply_text=AsyncMock()), effective_user=SimpleNamespace(id=123, username='viewer'))
+        with patch.object(bot, 'require_subscription', AsyncMock(return_value=True)), patch.object(bot, 'get_or_create_user', AsyncMock(return_value=1)), patch.object(bot, 'get_user_exercise_info', AsyncMock(return_value=(1,1))), patch.object(bot, 'get_running_entry_by_id', AsyncMock(return_value=(99,1,20,1,1,0,0,0,0,0,1,'2026-09-29'))), patch.object(bot, 'update_running_entry', AsyncMock()) as write, patch.object(bot, 'try_delete', AsyncMock()):
+            await bot.text_router(update, context)
+            write.assert_not_awaited()
+        self.assertNotIn(bot.RUNNING_INPUT_KEY, context.user_data)
+
     async def test_old_wizard_add_without_group_does_not_mutate_first(self):
         q = SimpleNamespace(answer=AsyncMock(), message=SimpleNamespace(chat_id=123, message_id=1))
         with patch.object(bot, 'toggle_user_exercise', AsyncMock()) as write:

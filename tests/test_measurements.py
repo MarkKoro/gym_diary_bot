@@ -79,6 +79,44 @@ class MeasurementDbTests(unittest.IsolatedAsyncioTestCase):
                 await backend.update_exercise_anatomy(exercise, {'items': [{'muscle_code': 'chest', 'weight_pct': value}]}, ctx)
         self.assertEqual(await db.get_user_anatomy(user, exercise), [('chest', 100)])
 
+    def test_bot_number_inputs_reject_non_finite_and_overflow_values(self):
+        for value in ('NaN', 'Infinity', '-Infinity', '1e309', '1e100'):
+            for parser in (bot.parse_distance_input, bot.parse_calories_input, lambda text: bot.parse_measurement_input({'type': 'number'}, text)):
+                with self.subTest(value=value, parser=parser), self.assertRaises(ValueError):
+                    parser(value)
+        with self.assertRaises(ValueError):
+            bot.parse_duration_input('9'*400 + ':00')
+        self.assertEqual(bot.parse_distance_input('5,25'), 5.25)
+        self.assertEqual(bot.parse_measurement_input({'type': 'number'}, '80,5'), (80.5, None))
+        self.assertEqual(bot.parse_duration_input('1:02:03'), 3723)
+
+    async def test_measurement_storage_rejects_non_finite_values_without_changing_history(self):
+        user = await db.get_or_create_user(903, 'finite_measurements')
+        await db.add_measurement_entry(user, 'body_weight', 80)
+        for value in (float('nan'), float('inf'), float('-inf')):
+            with self.subTest(value=value):
+                with self.assertRaises(ValueError):
+                    await db.add_measurement_entry(user, 'body_weight', value)
+                with self.assertRaises(ValueError):
+                    await db.update_last_measurement(user, 'body_weight', value)
+        history = await db.fetch_measurement_history(user, 'body_weight')
+        self.assertEqual([row[0] for row in history], [80])
+
+    async def test_measurement_api_returns_400_for_non_finite_text_without_writing(self):
+        import webapp_backend as backend
+        user = await db.get_or_create_user(904, 'api_finite')
+        ctx = SimpleNamespace(user_id=user)
+        by_type = {item.get('type'): item['code'] for item in backend.MEASUREMENT_ITEMS if not item.get('derived')}
+        cases = [('body_weight', value) for value in ('NaN', 'Infinity', '-Infinity', '1e100')]
+        cases += [(by_type['blood_pressure'], value) for value in ('120/Infinity', '1e100/80')]
+        cases += [(by_type['duration'], '9'*400 + ':00')]
+        for metric, value in cases:
+            with self.subTest(metric=metric, value=value), self.assertRaises(backend.HTTPException) as error:
+                await backend.measurements_add_entry({'metric': metric, 'value': value}, ctx)
+            self.assertEqual(error.exception.status_code, 400)
+        await backend.measurements_add_entry({'metric': 'body_weight', 'value': '80,5'}, ctx)
+        self.assertEqual([row[0] for row in await db.fetch_measurement_history(user, 'body_weight')], [80.5])
+
     def test_numeric_helpers_do_not_propagate_non_finite_values(self):
         import webapp_backend as backend
         for value in ('NaN', 'Infinity', '-Infinity', None, 'bad'):
