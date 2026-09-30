@@ -6897,16 +6897,17 @@
         const name = String(item.name || '').trim();
         const rawSets = Number(item.sets_count ?? item.done_sets ?? item.total_sets ?? 0);
         const sets = Math.max(0, rawSets);
-        if (!name || sets <= 0) return;
         const muscleKey = normalizeMuscleKey(item.muscle_group || 'other');
+        const isRunning = muscleKey === 'run';
+        if (!name || (sets <= 0 && !isRunning)) return;
         const groupName = allExercisesGroupName(muscleKey);
         const groupColor = getMuscleColor(muscleKey);
         if (!byGroup.has(groupName)) byGroup.set(groupName, { color: groupColor, entries: [] });
-        byGroup.get(groupName).entries.push({ name, sets });
+        byGroup.get(groupName).entries.push({ name, sets, isRunning });
       });
       const rows = [...byGroup.entries()].map(([group, payload]) => {
         const lines = payload.entries
-          .map((entry) => `<div class="all-ex-done-line"><span class="all-ex-done-name">${escapeHtml(entry.name)}</span><span class="all-ex-done-sets">${entry.sets} ${pluralizeApproaches(entry.sets)}</span></div>`)
+          .map((entry) => `<div class="all-ex-done-line"><span class="all-ex-done-name">${escapeHtml(entry.name)}</span><span class="all-ex-done-sets">${entry.isRunning ? 'Пробежка' : `${entry.sets} ${pluralizeApproaches(entry.sets)}`}</span></div>`)
           .join('');
         return `<section class="all-ex-done-group" style="--group-accent:${payload.color};"><div class="all-ex-done-group-title">${escapeHtml(group)}</div>${lines}</section>`;
       });
@@ -7331,6 +7332,7 @@
           source: 'all_exercises',
           free_workout: true,
           is_done: Boolean(data.is_done),
+          is_done_today: Boolean(data.is_done),
         };
         state.exercises.set(ueId, normalizedExercise);
         state.workout.expanded = ueId;
@@ -7354,7 +7356,7 @@
       const data = await apiFetch(`/gymapi/all_exercises/exercise/${exerciseId}/session?date=${encodeURIComponent(getAllExercisesDate())}`, { silent: true });
       if (seq !== st.exerciseRequestSeq || exerciseId !== st.selectedExerciseId || !st.sheetOpen || hasActiveWorkoutInteraction() || version !== (state.lifecycle.dataVersion || 0)) return;
       const ueId = Number(data.user_exercise_id);
-      const exercise = { ...state.exercises.get(ueId), ...data, source: 'all_exercises', free_workout: true, day_index: 0 };
+      const exercise = { ...state.exercises.get(ueId), ...data, is_done: Boolean(data.is_done), is_done_today: Boolean(data.is_done), source: 'all_exercises', free_workout: true, day_index: 0 };
       st.exercise = exercise;
       state.exercises.set(ueId, exercise);
       invalidateAllExerciseSessionCache(exerciseId);
@@ -12711,6 +12713,16 @@
       const cards = card ? [card] : getExerciseCards(ueId);
       if (!cards.length || !exercise) return;
       cards.forEach((targetCard) => {
+        const isDone = Boolean(exercise.is_done || exercise.is_done_today || state.workout.doneIds?.has(exercise.user_exercise_id));
+        targetCard.classList.toggle('is-done', isDone);
+        const flag = targetCard.querySelector('.finish-flag');
+        if (!isDone) flag?.remove();
+        else if (!flag) {
+          const finishFlag = document.createElement('span');
+          finishFlag.className = 'finish-flag';
+          finishFlag.textContent = '🏁';
+          targetCard.querySelector('.exercise-meta')?.prepend(finishFlag);
+        }
         const summary = targetCard.querySelector('.exercise-summary');
         const pill = targetCard.querySelector('.exercise-sets-pill');
         const expanded = targetCard.classList.contains('expanded');

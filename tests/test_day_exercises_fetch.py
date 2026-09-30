@@ -654,13 +654,98 @@ class AiPlanAtomicityTests(unittest.IsolatedAsyncioTestCase):
 
 
 
+class FreeWorkoutCompletionTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        import httpx
+        import webapp_backend as api
+        from unittest.mock import AsyncMock
+        self.api = api
+        await db.init_db()
+        self.uid = await db.get_or_create_user(98400, 'split-regression')
+        await db.wipe_user(self.uid)
+        await db.ensure_training_system_defaults(self.uid)
+        self.ctx = api.AuthCtx(user_id=self.uid, tg_id=98400, actor_user_id=self.uid, username='split-regression', first_name=None, last_name=None, auth_date=1)
+        api.app.dependency_overrides[api.get_auth_ctx] = lambda: self.ctx
+        self.addCleanup(api.app.dependency_overrides.clear)
+        awards = patch.object(api, '_evaluate_achievements', AsyncMock())
+        awards.start()
+        self.addCleanup(awards.stop)
+        self.client = httpx.AsyncClient(transport=httpx.ASGITransport(app=api.app, raise_app_exceptions=False), base_url='http://test')
+        self.addAsyncCleanup(self.client.aclose)
+        self.date = datetime.now(UTC).date().isoformat()
+        self.ids = [await db.get_or_create_exercise(f'Split exercise {i}', 'chest', self.uid) for i in range(3)]
+        for exercise in self.ids:
+            response = await self.client.post(f'/all_exercises/exercise/{exercise}/set/add', params={'date':self.date}, json={'weight_kg':40,'reps':8})
+            self.assertEqual(response.status_code, 200, response.text)
+
+    async def assert_only_first_done(self):
+        groups = (await self.client.get('/all_exercises/groups', params={'date':self.date})).json()
+        self.assertEqual([item['exercise_id'] for item in groups['done_today']], self.ids[:1])
+        self.assertEqual(groups['unfinished_count'], 2)
+        unfinished = (await self.client.get('/all_exercises/unfinished', params={'date':self.date})).json()
+        self.assertEqual({item['exercise_id'] for item in unfinished['items']}, set(self.ids[1:]))
+        items = (await self.client.get('/all_exercises/group/chest', params={'date':self.date})).json()['items']
+        self.assertEqual({item['exercise_id'] for item in items if item['is_done_today']}, set(self.ids[:1]))
+        for exercise in self.ids:
+            session = (await self.client.get(f'/all_exercises/exercise/{exercise}/session', params={'date':self.date})).json()
+            self.assertEqual(session['is_done'], exercise == self.ids[0])
+            self.assertEqual(len(session['sets']), 1)
+
+    async def test_split_workout_completion_and_retry_only_finish_selected_exercise(self):
+        for _ in range(2):
+            response = await self.client.post(f'/all_exercises/exercise/{self.ids[0]}/done', params={'date':self.date})
+            self.assertEqual(response.status_code, 200, response.text)
+            await self.assert_only_first_done()
+
+    async def test_legacy_finish_day_does_not_complete_other_split_exercises(self):
+        response = await self.client.post(f'/all_exercises/exercise/{self.ids[0]}/done', params={'date':self.date})
+        self.assertEqual(response.status_code, 200, response.text)
+        response = await self.client.post('/all_exercises/finish_day', params={'date':self.date})
+        self.assertEqual(response.status_code, 200, response.text)
+        await self.assert_only_first_done()
+
+    async def test_empty_sessions_and_notes_are_not_training_activity(self):
+        exercise = await db.get_or_create_exercise('Not started', 'chest', self.uid)
+        session = (await self.client.get(f'/all_exercises/exercise/{exercise}/session', params={'date':self.date})).json()
+        await db.set_exercise_note(session['session_id'], session['user_exercise_id'], 'Plan for later')
+        items = await db.build_effective_exercise_index_for_user(self.uid, self.date)
+        item = next(item for item in items if item['exercise_id'] == exercise)
+        self.assertFalse(item['has_history'])
+        self.assertFalse(item['unfinished_today'])
+        self.assertIsNone(item['last_activity_at'])
+        self.assertIsNone(item['last_done_at'])
+
+    async def test_free_running_save_and_done_leave_strength_exercises_unfinished(self):
+        exercise = await db.get_or_create_exercise('Split running', 'run', self.uid)
+        url = f'/all_exercises/exercise/{exercise}/running'
+        response = await self.client.post(url, params={'date':self.date}, json={'distance_km':3,'duration_ms':900000})
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertFalse((await self.client.get(f'/all_exercises/exercise/{exercise}/session', params={'date':self.date})).json()['is_done'])
+        groups = (await self.client.get('/all_exercises/groups', params={'date':self.date})).json()
+        self.assertEqual(groups['unfinished_count'], 4)
+        unfinished = (await self.client.get('/all_exercises/unfinished', params={'date':self.date})).json()
+        self.assertEqual({item['exercise_id'] for item in unfinished['items']}, {*self.ids, exercise})
+        response = await self.client.post(url+'/done', params={'date':self.date}, json={'distance_km':0})
+        self.assertEqual(response.status_code, 400, response.text)
+        response = await self.client.post(url+'/done', params={'date':self.date}, json={})
+        self.assertEqual(response.status_code, 200, response.text)
+        data = response.json()
+        self.assertEqual(data['unfinished_count'], 3)
+        self.assertEqual([item['exercise_id'] for item in data['done_today']], [exercise])
+        self.assertEqual(data['running']['distance_km'], 3)
+        self.assertEqual(data['running']['duration_ms'], 900000)
+        self.assertFalse(data['running']['is_draft'])
+        items = (await self.client.get('/all_exercises/group/run', params={'date':self.date})).json()['items']
+        self.assertEqual([item['exercise_id'] for item in items if item['is_done_today']], [exercise])
+
+
 class ApiInputMatrixTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         import webapp_backend as api
         self.api = api
         await db.init_db()
         uid = await db.get_or_create_user(98200, 'api-matrix')
-        self.ctx = SimpleNamespace(user_id=uid, tg_id=98200, actor_user_id=uid, username='api-matrix', read_only=False, acting=False)
+        self.ctx = api.AuthCtx(user_id=uid, tg_id=98200, actor_user_id=uid, username='api-matrix', first_name=None, last_name=None, auth_date=1)
         api.app.dependency_overrides[api.get_auth_ctx] = lambda: self.ctx
         self.addCleanup(api.app.dependency_overrides.clear)
 
@@ -681,6 +766,28 @@ class ApiInputMatrixTests(unittest.IsolatedAsyncioTestCase):
                     checked += 1
             self.assertGreaterEqual(checked, 119)
 
+    async def test_all_routes_handle_empty_input_without_unhandled_errors(self):
+        import httpx
+        import re
+        import socket
+        from unittest.mock import AsyncMock
+        external = {'/subscription/payment/start','/api/payments/redirect/create','/subscription/payment/notify-bot-success','/ai/coach/query'}
+        failures = []
+        checked = 0
+        with patch.object(socket.socket,'connect',side_effect=AssertionError('unexpected network')),patch.object(self.api.Bot,'send_message',AsyncMock()):
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=self.api.app,raise_app_exceptions=False),base_url='http://test') as client:
+                for route in self.api.app.routes:
+                    if route.path in external or not any(p.call==self.api.get_auth_ctx for p in getattr(getattr(route,'dependant',None),'dependencies',[])):
+                        continue
+                    path = re.sub(r'{([^}]+)}',lambda m:'99999999' if m[1].endswith('_id') or m[1]=='day_index' else 'audit-missing',route.path)
+                    for method in route.methods-{'HEAD','OPTIONS'}:
+                        response = await client.request(method,path,json={})
+                        if response.status_code>=500:failures.append(f'{method} {path}: {response.text}')
+                        checked += 1
+        self.maxDiff=None
+        self.assertGreaterEqual(checked,110)
+        self.assertEqual(failures,[])
+
     async def test_payload_routes_reject_malformed_scalar_fields_before_side_effects(self):
         import ast
         import httpx
@@ -696,6 +803,9 @@ class ApiInputMatrixTests(unittest.IsolatedAsyncioTestCase):
                         continue
                     node = ast.parse(inspect.getsource(inspect.unwrap(endpoint)))
                     keys = {n.args[0].value for n in ast.walk(node) if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) and isinstance(n.func.value, ast.Name) and n.func.value.id=='payload' and n.func.attr=='get' and n.args and isinstance(n.args[0],ast.Constant)}
+                    if any(isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id == '_save_running_payload' for n in ast.walk(node)):
+                        helper = ast.parse(inspect.getsource(self.api._save_running_payload))
+                        keys.update(n.args[0].value for n in ast.walk(helper) if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) and isinstance(n.func.value, ast.Name) and n.func.value.id == 'payload' and n.func.attr == 'get' and n.args and isinstance(n.args[0], ast.Constant))
                     if not keys:
                         continue
                     path = re.sub(r'{[^}]+}', '9999999', route.path)
@@ -704,6 +814,82 @@ class ApiInputMatrixTests(unittest.IsolatedAsyncioTestCase):
                         self.assertLess(response.status_code, 500, response.text)
                     checked += 1
             self.assertGreaterEqual(checked, 36)
+
+    async def test_numeric_path_ids_never_overflow_database_bindings(self):
+        import httpx
+        import re
+        import socket
+        checked = 0
+        failures = []
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=self.api.app,raise_app_exceptions=False),base_url='http://test') as client:
+            with patch.object(socket.socket,'connect',side_effect=AssertionError('unexpected network')):
+                for route in self.api.app.routes:
+                    parameters = getattr(getattr(route,'dependant',None),'path_params',[])
+                    numeric = {p.name for p in parameters if p.field_info.annotation is int or getattr(p.field_info.annotation, '__origin__', None) is int}
+                    if not numeric:
+                        continue
+                    for value in (-1,99999999,2**100):
+                        path = re.sub(r'{([^}]+)}',lambda m:str(value) if m[1] in numeric else 'audit-missing',route.path)
+                        for method in route.methods-{'HEAD','OPTIONS'}:
+                            response = await client.request(method,path,json={})
+                            if response.status_code >= 500:
+                                failures.append(f'{method} {path}: {response.status_code}')
+                            checked += 1
+        self.assertGreaterEqual(checked,100)
+        self.maxDiff = None
+        self.assertEqual(failures,[])
+
+    async def test_all_exercise_routes_reject_another_users_private_exercise(self):
+        import httpx
+        import re
+        other = await db.get_or_create_user(98201,'private-api-owner')
+        ex = await db.get_or_create_exercise('Private API sentinel','chest',other)
+        await db.add_user_exercise(other,1,ex)
+        async with db.connect_db() as conn:
+            ue = (await (await conn.execute('SELECT id FROM user_exercises WHERE user_id=? AND exercise_id=? AND day_index=1',(other,ex))).fetchone())[0]
+        payload = {'name':'Attempted rename','muscle_group':'back','sets':3,'reps':10,'seconds':0,'weight_kg':20,'field':'reps','delta':1,'note':'Attempted note','text':'Attempted note','is_warmup':False,'distance_km':5}
+        checked = 0
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=self.api.app,raise_app_exceptions=False),base_url='http://test') as client:
+            for route in self.api.app.routes:
+                if not any('{'+key+'}' in route.path for key in ('exercise_id','ue_id','user_exercise_id')):
+                    continue
+                path = re.sub(r'{([^}]+)}',lambda m:str(ex if m[1]=='exercise_id' else ue if m[1] in ('ue_id','user_exercise_id') else 1),route.path)
+                for method in route.methods-{'HEAD','OPTIONS'}:
+                    response = await client.request(method,path,json=payload)
+                    with self.subTest(method=method,path=path):
+                        self.assertIn(response.status_code,(400,403,404,422),response.text)
+                        self.assertNotIn('Private API sentinel',response.text)
+                    checked += 1
+        self.assertGreaterEqual(checked,25)
+        self.assertEqual(await db.get_exercise_details(ex),('Private API sentinel','chest',other))
+        self.assertEqual(await db.get_user_exercise_info(ue),(other,1))
+
+    async def test_trainer_access_is_limited_to_diary_routes_and_edit_permission(self):
+        from starlette.requests import Request
+        from fastapi import HTTPException
+        from unittest.mock import AsyncMock
+        tg = SimpleNamespace(user=SimpleNamespace(id=98200,username='trainer',first_name=None,last_name=None),auth_date=1)
+        personal_prefixes = ('/teams','/achievements','/subscription','/api/payments','/all_exercises','/leaderboard')
+        with patch.object(self.api.db,'get_or_create_user',AsyncMock(return_value=1)),patch.object(self.api,'ensure_training_system_defaults',AsyncMock()),patch.object(self.api,'get_trainer_link',AsyncMock(return_value=(1,'accepted',1))) as link:
+            for route in self.api.app.routes:
+                path = route.path
+                if not path.startswith(personal_prefixes) and path != '/settings/leaderboard_visibility':
+                    continue
+                for method in route.methods-{'OPTIONS','HEAD'}:
+                    with self.subTest(path=path,method=method),self.assertRaises(HTTPException) as caught:
+                        await self.api.get_auth_ctx(Request({'type':'http','path':path,'method':method,'headers':[]}),tg,2)
+                    self.assertEqual(caught.exception.status_code,403)
+            for editable in (False,True):
+                link.return_value=(1,'accepted',int(editable))
+                request=Request({'type':'http','path':'/day/1/exercise/1/done','method':'POST','headers':[]})
+                if editable:
+                    self.assertEqual((await self.api.get_auth_ctx(request,tg,2)).user_id,2)
+                else:
+                    with self.assertRaises(HTTPException):await self.api.get_auth_ctx(request,tg,2)
+                request=Request({'type':'http','path':'/day/1/sheet','method':'GET','headers':[]})
+                self.assertEqual((await self.api.get_auth_ctx(request,tg,2)).user_id,2)
+            actor_request=Request({'type':'http','path':'/settings/trainer','method':'GET','headers':[]})
+            self.assertEqual((await self.api.get_auth_ctx(actor_request,tg,2)).user_id,1)
 
     async def test_ai_receipt_status_is_owner_scoped_and_read_only(self):
         import json
@@ -856,6 +1042,80 @@ class AchievementCatalogIntegrationTests(unittest.IsolatedAsyncioTestCase):
             await conn.commit()
         self.assertEqual((await ach._fetch_metrics(self.uid))['variety_week'],11)
         self.assertNotIn('variety_12_week',(await ach.evaluate(self.uid))['earned_codes'])
+
+    async def test_every_achievement_has_a_negative_and_exact_boundary(self):
+        import achievements_engine as ach
+        from unittest.mock import AsyncMock
+        base = await ach._fetch_metrics(self.uid)
+        now = datetime.now(UTC).replace(microsecond=0)
+        class FrozenDateTime(datetime):
+            @classmethod
+            def now(cls,tz=None):return now if tz else now.replace(tzinfo=None)
+        cases = {}
+        for code,field,threshold in (
+            ('first_set','sets_non_warmup',1),('first_day_done','day_done_total',1),
+            ('variety_12_week','variety_week',12),('variety_20_week','variety_week',20),
+            ('volume_100k','volume',100000),('volume_500k','volume',500000),
+            ('sets_500','sets_non_warmup',500),('run_10km','run_km',10),('run_42km','run_km',42),
+            ('rename_master','rename_count',5),('copied_plan_3days','copied_plan_3days',1),
+            ('inspired_3','inspired',3),('arnold_15','inspired',15),('coach_1','accepted_trainees',1),
+            ('day_done_50','day_done_total',50),('team_month_top1','team_top1_streak_days',30),
+            ('team_consistency','team_sessions_per_member_28',12),('team_night_ops','team_night_sessions_28',6)):
+            cases[code]=[({field:threshold-1},False),({field:threshold},True),({field:threshold+1},True)]
+        for code,days in (('streak_7',7),('streak_21',21)):
+            cases[code]=[({'local_completions':[now-timedelta(days=i) for i in range(n)]},n>=days) for n in (days-1,days,days+1)]
+        cases['plan_architect']=[({'systems_count':2,'active_user_exercises':29},False),({'systems_count':3},True),({'active_user_exercises':30},True)]
+        cases['leaderboard_on']=[({'leaderboard_visible':False},False),({'leaderboard_visible':True},True)]
+        cases['team_joined']=[({'team_id':None},False),({'team_id':1},True)]
+        cases['team_founder']=[({'team_is_founder':False},False),({'team_is_founder':True},True)]
+        cases['apprentice_10']=[({'accepted_trainer_links':1,'day_done_total':9},False),({'accepted_trainer_links':0,'day_done_total':10},False),({'accepted_trainer_links':1,'day_done_total':10},True)]
+        cases['comeback_14']=[({'local_completions':[now,now-timedelta(days=n)]},n>=14) for n in (13,14,15)]
+        cases['night_shift']=[({'local_completions':[now.replace(hour=h,minute=m)]},ok) for h,m,ok in ((4,59,True),(5,0,False),(22,59,False),(23,0,True))]
+        cases['team_full_roster']=[({'team_id':1,'team_members_count':7},False),({'team_id':None,'team_members_count':8},False),({'team_id':1,'team_members_count':8},True)]
+        for code,rank in (('team_top10_week',10),('team_top3_week',3),('team_top1_week',1)):
+            cases[code]=[({'team_best_rank_7':n},ok) for n,ok in ((None,False),(0,False),(rank+1,False),(rank,True))]
+        for code,count in (('team_recruit_3',3),('team_recruit_8',8)):
+            cases[code]=[({'team_role':'captain','captain_recruits_count':count-1},False),({'team_role':'private','captain_recruits_count':count},False),({'team_role':'captain','captain_recruits_count':count},True)]
+        cases['team_loyal_30']=[({'team_id':1,'team_joined_at':(now-timedelta(days=30)+timedelta(seconds=offset)).isoformat()},offset<=0) for offset in (1,0,-1)]
+        self.assertEqual(set(cases),set(ach.ACHIEVEMENTS_BY_CODE))
+        with patch.object(ach,'datetime',FrozenDateTime),patch.object(ach.db,'list_user_achievements',AsyncMock(return_value=[])),patch.object(ach.db,'grant_achievement',AsyncMock(return_value=True)),patch.object(ach,'evaluate_team',AsyncMock()):
+            for code,checks in cases.items():
+                for changes,expected in checks:
+                    with self.subTest(code=code,changes=changes),patch.object(ach,'_fetch_metrics',AsyncMock(return_value={**base,**changes})):
+                        self.assertEqual(code in (await ach.evaluate(self.uid))['earned_codes'],expected)
+        team_base = {'members_count':0,'active_members_7d':0,'sessions_28':0,'night_sessions_28':0,'best_rank_7':None,'top1_streak_days':0,'top3_days_28':0}
+        team_cases = {
+            't_foundation':[({'members_count':0},False),({'members_count':1},True)],
+            't_full_roster':[({'members_count':7},False),({'members_count':8},True)],
+            't_active_core':[({'members_count':5,'active_members_7d':5},False),({'members_count':6,'active_members_7d':4},False),({'members_count':6,'active_members_7d':5},True)],
+            't_top1_month':[({'top1_streak_days':29},False),({'top1_streak_days':30},True)],
+            't_consistency_28':[({'members_count':3,'sessions_28':35},False),({'members_count':3,'sessions_28':36},True)],
+            't_night_ops':[({'members_count':2,'night_sessions_28':12},False),({'members_count':3,'night_sessions_28':11},False),({'members_count':3,'night_sessions_28':12},True)],
+            't_web_of_power':[({'members_count':7,'top3_days_28':21},False),({'members_count':8,'top3_days_28':20},False),({'members_count':8,'top3_days_28':21},True)],
+        }
+        for code,rank in (('t_top10_week',10),('t_top3_week',3),('t_top1_week',1)):
+            team_cases[code]=[({'best_rank_7':n},ok) for n,ok in ((None,False),(0,False),(rank+1,False),(rank,True))]
+        self.assertEqual(set(team_cases),set(ach.TEAM_ACHIEVEMENTS_BY_CODE))
+        with patch.object(ach.db,'list_team_achievements',AsyncMock(return_value=[])),patch.object(ach.db,'grant_team_achievement',AsyncMock(return_value=True)):
+            for code,checks in team_cases.items():
+                for changes,expected in checks:
+                    with self.subTest(code=code,changes=changes):
+                        self.assertEqual(code in (await ach.evaluate_team(1,metrics={**team_base,**changes}))['earned_team_codes'],expected)
+
+    async def test_daily_ranking_snapshot_removes_teams_that_left_the_top(self):
+        import achievements_engine as ach
+        team = await db.create_team(self.uid,'Snapshot team')
+        tid = team['team_id']
+        today = datetime.now(UTC).date()
+        for offset in range(30):
+            await db.upsert_team_daily_scores((today-timedelta(days=offset)).isoformat(),[{'team_id':tid,'rank':1}])
+        self.assertEqual((await ach._fetch_team_metrics(tid))['top1_streak_days'],30)
+        await db.upsert_team_daily_scores(today.isoformat(),[{'team_id':tid+1,'rank':1}])
+        self.assertEqual((await ach._fetch_team_metrics(tid))['top1_streak_days'],0)
+        await db.upsert_team_daily_scores(today.isoformat(),[])
+        async with db.connect_db() as conn:
+            self.assertEqual((await (await conn.execute('SELECT COUNT(*) FROM team_daily_scores WHERE day_utc=?',(today.isoformat(),))).fetchone())[0],0)
+            self.assertEqual((await (await conn.execute('SELECT COUNT(*) FROM team_daily_scores WHERE team_id=?',(tid,))).fetchone())[0],29)
 
     async def test_calendar_boundaries_match_across_awards_and_rankings(self):
         import achievements_engine as ach

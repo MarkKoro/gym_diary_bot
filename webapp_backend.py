@@ -10,9 +10,10 @@ import httpx
 import uuid
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 from dataclasses import dataclass
-from datetime import UTC, datetime, date, time, timedelta
+from datetime import UTC, datetime, date, timedelta
 from math import sqrt, isfinite
-from typing import Optional
+from typing import Annotated, Optional
+from pydantic import Field
 from zoneinfo import ZoneInfo
 from fastapi import Body, Depends, FastAPI, Header, HTTPException, Request, Response
 from fastapi.responses import FileResponse, JSONResponse
@@ -60,8 +61,6 @@ from db import (
     get_trainer_link,
     get_onboarding_video_message,
     get_onboarding_intro_message,
-    add_user_reminder,
-    clear_user_reminders,
     list_day_completions,
     list_trainer_requests,
     list_exercise_weight_progress,
@@ -85,10 +84,7 @@ from db import (
     rename_day,
     reorder_user_days,
     set_trainer_accepting_requests,
-    set_app_meta,
-    set_user_notifications_enabled,
     set_user_leaderboard_visible,
-    set_user_timezone,
     set_workouts_per_week,
     update_last_measurement,
     update_trainer_label,
@@ -198,6 +194,9 @@ ANATOMY_MUSCLE_CODES = {
     "other",
     "cardio",
 }
+
+# SQLite integer bindings are signed 64-bit; reject overflow before route execution.
+ApiInt = Annotated[int, Field(ge=-(2**63), le=2**63-1)]
 
 app = FastAPI(title="GymDiary WebApp backend")
 logger = logging.getLogger(__name__)
@@ -451,7 +450,7 @@ class AuthCtx:
 async def get_auth_ctx(
     request: Request,
     tg: TelegramInitData = Depends(get_tg_init_data),
-    x_acting_user: int | None = Header(default=None, alias="X-Acting-User"),
+    x_acting_user: ApiInt | None = Header(default=None, alias="X-Acting-User"),
 ) -> AuthCtx:
     internal_user_id = await db.get_or_create_user(tg.user.id, tg.user.username)
     actor_user_id = internal_user_id
@@ -463,6 +462,10 @@ async def get_auth_ctx(
         if request.url.path.startswith("/settings/trainer"):
             acting_user_id = None
         else:
+            # Match the personal sections hidden by the WebApp in trainer mode.
+            personal_prefixes = ('/teams', '/achievements', '/subscription', '/api/payments', '/all_exercises', '/leaderboard')
+            if request.url.path.startswith(personal_prefixes) or request.url.path == '/settings/leaderboard_visibility':
+                raise HTTPException(status_code=403, detail='Раздел доступен только для личного дневника')
             link = await get_trainer_link(internal_user_id, acting_user_id)
             if not link or str(link[1]) != "accepted":
                 raise HTTPException(status_code=403, detail="Trainer link not available")
@@ -2258,7 +2261,7 @@ async def day_today(ctx: AuthCtx = Depends(get_auth_ctx)):
 
 @app.get("/day/{day_index}/sheet")
 async def day_sheet(
-    day_index: int,
+    day_index: ApiInt,
     date: str | None = None,
     ctx: AuthCtx = Depends(get_auth_ctx),
 ):
@@ -2400,7 +2403,7 @@ async def list_catalog_groups(ctx: AuthCtx = Depends(get_auth_ctx)):
 @app.get("/catalog/group/{code}")
 async def list_catalog_group_exercises(
     code: str,
-    day_index: int | None = None,
+    day_index: ApiInt | None = None,
     ctx: AuthCtx = Depends(get_auth_ctx),
 ):
     user_id = ctx.user_id
@@ -2444,7 +2447,7 @@ async def create_catalog_group(
 @app.post("/day/{day_index}/exercise")
 @_validate_payload_input
 async def add_day_exercise(
-    day_index: int,
+    day_index: ApiInt,
     payload: dict = Body(...),
     ctx: AuthCtx = Depends(get_auth_ctx),
 ):
@@ -2464,7 +2467,7 @@ async def add_day_exercise(
 @_validate_payload_input
 async def create_catalog_exercise(
     payload: dict = Body(...),
-    day_index: int | None = None,
+    day_index: ApiInt | None = None,
     ctx: AuthCtx = Depends(get_auth_ctx),
 ):
     user_id = ctx.user_id
@@ -2487,8 +2490,8 @@ async def create_catalog_exercise(
 
 @app.post("/day/{day_index}/exercise/{exercise_id}/toggle")
 async def toggle_day_exercise(
-    day_index: int,
-    exercise_id: int,
+    day_index: ApiInt,
+    exercise_id: ApiInt,
     ctx: AuthCtx = Depends(get_auth_ctx),
 ):
     user_id = ctx.user_id
@@ -2501,8 +2504,8 @@ async def toggle_day_exercise(
 @app.post("/day/{day_index}/exercise/{exercise_id}/baseline")
 @_validate_payload_input
 async def set_day_exercise_baseline(
-    day_index: int,
-    exercise_id: int,
+    day_index: ApiInt,
+    exercise_id: ApiInt,
     payload: dict = Body(...),
     ctx: AuthCtx = Depends(get_auth_ctx),
 ):
@@ -2528,8 +2531,8 @@ async def set_day_exercise_baseline(
 @app.post("/day/{day_index}/exercise/{exercise_id}/ai_meta")
 @_validate_payload_input
 async def set_ai_meta_for_exercise(
-    day_index: int,
-    exercise_id: int,
+    day_index: ApiInt,
+    exercise_id: ApiInt,
     payload: dict = Body(...),
     ctx: AuthCtx = Depends(get_auth_ctx),
 ):
@@ -2554,7 +2557,7 @@ async def set_ai_meta_for_exercise(
 
 @app.post("/day/{day_index}/complete")
 async def complete_day(
-    day_index: int,
+    day_index: ApiInt,
     date: str | None = None,
     ctx: AuthCtx = Depends(get_auth_ctx),
 ):
@@ -2589,8 +2592,8 @@ async def complete_day(
 @app.post("/day/{day_index}/exercise/{user_exercise_id}/set/add")
 @_validate_payload_input
 async def add_set_fast(
-    day_index: int,
-    user_exercise_id: int,
+    day_index: ApiInt,
+    user_exercise_id: ApiInt,
     payload: dict | None = Body(default=None),
     date: str | None = None,
     ctx: AuthCtx = Depends(get_auth_ctx),
@@ -2631,8 +2634,8 @@ async def add_set_fast(
 
 @app.post("/day/{day_index}/exercise/{user_exercise_id}/set/remove_last")
 async def remove_last_set_fast(
-    day_index: int,
-    user_exercise_id: int,
+    day_index: ApiInt,
+    user_exercise_id: ApiInt,
     date: str | None = None,
     ctx: AuthCtx = Depends(get_auth_ctx),
 ):
@@ -2650,8 +2653,8 @@ async def remove_last_set_fast(
 @app.post("/day/{day_index}/exercise/{user_exercise_id}/set/inc_last")
 @_validate_payload_input
 async def inc_last_set_fast(
-    day_index: int,
-    user_exercise_id: int,
+    day_index: ApiInt,
+    user_exercise_id: ApiInt,
     payload: dict = Body(...),
     date: str | None = None,
     ctx: AuthCtx = Depends(get_auth_ctx),
@@ -2685,8 +2688,8 @@ async def inc_last_set_fast(
 
 @app.get("/day/{day_index}/exercise/{ue_id}/running")
 async def get_running_state(
-    day_index: int,
-    ue_id: int,
+    day_index: ApiInt,
+    ue_id: ApiInt,
     date: str | None = None,
     ctx: AuthCtx = Depends(get_auth_ctx),
 ):
@@ -2698,11 +2701,56 @@ async def get_running_state(
     return {"ok": True, **state}
 
 
+async def _save_running_payload(user_id: int, day_index: int, ue_id: int, session_id: int, payload: dict, *, complete: bool = False):
+    entry = await get_running_entry(
+        user_id,
+        ue_id,
+        session_id=session_id,
+        day_index=day_index,
+        create=True,
+    )
+    entry_id = entry[0]
+    distance_raw = payload.get("distance_km") if isinstance(payload, dict) else None
+    duration_sec_raw = payload.get("duration_sec") if isinstance(payload, dict) else None
+    duration_ms_raw = payload.get("duration_ms") if isinstance(payload, dict) else None
+    calories_raw = payload.get("calories") if isinstance(payload, dict) else None
+    heart_rate_raw = payload.get("heart_rate") if isinstance(payload, dict) else None
+
+    distance_val = _clamp_running_distance(distance_raw if distance_raw is not None else entry[1])
+    base_duration_ms = entry[3] if len(entry) > 3 else 0
+    if not base_duration_ms and entry[2]:
+        base_duration_ms = int(entry[2]) * 1000
+    if duration_ms_raw is not None:
+        duration_ms_val = _clamp_running_duration_ms(duration_ms_raw)
+    elif duration_sec_raw is not None:
+        duration_ms_val = _clamp_running_duration_ms(float(duration_sec_raw) * 1000)
+    else:
+        duration_ms_val = base_duration_ms
+    duration_sec_val = max(int(round(duration_ms_val / 1000)), 0)
+    calories_val = _clamp_running_calories(calories_raw if calories_raw is not None else entry[4])
+    heart_rate_val = _clamp_running_heart_rate(heart_rate_raw if heart_rate_raw is not None else entry[5])
+
+    if complete and (distance_val <= 0 or duration_ms_val <= 0):
+        raise HTTPException(status_code=400, detail="Добавь дистанцию и время перед сохранением.")
+    await update_running_entry(
+        entry_id,
+        distance_km=distance_val,
+        duration_sec=duration_sec_val,
+        duration_ms=duration_ms_val,
+        calories=calories_val,
+        heart_rate=heart_rate_val,
+        is_draft=0 if complete else int(entry[6]),
+    )
+    if complete:
+        await mark_running_entry_done(entry_id)
+        await mark_exercise_done(session_id, ue_id)
+
+
 @app.post("/day/{day_index}/exercise/{ue_id}/running")
 @_validate_payload_input
 async def update_running_state(
-    day_index: int,
-    ue_id: int,
+    day_index: ApiInt,
+    ue_id: ApiInt,
     payload: dict = Body(...),
     date: str | None = None,
     ctx: AuthCtx = Depends(get_auth_ctx),
@@ -2713,43 +2761,7 @@ async def update_running_state(
     target_date = _parse_date_param(date)
     iso_date = _iso_date(target_date)
     session_id = await db.get_or_create_today_session(user_id, iso_date, day_index, await get_active_training_system_id(user_id))
-    entry = await get_running_entry(
-        user_id,
-        ue_id,
-        session_id=session_id,
-        day_index=day_index,
-        create=True,
-    )
-    entry_id = entry[0]
-    distance_raw = payload.get("distance_km") if isinstance(payload, dict) else None
-    duration_sec_raw = payload.get("duration_sec") if isinstance(payload, dict) else None
-    duration_ms_raw = payload.get("duration_ms") if isinstance(payload, dict) else None
-    calories_raw = payload.get("calories") if isinstance(payload, dict) else None
-    heart_rate_raw = payload.get("heart_rate") if isinstance(payload, dict) else None
-
-    distance_val = _clamp_running_distance(distance_raw if distance_raw is not None else entry[1])
-    base_duration_ms = entry[3] if len(entry) > 3 else 0
-    if not base_duration_ms and entry[2]:
-        base_duration_ms = int(entry[2]) * 1000
-    if duration_ms_raw is not None:
-        duration_ms_val = _clamp_running_duration_ms(duration_ms_raw)
-    elif duration_sec_raw is not None:
-        duration_ms_val = _clamp_running_duration_ms(float(duration_sec_raw) * 1000)
-    else:
-        duration_ms_val = base_duration_ms
-    duration_sec_val = max(int(round(duration_ms_val / 1000)), 0)
-    calories_val = _clamp_running_calories(calories_raw if calories_raw is not None else entry[4])
-    heart_rate_val = _clamp_running_heart_rate(heart_rate_raw if heart_rate_raw is not None else entry[5])
-
-    await update_running_entry(
-        entry_id,
-        distance_km=distance_val,
-        duration_sec=duration_sec_val,
-        duration_ms=duration_ms_val,
-        calories=calories_val,
-        heart_rate=heart_rate_val,
-        is_draft=1,
-    )
+    await _save_running_payload(user_id, day_index, ue_id, session_id, payload)
     state = await _build_running_state(user_id, day_index, ue_id, target_date, history_limit=30)
     return {"ok": True, **state}
 
@@ -2757,8 +2769,8 @@ async def update_running_state(
 @app.post("/day/{day_index}/exercise/{ue_id}/running/done")
 @_validate_payload_input
 async def complete_running_state(
-    day_index: int,
-    ue_id: int,
+    day_index: ApiInt,
+    ue_id: ApiInt,
     payload: dict = Body(default={}),
     date: str | None = None,
     ctx: AuthCtx = Depends(get_auth_ctx),
@@ -2769,48 +2781,7 @@ async def complete_running_state(
     target_date = _parse_date_param(date)
     iso_date = _iso_date(target_date)
     session_id = await db.get_or_create_today_session(user_id, iso_date, day_index, await get_active_training_system_id(user_id))
-    entry = await get_running_entry(
-        user_id,
-        ue_id,
-        session_id=session_id,
-        day_index=day_index,
-        create=True,
-    )
-    entry_id = entry[0]
-    distance_raw = payload.get("distance_km") if isinstance(payload, dict) else None
-    duration_sec_raw = payload.get("duration_sec") if isinstance(payload, dict) else None
-    duration_ms_raw = payload.get("duration_ms") if isinstance(payload, dict) else None
-    calories_raw = payload.get("calories") if isinstance(payload, dict) else None
-    heart_rate_raw = payload.get("heart_rate") if isinstance(payload, dict) else None
-
-    distance_val = _clamp_running_distance(distance_raw if distance_raw is not None else entry[1])
-    base_duration_ms = entry[3] if len(entry) > 3 else 0
-    if not base_duration_ms and entry[2]:
-        base_duration_ms = int(entry[2]) * 1000
-    if duration_ms_raw is not None:
-        duration_ms_val = _clamp_running_duration_ms(duration_ms_raw)
-    elif duration_sec_raw is not None:
-        duration_ms_val = _clamp_running_duration_ms(float(duration_sec_raw) * 1000)
-    else:
-        duration_ms_val = base_duration_ms
-    duration_sec_val = max(int(round(duration_ms_val / 1000)), 0)
-    calories_val = _clamp_running_calories(calories_raw if calories_raw is not None else entry[4])
-    heart_rate_val = _clamp_running_heart_rate(heart_rate_raw if heart_rate_raw is not None else entry[5])
-
-    await update_running_entry(
-        entry_id,
-        distance_km=distance_val,
-        duration_sec=duration_sec_val,
-        duration_ms=duration_ms_val,
-        calories=calories_val,
-        heart_rate=heart_rate_val,
-        is_draft=1,
-    )
-    if distance_val <= 0 or duration_ms_val <= 0:
-        raise HTTPException(status_code=400, detail='Добавь дистанцию и время перед сохранением.')
-    await mark_running_entry_done(entry_id)
-    if session_id:
-        await mark_exercise_done(session_id, ue_id)
+    await _save_running_payload(user_id, day_index, ue_id, session_id, payload, complete=True)
     active_system_id = await get_active_training_system_id(user_id)
     exercises_rows = await db.fetch_day_exercises(user_id, day_index, iso_date, active_system_id)
     all_done = bool(exercises_rows) and all(bool(row[3]) for row in exercises_rows)
@@ -2844,8 +2815,8 @@ async def complete_running_state(
 
 @app.post("/day/{day_index}/exercise/{user_exercise_id}/done")
 async def mark_exercise_done_fast(
-    day_index: int,
-    user_exercise_id: int,
+    day_index: ApiInt,
+    user_exercise_id: ApiInt,
     date: str | None = None,
     ctx: AuthCtx = Depends(get_auth_ctx),
 ):
@@ -2915,8 +2886,8 @@ async def mark_exercise_done_fast(
 
 @app.get("/day/{day_index}/exercise/{ue_id}/context")
 async def exercise_context(
-    day_index: int,
-    ue_id: int,
+    day_index: ApiInt,
+    ue_id: ApiInt,
     date: str | None = None,
     ctx: AuthCtx = Depends(get_auth_ctx),
 ):
@@ -2967,8 +2938,8 @@ async def exercise_context(
 @app.put("/day/{day_index}/exercise/{ue_id}/note")
 @_validate_payload_input
 async def update_exercise_note(
-    day_index: int,
-    ue_id: int,
+    day_index: ApiInt,
+    ue_id: ApiInt,
     payload: dict = Body(...),
     date: str | None = None,
     ctx: AuthCtx = Depends(get_auth_ctx),
@@ -3136,19 +3107,24 @@ async def settings_system_group_clear(
 
 @app.post("/settings/exercises/{exercise_id}/move")
 @_validate_payload_input
-async def settings_move_exercise(exercise_id: int, payload: dict = Body(...), ctx: AuthCtx = Depends(get_auth_ctx)):
+async def settings_move_exercise(exercise_id: ApiInt, payload: dict = Body(...), ctx: AuthCtx = Depends(get_auth_ctx)):
     muscle_group = normalize_exercise_group_for_ui((payload or {}).get("muscle_group"))
-    updated_exercise_id = await db.set_exercise_muscle_group_for_user(ctx.user_id, int(exercise_id), muscle_group)
+    try:
+        updated_exercise_id = await db.set_exercise_muscle_group_for_user(ctx.user_id, int(exercise_id), muscle_group)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail='Упражнение не найдено') from exc
     return {"ok": True, "exercise_id": int(updated_exercise_id), "muscle_group": muscle_group}
 
 
 @app.delete("/settings/exercises/{exercise_id}/remove_for_user")
-async def settings_remove_for_user(exercise_id: int, ctx: AuthCtx = Depends(get_auth_ctx)):
+async def settings_remove_for_user(exercise_id: ApiInt, ctx: AuthCtx = Depends(get_auth_ctx)):
+    await _require_catalog_exercise(ctx.user_id, exercise_id)
     return await db.remove_exercise_for_user(ctx.user_id, int(exercise_id))
 
 
 @app.delete("/settings/exercises/{exercise_id}/unlink")
-async def settings_unlink_exercise(exercise_id: int, ctx: AuthCtx = Depends(get_auth_ctx)):
+async def settings_unlink_exercise(exercise_id: ApiInt, ctx: AuthCtx = Depends(get_auth_ctx)):
+    await _require_catalog_exercise(ctx.user_id, exercise_id)
     return await db.remove_exercise_for_user(ctx.user_id, int(exercise_id))
 
 
@@ -3187,8 +3163,11 @@ async def all_exercises_unfinished(date: str | None = None, ctx: AuthCtx = Depen
             JOIN user_exercises ue ON ue.user_id=s.user_id AND ue.day_index=0 AND ue.is_archived=0
             JOIN exercises e ON e.id=ue.exercise_id
             LEFT JOIN session_exercises se ON se.session_id=s.id AND se.user_exercise_id=ue.id
-            JOIN sets st ON st.session_id=s.id AND st.user_exercise_id=ue.id
+            LEFT JOIN sets st ON st.session_id=s.id AND st.user_exercise_id=ue.id
             WHERE s.user_id=? AND s.date=? AND s.day_index=0 AND IFNULL(se.is_done,0) != 1
+              AND (st.id IS NOT NULL OR EXISTS (
+                  SELECT 1 FROM running_entries re WHERE re.session_id=s.id AND re.user_exercise_id=ue.id
+                    AND (re.distance_km>0 OR re.duration_ms>0 OR re.duration_sec>0)))
             GROUP BY e.id, ue.id, e.name, muscle_group
             ORDER BY sets_count DESC, e.name COLLATE NOCASE
             """,
@@ -3220,7 +3199,7 @@ async def create_all_exercises_catalog_exercise(payload: dict = Body(...), ctx: 
 
 
 @app.get("/all_exercises/exercise/{exercise_id}/session")
-async def all_exercise_session(exercise_id: int, date: str | None = None, ctx: AuthCtx = Depends(get_auth_ctx)):
+async def all_exercise_session(exercise_id: ApiInt, date: str | None = None, ctx: AuthCtx = Depends(get_auth_ctx)):
     if ctx.is_acting:
         raise HTTPException(status_code=403, detail="Раздел доступен только для личного дневника")
     user_id = ctx.user_id
@@ -3279,7 +3258,7 @@ async def all_exercise_session(exercise_id: int, date: str | None = None, ctx: A
 
 @app.post("/all_exercises/exercise/{exercise_id}/set/add")
 @_validate_payload_input
-async def all_exercise_add_set(exercise_id: int, payload: dict | None = Body(default=None), date: str | None = None, ctx: AuthCtx = Depends(get_auth_ctx)):
+async def all_exercise_add_set(exercise_id: ApiInt, payload: dict | None = Body(default=None), date: str | None = None, ctx: AuthCtx = Depends(get_auth_ctx)):
     if ctx.is_acting:
         raise HTTPException(status_code=403, detail="Раздел доступен только для личного дневника")
     user_id = ctx.user_id
@@ -3306,7 +3285,7 @@ async def all_exercise_add_set(exercise_id: int, payload: dict | None = Body(def
 
 
 @app.post("/all_exercises/exercise/{exercise_id}/set/remove_last")
-async def all_exercise_remove_last(exercise_id: int, date: str | None = None, ctx: AuthCtx = Depends(get_auth_ctx)):
+async def all_exercise_remove_last(exercise_id: ApiInt, date: str | None = None, ctx: AuthCtx = Depends(get_auth_ctx)):
     if ctx.is_acting:
         raise HTTPException(status_code=403, detail="Раздел доступен только для личного дневника")
     user_id = ctx.user_id
@@ -3319,7 +3298,7 @@ async def all_exercise_remove_last(exercise_id: int, date: str | None = None, ct
 
 @app.post("/all_exercises/exercise/{exercise_id}/set/inc_last")
 @_validate_payload_input
-async def all_exercise_inc_set(exercise_id: int, payload: dict = Body(...), date: str | None = None, ctx: AuthCtx = Depends(get_auth_ctx)):
+async def all_exercise_inc_set(exercise_id: ApiInt, payload: dict = Body(...), date: str | None = None, ctx: AuthCtx = Depends(get_auth_ctx)):
     if ctx.is_acting:
         raise HTTPException(status_code=403, detail="Раздел доступен только для личного дневника")
     user_id = ctx.user_id
@@ -3342,7 +3321,7 @@ async def all_exercise_inc_set(exercise_id: int, payload: dict = Body(...), date
 
 @app.put("/all_exercises/exercise/{exercise_id}/note")
 @_validate_payload_input
-async def all_exercise_note(exercise_id: int, payload: dict = Body(...), ctx: AuthCtx = Depends(get_auth_ctx)):
+async def all_exercise_note(exercise_id: ApiInt, payload: dict = Body(...), ctx: AuthCtx = Depends(get_auth_ctx)):
     if ctx.is_acting:
         raise HTTPException(status_code=403, detail="Раздел доступен только для личного дневника")
     await _require_catalog_exercise(ctx.user_id, exercise_id)
@@ -3354,7 +3333,7 @@ async def all_exercise_note(exercise_id: int, payload: dict = Body(...), ctx: Au
 
 
 @app.post("/all_exercises/exercise/{exercise_id}/done")
-async def all_exercise_done(exercise_id: int, date: str | None = None, ctx: AuthCtx = Depends(get_auth_ctx)):
+async def all_exercise_done(exercise_id: ApiInt, date: str | None = None, ctx: AuthCtx = Depends(get_auth_ctx)):
     if ctx.is_acting:
         raise HTTPException(status_code=403, detail="Раздел доступен только для личного дневника")
     user_id = ctx.user_id
@@ -3374,14 +3353,14 @@ async def all_exercise_done(exercise_id: int, date: str | None = None, ctx: Auth
 
 @app.post("/all_exercises/exercise/{exercise_id}/running")
 @_validate_payload_input
-async def all_exercise_running_save(exercise_id: int, payload: dict = Body(...), date: str | None = None, ctx: AuthCtx = Depends(get_auth_ctx)):
+async def all_exercise_running_save(exercise_id: ApiInt, payload: dict = Body(...), date: str | None = None, ctx: AuthCtx = Depends(get_auth_ctx)):
     if ctx.is_acting:
         raise HTTPException(status_code=403, detail="Раздел доступен только для личного дневника")
     user_id = ctx.user_id
     ue_id = await _get_or_create_free_user_exercise(user_id, exercise_id)
     iso_date = _iso_date(_parse_date_param(date))
     session_id = await db.get_or_create_today_session(user_id, iso_date, 0, await get_active_training_system_id(user_id))
-    await db.update_running_entry(user_id, ue_id, exercise_id, session_id, 0, payload or {})
+    await _save_running_payload(user_id, 0, ue_id, session_id, payload or {})
     state = await _build_running_state(user_id, 0, ue_id, _parse_date_param(date), exercise_id=exercise_id, history_limit=20)
     payload = await _all_exercises_groups_payload(user_id, iso_date)
     return payload | {"ok": True, "exercise_id": int(exercise_id), "user_exercise_id": int(ue_id), "running": state.get("running"), "running_history": state.get("running_history"), "previous_running": state.get("previous_running")}
@@ -3389,17 +3368,14 @@ async def all_exercise_running_save(exercise_id: int, payload: dict = Body(...),
 
 @app.post("/all_exercises/exercise/{exercise_id}/running/done")
 @_validate_payload_input
-async def all_exercise_running_done(exercise_id: int, payload: dict = Body(default_factory=dict), date: str | None = None, ctx: AuthCtx = Depends(get_auth_ctx)):
+async def all_exercise_running_done(exercise_id: ApiInt, payload: dict = Body(default_factory=dict), date: str | None = None, ctx: AuthCtx = Depends(get_auth_ctx)):
     if ctx.is_acting:
         raise HTTPException(status_code=403, detail="Раздел доступен только для личного дневника")
     user_id = ctx.user_id
     ue_id = await _get_or_create_free_user_exercise(user_id, exercise_id)
     iso_date = _iso_date(_parse_date_param(date))
     session_id = await db.get_or_create_today_session(user_id, iso_date, 0, await get_active_training_system_id(user_id))
-    if payload:
-        await db.update_running_entry(user_id, ue_id, exercise_id, session_id, 0, payload)
-    await db.mark_running_entry_done(user_id, ue_id, session_id)
-    await mark_exercise_done(session_id, ue_id)
+    await _save_running_payload(user_id, 0, ue_id, session_id, payload or {}, complete=True)
     state = await _build_running_state(user_id, 0, ue_id, _parse_date_param(date), exercise_id=exercise_id, history_limit=20)
     payload = await _all_exercises_groups_payload(user_id, iso_date)
     return payload | {"ok": True, "exercise_id": int(exercise_id), "user_exercise_id": int(ue_id), "running": state.get("running"), "running_history": state.get("running_history"), "previous_running": state.get("previous_running")}
@@ -3411,23 +3387,8 @@ async def all_exercises_finish_day(date: str | None = None, ctx: AuthCtx = Depen
         raise HTTPException(status_code=403, detail="Раздел доступен только для личного дневника")
     user_id = ctx.user_id
     iso_date = _iso_date(_parse_date_param(date))
-    system_id = await get_active_training_system_id(user_id)
-    session_id = await db.get_or_create_today_session(user_id, iso_date, 0, system_id)
-    async with db.connect_db() as conn:
-        await conn.execute(
-            """
-            UPDATE session_exercises
-            SET is_done=1, done_at=COALESCE(done_at, CURRENT_TIMESTAMP)
-            WHERE session_id=?
-              AND user_exercise_id IN (
-                SELECT DISTINCT st.user_exercise_id
-                FROM sets st
-                WHERE st.session_id=?
-              )
-            """,
-            (int(session_id), int(session_id)),
-        )
-        await conn.commit()
+    # Kept for older clients: closing a free workout must not finish exercises.
+    # Only the explicit per-exercise /done endpoints may set completion flags.
     groups_payload = await _all_exercises_groups_payload(user_id, iso_date)
     return groups_payload | {"ok": True}
 
@@ -3534,7 +3495,7 @@ async def list_group_anatomy_summaries(
 async def list_library_exercises(
     query: str | None = None,
     muscle: str | None = None,
-    only_used: int | None = 1,
+    only_used: ApiInt | None = 1,
     ctx: AuthCtx = Depends(get_auth_ctx),
 ):
     if only_used not in (None, 1):
@@ -3561,7 +3522,7 @@ async def list_library_exercises(
 @app.put("/library/exercise/{exercise_id}/muscle")
 @_validate_payload_input
 async def update_exercise_muscle_group(
-    exercise_id: int,
+    exercise_id: ApiInt,
     payload: dict = Body(...),
     ctx: AuthCtx = Depends(get_auth_ctx),
 ):
@@ -3654,7 +3615,7 @@ def _format_anatomy_summary(items):
 
 @app.get("/library/exercise/{exercise_id}/anatomy")
 async def get_exercise_anatomy(
-    exercise_id: int,
+    exercise_id: ApiInt,
     ctx: AuthCtx = Depends(get_auth_ctx),
 ):
     user_id = ctx.user_id
@@ -3674,7 +3635,7 @@ async def get_exercise_anatomy(
 @app.put("/library/exercise/{exercise_id}/anatomy")
 @_validate_payload_input
 async def update_exercise_anatomy(
-    exercise_id: int,
+    exercise_id: ApiInt,
     payload: dict = Body(...),
     ctx: AuthCtx = Depends(get_auth_ctx),
 ):
@@ -3727,7 +3688,7 @@ async def update_exercise_anatomy(
 
 @app.delete("/library/exercise/{exercise_id}/anatomy")
 async def delete_exercise_anatomy(
-    exercise_id: int,
+    exercise_id: ApiInt,
     ctx: AuthCtx = Depends(get_auth_ctx),
 ):
     user_id = ctx.user_id
@@ -3747,7 +3708,7 @@ def _resolve_range(range_code: str | None, end_date: date) -> tuple[str, date]:
 
 @app.get("/exercise/{exercise_id}/history")
 async def exercise_history(
-    exercise_id: int,
+    exercise_id: ApiInt,
     range: str | None = None,  # noqa: A002
     ctx: AuthCtx = Depends(get_auth_ctx),
 ):
@@ -3889,7 +3850,7 @@ async def exercise_history(
 
 @app.get("/body/day/{day_index}")
 async def body_day_load(
-    day_index: int,
+    day_index: ApiInt,
     date: str | None = None,
     ctx: AuthCtx = Depends(get_auth_ctx),
 ):
@@ -4020,7 +3981,7 @@ async def measurements_overview(ctx: AuthCtx = Depends(get_auth_ctx)):
 @app.get("/measurements/history/{code}")
 async def measurements_history(
     code: str,
-    limit: int = 10,
+    limit: ApiInt = 10,
     ctx: AuthCtx = Depends(get_auth_ctx),
 ):
     user_id = ctx.user_id
@@ -5063,7 +5024,7 @@ async def settings_overview(ctx: AuthCtx = Depends(get_auth_ctx)):
 
 
 @app.delete("/settings/custom_exercises/{exercise_id}")
-async def delete_custom_exercise(exercise_id: int, ctx: AuthCtx = Depends(get_auth_ctx)):
+async def delete_custom_exercise(exercise_id: ApiInt, ctx: AuthCtx = Depends(get_auth_ctx)):
     removed = await hard_delete_user_owned_exercise(ctx.user_id, int(exercise_id))
     if not removed:
         raise HTTPException(status_code=404, detail="exercise_not_found_or_base")
@@ -5202,7 +5163,7 @@ async def onboarding_finish(ctx: AuthCtx = Depends(get_auth_ctx)):
 @app.post("/settings/days/{day_index}/rename")
 @_validate_payload_input
 async def settings_rename_day(
-    day_index: int,
+    day_index: ApiInt,
     payload: dict = Body(default_factory=dict),
     ctx: AuthCtx = Depends(get_auth_ctx),
 ):
@@ -5391,7 +5352,7 @@ async def settings_clear_completions(
 
 @app.get("/settings/share")
 async def settings_share_results(
-    randomize: int | None = None,
+    randomize: ApiInt | None = None,
     ctx: AuthCtx = Depends(get_auth_ctx),
 ):
     user_id = ctx.user_id
@@ -5500,7 +5461,7 @@ async def settings_trainer_requests(
 
 @app.post("/settings/trainer/request/{link_id}/{decision}")
 async def settings_trainer_request_decision(
-    link_id: int,
+    link_id: ApiInt,
     decision: str,
     ctx: AuthCtx = Depends(get_auth_ctx),
 ):
@@ -5596,7 +5557,7 @@ async def settings_trainer_label(
 @app.post("/settings/trainer/trainee/{link_id}/label")
 @_validate_payload_input
 async def settings_trainer_trainee_label(
-    link_id: int,
+    link_id: ApiInt,
     payload: dict = Body(default_factory=dict),
     ctx: AuthCtx = Depends(get_auth_ctx),
 ):
@@ -5611,7 +5572,7 @@ async def settings_trainer_trainee_label(
 
 @app.post("/settings/trainer/trainee/{trainee_user_id}/detach")
 async def settings_trainer_trainee_detach(
-    trainee_user_id: int,
+    trainee_user_id: ApiInt,
     ctx: AuthCtx = Depends(get_auth_ctx),
 ):
     user_id = ctx.user_id
@@ -5750,7 +5711,7 @@ async def systems_create(payload: dict = Body(default={}), ctx: AuthCtx = Depend
 
 
 @app.post('/systems/{system_id}/select')
-async def systems_select(system_id: int, ctx: AuthCtx = Depends(get_auth_ctx)):
+async def systems_select(system_id: ApiInt, ctx: AuthCtx = Depends(get_auth_ctx)):
     user_id = ctx.user_id
     try:
         await db.select_training_system(user_id, int(system_id))
@@ -5761,7 +5722,7 @@ async def systems_select(system_id: int, ctx: AuthCtx = Depends(get_auth_ctx)):
 
 @app.post('/systems/{system_id}/rename')
 @_validate_payload_input
-async def systems_rename(system_id: int, payload: dict = Body(default={}), ctx: AuthCtx = Depends(get_auth_ctx)):
+async def systems_rename(system_id: ApiInt, payload: dict = Body(default={}), ctx: AuthCtx = Depends(get_auth_ctx)):
     try:
         changed = await rename_training_system(ctx.user_id, int(system_id), (payload.get('name') or '').strip())
     except db.aiosqlite.IntegrityError as exc:
@@ -5775,14 +5736,14 @@ async def systems_rename(system_id: int, payload: dict = Body(default={}), ctx: 
 
 @app.post('/systems/{system_id}/color')
 @_validate_payload_input
-async def systems_color(system_id: int, payload: dict = Body(default={}), ctx: AuthCtx = Depends(get_auth_ctx)):
+async def systems_color(system_id: ApiInt, payload: dict = Body(default={}), ctx: AuthCtx = Depends(get_auth_ctx)):
     if not await set_training_system_color(ctx.user_id, int(system_id), (payload.get('color') or '#2ea6ff').strip()):
         raise HTTPException(status_code=404, detail='system_not_found')
     return {'ok': True}
 
 
 @app.delete('/systems/{system_id}')
-async def systems_delete(system_id: int, ctx: AuthCtx = Depends(get_auth_ctx)):
+async def systems_delete(system_id: ApiInt, ctx: AuthCtx = Depends(get_auth_ctx)):
     ok = await delete_training_system(ctx.user_id, int(system_id))
     if not ok:
         raise HTTPException(status_code=400, detail='Нельзя удалить единственную систему')
@@ -5844,8 +5805,8 @@ async def achievements_select_badge(payload: dict = Body(default_factory=dict), 
 
 @app.get('/leaderboard/productivity')
 async def leaderboard_productivity(
-    limit: int = 10,
-    offset: int = 0,
+    limit: ApiInt = 10,
+    offset: ApiInt = 0,
     ctx: AuthCtx = Depends(get_auth_ctx),
 ):
     _ = ctx.user_id
@@ -5976,7 +5937,7 @@ async def teams_join_by_code(payload: dict = Body(default_factory=dict), ctx: Au
 
 
 @app.post('/teams/{team_id}/join')
-async def teams_join_open(team_id: int, ctx: AuthCtx = Depends(get_auth_ctx)):
+async def teams_join_open(team_id: ApiInt, ctx: AuthCtx = Depends(get_auth_ctx)):
     user_id = int(ctx.user_id)
     if await get_user_team(user_id):
         raise HTTPException(status_code=400, detail='already_in_team')
@@ -5995,7 +5956,7 @@ async def teams_join_open(team_id: int, ctx: AuthCtx = Depends(get_auth_ctx)):
 
 
 @app.post('/teams/{team_id}/request')
-async def teams_request_join(team_id: int, ctx: AuthCtx = Depends(get_auth_ctx)):
+async def teams_request_join(team_id: ApiInt, ctx: AuthCtx = Depends(get_auth_ctx)):
     user_id = int(ctx.user_id)
     if await get_user_team(user_id):
         raise HTTPException(status_code=400, detail='already_in_team')
@@ -6021,7 +5982,7 @@ async def teams_leave(ctx: AuthCtx = Depends(get_auth_ctx)):
 
 
 @app.post('/teams/{team_id}/delete')
-async def teams_delete(team_id: int, ctx: AuthCtx = Depends(get_auth_ctx)):
+async def teams_delete(team_id: ApiInt, ctx: AuthCtx = Depends(get_auth_ctx)):
     me_team = await get_user_team(int(ctx.user_id))
     if not me_team or int(me_team.get('team_id') or 0) != int(team_id):
         raise HTTPException(status_code=403, detail='founder_only')
@@ -6034,7 +5995,7 @@ async def teams_delete(team_id: int, ctx: AuthCtx = Depends(get_auth_ctx)):
 
 
 @app.post('/teams/{team_id}/members/{member_user_id}/remove')
-async def teams_remove_member(team_id: int, member_user_id: int, ctx: AuthCtx = Depends(get_auth_ctx)):
+async def teams_remove_member(team_id: ApiInt, member_user_id: ApiInt, ctx: AuthCtx = Depends(get_auth_ctx)):
     is_admin = int(ctx.tg_id) in ADMIN_IDS
     try:
         await remove_team_member(int(team_id), int(ctx.user_id), int(member_user_id), actor_is_admin=is_admin)
@@ -6051,8 +6012,8 @@ async def teams_remove_member(team_id: int, member_user_id: int, ctx: AuthCtx = 
 @app.post('/teams/{team_id}/members/{member_user_id}/role')
 @_validate_payload_input
 async def teams_set_member_role(
-    team_id: int,
-    member_user_id: int,
+    team_id: ApiInt,
+    member_user_id: ApiInt,
     payload: dict = Body(default_factory=dict),
     ctx: AuthCtx = Depends(get_auth_ctx),
 ):
@@ -6073,8 +6034,8 @@ async def teams_set_member_role(
 @app.get('/teams/requests')
 async def teams_requests(
     q: str | None = None,
-    limit: int = 50,
-    offset: int = 0,
+    limit: ApiInt = 50,
+    offset: ApiInt = 0,
     ctx: AuthCtx = Depends(get_auth_ctx),
 ):
     me_team = await get_user_team(int(ctx.user_id))
@@ -6102,7 +6063,7 @@ async def teams_requests_count(ctx: AuthCtx = Depends(get_auth_ctx)):
 
 
 @app.post('/teams/requests/{request_id}/accept')
-async def teams_requests_accept(request_id: int, ctx: AuthCtx = Depends(get_auth_ctx)):
+async def teams_requests_accept(request_id: ApiInt, ctx: AuthCtx = Depends(get_auth_ctx)):
     me_team = await get_user_team(int(ctx.user_id))
     if not me_team or me_team.get('role') != 'captain':
         raise HTTPException(status_code=403, detail='captain_only')
@@ -6117,7 +6078,7 @@ async def teams_requests_accept(request_id: int, ctx: AuthCtx = Depends(get_auth
 
 
 @app.post('/teams/requests/{request_id}/reject')
-async def teams_requests_reject(request_id: int, ctx: AuthCtx = Depends(get_auth_ctx)):
+async def teams_requests_reject(request_id: ApiInt, ctx: AuthCtx = Depends(get_auth_ctx)):
     me_team = await get_user_team(int(ctx.user_id))
     if not me_team or me_team.get('role') != 'captain':
         raise HTTPException(status_code=403, detail='captain_only')
@@ -6133,8 +6094,8 @@ async def teams_requests_reject(request_id: int, ctx: AuthCtx = Depends(get_auth
 
 @app.get('/teams/leaderboard')
 async def teams_leaderboard(
-    limit: int = 10,
-    offset: int = 0,
+    limit: ApiInt = 10,
+    offset: ApiInt = 0,
     ctx: AuthCtx = Depends(get_auth_ctx),
 ):
     safe_limit = max(1, min(int(limit or 10), 50))
@@ -6316,7 +6277,7 @@ async def teams_style(payload: dict = Body(default_factory=dict), ctx: AuthCtx =
 
 
 @app.get('/teams/{team_id}')
-async def teams_profile(team_id: int, ctx: AuthCtx = Depends(get_auth_ctx)):
+async def teams_profile(team_id: ApiInt, ctx: AuthCtx = Depends(get_auth_ctx)):
     is_admin = int(ctx.tg_id) in ADMIN_IDS
     profile = await fetch_team_profile(int(team_id), int(ctx.user_id), include_members_for_admin=is_admin)
     if not profile:
@@ -6366,8 +6327,8 @@ async def teams_profile(team_id: int, ctx: AuthCtx = Depends(get_auth_ctx)):
 
 @app.get('/leaderboard/productivity/{leader_user_id}/plan')
 async def leaderboard_productivity_plan(
-    leader_user_id: int,
-    system_id: int | None = None,
+    leader_user_id: ApiInt,
+    system_id: ApiInt | None = None,
     ctx: AuthCtx = Depends(get_auth_ctx),
 ):
     _ = ctx.user_id
@@ -6417,7 +6378,7 @@ async def leaderboard_productivity_plan(
 @app.post('/leaderboard/productivity/{leader_user_id}/copy')
 @_validate_payload_input
 async def leaderboard_productivity_copy(
-    leader_user_id: int,
+    leader_user_id: ApiInt,
     payload: dict = Body(default_factory=dict),
     ctx: AuthCtx = Depends(get_auth_ctx),
 ):

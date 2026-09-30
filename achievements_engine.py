@@ -158,7 +158,7 @@ async def _fetch_team_metrics(team_id: int) -> dict:
             SUM(CASE WHEN day_utc BETWEEN date('now', '-27 day') AND date('now') AND rank <= 3 THEN 1 ELSE 0 END),
             SUM(CASE WHEN day_utc BETWEEN date('now', '-27 day') AND date('now') AND rank <= 10 THEN 1 ELSE 0 END)
         FROM team_daily_scores
-        WHERE team_id=?
+        WHERE team_id=? AND rank >= 1
         """
         rank_row = await (await conn.execute(rank_q, (team_id,))).fetchone()
         best_rank_7 = int(rank_row[0]) if rank_row and rank_row[0] is not None else None
@@ -409,8 +409,8 @@ async def evaluate_team(team_id: int, *, metrics: dict | None = None) -> dict:
         "t_foundation": m["members_count"] >= 1,
         "t_full_roster": m["members_count"] >= 8,
         "t_active_core": m["members_count"] >= 6 and m["active_members_7d"] >= 5,
-        "t_top10_week": m["best_rank_7"] is not None and m["best_rank_7"] <= 10,
-        "t_top3_week": m["best_rank_7"] is not None and m["best_rank_7"] <= 3,
+        "t_top10_week": m["best_rank_7"] is not None and 1 <= m["best_rank_7"] <= 10,
+        "t_top3_week": m["best_rank_7"] is not None and 1 <= m["best_rank_7"] <= 3,
         "t_top1_week": m["best_rank_7"] is not None and m["best_rank_7"] == 1,
         "t_top1_month": m["top1_streak_days"] >= 30,
         "t_consistency_28": (m["sessions_28"] / max(1, m["members_count"])) >= 12,
@@ -474,8 +474,8 @@ async def evaluate(user_id: int) -> dict:
         "team_joined": m["team_id"] is not None,
         "team_founder": m["team_is_founder"],
         "team_full_roster": m["team_id"] is not None and m["team_members_count"] >= 8,
-        "team_top10_week": m["team_best_rank_7"] is not None and m["team_best_rank_7"] <= 10,
-        "team_top3_week": m["team_best_rank_7"] is not None and m["team_best_rank_7"] <= 3,
+        "team_top10_week": m["team_best_rank_7"] is not None and 1 <= m["team_best_rank_7"] <= 10,
+        "team_top3_week": m["team_best_rank_7"] is not None and 1 <= m["team_best_rank_7"] <= 3,
         "team_top1_week": m["team_best_rank_7"] is not None and m["team_best_rank_7"] == 1,
         "team_month_top1": m["team_top1_streak_days"] >= 30,
         "team_consistency": m["team_sessions_per_member_28"] >= 12,

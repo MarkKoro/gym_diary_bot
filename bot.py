@@ -575,6 +575,8 @@ async def get_active_day_completions(user_id: int) -> set[int]:
 
 
 async def record_day_completion(user_id: int, day_index: int) -> tuple[set[int], bool]:
+    if day_index not in {day for day, _ in await list_active_days(user_id)}:
+        raise ValueError('day_not_available')
     system_id = await _active_system_id(user_id)
     parsed = await _active_completion_rows(user_id, system_id)
     now = datetime.now(UTC)
@@ -1021,6 +1023,8 @@ async def start_reminder_day_edit(
     context.user_data[REMINDER_EDIT_POSITION_KEY] = position
     context.user_data[REMINDER_EDIT_LABEL_KEY] = display_label
     context.user_data[REMINDER_EDIT_DAY_INDEX_KEY] = day_index
+    context.user_data['reminder_edit_owner'] = user_id
+    context.user_data['reminder_edit_system'] = await _active_system_id(user_id)
     reminders = await list_user_reminders(user_id)
     reminder_map = {
         day_no: (
@@ -13446,6 +13450,21 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if not await require_edit_allowed(q, context):
                 return
             action = parts[1] if len(parts) > 1 else ""
+            if action in {'dow', 'time'}:
+                position = int(parts[2]) if len(parts) > 2 else 0
+                days = await list_active_days(target_user_id)
+                state = context.user_data
+                valid_scope = (
+                    state.get('reminder_edit_owner') == target_user_id
+                    and state.get('reminder_edit_system') == await _active_system_id(target_user_id)
+                    and state.get(REMINDER_EDIT_POSITION_KEY) == position
+                    and 1 <= position <= len(days)
+                    and state.get(REMINDER_EDIT_DAY_INDEX_KEY) == days[position - 1][0]
+                )
+                if not valid_scope:
+                    await q.answer('Настройки изменились. Выберите день заново.', show_alert=True)
+                    await show_reminders_overview(q, context, target_user_id)
+                    return
             if action == "back":
                 context.user_data.pop(REMINDER_EDIT_POSITION_KEY, None)
                 context.user_data.pop(REMINDER_EDIT_LABEL_KEY, None)
@@ -13668,6 +13687,8 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
                 context.user_data[REMINDER_SELECTED_DOW_KEY] = str(dow_iso)
                 confirmation = format_reminder_status(label, (dow, hour, minute))
+                context.user_data.pop('reminder_edit_owner', None)
+                context.user_data.pop('reminder_edit_system', None)
                 await q.answer(confirmation)
                 context.user_data.pop(REMINDER_TIME_PAGE_KEY, None)
                 await show_reminders_overview(q, context, target_user_id)
@@ -13676,6 +13697,8 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         if parts[0] == "day":
             action = parts[1]
+            if int(parts[2]) not in {day for day, _ in await list_active_days(target_user_id)}:
+                raise ValueError('day_not_available')
             mutating_day_actions = {
                 "sheetdone",
                 "groupdel",

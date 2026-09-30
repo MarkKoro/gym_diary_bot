@@ -111,6 +111,34 @@ class ReminderTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(context.user_data['reminder_day'], 2)
         self.assertEqual(await db.list_user_reminders(user_id), [(1, 0, 9, 30)])
 
+    async def test_old_reminder_time_cannot_write_a_different_day_or_diary(self):
+        user_id = await db.get_or_create_user(9610,'reminder-scope')
+        await db.set_workouts_per_week(user_id,2)
+        system = await db.get_active_training_system_id(user_id)
+        for owner, position, old_system in ((user_id,2,system),(user_id+1,1,system),(user_id,1,system+1)):
+            state = {bot.REMINDER_EDIT_POSITION_KEY:position,bot.REMINDER_EDIT_DAY_INDEX_KEY:position,
+                     'reminder_edit_owner':owner,'reminder_edit_system':old_system}
+            context = SimpleNamespace(user_data=state,job_queue=None,application=None)
+            user = SimpleNamespace(id=9610,username='reminder-scope')
+            q = SimpleNamespace(data='remedit:time:1:1:9:30',answer=AsyncMock(),message=SimpleNamespace(chat_id=9610,message_id=1))
+            update = SimpleNamespace(callback_query=q,effective_user=user)
+            with patch.object(bot,'require_subscription',AsyncMock(return_value=True)),patch.object(bot,'show_reminders_overview',AsyncMock()),patch.object(bot,'_schedule_user_reminders',AsyncMock()),patch.object(bot,'add_user_reminder',AsyncMock(return_value=True)) as write:
+                await bot.menu_router(update,context)
+                write.assert_not_awaited()
+
+    async def test_current_reminder_flow_still_saves_the_selected_day(self):
+        user_id = await db.get_or_create_user(9611,'reminder-current')
+        await db.set_workouts_per_week(user_id,2)
+        context = SimpleNamespace(user_data={},job_queue=None,application=None)
+        user = SimpleNamespace(id=9611,username='reminder-current')
+        q = SimpleNamespace(data='remedit:day:2',answer=AsyncMock(),message=SimpleNamespace(chat_id=9611,message_id=1))
+        update = SimpleNamespace(callback_query=q,effective_user=user)
+        with patch.object(bot,'require_subscription',AsyncMock(return_value=True)),patch.object(bot,'show_screen',AsyncMock()),patch.object(bot,'show_reminders_overview',AsyncMock()),patch.object(bot,'_schedule_user_reminders',AsyncMock()):
+            for data in ('remedit:day:2','remedit:dow:2:4','remedit:time:2:4:18:45'):
+                q.data = data
+                await bot.menu_router(update,context)
+        self.assertEqual(await db.list_user_reminders(user_id),[(2,3,18,45)])
+
     async def test_normalize_dow_preserves_zero_based_values(self):
         self.assertEqual(db.normalize_dow(0), 0)
         self.assertEqual(db.normalize_dow(3), 3)

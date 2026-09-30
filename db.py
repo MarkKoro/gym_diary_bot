@@ -6776,8 +6776,7 @@ async def fetch_team_profile(team_id: int, viewer_user_id: int, *, include_membe
 
 
 async def upsert_team_daily_scores(day_utc: str, items: list[dict]) -> None:
-    if not items:
-        return
+    """Replace the full top-team snapshot for one UTC day atomically."""
     now = _now_utc_iso()
     rows = [
         (
@@ -6793,6 +6792,8 @@ async def upsert_team_daily_scores(day_utc: str, items: list[dict]) -> None:
         for item in items
     ]
     async with connect_db() as db:
+        await db.execute("BEGIN IMMEDIATE")
+        await db.execute("DELETE FROM team_daily_scores WHERE day_utc=?", (day_utc,))
         await db.executemany(
             """
             INSERT INTO team_daily_scores(team_id, day_utc, score, rank, members, sessions_7, sessions_28, created_at)
@@ -8008,6 +8009,8 @@ async def set_exercise_muscle_group_for_user(user_id: int, exercise_id: int, mus
             raise ValueError("exercise_not_found")
         ex_name = str(row[0] or "").strip()
         owner_id = int(row[1] or 0)
+        if owner_id not in (0, int(user_id)):
+            raise ValueError("exercise_not_found")
 
         if owner_id == int(user_id):
             await db.execute("UPDATE exercises SET muscle_group=? WHERE id=?", (muscle_group, int(exercise_id)))
@@ -8211,20 +8214,31 @@ async def build_effective_exercise_index_for_user(user_id: int, iso_date: str):
     async with connect_db() as db:
         cur = await db.execute(
             """
+            WITH activity AS (
+                SELECT st.session_id, st.user_exercise_id
+                FROM sets st JOIN sessions s ON s.id=st.session_id WHERE s.user_id=?
+                UNION
+                SELECT se.session_id, se.user_exercise_id
+                FROM session_exercises se JOIN sessions s ON s.id=se.session_id WHERE s.user_id=? AND se.is_done=1
+                UNION
+                SELECT session_id, user_exercise_id FROM running_entries
+                WHERE user_id=? AND session_id IS NOT NULL AND (distance_km>0 OR duration_ms>0 OR duration_sec>0)
+            )
             SELECT ue.exercise_id,
                    COUNT(st.id) AS total_sets_count,
                    MAX(s.date) AS last_activity_at,
                    MAX(CASE WHEN IFNULL(se.is_done,0)=1 THEN s.date END) AS last_done_at,
-                   MAX(CASE WHEN s.date=? AND s.day_index=0 AND IFNULL(se.is_done,0) != 1 AND st.id IS NOT NULL THEN 1 ELSE 0 END) AS unfinished_today,
+                   MAX(CASE WHEN s.date=? AND s.day_index=0 AND IFNULL(se.is_done,0) != 1 AND (st.id IS NOT NULL OR EXISTS (SELECT 1 FROM running_entries re WHERE re.session_id=s.id AND re.user_exercise_id=ue.id AND (re.distance_km>0 OR re.duration_ms>0 OR re.duration_sec>0))) THEN 1 ELSE 0 END) AS unfinished_today,
                    MAX(CASE WHEN ue.user_id IS NOT NULL THEN 1 ELSE 0 END) AS has_user_link
             FROM user_exercises ue
-            LEFT JOIN sets st ON st.user_exercise_id=ue.id
-            LEFT JOIN sessions s ON s.id=st.session_id AND s.user_id=ue.user_id
+            LEFT JOIN activity a ON a.user_exercise_id=ue.id
+            LEFT JOIN sessions s ON s.id=a.session_id AND s.user_id=ue.user_id
+            LEFT JOIN sets st ON st.session_id=s.id AND st.user_exercise_id=ue.id
             LEFT JOIN session_exercises se ON se.session_id=s.id AND se.user_exercise_id=ue.id
             WHERE ue.user_id=? AND ue.is_archived=0
             GROUP BY ue.exercise_id
             """,
-            (iso_date, int(user_id)),
+            (int(user_id), int(user_id), int(user_id), iso_date, int(user_id)),
         )
         overlay={int(r[0]): r for r in (await cur.fetchall() or []) if r and r[0] is not None}
     items=[]
@@ -8238,7 +8252,7 @@ async def build_effective_exercise_index_for_user(user_id: int, iso_date: str):
             'exercise_id': int(ex_id), 'name': str(name or ''), 'base_group_raw': str(mg or 'none'),
             'effective_group': normalize_exercise_group_for_ui(mg), 'is_base': int(owner or 0)==0,
             'created_by_user': int(owner or 0)==int(user_id), 'visible_for_user': True,
-            'has_user_link': has_link, 'has_history': total_sets>0, 'last_activity_at': last_done, 'last_done_at': (ov[3] if ov else None),
+            'has_user_link': has_link, 'has_history': bool(last_done), 'last_activity_at': last_done, 'last_done_at': (ov[3] if ov else None),
             'total_sets_count': total_sets, 'unfinished_today': unfinished,
             'sort_bucket': 0 if unfinished else (1 if total_sets>0 else 2),
             'can_hard_delete': int(owner or 0)==int(user_id), 'can_unlink': has_link,
@@ -8316,9 +8330,12 @@ async def count_all_exercises_unfinished(user_id: int, iso_date: str) -> int:
             SELECT COUNT(DISTINCT ue.exercise_id)
             FROM sessions s
             JOIN user_exercises ue ON ue.user_id=s.user_id AND ue.day_index=0 AND ue.is_archived=0
-            JOIN sets st ON st.session_id=s.id AND st.user_exercise_id=ue.id
+            LEFT JOIN sets st ON st.session_id=s.id AND st.user_exercise_id=ue.id
             LEFT JOIN session_exercises se ON se.session_id=s.id AND se.user_exercise_id=ue.id
             WHERE s.user_id=? AND s.date=? AND s.day_index=0 AND IFNULL(se.is_done,0) != 1
+              AND (st.id IS NOT NULL OR EXISTS (
+                  SELECT 1 FROM running_entries re WHERE re.session_id=s.id AND re.user_exercise_id=ue.id
+                    AND (re.distance_km>0 OR re.duration_ms>0 OR re.duration_sec>0)))
             """,
             (int(user_id), iso_date),
         )

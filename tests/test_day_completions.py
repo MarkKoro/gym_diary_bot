@@ -31,6 +31,13 @@ class DayCompletionTests(unittest.IsolatedAsyncioTestCase):
                 await conn.execute(f"DELETE FROM {table}")
             await conn.commit()
 
+    async def test_removed_day_cannot_be_completed_from_an_old_button(self):
+        user_id = await db.get_or_create_user(8004,'removed-day')
+        await db.set_workouts_per_week(user_id,1)
+        with self.assertRaises(ValueError):
+            await bot.record_day_completion(user_id,7)
+        self.assertEqual(await db.list_day_completions(user_id),[])
+
     async def test_completions_persist_within_training_week(self):
         user_id = await db.get_or_create_user(8000, "weekuser")
         await db.set_user_timezone(user_id, "Europe/Moscow")
@@ -87,3 +94,4 @@ class DayCompletionTests(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
