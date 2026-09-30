@@ -6412,17 +6412,24 @@ async def fetch_team_leaderboard(limit: int = 10, offset: int = 0):
     async with connect_db() as db:
         cur = await db.execute(
             """
-            WITH team_users AS (
+            WITH dated_sessions AS (
+                SELECT s.*, local_date(datetime('now'), u.tz) AS local_today
+                FROM sessions s
+                JOIN users u ON u.id=s.user_id
+                WHERE s.date BETWEEN date(local_date(datetime('now'), u.tz), '-55 day')
+                                 AND local_date(datetime('now'), u.tz)
+            ),
+            team_users AS (
                 SELECT tm.team_id, tm.user_id, COALESCE(u.username, '') AS username
                 FROM team_members tm
                 JOIN users u ON u.id = tm.user_id
                 WHERE tm.left_at IS NULL
             ),
             completed_sessions AS (
-                SELECT s.id, s.user_id, s.date, s.day_index, s.system_id
-                FROM sessions s
+                SELECT s.id, s.user_id, s.date, s.day_index, s.system_id, s.local_today
+                FROM dated_sessions s
                 JOIN users session_user ON session_user.id=s.user_id
-                WHERE s.date >= date('now', '-56 day')
+                WHERE s.date >= date(s.local_today, '-55 day')
                   AND EXISTS (SELECT 1 FROM team_users tu WHERE tu.user_id=s.user_id)
                   AND EXISTS (
                     SELECT 1 FROM day_completion_history dch
@@ -6432,18 +6439,18 @@ async def fetch_team_leaderboard(limit: int = 10, offset: int = 0):
             ),
             recent_sessions AS (
                 SELECT s.user_id,
-                       SUM(CASE WHEN s.date >= date('now', '-7 day') THEN 1 ELSE 0 END) AS sessions_7,
-                       SUM(CASE WHEN s.date >= date('now', '-28 day') THEN 1 ELSE 0 END) AS sessions_28,
-                       COUNT(DISTINCT CASE WHEN s.date >= date('now', '-28 day') THEN s.date END) AS training_days_28,
-                       COUNT(DISTINCT CASE WHEN s.date >= date('now', '-56 day') THEN substr(s.date, 1, 8) || CAST(((CAST(substr(s.date, 9, 2) AS INTEGER)-1)/7) AS INTEGER) END) AS training_weeks_8
+                       SUM(CASE WHEN s.date >= date(s.local_today, '-6 day') THEN 1 ELSE 0 END) AS sessions_7,
+                       SUM(CASE WHEN s.date >= date(s.local_today, '-27 day') THEN 1 ELSE 0 END) AS sessions_28,
+                       COUNT(DISTINCT CASE WHEN s.date >= date(s.local_today, '-27 day') THEN s.date END) AS training_days_28,
+                       COUNT(DISTINCT CASE WHEN s.date >= date(s.local_today, '-55 day') THEN CAST((julianday(s.local_today) - julianday(s.date)) / 7 AS INTEGER) END) AS training_weeks_8
                 FROM completed_sessions s
                 GROUP BY s.user_id
             ),
             set_stats AS (
                 SELECT s.user_id,
-                       SUM(CASE WHEN s.date >= date('now', '-28 day') THEN 1 ELSE 0 END) AS sets_28,
-                       COALESCE(SUM(CASE WHEN s.date >= date('now', '-28 day') THEN MAX(st.reps, 0) * MAX(st.weight_kg, 0) ELSE 0 END), 0) AS volume_28,
-                       AVG(CASE WHEN s.date >= date('now', '-28 day') THEN MAX(st.reps, 0) * MAX(st.weight_kg, 0) END) AS avg_weighted_reps
+                       SUM(CASE WHEN s.date >= date(s.local_today, '-27 day') THEN 1 ELSE 0 END) AS sets_28,
+                       COALESCE(SUM(CASE WHEN s.date >= date(s.local_today, '-27 day') THEN MAX(st.reps, 0) * MAX(st.weight_kg, 0) ELSE 0 END), 0) AS volume_28,
+                       AVG(CASE WHEN s.date >= date(s.local_today, '-27 day') THEN MAX(st.reps, 0) * MAX(st.weight_kg, 0) END) AS avg_weighted_reps
                 FROM sets st
                 JOIN completed_sessions s ON s.id = st.session_id
                 GROUP BY s.user_id
@@ -6458,8 +6465,8 @@ async def fetch_team_leaderboard(limit: int = 10, offset: int = 0):
                 SELECT s.user_id,
                        AVG(CASE WHEN se.is_done = 1 THEN 1.0 ELSE 0.0 END) AS completion_ratio
                 FROM session_exercises se
-                JOIN sessions s ON s.id = se.session_id
-                WHERE s.date >= date('now', '-28 day')
+                JOIN dated_sessions s ON s.id = se.session_id
+                WHERE s.date >= date(s.local_today, '-27 day')
                 GROUP BY s.user_id
             ),
             recent_best AS (
@@ -6467,7 +6474,7 @@ async def fetch_team_leaderboard(limit: int = 10, offset: int = 0):
                 FROM sets st
                 JOIN completed_sessions s ON s.id = st.session_id
                 JOIN user_exercises ue ON ue.id = st.user_exercise_id
-                WHERE s.date >= date('now', '-14 day')
+                WHERE s.date >= date(s.local_today, '-13 day')
                 GROUP BY s.user_id, ue.exercise_id
             ),
             prev_best AS (
@@ -6475,7 +6482,7 @@ async def fetch_team_leaderboard(limit: int = 10, offset: int = 0):
                 FROM sets st
                 JOIN completed_sessions s ON s.id = st.session_id
                 JOIN user_exercises ue ON ue.id = st.user_exercise_id
-                WHERE s.date >= date('now', '-28 day') AND s.date < date('now', '-14 day')
+                WHERE s.date >= date(s.local_today, '-27 day') AND s.date < date(s.local_today, '-13 day')
                 GROUP BY s.user_id, ue.exercise_id
             ),
             progression AS (
@@ -6633,9 +6640,16 @@ async def fetch_team_profile(team_id: int, viewer_user_id: int, *, include_membe
         members = None
         cur = await db.execute(
                 """
-                WITH completed_sessions AS (
-                    SELECT s.id, s.user_id, s.date, s.day_index, s.system_id
+                WITH dated_sessions AS (
+                    SELECT s.*, local_date(datetime('now'), u.tz) AS local_today
                     FROM sessions s
+                    JOIN users u ON u.id=s.user_id
+                    WHERE s.date BETWEEN date(local_date(datetime('now'), u.tz), '-55 day')
+                                     AND local_date(datetime('now'), u.tz)
+                ),
+                completed_sessions AS (
+                    SELECT s.id, s.user_id, s.date, s.day_index, s.system_id, s.local_today
+                    FROM dated_sessions s
                     JOIN users session_user ON session_user.id=s.user_id
                     JOIN day_completion_history dch
                       ON dch.user_id = s.user_id
@@ -6646,19 +6660,19 @@ async def fetch_team_profile(team_id: int, viewer_user_id: int, *, include_membe
                 ),
                 recent_sessions AS (
                     SELECT s.user_id,
-                           SUM(CASE WHEN s.date >= date('now', '-28 day') THEN 1 ELSE 0 END) AS sessions_28,
-                           COUNT(DISTINCT CASE WHEN s.date >= date('now', '-28 day') THEN s.date END) AS training_days_28,
-                           COUNT(DISTINCT CASE WHEN s.date >= date('now', '-56 day') THEN substr(s.date, 1, 8) || CAST(((CAST(substr(s.date, 9, 2) AS INTEGER)-1)/7) AS INTEGER) END) AS training_weeks_8
+                           SUM(CASE WHEN s.date >= date(s.local_today, '-27 day') THEN 1 ELSE 0 END) AS sessions_28,
+                           COUNT(DISTINCT CASE WHEN s.date >= date(s.local_today, '-27 day') THEN s.date END) AS training_days_28,
+                           COUNT(DISTINCT CASE WHEN s.date >= date(s.local_today, '-55 day') THEN CAST((julianday(s.local_today) - julianday(s.date)) / 7 AS INTEGER) END) AS training_weeks_8
                     FROM completed_sessions s
                     GROUP BY s.user_id
                 ),
                 set_stats AS (
                     SELECT s.user_id,
-                           SUM(CASE WHEN s.date >= date('now', '-28 day') THEN 1 ELSE 0 END) AS sets_28,
-                           COALESCE(SUM(CASE WHEN s.date >= date('now', '-28 day') THEN MAX(st.reps, 0) * MAX(st.weight_kg, 0) ELSE 0 END), 0) AS volume_28,
-                           AVG(CASE WHEN s.date >= date('now', '-28 day') THEN MAX(st.reps, 0) * MAX(st.weight_kg, 0) END) AS avg_weighted_reps
+                           SUM(CASE WHEN s.date >= date(s.local_today, '-27 day') THEN 1 ELSE 0 END) AS sets_28,
+                           COALESCE(SUM(CASE WHEN s.date >= date(s.local_today, '-27 day') THEN MAX(st.reps, 0) * MAX(st.weight_kg, 0) ELSE 0 END), 0) AS volume_28,
+                           AVG(CASE WHEN s.date >= date(s.local_today, '-27 day') THEN MAX(st.reps, 0) * MAX(st.weight_kg, 0) END) AS avg_weighted_reps
                     FROM sets st
-                    JOIN sessions s ON s.id = st.session_id
+                    JOIN dated_sessions s ON s.id = st.session_id
                     GROUP BY s.user_id
                 ),
                 exercise_variety AS (
@@ -6671,24 +6685,24 @@ async def fetch_team_profile(team_id: int, viewer_user_id: int, *, include_membe
                     SELECT s.user_id,
                            AVG(CASE WHEN se.is_done = 1 THEN 1.0 ELSE 0.0 END) AS completion_ratio
                     FROM session_exercises se
-                    JOIN sessions s ON s.id = se.session_id
-                    WHERE s.date >= date('now', '-28 day')
+                    JOIN dated_sessions s ON s.id = se.session_id
+                    WHERE s.date >= date(s.local_today, '-27 day')
                     GROUP BY s.user_id
                 ),
                 recent_best AS (
                     SELECT s.user_id, ue.exercise_id, MAX(st.weight_kg) AS max_w
                     FROM sets st
-                    JOIN sessions s ON s.id = st.session_id
+                    JOIN dated_sessions s ON s.id = st.session_id
                     JOIN user_exercises ue ON ue.id = st.user_exercise_id
-                    WHERE s.date >= date('now', '-14 day')
+                    WHERE s.date >= date(s.local_today, '-13 day')
                     GROUP BY s.user_id, ue.exercise_id
                 ),
                 prev_best AS (
                     SELECT s.user_id, ue.exercise_id, MAX(st.weight_kg) AS max_w
                     FROM sets st
-                    JOIN sessions s ON s.id = st.session_id
+                    JOIN dated_sessions s ON s.id = st.session_id
                     JOIN user_exercises ue ON ue.id = st.user_exercise_id
-                    WHERE s.date >= date('now', '-28 day') AND s.date < date('now', '-14 day')
+                    WHERE s.date >= date(s.local_today, '-27 day') AND s.date < date(s.local_today, '-13 day')
                     GROUP BY s.user_id, ue.exercise_id
                 ),
                 progression AS (
@@ -8625,7 +8639,14 @@ async def fetch_productivity_leaderboard(limit: int = 10, offset: int = 0):
     async with connect_db() as db:
         cur = await db.execute(
             """
-            WITH users_base AS (
+            WITH dated_sessions AS (
+                SELECT s.*, local_date(datetime('now'), u.tz) AS local_today
+                FROM sessions s
+                JOIN users u ON u.id=s.user_id
+                WHERE s.date BETWEEN date(local_date(datetime('now'), u.tz), '-55 day')
+                                 AND local_date(datetime('now'), u.tz)
+            ),
+            users_base AS (
                 SELECT u.id, u.username
                 FROM users u
                 WHERE COALESCE(u.leaderboard_visible, 1) = 1
@@ -8637,11 +8658,11 @@ async def fetch_productivity_leaderboard(limit: int = 10, offset: int = 0):
             ),
             recent_sessions AS (
                 SELECT s.user_id,
-                       SUM(CASE WHEN s.date >= date('now', '-28 day') THEN 1 ELSE 0 END) AS sessions_28,
-                       COUNT(DISTINCT CASE WHEN s.date >= date('now', '-28 day') THEN s.date END) AS training_days_28,
-                       COUNT(DISTINCT substr(s.date, 1, 8) || CAST(((CAST(substr(s.date, 9, 2) AS INTEGER)-1)/7) AS INTEGER)) AS training_weeks_8
-                FROM sessions s
-                WHERE s.date >= date('now', '-56 day')
+                       SUM(CASE WHEN s.date >= date(s.local_today, '-27 day') THEN 1 ELSE 0 END) AS sessions_28,
+                       COUNT(DISTINCT CASE WHEN s.date >= date(s.local_today, '-27 day') THEN s.date END) AS training_days_28,
+                       COUNT(DISTINCT CAST((julianday(s.local_today) - julianday(s.date)) / 7 AS INTEGER)) AS training_weeks_8
+                FROM dated_sessions s
+                WHERE s.date >= date(s.local_today, '-55 day')
                   AND (
                     EXISTS (SELECT 1 FROM sets activity_set WHERE activity_set.session_id=s.id)
                     OR EXISTS (SELECT 1 FROM session_exercises activity_ex WHERE activity_ex.session_id=s.id AND activity_ex.is_done=1)
@@ -8651,11 +8672,11 @@ async def fetch_productivity_leaderboard(limit: int = 10, offset: int = 0):
             ),
             set_stats AS (
                 SELECT s.user_id,
-                       SUM(CASE WHEN s.date >= date('now', '-28 day') THEN 1 ELSE 0 END) AS sets_28,
-                       COALESCE(SUM(CASE WHEN s.date >= date('now', '-28 day') THEN MAX(st.reps, 0) * MAX(st.weight_kg, 0) ELSE 0 END), 0) AS volume_28,
-                       AVG(CASE WHEN s.date >= date('now', '-28 day') THEN MAX(st.reps, 0) * MAX(st.weight_kg, 0) END) AS avg_weighted_reps
+                       SUM(CASE WHEN s.date >= date(s.local_today, '-27 day') THEN 1 ELSE 0 END) AS sets_28,
+                       COALESCE(SUM(CASE WHEN s.date >= date(s.local_today, '-27 day') THEN MAX(st.reps, 0) * MAX(st.weight_kg, 0) ELSE 0 END), 0) AS volume_28,
+                       AVG(CASE WHEN s.date >= date(s.local_today, '-27 day') THEN MAX(st.reps, 0) * MAX(st.weight_kg, 0) END) AS avg_weighted_reps
                 FROM sets st
-                JOIN sessions s ON s.id = st.session_id
+                JOIN dated_sessions s ON s.id = st.session_id
                 GROUP BY s.user_id
             ),
             exercise_variety AS (
@@ -8668,24 +8689,24 @@ async def fetch_productivity_leaderboard(limit: int = 10, offset: int = 0):
                 SELECT s.user_id,
                        AVG(CASE WHEN se.is_done = 1 THEN 1.0 ELSE 0.0 END) AS completion_ratio
                 FROM session_exercises se
-                JOIN sessions s ON s.id = se.session_id
-                WHERE s.date >= date('now', '-28 day')
+                JOIN dated_sessions s ON s.id = se.session_id
+                WHERE s.date >= date(s.local_today, '-27 day')
                 GROUP BY s.user_id
             ),
             recent_best AS (
                 SELECT s.user_id, ue.exercise_id, MAX(st.weight_kg) AS max_w
                 FROM sets st
-                JOIN sessions s ON s.id = st.session_id
+                JOIN dated_sessions s ON s.id = st.session_id
                 JOIN user_exercises ue ON ue.id = st.user_exercise_id
-                WHERE s.date >= date('now', '-14 day')
+                WHERE s.date >= date(s.local_today, '-13 day')
                 GROUP BY s.user_id, ue.exercise_id
             ),
             prev_best AS (
                 SELECT s.user_id, ue.exercise_id, MAX(st.weight_kg) AS max_w
                 FROM sets st
-                JOIN sessions s ON s.id = st.session_id
+                JOIN dated_sessions s ON s.id = st.session_id
                 JOIN user_exercises ue ON ue.id = st.user_exercise_id
-                WHERE s.date >= date('now', '-28 day') AND s.date < date('now', '-14 day')
+                WHERE s.date >= date(s.local_today, '-27 day') AND s.date < date(s.local_today, '-13 day')
                 GROUP BY s.user_id, ue.exercise_id
             ),
             progression AS (

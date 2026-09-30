@@ -124,7 +124,7 @@ async def _fetch_team_metrics(team_id: int) -> dict:
         JOIN sessions s ON s.user_id = tm.user_id
         JOIN users u ON u.id = tm.user_id
         WHERE tm.team_id=? AND tm.left_at IS NULL
-          AND s.date >= date('now', '-7 day')
+          AND s.date BETWEEN date(local_date(datetime('now'), u.tz), '-6 day') AND local_date(datetime('now'), u.tz)
           AND EXISTS (
               SELECT 1 FROM day_completion_history d
               WHERE d.user_id=s.user_id AND d.system_id=s.system_id
@@ -135,8 +135,8 @@ async def _fetch_team_metrics(team_id: int) -> dict:
 
         sessions_q = """
         SELECT
-            SUM(CASE WHEN s.date >= date('now', '-7 day') THEN 1 ELSE 0 END),
-            SUM(CASE WHEN s.date >= date('now', '-28 day') THEN 1 ELSE 0 END)
+            SUM(CASE WHEN s.date BETWEEN date(local_date(datetime('now'), u.tz), '-6 day') AND local_date(datetime('now'), u.tz) THEN 1 ELSE 0 END),
+            SUM(CASE WHEN s.date BETWEEN date(local_date(datetime('now'), u.tz), '-27 day') AND local_date(datetime('now'), u.tz) THEN 1 ELSE 0 END)
         FROM team_members tm
         JOIN users u ON u.id = tm.user_id
         LEFT JOIN sessions s ON s.user_id = tm.user_id
@@ -153,10 +153,10 @@ async def _fetch_team_metrics(team_id: int) -> dict:
 
         rank_q = """
         SELECT
-            MIN(CASE WHEN day_utc >= date('now', '-7 day') THEN rank END),
-            MIN(CASE WHEN day_utc >= date('now', '-28 day') THEN rank END),
-            SUM(CASE WHEN day_utc >= date('now', '-28 day') AND rank <= 3 THEN 1 ELSE 0 END),
-            SUM(CASE WHEN day_utc >= date('now', '-28 day') AND rank <= 10 THEN 1 ELSE 0 END)
+            MIN(CASE WHEN day_utc BETWEEN date('now', '-6 day') AND date('now') THEN rank END),
+            MIN(CASE WHEN day_utc BETWEEN date('now', '-27 day') AND date('now') THEN rank END),
+            SUM(CASE WHEN day_utc BETWEEN date('now', '-27 day') AND date('now') AND rank <= 3 THEN 1 ELSE 0 END),
+            SUM(CASE WHEN day_utc BETWEEN date('now', '-27 day') AND date('now') AND rank <= 10 THEN 1 ELSE 0 END)
         FROM team_daily_scores
         WHERE team_id=?
         """
@@ -171,7 +171,7 @@ async def _fetch_team_metrics(team_id: int) -> dict:
                 """
                 SELECT day_utc, rank
                 FROM team_daily_scores
-                WHERE team_id=?
+                WHERE team_id=? AND day_utc <= date('now')
                 ORDER BY day_utc DESC
                 LIMIT 35
                 """,
@@ -185,7 +185,8 @@ async def _fetch_team_metrics(team_id: int) -> dict:
             JOIN team_members tm ON tm.user_id = dch.user_id
             JOIN users u ON u.id = dch.user_id
             WHERE tm.team_id=? AND tm.left_at IS NULL
-              AND dch.completed_at >= datetime('now', '-28 day')
+              AND local_date(dch.completed_at, u.tz)
+                  BETWEEN date(local_date(datetime('now'), u.tz), '-27 day') AND local_date(datetime('now'), u.tz)
             GROUP BY dch.user_id, dch.system_id, dch.day_index, local_date(dch.completed_at, u.tz)
         """
         night_rows = await (await conn.execute(night_q, (team_id,))).fetchall()
@@ -251,8 +252,9 @@ async def _fetch_metrics(user_id: int) -> dict:
         SELECT COUNT(DISTINCT ue.exercise_id)
         FROM session_exercises se
         JOIN sessions s ON s.id=se.session_id
+        JOIN users u ON u.id=s.user_id
         JOIN user_exercises ue ON ue.id=se.user_exercise_id
-        WHERE s.user_id=? AND se.is_done=1 AND s.date >= date('now', '-7 day')
+        WHERE s.user_id=? AND se.is_done=1 AND s.date BETWEEN date(local_date(datetime('now'), u.tz), '-6 day') AND local_date(datetime('now'), u.tz)
         """
         variety_week = int((await (await conn.execute(q, (user_id,))).fetchone())[0] or 0)
 

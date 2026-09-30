@@ -153,9 +153,11 @@ class LeaderboardLoadTests(unittest.IsolatedAsyncioTestCase):
                 elapsed=time.perf_counter()-start
                 self.assertEqual(total,20)
                 self.assertEqual([r['team_id'] for r in page],list(range(1,11)))
-                self.assertTrue(all(r['sessions_7']==80 and r['sessions_28']==290 for r in full))
+                self.assertTrue(all(r['sessions_7']==7*10 and r['sessions_28']==28*10 for r in full))
                 self.assertEqual([r['rank'] for r in full],list(range(1,21)))
                 self.assertTrue(all(0<=r['score']<=100 for r in full))
+                _, _, people = await db.fetch_productivity_leaderboard(200,0)
+                self.assertTrue(all(r['training_weeks_8']==8 for r in people), {r['training_weeks_8'] for r in people})
                 print(f'Load fixture: 200 users, 16000 sessions, 32000 completion rows; team ranking {elapsed:.3f}s')
 
 

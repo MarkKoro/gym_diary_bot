@@ -138,7 +138,7 @@ class TeamAchievementRegressionTests(unittest.IsolatedAsyncioTestCase):
         import achievements_engine as ach
         team = await db.create_team(self.uid, 'Alpha')
         await db.set_user_timezone(self.uid, 'Asia/Bangkok')
-        now = datetime.now(UTC).replace(hour=18, minute=0, second=0)
+        now = (datetime.now(UTC)-timedelta(days=1)).replace(hour=18, minute=0, second=0)
         await db.mark_day_completed(self.uid, 1, now.isoformat(), 0)
         await db.mark_day_completed(self.uid, 1, (now+timedelta(seconds=10)).isoformat(), 0)
         self.assertEqual((await ach._fetch_team_metrics(team['team_id']))['night_sessions_28'], 1)
@@ -149,7 +149,7 @@ class TeamAchievementRegressionTests(unittest.IsolatedAsyncioTestCase):
         import achievements_engine as ach
         team = await db.create_team(self.uid, 'Night crew')
         await db.set_user_timezone(self.uid, 'Asia/Bangkok')
-        utc_time = datetime.now(UTC).replace(hour=18, minute=0, second=0)
+        utc_time = (datetime.now(UTC)-timedelta(days=1)).replace(hour=18, minute=0, second=0)
         local_date = (utc_time+timedelta(hours=7)).date().isoformat()
         await db.get_or_create_today_session(self.uid, local_date, 1, 0)
         await db.mark_day_completed(self.uid, 1, utc_time.isoformat(), 0)
@@ -782,6 +782,79 @@ class AchievementCatalogIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await ach._fetch_metrics(self.uid))['copied_plan_3days'],0)
         await db.mark_day_completed(self.uid,1,'2026-01-04T01:00:00+00:00',self.sid)
         self.assertEqual((await ach._fetch_metrics(self.uid))['copied_plan_3days'],1)
+
+    async def test_weekly_variety_excludes_eighth_day_and_future_sessions(self):
+        import achievements_engine as ach
+        today = datetime.now(UTC).date()
+        exercises = [await db.get_or_create_exercise(f'Boundary variety {i}', 'chest', self.uid) for i in range(13)]
+        async with db.connect_db() as conn:
+            for ex, offset in zip(exercises,[0]*10+[6,7,-1]):
+                cur = await conn.execute('INSERT INTO user_exercises(user_id,exercise_id,day_index) VALUES(?,?,1)', (self.uid,ex))
+                ue = cur.lastrowid
+                stamp = (today-timedelta(days=offset)).isoformat()
+                await conn.execute('INSERT OR IGNORE INTO sessions(user_id,date,day_index,system_id) VALUES(?,?,1,?)',(self.uid,stamp,self.sid))
+                session = (await (await conn.execute('SELECT id FROM sessions WHERE user_id=? AND date=? AND system_id=?',(self.uid,stamp,self.sid))).fetchone())[0]
+                await conn.execute('INSERT INTO session_exercises(session_id,user_exercise_id,is_done) VALUES(?,?,1)',(session,ue))
+            await conn.commit()
+        self.assertEqual((await ach._fetch_metrics(self.uid))['variety_week'],11)
+        self.assertNotIn('variety_12_week',(await ach.evaluate(self.uid))['earned_codes'])
+
+    async def test_calendar_boundaries_match_across_awards_and_rankings(self):
+        import achievements_engine as ach
+        from zoneinfo import ZoneInfo
+        team = await db.create_team(self.uid,'Calendar boundary team')
+        tid = team['team_id']
+        ex = await db.get_or_create_exercise('Boundary press','chest',self.uid)
+        await db.add_user_exercise(self.uid,1,ex)
+        async with db.connect_db() as conn:
+            ue = (await (await conn.execute('SELECT id FROM user_exercises WHERE user_id=? AND exercise_id=?',(self.uid,ex))).fetchone())[0]
+            await conn.execute('UPDATE users SET leaderboard_visible=1 WHERE id=?',(self.uid,))
+            await conn.commit()
+        for tz_name in ('Etc/GMT+12','Etc/GMT-14'):
+            with self.subTest(timezone=tz_name):
+                await db.set_user_timezone(self.uid,tz_name)
+                today = datetime.now(UTC).astimezone(ZoneInfo(tz_name)).date()
+                async with db.connect_db() as conn:
+                    await conn.execute('DELETE FROM sets WHERE session_id IN (SELECT id FROM sessions WHERE user_id=?)',(self.uid,))
+                    await conn.execute('DELETE FROM session_exercises WHERE session_id IN (SELECT id FROM sessions WHERE user_id=?)',(self.uid,))
+                    await conn.execute('DELETE FROM sessions WHERE user_id=?',(self.uid,))
+                    await conn.execute('DELETE FROM day_completion_history WHERE user_id=?',(self.uid,))
+                    for offset in (0,6,7,27,28,55,56,-1):
+                        day = today-timedelta(days=offset)
+                        stamp = datetime.combine(day,datetime.min.time(),ZoneInfo(tz_name)).astimezone(UTC).isoformat()
+                        cur = await conn.execute('INSERT INTO sessions(user_id,date,day_index,system_id) VALUES(?,?,1,?)',(self.uid,day.isoformat(),self.sid))
+                        session = cur.lastrowid
+                        await conn.execute('INSERT INTO day_completion_history(user_id,system_id,day_index,completed_at) VALUES(?,?,1,?)',(self.uid,self.sid,stamp))
+                        await conn.execute('INSERT INTO session_exercises(session_id,user_exercise_id,is_done) VALUES(?,?,1)',(session,ue))
+                        await conn.execute('INSERT INTO sets(session_id,user_exercise_id,set_no,reps,weight_kg) VALUES(?,?,1,5,20)',(session,ue))
+                    await conn.commit()
+                metrics = await ach._fetch_team_metrics(tid)
+                self.assertEqual((metrics['sessions_7'],metrics['sessions_28'],metrics['night_sessions_28']),(2,4,4))
+                _,_,teams = await db.fetch_team_leaderboard()
+                row = next(r for r in teams if r['team_id']==tid)
+                self.assertEqual((row['sessions_7'],row['sessions_28']),(2,4))
+                _,_,people = await db.fetch_productivity_leaderboard()
+                row = next(r for r in people if r['user_id']==self.uid)
+                self.assertEqual((row['sessions_28'],row['training_days_28'],row['sets_28'],row['volume_28']),(4,4,4,400))
+                profile = await db.fetch_team_profile(tid,self.uid)
+                member = next(r for r in profile['members'] if r['user_id']==self.uid)
+                self.assertEqual(member['sessions_28'],4)
+                self.assertEqual(row['training_weeks_8'],5)
+
+    async def test_expired_and_future_rankings_do_not_unlock_weekly_awards(self):
+        import achievements_engine as ach
+        team = await db.create_team(self.uid,'Expired rank team')
+        tid = team['team_id']
+        now = datetime.now(UTC)
+        async with db.connect_db() as conn:
+            for offset in (7,28,-1):
+                await conn.execute('INSERT INTO team_daily_scores VALUES(?,?,?,?,?,?,?,?)',(tid,(now-timedelta(days=offset)).date().isoformat(),100,1,1,1,1,now.isoformat()))
+            await conn.commit()
+        metrics = await ach._fetch_team_metrics(tid)
+        self.assertIsNone(metrics['best_rank_7'])
+        self.assertEqual(metrics['top3_days_28'],1)
+        self.assertNotIn('t_top1_week',(await ach.evaluate_team(tid))['earned_team_codes'])
+        self.assertNotIn('team_top1_week',(await ach.evaluate(self.uid))['earned_codes'])
 
 
 class ProductivityWindowTests(unittest.IsolatedAsyncioTestCase):
