@@ -6139,7 +6139,7 @@ async def list_team_requests(
 ) -> tuple[list[dict], int]:
     safe_limit = max(1, min(200, int(limit)))
     safe_offset = max(0, int(offset))
-    query = (q or "").strip()
+    query = (q or "").strip().removeprefix("@")
 
     where = ["r.team_id=?", "r.status=?"]
     params: list[object] = [team_id, status]
@@ -6166,15 +6166,23 @@ async def list_team_requests(
                     LIMIT 1
                 ), '') AS latest_system_name,
                 COALESCE((
-                    SELECT COUNT(*)
-                    FROM day_completions dc
-                    WHERE dc.user_id = r.user_id
+                    SELECT COUNT(*) FROM (
+                        SELECT dc.system_id, dc.day_index, local_date(dc.completed_at, u.tz) AS local_day
+                        FROM day_completion_history dc
+                        WHERE dc.user_id = r.user_id
+                          AND local_date(dc.completed_at, u.tz) <= local_date(datetime('now'), u.tz)
+                        GROUP BY dc.system_id, dc.day_index, local_date(dc.completed_at, u.tz)
+                    )
                 ), 0) AS sessions_total,
                 COALESCE((
-                    SELECT COUNT(*)
-                    FROM day_completions dc
-                    WHERE dc.user_id = r.user_id
-                      AND dc.completed_at >= datetime('now', '-28 days')
+                    SELECT COUNT(*) FROM (
+                        SELECT dc.system_id, dc.day_index, local_date(dc.completed_at, u.tz) AS local_day
+                        FROM day_completion_history dc
+                        WHERE dc.user_id = r.user_id
+                          AND local_date(dc.completed_at, u.tz)
+                              BETWEEN date(local_date(datetime('now'), u.tz), '-27 day') AND local_date(datetime('now'), u.tz)
+                        GROUP BY dc.system_id, dc.day_index, local_date(dc.completed_at, u.tz)
+                    )
                 ), 0) AS sessions_28,
                 COALESCE(u.created_at, '') AS user_created_at
             FROM team_join_requests r
@@ -6672,7 +6680,7 @@ async def fetch_team_profile(team_id: int, viewer_user_id: int, *, include_membe
                            COALESCE(SUM(CASE WHEN s.date >= date(s.local_today, '-27 day') THEN MAX(st.reps, 0) * MAX(st.weight_kg, 0) ELSE 0 END), 0) AS volume_28,
                            AVG(CASE WHEN s.date >= date(s.local_today, '-27 day') THEN MAX(st.reps, 0) * MAX(st.weight_kg, 0) END) AS avg_weighted_reps
                     FROM sets st
-                    JOIN dated_sessions s ON s.id = st.session_id
+                    JOIN completed_sessions s ON s.id = st.session_id
                     GROUP BY s.user_id
                 ),
                 exercise_variety AS (
@@ -6692,7 +6700,7 @@ async def fetch_team_profile(team_id: int, viewer_user_id: int, *, include_membe
                 recent_best AS (
                     SELECT s.user_id, ue.exercise_id, MAX(st.weight_kg) AS max_w
                     FROM sets st
-                    JOIN dated_sessions s ON s.id = st.session_id
+                    JOIN completed_sessions s ON s.id = st.session_id
                     JOIN user_exercises ue ON ue.id = st.user_exercise_id
                     WHERE s.date >= date(s.local_today, '-13 day')
                     GROUP BY s.user_id, ue.exercise_id
@@ -6700,7 +6708,7 @@ async def fetch_team_profile(team_id: int, viewer_user_id: int, *, include_membe
                 prev_best AS (
                     SELECT s.user_id, ue.exercise_id, MAX(st.weight_kg) AS max_w
                     FROM sets st
-                    JOIN dated_sessions s ON s.id = st.session_id
+                    JOIN completed_sessions s ON s.id = st.session_id
                     JOIN user_exercises ue ON ue.id = st.user_exercise_id
                     WHERE s.date >= date(s.local_today, '-27 day') AND s.date < date(s.local_today, '-13 day')
                     GROUP BY s.user_id, ue.exercise_id

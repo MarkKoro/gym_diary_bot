@@ -160,6 +160,64 @@ class TeamAchievementRegressionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(next(t for t in teams if t['team_id'] == team['team_id'])['sessions_28'], 1)
         self.assertIsNotNone(await db.fetch_team_profile(team['team_id'], self.uid))
 
+    async def test_team_profile_uses_the_same_completed_training_score_as_ranking(self):
+        await db.set_user_timezone(self.uid,'UTC')
+        team = await db.create_team(self.uid,'Consistent member score')
+        ex = await db.get_or_create_exercise('Profile score press','chest',self.uid)
+        await db.add_user_exercise(self.uid,1,ex)
+        today = datetime.now(UTC).date().isoformat()
+        session = await db.get_or_create_today_session(self.uid,today,1,0)
+        async with db.connect_db() as conn:
+            ue = (await (await conn.execute('SELECT id FROM user_exercises WHERE user_id=? AND exercise_id=?',(self.uid,ex))).fetchone())[0]
+            await conn.executemany('INSERT INTO sets(session_id,user_exercise_id,set_no,reps,weight_kg) VALUES(?,?,?,?,?)',[(session,ue,i+1,10,100) for i in range(10)])
+            await conn.commit()
+        profile = await db.fetch_team_profile(team['team_id'],self.uid)
+        self.assertEqual(profile['members'][0]['score'],profile['team']['avg_member_score'])
+        await db.mark_day_completed(self.uid,1,datetime.now(UTC).isoformat(),0)
+        completed = await db.fetch_team_profile(team['team_id'],self.uid)
+        self.assertEqual(completed['members'][0]['score'],completed['team']['avg_member_score'])
+        self.assertGreater(completed['members'][0]['score'],profile['members'][0]['score'])
+
+    async def test_join_request_statistics_use_unique_history_not_latest_day_state(self):
+        from zoneinfo import ZoneInfo
+        applicant = await db.get_or_create_user(92901,'HistoryApplicant')
+        await db.set_user_timezone(applicant,'Etc/GMT-14')
+        team = await db.create_team(self.uid,'Request history')
+        await db.create_or_get_join_request(team['team_id'],applicant)
+        local_now = datetime.now(UTC).astimezone(ZoneInfo('Etc/GMT-14')).replace(hour=0,minute=0,second=0,microsecond=0)
+        for offset in (0,27,28,0):
+            await db.mark_day_completed(applicant,1,(local_now-timedelta(days=offset)).astimezone(UTC).isoformat(),0)
+        items,total = await db.list_team_requests(team['team_id'])
+        self.assertEqual(total,1)
+        self.assertEqual((items[0]['sessions_total'],items[0]['sessions_28']),(3,2))
+
+    async def test_join_request_search_accepts_username_with_at_sign(self):
+        applicant = await db.get_or_create_user(92902,'SearchApplicant')
+        team = await db.create_team(self.uid,'Request search')
+        await db.create_or_get_join_request(team['team_id'],applicant)
+        for query in ('SearchApp',' @searchapp '):
+            with self.subTest(query=query):
+                items,total = await db.list_team_requests(team['team_id'],q=query)
+                self.assertEqual(total,1)
+                self.assertEqual(items[0]['user_id'],applicant)
+
+    async def test_captain_cannot_read_or_decide_another_teams_requests(self):
+        import webapp_backend as api
+        from fastapi import HTTPException
+        other = await db.get_or_create_user(92903,'OtherCaptain')
+        applicant = await db.get_or_create_user(92904,'PrivateApplicant')
+        await db.create_team(self.uid,'Own team')
+        team = await db.create_team(other,'Other team')
+        request = await db.create_or_get_join_request(team['team_id'],applicant)
+        self.assertEqual((await api.teams_requests(ctx=SimpleNamespace(user_id=self.uid)))['items'],[])
+        for user in (self.uid,applicant):
+            for handler in (api.teams_requests_accept,api.teams_requests_reject):
+                with self.subTest(user=user,action=handler.__name__),self.assertRaises(HTTPException) as caught:
+                    await handler(request['request_id'],SimpleNamespace(user_id=user))
+                self.assertEqual(caught.exception.status_code,403)
+        self.assertEqual(await db.count_team_pending_requests(team['team_id']),1)
+        self.assertIsNone(await db.get_user_team(applicant))
+
     async def test_system_operations_reject_other_users_system_without_changes(self):
         other = await db.get_or_create_user(9300, 'private')
         own_system = await db.get_active_training_system_id(self.uid)
