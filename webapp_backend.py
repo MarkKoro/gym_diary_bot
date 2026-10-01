@@ -457,14 +457,15 @@ async def get_auth_ctx(
     acting_user_id = None
     acting_can_edit = True
     is_acting = False
+    route_path = getattr(request.scope.get('route'), 'path', request.url.path)
     if x_acting_user and x_acting_user != internal_user_id:
         acting_user_id = int(x_acting_user)
-        if request.url.path.startswith("/settings/trainer"):
+        if route_path.startswith("/settings/trainer"):
             acting_user_id = None
         else:
             # Match the personal sections hidden by the WebApp in trainer mode.
             personal_prefixes = ('/teams', '/achievements', '/subscription', '/api/payments', '/all_exercises', '/leaderboard')
-            if request.url.path.startswith(personal_prefixes) or request.url.path == '/settings/leaderboard_visibility':
+            if route_path.startswith(personal_prefixes) or route_path == '/settings/leaderboard_visibility':
                 raise HTTPException(status_code=403, detail='Раздел доступен только для личного дневника')
             link = await get_trainer_link(internal_user_id, acting_user_id)
             if not link or str(link[1]) != "accepted":

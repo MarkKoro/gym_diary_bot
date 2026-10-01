@@ -891,6 +891,29 @@ class ApiInputMatrixTests(unittest.IsolatedAsyncioTestCase):
             actor_request=Request({'type':'http','path':'/settings/trainer','method':'GET','headers':[]})
             self.assertEqual((await self.api.get_auth_ctx(actor_request,tg,2)).user_id,1)
 
+    async def test_trainer_scope_remains_correct_when_api_is_mounted_under_a_prefix(self):
+        import httpx
+        from fastapi import FastAPI
+        from unittest.mock import AsyncMock
+        api = self.api
+        api.app.dependency_overrides.clear()
+        tg = SimpleNamespace(user=SimpleNamespace(id=98200, username='trainer', first_name=None, last_name=None), auth_date=1)
+        api.app.dependency_overrides[api.get_tg_init_data] = lambda: tg
+        mounted = FastAPI()
+        mounted.mount('/gymapi', api.app)
+        actor = self.ctx.user_id
+        trainee = await db.get_or_create_user(98202, 'prefix-trainee')
+        with patch.object(api.db, 'get_or_create_user', AsyncMock(return_value=actor)), patch.object(api, 'get_trainer_link', AsyncMock(return_value=(1,'accepted',1))), patch.object(api, 'ensure_training_system_defaults', AsyncMock()), patch.object(api, '_fetch_trainer_profile', AsyncMock(return_value={'is_trainer':False, 'trainer_code':None, 'accepts_requests':False})) as profile:
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=mounted, raise_app_exceptions=False), base_url='http://test') as client:
+                headers = {'X-Acting-User':str(trainee)}
+                with self.subTest(section='personal teams'):
+                    response = await client.get('/gymapi/teams/me', headers=headers)
+                    self.assertEqual(response.status_code, 403, response.text)
+                with self.subTest(section='own trainer settings'):
+                    response = await client.get('/gymapi/settings/trainer', headers=headers)
+                    self.assertEqual(response.status_code, 200, response.text)
+                    profile.assert_awaited_once_with(actor)
+
     async def test_ai_receipt_status_is_owner_scoped_and_read_only(self):
         import json
         token = 'test_receipt_1234567890'
