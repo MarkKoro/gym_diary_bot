@@ -1,3 +1,5 @@
+from telegram_webapp_auth import TelegramWebAppUser
+from progressor_bridge import current_claims, install_auth_bridge
 import functools
 import inspect
 import os
@@ -199,6 +201,9 @@ ANATOMY_MUSCLE_CODES = {
 ApiInt = Annotated[int, Field(ge=-(2**63), le=2**63-1)]
 
 app = FastAPI(title="GymDiary WebApp backend")
+install_auth_bridge(app, "gym")
+from progressor_client import install_cache_worker
+install_cache_worker(app, "gym", db.DB_PATH)
 logger = logging.getLogger(__name__)
 
 MAX_INITDATA_AGE_SEC = 24 * 60 * 60
@@ -417,6 +422,10 @@ def get_tg_init_data(
     Берём initData либо из заголовка X-Telegram-InitData (предпочтительно),
     либо из query param ?initData=...
     """
+    shared = current_claims()
+    if shared:
+        return TelegramInitData(user=TelegramWebAppUser(**shared["user"]), auth_date=shared["auth_date"])
+
     init_data = x_telegram_initdata
     if not init_data:
         init_data = request.query_params.get("initData")
@@ -6808,6 +6817,11 @@ async def _run_ai_coach_query(user_id: int, mode: str, user_message: str, payloa
         'muscle_groups': (catalog_context.get('groups') or []),
     }
 
+    from progressor_client import ai_context
+    async with db.connect_db() as connection:
+        identity = await (await connection.execute("SELECT tg_id FROM users WHERE id=?", (user_id,))).fetchone()
+    shared_context = await ai_context("gym", identity[0]) if identity else None
+    if shared_context: ctx["progressor_context"] = shared_context
     context_text = json.dumps(ctx, ensure_ascii=False)
     user_prompt = (
         'Используй этот контекст (JSON) и сформируй ответ по схеме:\\n'
@@ -6905,6 +6919,7 @@ async def _run_ai_coach_query(user_id: int, mode: str, user_message: str, payloa
         "parsed_action_plan": sanitized_plan,
         "action_plan_warnings": plan_warnings,
         "context_preview": context_text,
+        "context_sources": shared_context["sources"] if shared_context else [],
         "model": get_openai_model(),
         "requested_days": requested_days,
         "expected_days": requested_days,

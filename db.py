@@ -3959,6 +3959,11 @@ async def get_active_subscription(user_id: int) -> dict | None:
             (user_id,),
         )
         row = await cur.fetchone()
+        from progressor_client import bundle_until, parse_until
+        identity = await (await db.execute("SELECT tg_id FROM users WHERE id=?", (user_id,))).fetchone()
+        shared = bundle_until(DB_PATH, identity[0]) if identity else None
+        if shared and (not row or shared > parse_until(row[2])):
+            return {"plan":"progressor_bundle", "started_at":None, "expires_at":shared}
         if not row:
             return None
         plan, started_at, expires_at = row
