@@ -193,6 +193,9 @@ def supply(db):
 ADAPTERS = {'gym': gym, 'food': food, 'supply': supply}
 
 
-def snapshot(source, path):
+def snapshot(source, path, max_age=None):
+    if max_age is not None:
+        age=time.time()-Path(path).stat().st_mtime
+        if not -5<=age<=max_age:raise FileNotFoundError('source_snapshot_stale')
     with read_only(path) as db:
         return ADAPTERS[source](db)

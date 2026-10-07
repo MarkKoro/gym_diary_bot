@@ -38,11 +38,12 @@ class Config:
     yookassa_shop: str = ''
     yookassa_key: str = ''
     yookassa_vat: int = 1
+    require_fresh_snapshots: bool = False
 
     @classmethod
     def environment(cls):
         enabled = tuple(s for s in os.environ.get('PROGRESSOR_ENABLED_DOMAINS', '').split(',') if s in SOURCES)
-        return cls(db_path=os.environ['PROGRESSOR_DB_PATH'], signing_key=Path(os.environ['PROGRESSOR_SIGNING_KEY_FILE']).read_text().strip(), source_paths={s: os.environ['PROGRESSOR_' + s.upper() + '_DB_RO'] for s in SOURCES if os.environ.get('PROGRESSOR_' + s.upper() + '_DB_RO')}, bot_tokens={s: os.environ.get('PROGRESSOR_' + s.upper() + '_BOT_TOKEN', '') for s in SOURCES}, ingest_keys={s: os.environ.get('PROGRESSOR_' + s.upper() + '_INGEST_KEY', '') for s in SOURCES}, enabled_domains=enabled,yookassa_shop=os.getenv('PROGRESSOR_YOOKASSA_SHOP_ID',''),yookassa_key=os.getenv('PROGRESSOR_YOOKASSA_SECRET_KEY',''),yookassa_vat=int(os.getenv('PROGRESSOR_YOOKASSA_VAT_CODE','1')))
+        return cls(db_path=os.environ['PROGRESSOR_DB_PATH'], signing_key=Path(os.environ['PROGRESSOR_SIGNING_KEY_FILE']).read_text().strip(), source_paths={s: os.environ['PROGRESSOR_' + s.upper() + '_DB_RO'] for s in SOURCES if os.environ.get('PROGRESSOR_' + s.upper() + '_DB_RO')}, bot_tokens={s: os.environ.get('PROGRESSOR_' + s.upper() + '_BOT_TOKEN', '') for s in SOURCES}, ingest_keys={s: os.environ.get('PROGRESSOR_' + s.upper() + '_INGEST_KEY', '') for s in SOURCES}, enabled_domains=enabled,yookassa_shop=os.getenv('PROGRESSOR_YOOKASSA_SHOP_ID',''),yookassa_key=os.getenv('PROGRESSOR_YOOKASSA_SECRET_KEY',''),yookassa_vat=int(os.getenv('PROGRESSOR_YOOKASSA_VAT_CODE','1')),require_fresh_snapshots=os.getenv('PROGRESSOR_REQUIRE_FRESH_SNAPSHOTS','0')=='1')
 
 
 class Engine:
@@ -67,7 +68,7 @@ class Engine:
             try:
                 if source not in self.config.source_paths:
                     raise FileNotFoundError('source_not_configured')
-                changed = self.store.reconcile(source, snapshot(source, self.config.source_paths[source]))
+                changed = self.store.reconcile(source, snapshot(source, self.config.source_paths[source],max_age=90 if self.config.require_fresh_snapshots else None))
                 self.metrics['events_accepted'] += changed
                 log.info(json.dumps({'event': 'source_snapshot', 'source': source, 'changed': changed, 'correlation_id': uuid.uuid4().hex}))
             except Exception as exc:
