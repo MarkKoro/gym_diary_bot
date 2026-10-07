@@ -22,6 +22,12 @@ from .billing import Billing
 from .payments import install_routes, reconcile_pending
 
 log = logging.getLogger('progressor')
+if not log.handlers:
+    safe_handler=logging.StreamHandler()
+    safe_handler.setFormatter(logging.Formatter('%(message)s'))
+    log.addHandler(safe_handler)
+log.setLevel(logging.INFO)
+log.propagate=False  # Do not enable HTTP-client logging: upstream URLs can contain bot tokens.
 
 
 @dataclass

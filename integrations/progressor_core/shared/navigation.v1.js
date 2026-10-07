@@ -197,7 +197,7 @@
           for (const report of context.supply.lab_reports || []) { element('p', `Отчёт ${report.report_date || 'без даты'} · ${report.observation_count} показателей · статус ${report.confirmation_state}`, details); for (const value of report.observations || []) element('p', `${value.name}: ${value.value ?? value.value_text ?? 'нет данных'} ${value.unit}`, details); }
           element('small', context.supply.uncertainty, details);
         }
-        if (context.memberships.length) element('small', 'Источники: ' + context.memberships.map(s => ({gym:'Gym',food:'Food',supply:'Supply'}[s])).join(', ') + '. Обновление примерно раз в 30 секунд; выводы учитывают полноту записей.', content);
+        if (context.memberships.length) element('small', 'Источники: ' + context.memberships.map(s => ({gym:'Gym',food:'Food',supply:'Supply'}[s])).join(', ') + '. Изменения обычно появляются в течение минуты; выводы учитывают полноту записей.', content);
       } catch (_) { status.textContent = 'Общий контекст временно недоступен. Текущий раздел продолжает работать.'; if (activityCard) activityCard.textContent = 'Контекст тренировки временно недоступен; питание можно записывать как обычно.'; }
       finally { clearTimeout(timeout); loading = false; nav.querySelectorAll('a').forEach(a => a.setAttribute('aria-disabled', String(a.dataset.domain !== source && (!sessionValid() || !availableDomains.includes(a.dataset.domain))))); }
     }

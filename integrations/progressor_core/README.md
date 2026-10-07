@@ -79,3 +79,10 @@ Production isolation: native API workers publish private online backups every 30
 files and PROGRESSOR_REQUIRE_FRESH_SNAPSHOTS=1. Reject copies older than 90s. Core's strict
 read-only filesystem has only /var/lib/progressor writable, so live SQLite WAL coordination
 remains entirely with each source owner. Native flag PROGRESSOR_SOURCE_SNAPSHOT_ENABLED=1.
+
+
+RUB first-request preflight reads the selected live merchant with GET /me and mirrors its
+receipt configuration. Disabled automatic receipts means no receipt field in the provider
+request, matching the existing Food flow; email is stored privately in bundle_provider_contacts.
+An enabled mode includes the configured VAT data and internet=true. Stored provider bodies
+and emails stay immutable on all retries, including legacy bodies created before this change.

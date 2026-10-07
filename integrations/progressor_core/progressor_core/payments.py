@@ -96,13 +96,33 @@ async def create_rub(engine,order,email):
     from .contracts import canonical
     import json
     with engine.store.connection() as db:
+        existing=db.execute('SELECT payload FROM bundle_provider_requests WHERE order_id=?',(order['id'],)).fetchone()
+        contact=db.execute('SELECT email FROM bundle_provider_contacts WHERE order_id=?',(order['id'],)).fetchone()
+    if existing:
+        body=json.loads(existing['payload'])
+        original_email=contact['email'] if contact else ((body.get('receipt') or {}).get('customer') or {}).get('email')
+        if original_email!=email:raise ValueError('immutable_receipt_email')
+    else:
+        # Match the selected existing merchant's receipt mode before the first provider POST.
+        # This GET creates no payment; an uncertain/disabled shop never starts a charge.
+        merchant=await yookassa(engine.config,'GET','me')
+        if merchant.get('status')!='enabled' or merchant.get('test') is not False or str(merchant.get('account_id'))!=engine.config.yookassa_shop:
+            raise ValueError('merchant_not_ready')
+        enabled=(merchant.get('fiscalization') or {}).get('enabled',merchant.get('fiscalization_enabled',False))
+        if type(enabled) is not bool:raise ValueError('invalid_merchant_receipt_mode')
+        if enabled:body['receipt']['internet']=True
+        else:body.pop('receipt')
+    with engine.store.connection() as db:
         db.execute('BEGIN IMMEDIATE')
         old=db.execute('SELECT payload FROM bundle_provider_requests WHERE order_id=?',(order['id'],)).fetchone()
         if old:
             stored=json.loads(old['payload'])
-            if stored['receipt']['customer']['email']!=email: raise ValueError('immutable_receipt_email')
+            contact=db.execute('SELECT email FROM bundle_provider_contacts WHERE order_id=?',(order['id'],)).fetchone()
+            original_email=contact['email'] if contact else ((stored.get('receipt') or {}).get('customer') or {}).get('email')
+            if original_email!=email: raise ValueError('immutable_receipt_email')
             body=stored
         else: db.execute('INSERT INTO bundle_provider_requests VALUES(?,?)',(order['id'],canonical(body)))
+        db.execute('INSERT OR IGNORE INTO bundle_provider_contacts VALUES(?,?)',(order['id'],email))
     payment=await yookassa(engine.config,'POST','payments',json=body,headers={'Idempotence-Key':order['id']})
     checked_payment(order,payment)
     with engine.store.connection() as db: db.execute('UPDATE bundle_orders SET provider_id=? WHERE id=? AND provider_id IS NULL',(payment['id'],order['id']))
