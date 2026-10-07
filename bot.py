@@ -2688,6 +2688,7 @@ async def build_referral_screen(user_id: int) -> tuple[str, InlineKeyboardMarkup
         )
         rows.append([InlineKeyboardButton("ℹ️ Информация", callback_data="settings:referral:info")])
         rows.append([InlineKeyboardButton("✏️ Изменить имя", callback_data="settings:referral:create")])
+    rows.append([InlineKeyboardButton("Progressor · 3 продукта", callback_data="pg:menu")])
     rows.append([InlineKeyboardButton(BACK_BTN, callback_data="menu:settings")])
     return text, InlineKeyboardMarkup(rows)
 
@@ -14876,6 +14877,9 @@ def main():
     app.job_queue.scheduler.add_listener(
         _on_job_event, EVENT_JOB_EXECUTED | EVENT_JOB_MISSED | EVENT_JOB_ERROR
     )
+    from progressor_bot import install as install_progressor
+    from settings import DB_PATH
+    install_progressor(app, "gym", DB_PATH)
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("set_intro", cmd_set_intro))
     app.add_handler(CommandHandler("splash_reset", splash_reset))
