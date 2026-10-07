@@ -150,12 +150,47 @@ class Bundle(unittest.TestCase):
         from progressor_core.payments import create_rub
         o=self.order(currency='RUB');seen=[]
         async def ambiguous(cfg,method,path,**kwargs):
+            if method=='GET' and path=='me':return {'account_id':cfg.yookassa_shop,'status':'enabled','test':False,'fiscalization':{'enabled':False}}
             seen.append(kwargs);raise TimeoutError('provider_outcome_unknown')
         with patch('progressor_core.payments.yookassa',ambiguous):
             for _ in range(2):
                 with self.assertRaises(TimeoutError):asyncio.run(create_rub(self.engine,o,'test@example.org'))
         self.assertEqual(seen[0],seen[1]);self.assertEqual(seen[0]['headers']['Idempotence-Key'],o['id'])
         with self.assertRaises(ValueError):asyncio.run(create_rub(self.engine,o,'changed@example.org'))
+    def test_yookassa_creation_matches_selected_merchant_receipt_mode(self):
+        from progressor_core.payments import create_rub
+        for enabled in (False,True):
+            with self.subTest(enabled=enabled):
+                o=self.order(currency='RUB');sent=[]
+                async def provider(cfg,method,path,**kwargs):
+                    if path=='me':return {'account_id':cfg.yookassa_shop,'status':'enabled','test':False,'fiscalization':{'enabled':enabled}}
+                    sent.append(kwargs['json'])
+                    return {'id':'provider-'+o['id'],'status':'pending','amount':{'value':'599.00','currency':'RUB'},'metadata':kwargs['json']['metadata'],'confirmation':{'confirmation_url':'https://yoomoney.ru/checkout'}}
+                with patch('progressor_core.payments.yookassa',provider):asyncio.run(create_rub(self.engine,o,'test@example.org'))
+                self.assertEqual('receipt' in sent[0],enabled)
+                if enabled:self.assertTrue(sent[0]['receipt']['internet'])
+                with self.engine.store.connection() as db:self.assertEqual(db.execute('SELECT email FROM bundle_provider_contacts WHERE order_id=?',(o['id'],)).fetchone()[0],'test@example.org')
+    def test_yookassa_disabled_merchant_never_creates_payment(self):
+        from progressor_core.payments import create_rub
+        o=self.order(currency='RUB');provider=AsyncMock(return_value={'account_id':self.engine.config.yookassa_shop,'status':'disabled','test':False})
+        with patch('progressor_core.payments.yookassa',provider):
+            with self.assertRaisesRegex(ValueError,'merchant_not_ready'):asyncio.run(create_rub(self.engine,o,'test@example.org'))
+        self.assertEqual(provider.await_count,1);self.assertEqual(provider.await_args.args[1:3],('GET','me'))
+    def test_yookassa_demo_merchant_never_creates_live_order(self):
+        from progressor_core.payments import create_rub
+        o=self.order(currency='RUB');provider=AsyncMock(return_value={'account_id':self.engine.config.yookassa_shop,'status':'enabled','test':True})
+        with patch('progressor_core.payments.yookassa',provider):
+            with self.assertRaisesRegex(ValueError,'merchant_not_ready'):asyncio.run(create_rub(self.engine,o,'test@example.org'))
+        self.assertEqual(provider.await_count,1)
+    def test_yookassa_legacy_saved_request_is_replayed_without_changes(self):
+        from progressor_core.payments import create_rub
+        o=self.order(currency='RUB')
+        legacy={'amount':{'value':'599.00','currency':'RUB'},'metadata':{'progressor_order':o['id'],'progressor_user':str(USER)},'receipt':{'customer':{'email':'test@example.org'}}}
+        with self.engine.store.connection() as db:db.execute('INSERT INTO bundle_provider_requests VALUES(?,?)',(o['id'],json.dumps(legacy)))
+        provider=AsyncMock(return_value={'id':'legacy-provider','status':'pending','amount':legacy['amount'],'metadata':legacy['metadata'],'confirmation':{'confirmation_url':'https://yoomoney.ru/checkout'}})
+        with patch('progressor_core.payments.yookassa',provider):asyncio.run(create_rub(self.engine,o,'test@example.org'))
+        self.assertEqual(provider.await_count,1);self.assertEqual(provider.await_args.args[1:3],('POST','payments'))
+        self.assertEqual(provider.await_args.kwargs['json'],legacy)
     def test_verified_partial_refund_retains_access_full_refund_revokes(self):
         from progressor_core.payments import reconcile_rub
         o=self.order(currency='RUB')

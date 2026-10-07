@@ -16,6 +16,7 @@ CREATE TABLE IF NOT EXISTS bundle_receipts(id TEXT PRIMARY KEY,order_id TEXT NOT
 CREATE TABLE IF NOT EXISTS bundle_entitlements(user_id TEXT PRIMARY KEY,expires_at TEXT NOT NULL,revision INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS bundle_refunds(provider_id TEXT PRIMARY KEY,payment_id TEXT NOT NULL,amount INTEGER NOT NULL,status TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS bundle_provider_requests(order_id TEXT PRIMARY KEY,payload TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS bundle_provider_contacts(order_id TEXT PRIMARY KEY,email TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS bundle_provider_checks(payment_id TEXT PRIMARY KEY,checked_at REAL NOT NULL);
 CREATE TABLE IF NOT EXISTS website_logins(id TEXT PRIMARY KEY,poll_hash TEXT NOT NULL,created_at REAL NOT NULL,user_id TEXT,consumed INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS website_sessions(token_hash TEXT PRIMARY KEY,user_id TEXT NOT NULL,expires_at REAL NOT NULL);
