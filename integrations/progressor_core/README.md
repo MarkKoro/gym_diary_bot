@@ -72,3 +72,10 @@ Deploy Core -> native bridges/cache/payments/prompts -> shared navigation -> ena
 Rollback restores only exact affected code/config files, preserves additive tables and ledger,
 then restarts the same affected units. Preserve paid bundle caches during code rollback: the
 compatibility helper must continue granting paid access; never revert to code that ignores paid users.
+
+
+Production isolation: native API workers publish private online backups every 30s to
+/var/lib/progressor-sources/{gym,food,supply}/source.sqlite3. Set PROGRESSOR_*_DB_RO to those
+files and PROGRESSOR_REQUIRE_FRESH_SNAPSHOTS=1. Reject copies older than 90s. Core's strict
+read-only filesystem has only /var/lib/progressor writable, so live SQLite WAL coordination
+remains entirely with each source owner. Native flag PROGRESSOR_SOURCE_SNAPSHOT_ENABLED=1.
