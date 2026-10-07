@@ -179,7 +179,7 @@
         if (!response.ok) throw new Error('unavailable');
         const context = await response.json();
         availableDomains = context.enabled_domains || [];
-        status.textContent = context.memberships.length ? `Подключены: ${context.memberships.map(s => ({gym:'Gym',food:'Food',supply:'Supply'}[s])).join(', ')}.` : 'В этом разделе сейчас нет доступного общего контекста.';
+        status.textContent = context.memberships.length ? `Личный контекст. Подключены: ${context.memberships.map(s => ({gym:'Gym',food:'Food',supply:'Supply'}[s])).join(', ')}.` : 'В этом разделе сейчас нет доступного общего контекста.';
         content.replaceChildren();
         if (context.activity) element('p', activityText(context.activity), content);
         if (context.nutrition) element('p', nutritionText(context), content);

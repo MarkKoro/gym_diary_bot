@@ -305,7 +305,7 @@ class SubscriptionDbTests(unittest.IsolatedAsyncioTestCase):
             provider = AsyncMock(side_effect=provider_result) if isinstance(provider_result, Exception) else AsyncMock(return_value=provider_result)
             with patch.object(backend, '_build_ai_context_payload', AsyncMock(return_value=context)), patch.object(backend, '_call_openai_chat', provider):
                 with self.assertRaises(Exception):
-                    await backend.ai_coach_query({'mode': 'new_system', 'message': 'make a plan'}, SimpleNamespace(user_id=user))
+                    await backend.ai_coach_query({'mode': 'new_system', 'message': 'make a plan'}, SimpleNamespace(user_id=user, is_acting=False))
                 self.assertEqual(provider.await_count, 1)
             self.assertEqual((await db.get_ai_coach_quota(user))['usage']['day'], 1)
         await db.release_ai_coach_quota(user+999, successful['request_id'])
@@ -329,7 +329,7 @@ class SubscriptionDbTests(unittest.IsolatedAsyncioTestCase):
         user = await db.get_or_create_user(8088, 'ai-success')
         await db.grant_subscription_days(user,30)
         with patch.object(api,'_run_ai_coach_query',AsyncMock(return_value={'ok':True})):
-            await api.ai_coach_query({'mode':'mistakes_analysis'},SimpleNamespace(user_id=user))
+            await api.ai_coach_query({'mode':'mistakes_analysis'},SimpleNamespace(user_id=user, is_acting=False))
         self.assertEqual((await db.get_ai_coach_quota(user, datetime.now(UTC)+timedelta(minutes=16)))['usage']['day'],1)
 
     async def test_yookassa_pending_poll_preserves_long_plan(self):

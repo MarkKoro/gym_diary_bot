@@ -28,8 +28,23 @@ class CrossContext(unittest.IsolatedAsyncioTestCase):
         async def llm(system,user,**kwargs):
             captured.append(user);return {'parsed':{'summary':'Проверка.'*20,'rationale':['one','two','three'],'action_plan':{'actions':[]}}}
         with patch('progressor_client.ai_context',AsyncMock(return_value=shared)),patch.object(api,'_build_ai_context_payload',AsyncMock(return_value=own)),patch.object(api,'_call_openai_chat',llm):
-            response=await api._run_ai_coach_query(self.uid,'mistakes_analysis','Проверь',{}, {})
+            response=await api._run_ai_coach_query(self.uid,'mistakes_analysis','Проверь',{}, {},include_progressor=True)
         self.assertIn('183',captured[0]);self.assertIn('84',captured[0]);self.assertIn('progressor_context',captured[0]);self.assertEqual(response['context_sources'],[{'source':'supply'}])
         with patch('progressor_client.ai_context',AsyncMock(return_value=None)),patch.object(api,'_build_ai_context_payload',AsyncMock(return_value=own)),patch.object(api,'_call_openai_chat',llm):
-            response=await api._run_ai_coach_query(self.uid,'mistakes_analysis','Проверь',{}, {})
+            response=await api._run_ai_coach_query(self.uid,'mistakes_analysis','Проверь',{}, {},include_progressor=True)
         self.assertNotIn('progressor_context',captured[1]);self.assertEqual(response['context_sources'],[])
+    async def test_trainer_query_keeps_native_ai_without_other_product_data(self):
+        from types import SimpleNamespace
+        own={'user_profile':{'workouts_per_week':3},'catalog_context':{},'day_snapshots':[]}
+        captured=[]
+        async def llm(system,user,**kwargs):
+            captured.append(user);return {'parsed':{'summary':'Проверка.'*20,'rationale':['one','two','three'],'action_plan':{'actions':[]}}}
+        cross=AsyncMock(side_effect=AssertionError('trainer cross-source read must not occur'))
+        with patch('progressor_client.ai_context',cross),patch.object(api,'_build_ai_context_payload',AsyncMock(return_value=own)),patch.object(api,'_call_openai_chat',llm):
+            response=await api._run_ai_coach_query(self.uid,'mistakes_analysis','Проверь',{}, {},include_progressor=False)
+        cross.assert_not_awaited();self.assertNotIn('progressor_context',captured[0]);self.assertEqual(response['context_sources'],[])
+        decisions=[]
+        async def query(*args,**kwargs):decisions.append(kwargs['include_progressor']);return {'ok':True}
+        with patch.object(db,'get_active_subscription',AsyncMock(return_value={'plan':'native'})),patch.object(api,'get_user_timezone',AsyncMock(return_value='UTC')),patch.object(api,'consume_ai_coach_quota',AsyncMock(return_value={'ok':True,'request_id':'offline'})),patch.object(db,'complete_ai_coach_quota',AsyncMock()),patch.object(api,'_run_ai_coach_query',query):
+            for acting in (True,False):await api.ai_coach_query(payload={'mode':'mistakes_analysis'},ctx=SimpleNamespace(user_id=self.uid,is_acting=acting))
+        self.assertEqual(decisions,[False,True])
