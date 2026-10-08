@@ -5295,7 +5295,7 @@ async def mark_exercise_done(session_id: int, ue_id: int):
             ON CONFLICT(session_id, user_exercise_id)
             DO UPDATE SET
                 is_done=1,
-                done_at=excluded.done_at,
+                done_at=COALESCE(session_exercises.done_at,excluded.done_at),
                 last_reps=COALESCE(excluded.last_reps, session_exercises.last_reps),
                 last_seconds=COALESCE(excluded.last_seconds, session_exercises.last_seconds),
                 last_weight=COALESCE(excluded.last_weight, session_exercises.last_weight)
@@ -5310,6 +5310,29 @@ async def mark_exercise_done(session_id: int, ue_id: int):
             ),
         )
         await db.commit()
+
+
+async def set_strength_session_duration(user_id: int, session_id: int, minutes: int):
+    if type(minutes) is not int or not 5<=minutes<=240: raise ValueError('invalid_workout_duration')
+    async with connect_db() as conn:
+        row=await (await conn.execute('SELECT id FROM sessions WHERE id=? AND user_id=?',(session_id,user_id))).fetchone()
+        if not row: raise ValueError('session_owner_mismatch')
+        done=await (await conn.execute('''SELECT 1 FROM sets st JOIN session_exercises se ON se.session_id=st.session_id AND se.user_exercise_id=st.user_exercise_id
+            WHERE st.session_id=? AND se.is_done=1 AND COALESCE(st.is_warmup,0)=0 AND (COALESCE(st.reps,0)>0 OR COALESCE(st.seconds,0)>0) LIMIT 1''',(session_id,))).fetchone()
+        if not done: raise ValueError('no_completed_strength_sets')
+        await conn.execute('''CREATE TABLE IF NOT EXISTS progressor_session_durations(
+            session_id INTEGER PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
+            duration_seconds INTEGER NOT NULL,recorded_at TEXT NOT NULL)''')
+        await conn.execute('INSERT INTO progressor_session_durations VALUES(?,?,?) ON CONFLICT(session_id) DO UPDATE SET duration_seconds=excluded.duration_seconds,recorded_at=excluded.recorded_at',
+                           (session_id,minutes*60,datetime.now(UTC).isoformat()))
+        await conn.commit()
+
+
+async def get_strength_session_duration(user_id: int, session_id: int):
+    async with connect_db() as conn:
+        if not await (await conn.execute("SELECT 1 FROM sqlite_master WHERE name='progressor_session_durations'")).fetchone(): return None
+        row=await (await conn.execute('SELECT d.duration_seconds FROM progressor_session_durations d JOIN sessions s ON s.id=d.session_id WHERE s.id=? AND s.user_id=?',(session_id,user_id))).fetchone()
+        return row[0]//60 if row else None
 
 
 async def set_exercise_note(session_id: int, ue_id: int, note: str | None):

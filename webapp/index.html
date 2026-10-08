@@ -2567,6 +2567,11 @@
     body.keyboard-open .sheet { transition: none; }
     body.exercise-modal-open, body.all-ex-modal-open { overflow: hidden; overscroll-behavior: none; }
     .exercise-card[aria-busy="true"] .workout-actions button { pointer-events: none; opacity: .65; }
+    .progressor-free-duration { margin:12px 0; padding:12px; border-radius:16px; background:var(--card); border:1px solid var(--border); }
+    .progressor-free-duration summary { min-height:48px; display:flex; align-items:center; cursor:pointer; }
+    .progressor-free-duration p { font-size:14px; color:var(--muted); }
+    .progressor-free-duration input { min-height:48px; width:120px; margin:8px; border-radius:10px; padding:8px; font:inherit; color:var(--text); background:var(--bg); border:1px solid var(--border); }
+    .progressor-free-duration button { min-height:48px; }
   </style>
 </head>
 <body>
@@ -6656,6 +6661,7 @@
       if (!data || typeof data !== 'object') return;
       if (Array.isArray(data.groups)) st.groups = data.groups;
       if (Array.isArray(data.done_today)) st.doneToday = data.done_today;
+      if ('strength_duration_minutes' in data) st.strengthDurationMinutes=data.strength_duration_minutes;
       if (Number.isFinite(Number(data.unfinished_count))) st.unfinishedCount = Number(data.unfinished_count || 0);
       if (Array.isArray(data.done_today) && Array.isArray(st.unfinished) && Number(data.exercise_id || 0) > 0
           && data.done_today.some((item) => Number(item.exercise_id) === Number(data.exercise_id))) {
@@ -7210,6 +7216,19 @@
         </div>
         <div class="all-ex-stage" id="allExercisesStage"></div>
       `;
+      if(st.view==='groups' && Array.isArray(st.doneToday) && st.doneToday.some(d=>d.max_reps>0 || d.max_seconds>0)){
+        const details=document.createElement('details');details.className='progressor-free-duration';
+        details.innerHTML='<summary>Учесть длительность силовой части</summary><p>Минуты силовой тренировки с паузами, без кардио. Необязательно; без этого расход калорий остаётся неизвестным.</p><label for="freeWorkoutDurationMinutes">От 5 до 240 минут</label><input id="freeWorkoutDurationMinutes" type="number" inputmode="numeric" min="5" max="240" step="1"><button type="button" class="all-ex-btn" data-save-free-duration>Сохранить</button>';
+        root.querySelector('.all-ex-hero')?.after(details);
+        details.querySelector('input').value=st.strengthDurationMinutes ?? '';
+        details.querySelector('[data-save-free-duration]').addEventListener('click',async event=>{
+          const minutes=Number(details.querySelector('input').value);
+          if(!Number.isInteger(minutes)||minutes<5||minutes>240){toast('Укажите от 5 до 240 минут');return;}
+          const button=event.currentTarget;button.disabled=true;
+          try{await apiFetch('/gymapi/all_exercises/duration?date='+getAllExercisesDate(),{method:'POST',body:JSON.stringify({duration_minutes:minutes})});st.strengthDurationMinutes=minutes;toast('Длительность сохранена');details.open=false;}
+          catch(_){toast('Не удалось сохранить длительность');}finally{button.disabled=false;}
+        });
+      }
       root.querySelector('[data-action="all-ex-go-back"]')?.addEventListener('click', goBackAllExercises);
       root.querySelector('[data-action="all-ex-add-group"]')?.addEventListener('click', promptAllExercisesGroup);
       root.querySelector('[data-action="all-ex-layout"]')?.addEventListener('click', (event) => {
@@ -7287,6 +7306,7 @@
         if (version !== st.metaVersion) return;
         st.groups = groupsData.groups || [];
         st.doneToday = groupsData.done_today || [];
+        st.strengthDurationMinutes=groupsData.strength_duration_minutes ?? null;
         st.unfinishedCount = Number(groupsData.unfinished_count || 0);
         st.groupsLoadedAt = Date.now();
         syncAllExercisesHeaderButton();

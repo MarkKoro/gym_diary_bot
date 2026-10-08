@@ -3073,7 +3073,9 @@ async def _all_exercises_groups_payload(user_id: int, iso_date: str) -> dict:
         })
     groups.sort(key=lambda item: (LIBRARY_GROUP_ORDER.index(item["code"]) if item["code"] in LIBRARY_GROUP_ORDER else len(LIBRARY_GROUP_ORDER), str(item.get("name") or "").lower()))
     done_today = await db.list_all_exercises_done_today(user_id, iso_date)
-    return {"ok": True, "date": iso_date, "groups": groups, "done_today": done_today, "unfinished_count": await db.count_all_exercises_unfinished(user_id, iso_date)}
+    session_id=await db.get_session_for_day(user_id,iso_date,0,await get_active_training_system_id(user_id))
+    duration=await db.get_strength_session_duration(user_id,session_id) if session_id else None
+    return {"ok": True, "date": iso_date, "groups": groups, "done_today": done_today, "strength_duration_minutes":duration,"unfinished_count": await db.count_all_exercises_unfinished(user_id, iso_date)}
 
 
 async def _all_exercises_group_items(user_id: int, code: str, iso_date: str) -> list[dict]:
@@ -3416,6 +3418,20 @@ async def all_exercises_finish_day(date: str | None = None, ctx: AuthCtx = Depen
     # Only the explicit per-exercise /done endpoints may set completion flags.
     groups_payload = await _all_exercises_groups_payload(user_id, iso_date)
     return groups_payload | {"ok": True}
+
+
+@app.post('/all_exercises/duration')
+async def all_exercises_duration(payload: dict = Body(...), date: str | None = None, ctx: AuthCtx = Depends(get_auth_ctx)):
+    if ctx.is_acting: raise HTTPException(403,'Раздел доступен только для личного дневника')
+    minutes=payload.get('duration_minutes')
+    if type(minutes) is not int or not 5<=minutes<=240: raise HTTPException(422,'Укажите от 5 до 240 минут')
+    iso_date=_iso_date(_parse_date_param(date))
+    session_id=await db.get_session_for_day(ctx.user_id,iso_date,0,await get_active_training_system_id(ctx.user_id))
+    if not session_id or not await db.list_all_exercises_done_today(ctx.user_id,iso_date):
+        raise HTTPException(409,'Сначала отметьте выполненные упражнения')
+    try: await db.set_strength_session_duration(ctx.user_id,session_id,minutes)
+    except ValueError: raise HTTPException(409,'Сначала отметьте выполненные силовые подходы')
+    return {'ok':True,'duration_minutes':minutes}
 
 @app.get("/muscles")
 async def list_muscles(ctx: AuthCtx = Depends(get_auth_ctx)):

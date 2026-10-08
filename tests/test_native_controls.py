@@ -35,3 +35,33 @@ class NativeControls(unittest.IsolatedAsyncioTestCase):
         with patch.object(api,'_validate_day',AsyncMock(return_value=(1,[1]))),patch.object(api,'get_user_timezone',AsyncMock(return_value='UTC')),patch.object(api,'get_active_training_system_id',AsyncMock(return_value=0)),patch.object(api,'mark_day_completed',AsyncMock()) as completion:
             with self.assertRaises(api.HTTPException) as exc:await api.complete_day(1,date='2026-10-07',payload={'duration_minutes':True},ctx=ctx)
         self.assertEqual(exc.exception.status_code,422);completion.assert_not_awaited()
+
+    async def free_session(self):
+        async with db.connect_db() as conn:
+            row=await (await conn.execute("INSERT INTO exercises(name,muscle_group) VALUES('Offline strength','legs') RETURNING id")).fetchone();await conn.commit()
+        await db.add_user_exercise(self.uid,0,row[0])
+        async with db.connect_db() as conn:
+            ue=await (await conn.execute('SELECT id FROM user_exercises WHERE user_id=? AND day_index=0 AND exercise_id=?',(self.uid,row[0]))).fetchone()
+        sid=await db.get_or_create_today_session(self.uid,'2026-10-07',0,0)
+        await db.add_set(sid,ue[0],reps=10,weight=30)
+        return sid,ue[0]
+
+    async def test_repeat_exercise_completion_keeps_original_timestamp(self):
+        sid,ue=await self.free_session();await db.mark_exercise_done(sid,ue)
+        async with db.connect_db() as conn:
+            await conn.execute("UPDATE session_exercises SET done_at='2026-10-07T09:00:00Z' WHERE session_id=? AND user_exercise_id=?",(sid,ue));await conn.commit()
+        await db.mark_exercise_done(sid,ue)
+        async with db.connect_db() as conn:
+            value=await (await conn.execute('SELECT done_at FROM session_exercises WHERE session_id=? AND user_exercise_id=?',(sid,ue))).fetchone()
+            self.assertEqual(value[0],'2026-10-07T09:00:00Z')
+
+    async def test_free_duration_requires_done_strength_ownership_and_valid_minutes(self):
+        sid,ue=await self.free_session()
+        with self.assertRaises(ValueError):await db.set_strength_session_duration(self.uid,sid,60)
+        await db.mark_exercise_done(sid,ue);await db.set_strength_session_duration(self.uid,sid,60)
+        self.assertEqual(await db.get_strength_session_duration(self.uid,sid),60)
+        for minutes in (True,0,241,1.5):
+            with self.assertRaises(ValueError):await db.set_strength_session_duration(self.uid,sid,minutes)
+        other=await db.get_or_create_user(900000000002,'other')
+        with self.assertRaises(ValueError):await db.set_strength_session_duration(other,sid,60)
+        self.assertIsNone(await db.get_strength_session_duration(other,sid))
