@@ -1,6 +1,7 @@
 from telegram_webapp_auth import TelegramWebAppUser
 from progressor_bridge import current_claims, install_auth_bridge
 import functools
+import asyncio
 import inspect
 import os
 import json
@@ -2569,6 +2570,7 @@ async def set_ai_meta_for_exercise(
 async def complete_day(
     day_index: ApiInt,
     date: str | None = None,
+    payload: dict | None = Body(default=None),
     ctx: AuthCtx = Depends(get_auth_ctx),
 ):
     user_id = ctx.user_id
@@ -2578,7 +2580,19 @@ async def complete_day(
     local_now = datetime.now(zone)
     completed_at = datetime.combine(target_date, local_now.timetz()).astimezone(UTC).isoformat()
     active_system_id = await get_active_training_system_id(user_id)
-    await mark_day_completed(user_id, day_index, completed_at, active_system_id)
+    duration_minutes=(payload or {}).get('duration_minutes')
+    if duration_minutes is not None and (type(duration_minutes) is not int or not 5<=duration_minutes<=240):
+        raise HTTPException(422,'Длительность: целое число от 5 до 240 минут')
+    session_id=await db.get_or_create_today_session(user_id,target_date.isoformat(),day_index,active_system_id)
+    await mark_day_completed(user_id, day_index, completed_at, active_system_id, session_id=session_id,
+                             duration_seconds=duration_minutes*60 if duration_minutes is not None else None)
+    from progressor_workout_metrics import set_metrics
+    async with db.connect_db() as connection:
+        connection.row_factory=__import__('aiosqlite').Row
+        session_sets=await (await connection.execute('SELECT * FROM sets WHERE session_id=?',(session_id,))).fetchall()
+        details=await (await connection.execute('SELECT duration_seconds FROM workout_session_details WHERE session_id=?',(session_id,))).fetchone()
+    workout_summary={'strength_metrics':set_metrics([dict(row) for row in session_sets]),
+                     'recorded_duration_seconds':details[0] if details else None}
     await mark_copy_trained(user_id, active_system_id, completed_at)
     await _evaluate_achievements(user_id)
     _, active_days = await _validate_day(user_id, day_index)
@@ -2596,6 +2610,7 @@ async def complete_day(
         "completed_days": sorted(int(d) for d in completed),
         "last_completed_at": last_completed_at,
         "last_completed_volume_kg": int(last_completed_volume_kg or 0),
+        "workout_summary": workout_summary,
     }
 
 
@@ -6764,30 +6779,40 @@ async def ai_coach_query(payload: dict = Body(default_factory=dict), ctx: AuthCt
     if mode in {'replace_exercises', 'new_system'} and not user_message:
         raise HTTPException(status_code=400, detail='Опиши, что хочешь улучшить')
 
-    timezone = await get_user_timezone(user_id)
-    quota_state = await consume_ai_coach_quota(user_id, mode, reserve=True)
-    if not quota_state.get('ok'):
-        blocked_scope = str(quota_state.get('blocked_scope') or 'day')
-        detail = 'Извините, вы превысили количество допустимых запросов за сегодня.'
-        if blocked_scope == 'week':
-            detail = 'Извините, вы превысили количество допустимых запросов в неделю.'
-        elif blocked_scope == 'month':
-            reset_text = _format_ai_quota_reset_at(quota_state.get('reset_at'), timezone)
-            detail = 'Извините, вы превысили количество допустимых запросов в месяц.'
-            if reset_text:
-                detail += f' Следующий доступ: {reset_text}.'
-        raise HTTPException(status_code=429, detail=detail)
-
-    completed = False
+    from progressor_ai_guard import acquire, finish, AttemptLimited
     try:
-        result = await _run_ai_coach_query(user_id, mode, user_message, payload, quota_state, include_progressor=not ctx.is_acting)
-        if result.get('ok'):
-            await db.complete_ai_coach_quota(user_id, quota_state['request_id'])
-            completed = True
-        return result
+        # Verified requester, including trainer mode; switching trainees cannot bypass it.
+        requester=getattr(ctx,'tg_id',None) or getattr(ctx,'actor_user_id',None) or user_id
+        token=await asyncio.to_thread(acquire,db.DB_PATH,requester,'gym_coach',hourly=6,daily=12,cooldown=15)
+    except AttemptLimited as exc:
+        raise HTTPException(429,str(exc),headers={'Retry-After':str(exc.retry_after)})
+    try:
+        timezone = await get_user_timezone(user_id)
+        quota_state = await consume_ai_coach_quota(user_id, mode, reserve=True)
+        if not quota_state.get('ok'):
+            blocked_scope = str(quota_state.get('blocked_scope') or 'day')
+            detail = 'Извините, вы превысили количество допустимых запросов за сегодня.'
+            if blocked_scope == 'week':
+                detail = 'Извините, вы превысили количество допустимых запросов в неделю.'
+            elif blocked_scope == 'month':
+                reset_text = _format_ai_quota_reset_at(quota_state.get('reset_at'), timezone)
+                detail = 'Извините, вы превысили количество допустимых запросов в месяц.'
+                if reset_text:
+                    detail += f' Следующий доступ: {reset_text}.'
+            raise HTTPException(status_code=429, detail=detail)
+
+        completed = False
+        try:
+            result = await _run_ai_coach_query(user_id, mode, user_message, payload, quota_state, include_progressor=not ctx.is_acting)
+            if result.get('ok'):
+                await db.complete_ai_coach_quota(user_id, quota_state['request_id'])
+                completed = True
+            return result
+        finally:
+            if not completed:
+                await db.release_ai_coach_quota(user_id, quota_state['request_id'])
     finally:
-        if not completed:
-            await db.release_ai_coach_quota(user_id, quota_state['request_id'])
+        await asyncio.to_thread(finish,db.DB_PATH,token)
 
 
 async def _run_ai_coach_query(user_id: int, mode: str, user_message: str, payload: dict, quota_state: dict, *, include_progressor: bool = False):

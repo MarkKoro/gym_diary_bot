@@ -3589,6 +3589,8 @@ async def wipe_user(user_id: int):
     async with connect_db() as db:
         await db.execute("BEGIN IMMEDIATE")
         try:
+            if await (await db.execute("SELECT 1 FROM sqlite_master WHERE name='workout_session_details'")).fetchone():
+                await db.execute("DELETE FROM workout_session_details WHERE session_id IN (SELECT id FROM sessions WHERE user_id=?)",(user_id,))
             await db.execute("DELETE FROM app_meta WHERE key LIKE ?", (f"ai_apply:{user_id}:%",))
             for table in ('training_system_exercise_sources', 'training_system_exercises', 'training_system_reminders', 'training_system_days'):
                 await db.execute(f"DELETE FROM {table} WHERE system_id IN (SELECT id FROM training_systems WHERE user_id=?)", (user_id,))
@@ -4598,10 +4600,31 @@ async def get_last_completion_for_user(user_id: int, system_id: int | None = Non
         return await cur.fetchone()
 
 
-async def mark_day_completed(user_id: int, day_index: int, completed_at: str, system_id: int | None = None):
+async def mark_day_completed(user_id: int, day_index: int, completed_at: str, system_id: int | None = None, *, session_id: int | None = None, duration_seconds: int | None = None):
+    if duration_seconds is not None and (type(duration_seconds) is not int or not 300 <= duration_seconds <= 14400):
+        raise ValueError('invalid_workout_duration')
     resolved_system_id = 0 if system_id is None else int(system_id)
     async with connect_db() as db:
-        await db.execute(
+        await db.execute("BEGIN IMMEDIATE")
+        await db.execute("""CREATE TABLE IF NOT EXISTS workout_session_details(
+            session_id INTEGER PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
+            history_id INTEGER NOT NULL, duration_seconds INTEGER, recorded_at TEXT NOT NULL)""")
+        if session_id is not None:
+            session = await (await db.execute("SELECT id,date FROM sessions WHERE id=? AND user_id=? AND day_index=? AND system_id IS ?",(session_id,user_id,day_index,system_id))).fetchone()
+            if not session: raise ValueError('session_owner_mismatch')
+            tz = await (await db.execute("SELECT tz FROM users WHERE id=?",(user_id,))).fetchone()
+            try: user_zone=ZoneInfo(tz[0] or 'UTC') if tz else timezone.utc
+            except (ZoneInfoNotFoundError, ValueError): user_zone=timezone.utc
+            start=datetime.fromisoformat(session[1]).replace(tzinfo=user_zone)
+            start_utc=start.astimezone(UTC); end_utc=(start+timedelta(days=1)).astimezone(UTC)
+            candidates=await (await db.execute("SELECT id,completed_at FROM day_completion_history WHERE user_id=? AND system_id=? AND day_index=? ORDER BY id DESC",(user_id,resolved_system_id,day_index))).fetchall()
+            prior=next((r for r in candidates if start_utc<=datetime.fromisoformat(r[1].replace('Z','+00:00'))<end_utc),None)
+            if prior:
+                await db.execute("INSERT INTO workout_session_details VALUES(?,?,?,?) ON CONFLICT(session_id) DO UPDATE SET duration_seconds=COALESCE(excluded.duration_seconds,workout_session_details.duration_seconds),recorded_at=excluded.recorded_at",(session_id,prior[0],duration_seconds,completed_at))
+                await db.execute("INSERT INTO day_completions(user_id,system_id,day_index,completed_at) VALUES(?,?,?,?) ON CONFLICT(user_id,system_id,day_index) DO UPDATE SET completed_at=excluded.completed_at",(user_id,resolved_system_id,day_index,prior[1]))
+                await db.commit()
+                return
+        cur = await db.execute(
             """
             INSERT INTO day_completion_history(user_id, system_id, day_index, completed_at)
             VALUES(?,?,?,?)
@@ -4617,6 +4640,8 @@ async def mark_day_completed(user_id: int, day_index: int, completed_at: str, sy
             """,
             (user_id, resolved_system_id, day_index, completed_at),
         )
+        if session_id is not None:
+            await db.execute("INSERT INTO workout_session_details VALUES(?,?,?,?) ON CONFLICT(session_id) DO UPDATE SET history_id=excluded.history_id,duration_seconds=COALESCE(excluded.duration_seconds,workout_session_details.duration_seconds),recorded_at=excluded.recorded_at",(session_id,cur.lastrowid,duration_seconds,completed_at))
         await db.commit()
 
 

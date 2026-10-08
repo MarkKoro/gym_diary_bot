@@ -72,7 +72,7 @@
     }
     .header-row {
       display: grid;
-      grid-template-columns: auto 1fr auto;
+      grid-template-columns: auto minmax(0, 1fr) auto;
       align-items: center;
       gap: 10px;
     }
@@ -119,7 +119,7 @@
       }
     }
     .header-title { font-size: 18px; font-weight: 800; letter-spacing: -0.02em; }
-    .header-title { justify-self: center; text-align: center; }
+    .header-title { justify-self: center; text-align: center; min-width: 0; max-width: 100%; overflow-wrap: anywhere; }
     .header-title.title-frame { position: relative; padding: 6px 10px; border-radius: 14px; isolation: isolate; }
     .header-title.title-frame::before { content:''; position:absolute; inset:-2px; border-radius: 16px; opacity:.9; pointer-events:none; z-index:-1; }
     .header-title.title-frame::after { content:''; position:absolute; inset:0; border-radius: 14px; background: rgba(255,255,255,0.06); pointer-events:none; }
@@ -2709,6 +2709,7 @@
           <button id="deleteModeDone" class="btn primary header-done-btn hidden" type="button">Готово</button>
         </div>
       </div>
+      <div id="progressor-inline-host" hidden></div>
       <div id="todayHeader" class="today-header">
         <div class="day-line">
           <div class="day-nav">
@@ -2765,6 +2766,9 @@
           <div class="finish-popover" id="finishPopover" role="dialog" aria-hidden="true">
             <div class="finish-popover-title" id="finishPopoverTitle">Завершить день</div>
             <div class="finish-popover-total" id="finishTotal">Общий объём за сегодня: 0 кг</div>
+            <label for="workoutDurationMinutes" style="display:block;margin:12px 0">Длительность, минут <span style="opacity:.7">(необязательно)</span></label>
+            <input id="workoutDurationMinutes" type="number" inputmode="numeric" min="5" max="240" step="1" placeholder="Например, 60" style="width:100%;min-height:48px;margin-bottom:8px" aria-describedby="workoutDurationHelp" />
+            <div id="workoutDurationHelp" style="font-size:12px;margin-bottom:12px;opacity:.75">Время занятия вместе с обычными паузами. Поможет оценить расход энергии.</div>
             <button class="btn primary" id="finishBtn" type="button">Завершить день</button>
           </div>
         </div>
@@ -3528,6 +3532,11 @@
       sourceMetaOpenFor: null,
     };
 
+    window.ProgressorDomain={version:1,
+      hintHost:()=>document.getElementById('progressor-inline-host'),
+      eligible:()=>!state.acting.userId && state.currentRoute==='today' && !!state.userId,
+      perform:()=>false
+    };
     let openConfirmModal = null;
     function getTg() {
       return (window.Telegram && window.Telegram.WebApp) ? window.Telegram.WebApp : null;
@@ -10180,6 +10189,7 @@
         return;
       }
       state.currentRoute = normalized;
+      window.Progressor?.refreshSurface?.();
       if (normalized !== 'allExercises') {
         closeAllExerciseSheet();
         closeAllExercisesDonePopup();
@@ -12805,7 +12815,11 @@
       if (!state.dayIndex && !isAllExercisesEditorContext()) return;
       try {
         const query = state.dateIso ? `?date=${state.dateIso}` : '';
-        const data = await apiFetch(`/gymapi/day/${state.dayIndex}/complete${query}`, { method: 'POST', body: JSON.stringify({}), silent: false });
+        const minutesInput=document.getElementById('workoutDurationMinutes');
+        const minutes=minutesInput?.value.trim() ? Number(minutesInput.value) : null;
+        if (minutes!==null && (!Number.isInteger(minutes)||minutes<5||minutes>240)) { toast('Длительность: от 5 до 240 минут'); minutesInput?.focus(); return; }
+        const data = await apiFetch(`/gymapi/day/${state.dayIndex}/complete${query}`, { method: 'POST', body: JSON.stringify({duration_minutes:minutes}), silent: false });
+        if (minutesInput) minutesInput.value='';
         state.completedDays = new Set((data.completed_days || []).map(Number));
         renderDayOptions(state.dayIndex);
         renderDayHeader();
@@ -12844,6 +12858,7 @@
         const unchanged = !dayChanged && JSON.stringify([...state.exercises.values()]) === JSON.stringify(sheet.exercises || []);
         state.dayIndex = dayIndex;
         if (dayChanged) {
+          const durationInput=document.getElementById('workoutDurationMinutes'); if(durationInput) durationInput.value='';
           state.workout.expanded = null;
           state.workout.order = [];
           state.workout.animations = { completed: null, next: null };
@@ -13509,6 +13524,7 @@
     }
 
     function renderDayHeader() {
+      window.Progressor?.refreshSurface?.();
       const combined = state.daySubtitle ? `${state.dayLabel} / ${state.daySubtitle}` : (state.dayLabel || 'Тренировка');
       const title = document.getElementById('dayTitle');
       if (title) title.textContent = combined;
@@ -14660,6 +14676,8 @@
       const pop = document.getElementById('finishPopover');
       document.getElementById('finishBtn').addEventListener('click', () => {
         if (!state.dayIndex && !isAllExercisesEditorContext()) return;
+        const durationInput=document.getElementById('workoutDurationMinutes');
+        if (durationInput && !durationInput.checkValidity()) { toast('Длительность: от 5 до 240 минут'); durationInput.focus(); durationInput.reportValidity(); return; }
         closeFinishPopover();
         openConfirmModal?.(() => completeDay(), 'Завершить день?', 'Ты больше не будешь добавлять подходы в этот день?');
       });

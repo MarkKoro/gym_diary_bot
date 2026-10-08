@@ -46,5 +46,6 @@ class CrossContext(unittest.IsolatedAsyncioTestCase):
         decisions=[]
         async def query(*args,**kwargs):decisions.append(kwargs['include_progressor']);return {'ok':True}
         with patch.object(db,'get_active_subscription',AsyncMock(return_value={'plan':'native'})),patch.object(api,'get_user_timezone',AsyncMock(return_value='UTC')),patch.object(api,'consume_ai_coach_quota',AsyncMock(return_value={'ok':True,'request_id':'offline'})),patch.object(db,'complete_ai_coach_quota',AsyncMock()),patch.object(api,'_run_ai_coach_query',query):
-            for acting in (True,False):await api.ai_coach_query(payload={'mode':'mistakes_analysis'},ctx=SimpleNamespace(user_id=self.uid,is_acting=acting))
+            with patch('progressor_ai_guard.acquire',return_value='scope-test'),patch('progressor_ai_guard.finish'):
+                for acting in (True,False):await api.ai_coach_query(payload={'mode':'mistakes_analysis'},ctx=SimpleNamespace(user_id=self.uid,is_acting=acting))
         self.assertEqual(decisions,[False,True])

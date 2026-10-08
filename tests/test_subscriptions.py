@@ -308,6 +308,10 @@ class SubscriptionDbTests(unittest.IsolatedAsyncioTestCase):
                     await backend.ai_coach_query({'mode': 'new_system', 'message': 'make a plan'}, SimpleNamespace(user_id=user, is_acting=False))
                 self.assertEqual(provider.await_count, 1)
             self.assertEqual((await db.get_ai_coach_quota(user))['usage']['day'], 1)
+            # A failed call refunds its business quota but still enforces retry delay.
+            async with db.connect_db() as conn:
+                await conn.execute("UPDATE progressor_ai_attempts SET started=started-20 WHERE subject=?", (str(user),))
+                await conn.commit()
         await db.release_ai_coach_quota(user+999, successful['request_id'])
         self.assertEqual((await db.get_ai_coach_quota(user))['usage']['day'], 1)
 
