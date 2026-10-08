@@ -6780,7 +6780,7 @@ async def ai_coach_query(payload: dict = Body(default_factory=dict), ctx: AuthCt
 
     completed = False
     try:
-        result = await _run_ai_coach_query(user_id, mode, user_message, payload, quota_state)
+        result = await _run_ai_coach_query(user_id, mode, user_message, payload, quota_state, include_progressor=not ctx.is_acting)
         if result.get('ok'):
             await db.complete_ai_coach_quota(user_id, quota_state['request_id'])
             completed = True
@@ -6790,7 +6790,7 @@ async def ai_coach_query(payload: dict = Body(default_factory=dict), ctx: AuthCt
             await db.release_ai_coach_quota(user_id, quota_state['request_id'])
 
 
-async def _run_ai_coach_query(user_id: int, mode: str, user_message: str, payload: dict, quota_state: dict):
+async def _run_ai_coach_query(user_id: int, mode: str, user_message: str, payload: dict, quota_state: dict, *, include_progressor: bool = False):
     rejected_variants = payload.get('rejected_variants')
     rejected_list: list[str] = []
     if isinstance(rejected_variants, list):
@@ -6818,9 +6818,12 @@ async def _run_ai_coach_query(user_id: int, mode: str, user_message: str, payloa
     }
 
     from progressor_client import ai_context
-    async with db.connect_db() as connection:
-        identity = await (await connection.execute("SELECT tg_id FROM users WHERE id=?", (user_id,))).fetchone()
-    shared_context = await ai_context("gym", identity[0]) if identity else None
+    shared_context = None
+    if include_progressor:
+        # A native Gym trainer link covers Gym only; it grants no Food/Supply data access.
+        async with db.connect_db() as connection:
+            identity = await (await connection.execute("SELECT tg_id FROM users WHERE id=?", (user_id,))).fetchone()
+        shared_context = await ai_context("gym", identity[0]) if identity else None
     if shared_context: ctx["progressor_context"] = shared_context
     context_text = json.dumps(ctx, ensure_ascii=False)
     user_prompt = (
