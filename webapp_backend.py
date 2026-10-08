@@ -204,7 +204,7 @@ ApiInt = Annotated[int, Field(ge=-(2**63), le=2**63-1)]
 app = FastAPI(title="GymDiary WebApp backend")
 install_auth_bridge(app, "gym")
 from progressor_client import install_cache_worker
-install_cache_worker(app, "gym", db.DB_PATH)
+install_cache_worker(app, "gym", db.DB_PATH,lambda:{'RUB':SUBSCRIPTION_PLANS['1m']['amount_rub']*100,'XTR':_plan_amount_stars(SUBSCRIPTION_PLANS['1m']['amount_rub'])})
 logger = logging.getLogger(__name__)
 
 MAX_INITDATA_AGE_SEC = 24 * 60 * 60

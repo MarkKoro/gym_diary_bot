@@ -1763,6 +1763,9 @@ def remember_message(chat_id: int | None, message_id: int | None):
     if chat_id is None or message_id is None:
         return
     last_messages[chat_id] = message_id
+    from progressor_native_subscription import menu_anchor
+    from settings import DB_PATH
+    menu_anchor(DB_PATH,chat_id,message_id)
     history = message_history[chat_id]
     if message_id not in history:
         history.append(message_id)
@@ -3133,7 +3136,27 @@ def clear_linear_state(
         user_data.pop(key, None)
 
 
-async def send_main_message(
+_main_menu_locks: dict[int,asyncio.Lock] = {}
+
+async def send_main_message(bot,chat_id,text,reply_markup=None,**kwargs):
+    async with _main_menu_locks.setdefault(chat_id,asyncio.Lock()):
+        return await _send_main_unlocked(bot,chat_id,text,reply_markup,**kwargs)
+
+async def _progressor_render(update,context,text,markup):
+    query=update.callback_query
+    if query and query.message and update.effective_chat.id not in last_messages:
+        from progressor_native_subscription import menu_anchor
+        from settings import DB_PATH
+        previous=menu_anchor(DB_PATH,update.effective_chat.id)
+        remember_message(update.effective_chat.id,previous or query.message.message_id)
+    return await send_main_message(context.bot,update.effective_chat.id,text,markup,parse_mode=None)
+
+async def _progressor_scheduled_send(application,user_id,text,markup):
+    from progressor_bot import notification_preflight
+    notification_preflight(application,user_id,'gym')
+    return await send_main_message(application.bot,user_id,text,markup,parse_mode=None,force_new=True)
+
+async def _send_main_unlocked(
     bot,
     chat_id: int | None,
     text: str,
@@ -3143,6 +3166,18 @@ async def send_main_message(
     if chat_id is None:
         raise ValueError("chat_id is required to send a message")
     previous_id = last_messages.get(chat_id)
+    if previous_id is None:
+        from progressor_native_subscription import menu_anchor
+        from settings import DB_PATH
+        previous_id=menu_anchor(DB_PATH,chat_id)
+        if previous_id:last_messages[chat_id]=previous_id
+    if kwargs.pop('force_new',False):
+        msg=await bot.send_message(chat_id=chat_id,text=text,reply_markup=reply_markup,**kwargs)
+        remember_message(chat_id,msg.message_id)
+        if previous_id and previous_id!=msg.message_id:
+            from progressor_bot import retire_owned_menu
+            await retire_owned_menu(bot,chat_id,previous_id)
+        return msg
     editable_kwargs = {
         key: value
         for key, value in kwargs.items()
@@ -8582,6 +8617,7 @@ def build_subscription_keyboard() -> InlineKeyboardMarkup:
                 )
             ]
         )
+    rows.append([InlineKeyboardButton("Общая подписка · доплатить",callback_data="pg:menu")])
     rows.append([InlineKeyboardButton("⬅️ Назад", callback_data="back:main")])
     return InlineKeyboardMarkup(rows)
 
@@ -14879,7 +14915,7 @@ def main():
     )
     from progressor_bot import install as install_progressor
     from settings import DB_PATH
-    install_progressor(app, "gym", DB_PATH)
+    install_progressor(app, "gym", DB_PATH,render=_progressor_render,back_callback='back:main',notify=lambda uid,text,kb:_progressor_scheduled_send(app,uid,text,kb))
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("set_intro", cmd_set_intro))
     app.add_handler(CommandHandler("splash_reset", splash_reset))

@@ -4391,6 +4391,11 @@ async def finalize_payment_subscription_idempotent(
             "UPDATE payments SET finalized_at=?, finalization_source=?, payload_json=? WHERE id=?",
             (now_iso, source, json.dumps(payment_payload, ensure_ascii=False), payment_row_id),
         )
+        from progressor_native_subscription import record_paid_async
+        payment_cur=await db.execute("SELECT p.currency,p.amount,p.status,u.tg_id,p.provider,p.external_id FROM payments p JOIN users u ON u.id=p.user_id WHERE p.id=?",(payment_row_id,))
+        proof=await payment_cur.fetchone()
+        if proof and proof[2] in ('paid','succeeded','paid_invoice') and proof[4] in ('telegram','yookassa') and proof[5] and payment_payload.get('test') is not True:
+            await record_paid_async(db,'gym:'+str(payment_row_id),proof[3],base_dt,expires_at,proof[0],int(proof[1]))
         await db.commit()
         return {"ok": True, "already_finalized": False, "expires_at": expires_at}
 
