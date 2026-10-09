@@ -3538,6 +3538,8 @@
     };
 
     window.ProgressorDomain={version:1,
+      subscriptionPlans:async()=>{const data=await apiFetch('/gymapi/subscription/overview',{silent:true});return (data.plans||[]).map(p=>({id:p.code,label:p.title,RUB:Math.round(Number(p.amount_rub)*100),XTR:Number(p.amount_stars)}));},
+      purchaseSubscription:(id,currency)=>startSubscriptionPayment(id,currency==='XTR'?'stars':'rub'),
       hintHost:()=>document.getElementById('progressor-inline-host'),
       eligible:()=>!state.acting.userId && state.currentRoute==='today' && !!state.userId,
       perform:()=>false
