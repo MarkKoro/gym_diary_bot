@@ -90,6 +90,7 @@ def main_menu_kb(
             ]
         )
     if include_settings:
+        rows.append([InlineKeyboardButton('Связь продуктов',callback_data='pg:settings')])
         rows.append(
             [
                 InlineKeyboardButton(
@@ -362,6 +363,7 @@ def trainee_trainer_settings_kb(can_edit: bool):
 
 def trainer_manage_trainee_kb(trainee_user_id: int) -> InlineKeyboardMarkup:
     rows = [
+        [InlineKeyboardButton('Питание подопечного · КБЖУ',callback_data=f'pg:coach_view:{trainee_user_id}')],
         [
             InlineKeyboardButton(
                 dual(

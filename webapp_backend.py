@@ -3282,6 +3282,21 @@ async def all_exercise_session(exercise_id: ApiInt, date: str | None = None, ctx
         "previous_running": running_state.get("previous_running"),
     }
 
+@app.post('/all_exercises/session/finish')
+async def free_workout_finish(payload:dict=Body(...),ctx:AuthCtx=Depends(get_auth_ctx)):
+    if ctx.is_acting:raise HTTPException(403,'Завершать можно только свою тренировку')
+    from progressor_free_workout import finish
+    try:return await asyncio.to_thread(finish,db.DB_PATH,ctx.user_id,int(payload['session_id']))
+    except (ValueError,KeyError,TypeError):raise HTTPException(409,'Свободная тренировка недоступна')
+
+@app.get('/all_exercises/session/current')
+async def free_workout_current(date:str|None=None,ctx:AuthCtx=Depends(get_auth_ctx)):
+    if ctx.is_acting:raise HTTPException(403,'Доступна только своя тренировка')
+    selected=_iso_date(_parse_date_param(date))
+    async with db.connect_db() as conn:
+        row=await (await conn.execute('SELECT id FROM sessions WHERE user_id=? AND date=? AND day_index=0 ORDER BY id DESC LIMIT 1',(ctx.user_id,selected))).fetchone()
+    return {'session_id':row[0] if row else None,'date':selected}
+
 
 @app.post("/all_exercises/exercise/{exercise_id}/set/add")
 @_validate_payload_input
@@ -5350,6 +5365,9 @@ async def settings_update_reminders(
         if not row:
             raise HTTPException(status_code=409, detail="Система тренировок изменилась. Повтори сохранение.")
         system_id = int(row[0])
+        from progressor_timezone_history import record
+        tz_row=await (await conn.execute('SELECT tg_id,tz FROM users WHERE id=?',(user_id,))).fetchone()
+        await record(conn,tz_row[0],tz_row[1] or 'UTC',timezone)
         await conn.execute("UPDATE users SET notifications_enabled=?, tz=? WHERE id=?", (int(enabled), timezone, user_id))
         await conn.execute("DELETE FROM user_reminders WHERE user_id=?", (user_id,))
         await conn.execute("DELETE FROM training_system_reminders WHERE system_id=?", (system_id,))
@@ -5367,6 +5385,15 @@ async def settings_update_reminders(
         )
         await conn.commit()
     return {"ok": True}
+
+
+@app.post("/integrations/timezone")
+@_validate_payload_input
+async def integration_timezone(payload:dict=Body(...),ctx:AuthCtx=Depends(get_auth_ctx)):
+    if ctx.is_acting:raise HTTPException(403,'Раздел доступен только владельцу профиля')
+    from progressor_timezone import change
+    try:return await change(ctx.user_id,ctx.tg_id,payload)
+    except ValueError:raise HTTPException(409,'Пояс изменился или недоступен. Обновите предпросмотр.')
 
 
 @app.post("/settings/leaderboard_visibility")
@@ -6820,7 +6847,7 @@ async def ai_coach_query(payload: dict = Body(default_factory=dict), ctx: AuthCt
         completed = False
         try:
             result = await _run_ai_coach_query(user_id, mode, user_message, payload, quota_state, include_progressor=not ctx.is_acting)
-            if result.get('ok'):
+            if result.get('ok') and not result.get('cache_hit'):
                 await db.complete_ai_coach_quota(user_id, quota_state['request_id'])
                 completed = True
             return result
@@ -6874,7 +6901,11 @@ async def _run_ai_coach_query(user_id: int, mode: str, user_message: str, payloa
 
     # --- OpenAI call (mode-aware) ---
     system_prompt = _build_ai_system_prompt(mode, requested_days=requested_days)
-    result = await _call_openai_chat(system_prompt, user_prompt, mode=mode, requested_days=requested_days)
+    from progressor_ai_cache import key,get,put
+    request_key=key({'model':get_openai_model(),'mode':mode,'requested_days':requested_days,'system_prompt':system_prompt,'context':ctx,'include_progressor':include_progressor})
+    result=await asyncio.to_thread(get,db.DB_PATH,user_id,'gym_coach',request_key)
+    cache_hit=result is not None
+    if result is None:result = await _call_openai_chat(system_prompt, user_prompt, mode=mode, requested_days=requested_days)
 
     # --- Parse structured root ---
     parsed_root = None
@@ -6904,6 +6935,7 @@ async def _run_ai_coach_query(user_id: int, mode: str, user_message: str, payloa
     )
     if mode == "new_system" and requested_days and not (sanitized_plan.get("actions") if isinstance(sanitized_plan, dict) else []):
         if any(isinstance(w, dict) and w.get("code") == "days_count_mismatch" for w in plan_warnings):
+            cache_hit=False
             retry_prompt = user_prompt + f"\n\nВНИМАНИЕ: Ты вернул неверное число дней. Верни строго {requested_days} дней в create_system.days."
             retry_result = await _call_openai_chat(system_prompt, retry_prompt, mode=mode, requested_days=requested_days)
             retry_root = retry_result.get("parsed") if isinstance(retry_result, dict) else {}
@@ -6916,6 +6948,7 @@ async def _run_ai_coach_query(user_id: int, mode: str, user_message: str, payloa
             )
             if (sanitized_plan.get("actions") if isinstance(sanitized_plan, dict) else []):
                 parsed_root = retry_root if isinstance(retry_root, dict) else parsed_root
+                result=retry_result
 
     summary = str(parsed_root.get("summary") or "").strip()
     rationale = parsed_root.get("rationale")
@@ -6950,11 +6983,14 @@ async def _run_ai_coach_query(user_id: int, mode: str, user_message: str, payloa
     if mode != 'mistakes_analysis' and not sanitized_plan.get('actions'):
         raise HTTPException(status_code=502, detail='ИИ не вернул применимый план. Попытка не списана.')
 
+    if not cache_hit:await asyncio.to_thread(put,db.DB_PATH,user_id,'gym_coach',request_key,result,3600)
+
     return {
         "ok": True,
+        "cache_hit":cache_hit,
         "mode": mode,
         "quota": {
-            "daily_remaining": int(((quota_state.get("remaining") or {}).get("day") or 0)),
+            "daily_remaining": int(((quota_state.get("remaining") or {}).get("day") or 0)) + int(cache_hit),
             "daily_limit": int(((quota_state.get("limits") or {}).get("day") or 3)),
         },
         "answer_text": answer_text,

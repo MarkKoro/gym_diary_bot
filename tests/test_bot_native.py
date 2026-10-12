@@ -45,6 +45,27 @@ class NativeBundleHandlers(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(pair[0].url,'https://example.test/progressor/subscribe?source='+SOURCE+'&plan=m1')
         self.assertEqual(pair[1].callback_data,'pg:buy:m1')
         self.assertEqual(self.render.await_count,1)
+    async def test_native_coach_owned_link_and_separate_aggregate_only_output(self):
+        with sqlite3.connect(self.path) as conn:
+            conn.executescript("CREATE TABLE users(id INTEGER PRIMARY KEY,tg_id INTEGER,is_trainer INTEGER);INSERT INTO users VALUES(7,123,1),(8,456,0);CREATE TABLE trainer_links(trainer_user_id INTEGER,trainee_user_id INTEGER,status TEXT);INSERT INTO trainer_links VALUES(7,8,'accepted');")
+        self.q.data='pg:coach_view:8'
+        value={'date':'2026-10-12','totals':{'kcal':1800,'protein':90,'fat':60,'carbs':220},'top_dishes_enabled':False}
+        call=AsyncMock(return_value=value)
+        with patch.object(client,'call',call):await self.invoke('callback')
+        self.assertEqual(call.call_args.args[2],{'coach_id':'123','trainee_id':'456'})
+        text=self.render.call_args.args[2];self.assertIn('1800 ккал',text);self.assertNotIn('Состав',text);self.assertNotIn('5 частых',text)
+        with sqlite3.connect(self.path) as conn:conn.execute("UPDATE trainer_links SET status='inactive'")
+        call.reset_mock()
+        with patch.object(client,'call',call):await self.invoke('callback')
+        call.assert_not_awaited();self.assertIn('связь с подопечным недоступна',self.render.call_args.args[2])
+
+    async def test_native_coach_revoked_core_permission_shows_no_cached_macros(self):
+        with sqlite3.connect(self.path) as conn:
+            conn.executescript("CREATE TABLE users(id INTEGER PRIMARY KEY,tg_id INTEGER,is_trainer INTEGER);INSERT INTO users VALUES(7,123,1),(8,456,0);CREATE TABLE trainer_links(trainer_user_id INTEGER,trainee_user_id INTEGER,status TEXT);INSERT INTO trainer_links VALUES(7,8,'accepted');")
+        self.q.data='pg:coach_view:8'
+        with patch.object(client,'call',AsyncMock(side_effect=PermissionError)):await self.invoke('callback')
+        self.assertIn('Питание не открыто',self.render.call_args.args[2]);self.assertNotIn('ккал;',self.render.call_args.args[2])
+
     async def test_invoice_button_uses_actual_reserved_id_and_no_extra_invoice_message(self):
         self.q.data='pg:buy:m1'
         call=AsyncMock(side_effect=[self.order(),{'invoice_url':'https://t.me/$offline'}])

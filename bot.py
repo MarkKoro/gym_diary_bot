@@ -7728,19 +7728,20 @@ async def _rem_fire(context):
         day_no = None
     kind: str = data.get("kind", "workout_reminder")
 
-    # 1) удалить прошлое напоминание (сначала из БД, потом из памяти)
-    await purge_chat_history(context.bot, chat_id)
-    prev_db = _rem_try_db_get_last_msg(user_id, kind)
-    for mid in {prev_db, _REM_LAST_MSG.get(chat_id)}:
-        if not mid:
-            continue
-        with contextlib.suppress(Exception):
-            await context.bot.delete_message(chat_id=chat_id, message_id=int(mid))
+    # Queue the next normal slot even on rest, an unmarked workout, or a failed
+    # delivery. _rem_next_occurrence already returns the following week.
+    nxt_local = _rem_next_occurrence(tz_name, dow, hh, mm)
+    delay = max(1,(nxt_local - _dt.now(_Z(tz_name))).total_seconds())
+    context.job_queue.run_once(_rem_fire,when=delay,name=context.job.name,data=data,chat_id=chat_id,
+        job_kwargs={"misfire_grace_time":600,"coalesce":True,"max_instances":1})
+    from progressor_bot import notification_preflight,NotificationDeferred
+    from progressor_reminder import reserve
+    from settings import DB_PATH
+    try:notification_preflight(context.application,chat_id,'gym')
+    except NotificationDeferred:return
 
-    # 2) СФОРМИРОВАТЬ ТЕКУЩЕЕ УВЕДОМЛЕНИЕ (ИСПОЛЬЗУЙ УЖЕ ИМЕЮЩИЙСЯ В БОТЕ КОД!)
-    # ВАЖНО: не ломай существующую сборку текста/клавиатуры.
-    # Найди в текущем reminder_job сборку текста/клавиатуры и оставь её «как есть».
-    # Здесь только вызов отправки и сохранение message_id.
+    # A formatter error can use the minimal copy before any provider request.
+    # A send error cannot: Telegram may have already accepted that message.
     try:
         # если в проекте есть готовая функция, формирующая текст/kb напоминания — используй её.
         text, kb = await build_workout_reminder(
@@ -7749,29 +7750,24 @@ async def _rem_fire(context):
             day_index=day_no or dow,
             tz_name=tz_name,
         )
-        msg = await context.bot.send_message(chat_id=chat_id, text=text, reply_markup=kb)
     except Exception:
         # Фолбэк: минимальное уведомление (на случай, если Codex не нашёл сборку)
         from telegram import InlineKeyboardMarkup, InlineKeyboardButton
 
         kb = InlineKeyboardMarkup([[InlineKeyboardButton("Открыть дневник", callback_data="menu:root")]])
-        msg = await context.bot.send_message(chat_id=chat_id, text="⏰ Время тренировки!", reply_markup=kb)
+        text="⏰ Время тренировки!"
+
+    slot=f'{kind}:{_dt.now(_Z(tz_name)).date().isoformat()}:{dow}:{hh}:{mm}'
+    if not await asyncio.to_thread(reserve,DB_PATH,chat_id,slot):return
+    try:msg=await send_main_message(context.bot,chat_id,text,kb,parse_mode=None,force_new=True)
+    except Exception:
+        logger.warning('gym_reminder_delivery_uncertain')
+        return
 
     _REM_LAST_MSG[chat_id] = msg.message_id
     remember_message(msg.chat_id, msg.message_id)
     _rem_try_db_set_last_msg(user_id, msg.message_id, kind)
 
-    # 3) перепланировать следующий запуск (ровно через неделю в тот же локальный момент)
-    nxt_local = _rem_next_occurrence(tz_name, dow, hh, mm) + _td(days=7)
-    delay = (nxt_local - _dt.now(_Z(tz_name))).total_seconds()
-    context.job_queue.run_once(
-        _rem_fire,
-        when=delay,
-        name=context.job.name,  # то же имя — будет одна актуальная джоба
-        data=data,
-        chat_id=chat_id,
-        job_kwargs={"misfire_grace_time": 600, "coalesce": True, "max_instances": 1},
-    )
 
 
 def _rem_clear_user_jobs(app, user_id: int):

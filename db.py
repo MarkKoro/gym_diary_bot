@@ -2624,6 +2624,8 @@ async def inc_last_set(user_ex_id: int, session_id: int, field: str, delta: floa
             value = int(value)
         await db.execute(f'UPDATE sets SET {field}=? WHERE id=?', (value, row[0]))
         await _refresh_session_defaults(db, session_id, user_ex_id)
+        from progressor_free_workout import touch
+        await touch(db,session_id)
         await db.commit()
 
 async def apply_sets_template(
@@ -2693,6 +2695,8 @@ async def inc_specific_set(user_ex_id: int, session_id: int, set_no: int, field:
             new_val = max(float(weight + delta), 0.0)
             await db.execute("UPDATE sets SET weight_kg=? WHERE id=?", (new_val, set_id))
         await _refresh_session_defaults(db, session_id, user_ex_id)
+        from progressor_free_workout import touch
+        await touch(db,session_id)
         await db.commit()
 
 async def fetch_user_settings(user_id: int):
@@ -3453,6 +3457,9 @@ async def set_baseline(
 
 async def set_user_timezone(user_id: int, tz: str):
     async with connect_db() as db:
+        from progressor_timezone_history import record
+        row=await (await db.execute('SELECT tg_id,tz FROM users WHERE id=?',(user_id,))).fetchone()
+        if row:await record(db,row[0],row[1] or 'UTC',tz)
         await db.execute("UPDATE users SET tz=? WHERE id=?", (tz, user_id))
         await db.commit()
 
@@ -5231,6 +5238,8 @@ async def add_set(
         )
         if not is_warmup:
             await _upsert_session_defaults(db, session_id, user_ex_id, reps, seconds, weight)
+        from progressor_free_workout import touch
+        await touch(db,session_id)
         await db.commit()
 
 async def remove_last_set(user_ex_id: int, session_id: int):
@@ -5251,6 +5260,8 @@ async def remove_last_set(user_ex_id: int, session_id: int):
             set_id, reps, seconds, weight = row
             await db.execute("DELETE FROM sets WHERE id=?", (set_id,))
             await _refresh_session_defaults(db, session_id, user_ex_id)
+            from progressor_free_workout import touch
+            await touch(db,session_id)
             cur = await db.execute(
                 "SELECT COUNT(*) FROM sets WHERE session_id=? AND user_exercise_id=? AND is_warmup=0",
                 (session_id, user_ex_id),
@@ -5273,6 +5284,8 @@ async def toggle_last_set_warmup(user_ex_id: int, session_id: int):
         set_id, is_warmup = row
         new_val = 0 if is_warmup else 1
         await db.execute("UPDATE sets SET is_warmup=? WHERE id=?", (new_val, set_id))
+        from progressor_free_workout import touch
+        await touch(db,session_id)
         await _refresh_session_defaults(db, session_id, user_ex_id)
         await db.commit()
 
@@ -5314,6 +5327,8 @@ async def mark_exercise_done(session_id: int, ue_id: int):
                 last_weight,
             ),
         )
+        from progressor_free_workout import touch
+        await touch(db,session_id)
         await db.commit()
 
 
@@ -7417,6 +7432,10 @@ async def update_running_entry(
             f"UPDATE running_entries SET {', '.join(fields)} WHERE id=?",
             tuple(values),
         )
+        actual=await (await db.execute('SELECT session_id,is_draft FROM running_entries WHERE id=?',(entry_id,))).fetchone()
+        if actual and actual[0] and not actual[1]:
+            from progressor_free_workout import touch
+            await touch(db,actual[0])
         await db.commit()
 
 
@@ -7430,6 +7449,10 @@ async def mark_running_entry_done(entry_id: int):
             """,
             (_now_iso(), entry_id),
         )
+        row=await (await db.execute('SELECT session_id FROM running_entries WHERE id=?',(entry_id,))).fetchone()
+        if row and row[0]:
+            from progressor_free_workout import touch
+            await touch(db,row[0])
         await db.commit()
 
 
