@@ -32,10 +32,19 @@ class TimezoneBehaviourTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(actual, expected)
 
     async def test_local_date_falls_back_to_utc_when_invalid(self):
-        await db.set_user_timezone(self.user_id, "Mars/Phobos")
+        # Historical invalid storage must remain readable; new writes reject it.
+        async with db.connect_db() as conn:
+            await conn.execute('UPDATE users SET tz=? WHERE id=?', ('Mars/Phobos', self.user_id))
+            await conn.commit()
         expected = datetime.now(ZoneInfo("UTC")).strftime("%Y-%m-%d")
         actual = await bot.get_user_local_date(self.user_id)
         self.assertEqual(actual, expected)
+
+    async def test_invalid_new_timezone_is_rejected_without_changing_the_current_one(self):
+        await db.set_user_timezone(self.user_id, 'Europe/Moscow')
+        with self.assertRaises(ValueError):
+            await db.set_user_timezone(self.user_id, 'Mars/Phobos')
+        self.assertEqual(await db.get_user_timezone(self.user_id), 'Europe/Moscow')
 
 
 if __name__ == "__main__":

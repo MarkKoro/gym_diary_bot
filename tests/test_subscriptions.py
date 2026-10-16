@@ -23,6 +23,20 @@ import bot  # noqa: E402
 importlib.reload(bot)
 
 
+class NativePaymentMenuTests(unittest.TestCase):
+    def test_all_periods_offer_matching_ruble_and_stars_paths_from_actual_tariffs(self):
+        with patch.dict(bot.SUBSCRIPTION_PLANS,{'1m':{'title':'Подписка на 1 месяц','days':30,'amount_rub':123}}):
+            rows=bot.build_subscription_keyboard().inline_keyboard
+        pairs=[row for row in rows if len(row)==2]
+        self.assertEqual(len(pairs),3)
+        self.assertIn('123 ₽',pairs[0][0].text)
+        self.assertIn(str(bot.plan_amount_stars(123)),pairs[0][1].text)
+        for row,plan in zip(pairs,('1m','6m','12m')):
+            self.assertIn('plan_id='+plan,row[0].web_app.url)
+            self.assertEqual(row[1].callback_data,'sub:stars:'+plan)
+        self.assertIn('pg:menu',[b.callback_data for row in rows for b in row])
+
+
 class InitDataValidationTests(unittest.TestCase):
     def signed(self, user, auth_date=1000):
         import hashlib

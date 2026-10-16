@@ -44,7 +44,7 @@ class ReminderJourney(unittest.IsolatedAsyncioTestCase):
         from types import SimpleNamespace
         import bot
         context=SimpleNamespace(job=SimpleNamespace(name='test',data={'chat_id':1001,'user_id':7,'tz':'UTC','dow':2,'hh':10,'mm':0}),job_queue=Mock(),application=SimpleNamespace(bot_data={}),bot=Mock())
-        with patch.object(bot,'build_workout_reminder',AsyncMock(return_value=('test',None))),patch('progressor_bot.notification_preflight'),patch('progressor_reminder.reserve',return_value=True),patch.object(bot,'send_main_message',AsyncMock(side_effect=TimeoutError)) as send:
+        with patch.object(bot,'find_user_by_id',AsyncMock(return_value=(7,1001))),patch.object(bot,'build_workout_reminder',AsyncMock(return_value=('test',None))),patch('progressor_bot.notification_preflight'),patch('progressor_reminder.reserve',return_value=True),patch.object(bot,'send_main_message',AsyncMock(side_effect=TimeoutError)) as send:
             await bot._rem_fire(context)
         self.assertEqual(send.await_count,1);self.assertEqual(context.job_queue.run_once.call_count,1)
         delay=context.job_queue.run_once.call_args.kwargs['when'];self.assertGreater(delay,0);self.assertLessEqual(delay,7*86400)
@@ -53,5 +53,5 @@ class ReminderJourney(unittest.IsolatedAsyncioTestCase):
         import bot
         from progressor_bot import NotificationDeferred
         context=SimpleNamespace(job=SimpleNamespace(name='test',data={'chat_id':1001,'user_id':7,'tz':'UTC','dow':2,'hh':10,'mm':0}),job_queue=Mock(),application=SimpleNamespace(bot_data={}),bot=Mock())
-        with patch('progressor_bot.notification_preflight',side_effect=NotificationDeferred),patch.object(bot,'send_main_message',AsyncMock()) as send:await bot._rem_fire(context)
+        with patch.object(bot,'find_user_by_id',AsyncMock(return_value=(7,1001))),patch('progressor_bot.notification_preflight',side_effect=NotificationDeferred),patch.object(bot,'send_main_message',AsyncMock()) as send:await bot._rem_fire(context)
         self.assertEqual(context.job_queue.run_once.call_count,1);send.assert_not_awaited()

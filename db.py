@@ -1851,8 +1851,23 @@ async def get_active_training_system_id(user_id: int) -> int:
     return int(system_id)
 
 
+async def peek_active_training_system_id(user_id: int) -> int:
+    """Resolve an existing owned program without seeding or changing the diary."""
+    async with connect_db() as conn:
+        row = await (await conn.execute(
+            "SELECT s.id FROM users u JOIN training_systems s ON s.id=u.active_system_id AND s.user_id=u.id WHERE u.id=?",
+            (user_id,),
+        )).fetchone()
+        if row:
+            return int(row[0])
+        row = await (await conn.execute(
+            "SELECT id FROM training_systems WHERE user_id=? ORDER BY id LIMIT 1", (user_id,),
+        )).fetchone()
+        return int(row[0]) if row else 0
+
+
 async def list_training_systems(user_id: int):
-    active_id = await get_active_training_system_id(user_id)
+    active_id = await peek_active_training_system_id(user_id)
     async with connect_db() as db:
         cur = await db.execute(
             "SELECT id, name, color FROM training_systems WHERE user_id=? ORDER BY id",
@@ -2475,7 +2490,7 @@ async def append_imported_exercise_note(
         )
         current_row = await current_cur.fetchone()
         current_note = (str(current_row[0]) if current_row and current_row[0] is not None else "").strip()
-        if imported_block in current_note:
+        if imported_block in current_note or (int(user_id) == int(source_user_id) and imported_note == current_note):
             return
 
         merged_note = imported_block if not current_note else f"{current_note}\n\n{imported_block}"
@@ -3955,17 +3970,18 @@ async def cleanup_expired_subscriptions(user_id: int | None = None):
 
 
 async def get_active_subscription(user_id: int) -> dict | None:
-    await cleanup_expired_subscriptions(user_id)
+    # Reading capabilities does not mutate another diary's subscription rows.
+    now_iso = datetime.now(UTC).isoformat()
     async with connect_db() as db:
         cur = await db.execute(
             """
             SELECT plan, started_at, expires_at
             FROM subscriptions
-            WHERE user_id=? AND status='active'
+            WHERE user_id=? AND status='active' AND expires_at>?
             ORDER BY expires_at DESC
             LIMIT 1
             """,
-            (user_id,),
+            (user_id, now_iso),
         )
         row = await cur.fetchone()
         from progressor_client import bundle_until, parse_until
@@ -5096,40 +5112,37 @@ async def fetch_day_sheet_exercise_data(
             system_clause = "AND COALESCE(s.system_id,0)=?"
             system_params = (int(system_id),)
 
+        requested_values = ','.join('( ? )' for _ in exercise_ids)
         cur = await conn.execute(
             f"""
-            WITH ranked_previous AS (
-                SELECT
-                    ue.exercise_id,
-                    s.id AS session_id,
-                    st.user_exercise_id,
-                    ROW_NUMBER() OVER (
-                        PARTITION BY ue.exercise_id
-                        ORDER BY s.date DESC, st.set_no DESC
-                    ) AS rn
-                FROM sessions s
-                JOIN sets st ON st.session_id=s.id AND st.is_warmup=0
-                JOIN user_exercises ue ON ue.id=st.user_exercise_id
-                WHERE s.user_id=?
-                  AND ue.exercise_id IN ({exercise_placeholders})
-                  AND s.date<?
-                  {system_clause}
+            WITH requested(exercise_id) AS (VALUES {requested_values}),
+            prior AS MATERIALIZED (
+                SELECT r.exercise_id, (
+                    SELECT s.id FROM sessions s
+                    WHERE s.user_id=? AND s.date<? {system_clause}
+                      AND EXISTS (
+                        SELECT 1 FROM sets recent
+                        JOIN user_exercises linked ON linked.id=recent.user_exercise_id
+                        WHERE recent.session_id=s.id AND recent.is_warmup=0
+                          AND linked.exercise_id=r.exercise_id
+                      )
+                    ORDER BY s.date DESC,s.id DESC LIMIT 1
+                ) AS session_id FROM requested r
+            ), chosen AS MATERIALIZED (
+                SELECT prior.*, (
+                    SELECT recent.user_exercise_id FROM sets recent
+                    JOIN user_exercises linked ON linked.id=recent.user_exercise_id
+                    WHERE recent.session_id=prior.session_id AND recent.is_warmup=0
+                      AND linked.exercise_id=prior.exercise_id
+                    ORDER BY recent.set_no DESC LIMIT 1
+                ) AS user_exercise_id FROM prior
             )
-            SELECT
-                rp.exercise_id,
-                st.set_no,
-                st.reps,
-                st.seconds,
-                st.weight_kg
-            FROM ranked_previous rp
-            JOIN sets st
-              ON st.session_id=rp.session_id
-             AND st.user_exercise_id=rp.user_exercise_id
-             AND st.is_warmup=0
-            WHERE rp.rn=1
-            ORDER BY rp.exercise_id, st.set_no
+            SELECT chosen.exercise_id,st.set_no,st.reps,st.seconds,st.weight_kg
+            FROM chosen JOIN sets st ON st.session_id=chosen.session_id
+              AND st.user_exercise_id=chosen.user_exercise_id AND st.is_warmup=0
+            ORDER BY chosen.exercise_id,st.set_no
             """,
-            (int(user_id), *exercise_ids, today, *system_params),
+            (*exercise_ids,int(user_id),today,*system_params),
         )
         previous_sets_by_exercise: dict[int, list[tuple]] = {}
         for row in await cur.fetchall():
@@ -5147,28 +5160,13 @@ async def fetch_day_sheet_exercise_data(
                 result[ue_id]["previous_summary"] = (len(rows), reps, seconds, weight)
 
         cur = await conn.execute(
-            f"""
-            WITH ranked_done AS (
-                SELECT
-                    ue.exercise_id,
-                    s.date,
-                    ROW_NUMBER() OVER (
-                        PARTITION BY ue.exercise_id
-                        ORDER BY s.date DESC, COALESCE(se.done_at, s.date || 'T00:00:00') DESC
-                    ) AS rn
-                FROM session_exercises se
-                JOIN user_exercises ue ON ue.id = se.user_exercise_id
-                JOIN sessions s ON s.id = se.session_id
-                WHERE ue.exercise_id IN ({exercise_placeholders})
-                  AND s.user_id=?
-                  AND se.is_done=1
-                  AND se.session_id<>?
-            )
-            SELECT exercise_id, date
-            FROM ranked_done
-            WHERE rn=1
-            """,
-            (*exercise_ids, int(user_id), int(session_id)),
+            f"""SELECT ue.exercise_id,MAX(s.date) FROM session_exercises se
+                JOIN user_exercises ue ON ue.id=se.user_exercise_id
+                JOIN sessions s ON s.id=se.session_id
+                WHERE ue.exercise_id IN ({exercise_placeholders}) AND s.user_id=?
+                  AND se.is_done=1 AND se.session_id<>?
+                GROUP BY ue.exercise_id""",
+            (*exercise_ids,int(user_id),int(session_id)),
         )
         for exercise_id, previous_date in await cur.fetchall():
             ue_id = exercise_to_current_ue.get(int(exercise_id))
@@ -5353,6 +5351,23 @@ async def get_strength_session_duration(user_id: int, session_id: int):
         if not await (await conn.execute("SELECT 1 FROM sqlite_master WHERE name='progressor_session_durations'")).fetchone(): return None
         row=await (await conn.execute('SELECT d.duration_seconds FROM progressor_session_durations d JOIN sessions s ON s.id=d.session_id WHERE s.id=? AND s.user_id=?',(session_id,user_id))).fetchone()
         return row[0]//60 if row else None
+
+
+async def recorded_training_summary(user_id: int):
+    """Actual activity on either surface, including free training; views are not workouts."""
+    async with connect_db() as conn:
+        row = await (await conn.execute('''SELECT count(*),min(s.date),max(s.date)
+            FROM sessions s WHERE s.user_id=? AND (
+              EXISTS(SELECT 1 FROM sets st JOIN user_exercises ue ON ue.id=st.user_exercise_id
+                     WHERE st.session_id=s.id AND ue.user_id=s.user_id
+                     AND (COALESCE(st.reps,0)>0 OR COALESCE(st.seconds,0)>0))
+              OR EXISTS(SELECT 1 FROM session_exercises se JOIN user_exercises ue ON ue.id=se.user_exercise_id
+                        WHERE se.session_id=s.id AND ue.user_id=s.user_id AND se.is_done=1)
+              OR EXISTS(SELECT 1 FROM running_entries r JOIN user_exercises ue ON ue.id=r.user_exercise_id
+                        WHERE r.session_id=s.id AND ue.user_id=s.user_id AND COALESCE(r.is_draft,1)=0
+                        AND (COALESCE(r.duration_sec,0)>0 OR COALESCE(r.duration_ms,0)>0 OR COALESCE(r.distance_km,0)>0))
+            )''', (user_id,))).fetchone()
+    return int(row[0] or 0), row[1], row[2]
 
 
 async def set_exercise_note(session_id: int, ue_id: int, note: str | None):
@@ -6240,21 +6255,23 @@ async def list_team_requests(
                 ), '') AS latest_system_name,
                 COALESCE((
                     SELECT COUNT(*) FROM (
-                        SELECT dc.system_id, dc.day_index, local_date(dc.completed_at, u.tz) AS local_day
+                        SELECT dc.system_id, dc.day_index, local_date(dc.completed_at, history_user.tz) AS local_day
                         FROM day_completion_history dc
+                        JOIN users history_user ON history_user.id = dc.user_id
                         WHERE dc.user_id = r.user_id
-                          AND local_date(dc.completed_at, u.tz) <= local_date(datetime('now'), u.tz)
-                        GROUP BY dc.system_id, dc.day_index, local_date(dc.completed_at, u.tz)
+                          AND local_date(dc.completed_at, history_user.tz) <= local_date(datetime('now'), history_user.tz)
+                        GROUP BY dc.system_id, dc.day_index, local_date(dc.completed_at, history_user.tz)
                     )
                 ), 0) AS sessions_total,
                 COALESCE((
                     SELECT COUNT(*) FROM (
-                        SELECT dc.system_id, dc.day_index, local_date(dc.completed_at, u.tz) AS local_day
+                        SELECT dc.system_id, dc.day_index, local_date(dc.completed_at, history_user.tz) AS local_day
                         FROM day_completion_history dc
+                        JOIN users history_user ON history_user.id = dc.user_id
                         WHERE dc.user_id = r.user_id
-                          AND local_date(dc.completed_at, u.tz)
-                              BETWEEN date(local_date(datetime('now'), u.tz), '-27 day') AND local_date(datetime('now'), u.tz)
-                        GROUP BY dc.system_id, dc.day_index, local_date(dc.completed_at, u.tz)
+                          AND local_date(dc.completed_at, history_user.tz)
+                              BETWEEN date(local_date(datetime('now'), history_user.tz), '-27 day') AND local_date(datetime('now'), history_user.tz)
+                        GROUP BY dc.system_id, dc.day_index, local_date(dc.completed_at, history_user.tz)
                     )
                 ), 0) AS sessions_28,
                 COALESCE(u.created_at, '') AS user_created_at
@@ -9278,7 +9295,9 @@ async def copy_training_system_from_user(source_user_id: int, target_user_id: in
                 (source_user_id, ex_id),
             )
             note_row = await note_cur.fetchone()
-            snapshot['note'] = (note_row[0] or '').strip() if note_row else ''
+            # Historical session notes are private. Explicit program instructions
+            # remain in the shared plan; an individual's old diary note does not.
+            snapshot['note'] = (note_row[0] or '').strip() if note_row and source_user_id == target_user_id else ''
             source_snapshot_cache[ex_id] = snapshot
             return snapshot
 

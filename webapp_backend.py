@@ -407,7 +407,7 @@ async def _create_telegram_subscription_invoice_link(
     return payload, confirmation_url, plan
 
 
-DAY_COMPLETION_RETENTION_DAYS = 2
+DAY_COMPLETION_RETENTION_DAYS = 5
 SCHEDULED_COMPLETION_EXPIRY_DAYS = 5
 
 # Статика (пока заглушка)
@@ -486,7 +486,9 @@ async def get_auth_ctx(
                 raise HTTPException(status_code=403, detail="No edit permission for trainee")
             internal_user_id = acting_user_id
 
-    await ensure_training_system_defaults(internal_user_id)
+    # Viewing another diary must not seed its program, sessions or reminders.
+    if not is_acting or request.method != "GET":
+        await ensure_training_system_defaults(internal_user_id)
 
     return AuthCtx(
         tg_id=tg.user.id,
@@ -1621,7 +1623,7 @@ def _today_date() -> date:
 
 async def get_active_training_system_id(user_id: int) -> int:
     """Возвращает id активной системы тренировок пользователя."""
-    return await db.get_active_training_system_id(user_id)
+    return await db.peek_active_training_system_id(user_id)
 
 
 def _iso_date(d: date | None) -> str:
@@ -1857,14 +1859,14 @@ async def _build_running_state(
         info = await db.get_exercise_info(ue_id)
         ex_id = int(info[0]) if info else None
     iso_date = _iso_date(target_date)
-    session_id = await db.get_or_create_today_session(user_id, iso_date, day_index, await get_active_training_system_id(user_id))
+    session_id = await db.get_session_for_day(user_id, iso_date, day_index, await get_active_training_system_id(user_id))
     entry = await get_running_entry(
         user_id,
         ue_id,
         session_id=session_id,
         day_index=day_index,
-        create=True,
-    )
+        create=False,
+    ) if session_id is not None else None
     running_summary = _serialize_running_entry(entry)
     history_rows = await list_running_history(
         user_id,
@@ -1897,22 +1899,14 @@ async def _prune_expired_day_completions(
     now_local_date = datetime.now(UTC).astimezone(zone).date()
 
     fresh: list[tuple[int, datetime]] = []
-    stale_days: list[int] = []
     for day, completed_at in parsed:
         completed_local_date = completed_at.astimezone(zone).date()
         age_days = (now_local_date - completed_local_date).days
         if age_days >= DAY_COMPLETION_RETENTION_DAYS:
-            stale_days.append(int(day))
             continue
         fresh.append((int(day), completed_at))
 
-    if stale_days:
-        async with db.connect_db() as conn:
-            await conn.executemany(
-                "DELETE FROM day_completions WHERE user_id=? AND system_id=? AND day_index=?",
-                [(user_id, active_system_id, day) for day in stale_days],
-            )
-            await conn.commit()
+    # A read hides elapsed cycle marks without changing the saved diary.
     return fresh
 
 
@@ -2289,7 +2283,7 @@ async def day_sheet(
     )
     target_date = _parse_date_param(date)
     iso_date = _iso_date(target_date)
-    session_id = await db.get_or_create_today_session(user_id, iso_date, day_index, active_system_id)
+    session_id = await db.get_session_for_day(user_id, iso_date, day_index, active_system_id) or 0
     day_label = await db.get_day_label(user_id, day_index)
     exercises_rows = await db.fetch_day_exercises(user_id, day_index, iso_date, active_system_id)
     exercise_sources = await fetch_training_system_exercise_sources(active_system_id, day_index)
@@ -2921,7 +2915,7 @@ async def exercise_context(
     exercise_id = await _resolve_user_exercise_id(user_id, ue_id, day_index)
     target_date = _parse_date_param(date)
     iso_date = _iso_date(target_date)
-    session_id = await db.get_or_create_today_session(user_id, iso_date, day_index, await get_active_training_system_id(user_id))
+    session_id = await db.get_session_for_day(user_id, iso_date, day_index, await get_active_training_system_id(user_id)) or 0
 
     current_note = await db.get_exercise_persistent_note(user_id, exercise_id)
     previous_note = None
@@ -3915,7 +3909,7 @@ async def body_day_load(
     target_date = _parse_date_param(date)
     iso_date = _iso_date(target_date)
 
-    session_id = await db.get_or_create_today_session(user_id, iso_date, day_index, await get_active_training_system_id(user_id))
+    session_id = await db.get_session_for_day(user_id, iso_date, day_index, await get_active_training_system_id(user_id)) or 0
     sets = await db.fetch_session_sets_with_exercises(user_id, session_id)
     exercise_ids = [row["exercise_id"] for row in sets]
     mapping = await db.resolve_exercise_muscles(user_id, exercise_ids)
@@ -4857,22 +4851,9 @@ def _render_share_results_text(
 
 
 async def _load_training_summary(user_id: int) -> tuple[int, datetime | None, datetime | None]:
-    async with db.connect_db() as conn:
-        cur = await conn.execute(
-            """
-            SELECT COUNT(*), MIN(date), MAX(date)
-            FROM sessions
-            WHERE user_id=? AND day_index>0
-            """,
-            (user_id,),
-        )
-        row = await cur.fetchone()
-    if not row:
-        return 0, None, None
-    count = int(row[0] or 0)
-    first = _parse_iso_datetime(row[1])
-    last = _parse_iso_datetime(row[2])
-    return count, first, last
+    from db import recorded_training_summary
+    count, first, last = await recorded_training_summary(user_id)
+    return count, _parse_iso_datetime(first), _parse_iso_datetime(last)
 
 
 async def _load_featured_measurement_changes(
@@ -5278,11 +5259,18 @@ async def settings_workouts_per_week(
     ctx: AuthCtx = Depends(get_auth_ctx),
 ):
     user_id = ctx.user_id
-    try:
-        value = int(payload.get("value") or 0)
-    except (TypeError, ValueError):
-        value = 0
-    value = max(1, min(7, value))
+    raw = payload.get('value')
+    if type(raw) is int:
+        value = raw
+    elif isinstance(raw, str) and re.fullmatch(r'[1-7]', raw.strip()):
+        value = int(raw.strip())
+    else:
+        raise HTTPException(422, 'Выберите количество тренировочных дней от 1 до 7.')
+    if not 1 <= value <= 7:
+        raise HTTPException(422, 'Выберите количество тренировочных дней от 1 до 7.')
+    # This is an explicit owner-authorized write. Pure active-system lookups do
+    # not create missing programs as a side effect of viewing an account.
+    await db.ensure_training_system_defaults(user_id)
     await set_workouts_per_week(user_id, value)
     active_system_id = await get_active_training_system_id(user_id)
     await sync_current_plan_to_system(user_id, active_system_id)
@@ -5661,42 +5649,15 @@ async def _evaluate_achievements(user_id: int) -> dict:
 
 
 async def _enforce_system_limit_if_needed(user_id: int) -> dict:
-    has_sub = await _has_active_subscription(user_id)
+    # Expiry changes purchase capabilities, never deletes the owner's saved data.
+    # Keep legacy response keys for old WebApp clients, without a grace timer.
     systems = await list_training_systems(user_id)
-    if has_sub or len(systems) <= 1:
-        await db.set_systems_limit_prompted_at(user_id, None)
-        return {
-            'requires_resolution': False,
-            'auto_pruned': False,
-            'first_prompt_at': None,
-            'grace_deadline': None,
-            'systems': systems,
-        }
-
-    now = datetime.now(UTC)
-    first_prompt_at = await db.get_systems_limit_prompted_at(user_id)
-    if first_prompt_at is None:
-        first_prompt_at = now
-        await db.set_systems_limit_prompted_at(user_id, first_prompt_at)
-
-    deadline = first_prompt_at + timedelta(days=SYSTEMS_LIMIT_GRACE_DAYS)
-    if now >= deadline:
-        keep_system_id = int(sorted(systems, key=lambda x: int(x.get('id') or 0))[0]['id'])
-        await db.prune_user_training_systems(user_id, keep_system_id)
-        systems = await list_training_systems(user_id)
-        return {
-            'requires_resolution': False,
-            'auto_pruned': True,
-            'first_prompt_at': first_prompt_at.isoformat(),
-            'grace_deadline': deadline.isoformat(),
-            'systems': systems,
-        }
-
     return {
-        'requires_resolution': True,
+        'requires_resolution': False,
         'auto_pruned': False,
-        'first_prompt_at': first_prompt_at.isoformat(),
-        'grace_deadline': deadline.isoformat(),
+        'first_prompt_at': None,
+        'grace_deadline': None,
+        'saved_systems_preserved': True,
         'systems': systems,
     }
 
@@ -5735,6 +5696,7 @@ async def systems_overview(ctx: AuthCtx = Depends(get_auth_ctx)):
         'has_subscription': bool(sub),
         'systems_limit': {
             'max_without_subscription': 1,
+            'saved_systems_preserved': True,
             'requires_resolution': bool(limit_info.get('requires_resolution')),
             'auto_pruned': bool(limit_info.get('auto_pruned')),
             'first_prompt_at': limit_info.get('first_prompt_at'),
@@ -5767,13 +5729,15 @@ async def systems_create(payload: dict = Body(default={}), ctx: AuthCtx = Depend
     except db.aiosqlite.IntegrityError as exc:
         raise HTTPException(status_code=409, detail="system_name_exists") from exc
     await clone_system_cosmetics(user_id, previous_system_id, int(system_id))
+    await db.select_training_system(user_id, int(system_id))
     if workouts_per_week:
-        await db.select_training_system(user_id, int(system_id))
         await set_workouts_per_week(user_id, workouts_per_week)
         await sync_current_plan_to_system(user_id, int(system_id))
 
-    if not has_sub:
-        await db.prune_user_training_systems(user_id, int(system_id))
+    if not has_sub and replace_existing and systems_count >= 1:
+        # The confirmed replacement targets only the old active program.
+        # Other programs retained from a paid period must remain intact.
+        await db.delete_training_system(user_id, previous_system_id)
 
     return {'ok': True, 'system_id': int(system_id), 'replaced': bool(not has_sub and systems_count >= 1)}
 
@@ -6488,7 +6452,7 @@ async def leaderboard_productivity_copy(
     await _evaluate_achievements(int(leader_user_id))
     await _evaluate_achievements(int(user_id))
     if not had_sub:
-        await db.prune_user_training_systems(int(user_id), int(result.get('system_id')))
+        await db.delete_training_system(int(user_id), previous_system_id)
         result['overwritten'] = True
     return {'ok': True, **result}
 
@@ -6700,8 +6664,8 @@ async def systems_resolve_limit(payload: dict = Body(default_factory=dict), ctx:
     systems = await db.list_user_training_system_ids(user_id)
     if keep_system_id not in systems:
         raise HTTPException(status_code=404, detail='Система не найдена')
-    await db.prune_user_training_systems(user_id, keep_system_id)
-    await apply_system_to_current_plan(user_id, keep_system_id)
+    # Compatibility with a previously opened resolution dialog: choose, do not prune.
+    await db.select_training_system(user_id, keep_system_id)
     return {'ok': True, 'keep_system_id': keep_system_id}
 
 

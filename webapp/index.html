@@ -1,9 +1,9 @@
 <!doctype html>
 <html lang="ru">
 <head>
-  <script data-progressor-source="gym" src="/progressor/assets/navigation.v1.js"></script>
+  <script data-progressor-source="gym" src="./assets/progressor-bootstrap.v1.js"></script>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Дневник тренировок</title>
   <script defer src="https://telegram.org/js/telegram-web-app.js"></script>
   <style>
@@ -78,6 +78,12 @@
     }
     .header-left { display: flex; align-items: center; gap: 7px; }
     .header-right { display: flex; align-items: center; gap: 7px; justify-content: flex-end; }
+    @media (max-width: 600px) {
+      .header-row { grid-template-columns: 1fr 1fr; gap: 8px; }
+      .header-row > .header-title { grid-column: 1 / -1; grid-row: 1; width: 100%; line-height: 1.25; }
+      .header-left { grid-column: 1; grid-row: 2; }
+      .header-right { grid-column: 2; grid-row: 2; }
+    }
     .all-ex-header-unfinished {
       min-height: 36px;
       max-width: 160px;
@@ -429,9 +435,9 @@
     [data-theme="dark"] .day-badge { background: rgba(76,217,100,0.15); color: #9be9b7; }
     .day-nav { display: inline-flex; align-items: center; gap: 6px; }
     .icon-btn {
-      width: 40px;
-      height: 40px;
-      min-width: 40px;
+      width: 44px;
+      height: 44px;
+      min-width: 44px;
       border-radius: 14px;
       border: 1px solid var(--border);
       background: var(--glass-surface);
@@ -443,7 +449,7 @@
       transition: transform 0.12s ease, box-shadow 0.15s ease, background 0.15s ease, opacity 0.15s ease;
       backdrop-filter: blur(12px);
     }
-    .icon-btn.small { width: 40px; height: 40px; min-width: 40px; }
+    .icon-btn.small { width: 44px; height: 44px; min-width: 44px; }
     .icon-btn:hover { background: rgba(0,0,0,0.03); }
     [data-theme="dark"] .icon-btn:hover { background: rgba(255,255,255,0.05); }
     .icon-btn:active { transform: scale(0.97); opacity: 0.9; }
@@ -467,7 +473,8 @@
       display: flex;
       align-items: stretch;
     }
-    .drawer-backdrop.show { opacity: 1; pointer-events: auto; }
+    .drawer-backdrop:not(.show) { visibility: hidden; }
+    .drawer-backdrop.show { opacity: 1; pointer-events: auto; visibility: visible; }
     .drawer {
       width: 80%;
       max-width: 320px;
@@ -715,8 +722,12 @@
 
       .finish-fab{
         position: relative;
-        width: 54px;
-        height: 54px;
+        min-width: 54px;
+        min-height: 54px;
+        width: auto;
+        height: auto;
+        padding: 8px;
+        line-height: 1;
         border-radius: 18px;
         border: 1px solid rgba(255,255,255,0.12);
         background: var(--tg-theme-link-color, #3b82f6);
@@ -874,9 +885,10 @@
       z-index: 40;
       opacity: 0;
       pointer-events: none;
+      visibility: hidden;
       transition: opacity 0.2s ease;
     }
-    .modal-backdrop.show { opacity: 1; pointer-events: auto; }
+    .modal-backdrop.show { opacity: 1; pointer-events: auto; visibility: visible; }
     .modal { background: var(--card); color: var(--text); border-radius: 16px; padding: 18px; box-shadow: var(--shadow); border: 1px solid var(--border); max-width: 360px; width: calc(100% - 40px); }
     .modal-title { font-size: 17px; font-weight: 700; margin-bottom: 8px; }
     .modal-text { font-size: 14px; color: var(--muted); margin-bottom: 14px; }
@@ -885,7 +897,7 @@
     .system-days-picker { margin: 8px 0 16px; padding: 12px; border: 1px solid var(--border); border-radius: 14px; background: color-mix(in srgb, var(--bg) 82%, transparent); display: grid; gap: 10px; }
     .system-days-picker .control-value { width: 100%; }
     .system-days-actions { display: flex; align-items: center; justify-content: center; gap: 16px; }
-    .system-days-actions .circle-btn { width: 52px; height: 52px; font-size: 24px; }
+    .system-days-actions .circle-btn { min-width:52px; min-height:52px; width:auto; height:auto; line-height:1.2; padding:.15em; font-size:24px; }
     .system-days-modal .modal-actions { margin-top: 4px; }
 
     .sheet-backdrop {
@@ -1008,7 +1020,7 @@
     [data-theme="dark"] .control-block.primary { background: rgba(110,168,255,0.08); }
     .control-head { display: flex; justify-content: space-between; align-items: center; font-size: 13px; color: var(--muted); }
     .control-value { font-size: 28px; font-weight: 800; text-align: center; letter-spacing: -0.01em; cursor: pointer; padding: 10px 12px; border-radius: 12px; border: 1px solid var(--border); background: var(--card); box-shadow: inset 0 1px 0 rgba(255,255,255,0.04); }
-    .control-value { min-width: 0; flex: 1; max-width: 180px; height: 56px; padding: 8px; }
+    .control-value { min-width: 0; flex: 1; max-width: 180px; min-height:56px; height:auto; line-height:1.15; padding:8px; }
     .inline-num-input {
       display: block; width: 100%; min-width: 0; height: 100%; padding: 0;
       border: 0; border-radius: 0; background: transparent; color: var(--text);
@@ -3342,6 +3354,7 @@
       currentRoute: 'today',
       drawerOpen: false,
       isTelegram: false,
+      uiReady: false,
       isAdmin: false,
       systemSheetOpen: false,
       aiCoach: { open: false, loading: false, applying: false, mode: 'replace_exercises', answerText: '', parsed: null, summary: '', rationale: [], retriesUsed: 0, maxRetries: 3, usedRequests: 0, rejectedVariants: [], hasResponse: false, requestDayKey: '', appliedByDay: {}, warnings: [], decisions: {}, done: {}, replaceDayCursor: 1 },
@@ -3541,7 +3554,8 @@
       subscriptionPlans:async()=>{const data=await apiFetch('/gymapi/subscription/overview',{silent:true});return (data.plans||[]).map(p=>({id:p.code,label:p.title,RUB:Math.round(Number(p.amount_rub)*100),XTR:Number(p.amount_stars)}));},
       purchaseSubscription:(id,currency)=>startSubscriptionPayment(id,currency==='XTR'?'stars':'rub'),
       hintHost:()=>document.getElementById('progressor-inline-host'),
-      eligible:()=>!state.acting.userId && state.currentRoute==='today' && !!state.userId,
+      isReady:()=>state.uiReady,
+      eligible:()=>state.uiReady && !state.onboarding.active && !state.acting.userId && state.currentRoute==='today' && !!state.userId,
       perform:async action=>{if(action.kind!=='gym_plan' || state.acting.userId)return false;navigateTo('settings');return true;}
     };
     let openConfirmModal = null;
@@ -3925,8 +3939,9 @@
     function getTextColorForBg(hex) {
       const rgb = hexToRgb(hex);
       if (!rgb) return '#0f172a';
-      const brightness = (rgb.r * 299 + rgb.g * 587 + rgb.b * 114) / 1000;
-      return brightness > 150 ? '#0f172a' : '#f8fafc';
+      const channels = [rgb.r, rgb.g, rgb.b].map(v => { const s=v/255;return s<=0.04045?s/12.92:((s+0.055)/1.055)**2.4; });
+      const luminance=channels[0]*0.2126+channels[1]*0.7152+channels[2]*0.0722;
+      return (luminance+0.05)/0.05 >= 1.05/(luminance+0.05) ? '#000000' : '#ffffff';
     }
 
     function getMuscleColor(value) {
@@ -4374,7 +4389,7 @@
         `).join('') || '<div class="timer-hint">Нет упражнений</div>';
         return `
           <div class="leader-day-card">
-            <div class="leader-day-title">${day.label || `День ${day.day_index}`}</div>
+            <div class="leader-day-title">${escapeHtml(day.label || `День ${day.day_index}`)}</div>
             ${exercises}
           </div>
         `;
@@ -4382,7 +4397,7 @@
       const systemsHtml = systems.map((sys) => {
         const sid = Number(sys.system_id || 0);
         const active = sid === selectedSystemId;
-        return `<button class="btn small-btn ${active ? 'primary' : ''}" data-action="leader-system-select" data-user-id="${lb.profile.leader_user_id}" data-system-id="${sid}">${sys.name || ('Система ' + sid)}</button>`;
+        return `<button class="btn small-btn ${active ? 'primary' : ''}" data-action="leader-system-select" data-user-id="${lb.profile.leader_user_id}" data-system-id="${sid}">${escapeHtml(sys.name || ('Система ' + sid))}</button>`;
       }).join('');
       const mark = lb.profile.display_mark || lb.profile.selected_badge_icon || (lb.profile.is_premium ? '⭐' : '');
       const icons = Array.isArray(lb.profile.unlocked_icons) ? lb.profile.unlocked_icons : [];
@@ -8564,7 +8579,7 @@
             <div class="list-row">
               <div class="list-text">
                 <div class="label">День ${day.day_index}</div>
-                <div class="list-subtitle">${settingsDayLabel(day)}</div>
+                <div class="list-subtitle">${escapeHtml(settingsDayLabel(day))}</div>
               </div>
               <button class="btn small-btn" data-action="rename-day" data-day="${day.day_index}">Переименовать</button>
             </div>
@@ -9221,8 +9236,8 @@
         body.innerHTML = `
           <div class="settings-row">
             <div class="label">Значение</div>
-            <input class="settings-input" id="measurementValueInput" placeholder="${item.prompt || ''}">
-            <div class="hint">${latest}</div>
+            <input class="settings-input" id="measurementValueInput" placeholder="${escapeHtml(item.prompt || '')}">
+            <div class="hint">${escapeHtml(latest)}</div>
           </div>
           <div class="measurement-sheet-actions">
             <button class="btn primary" data-action="measurement-save" data-code="${item.code}">Сохранить</button>
@@ -10143,7 +10158,7 @@
     function updateBackButton(route) {
       const tg = getTg();
       if (!state.isTelegram || !tg?.BackButton) return;
-      if (state.aiCoach?.open) { tg.BackButton.show(); return; }
+      if (nativeOverlayRoot() || state.aiCoach?.open) { tg.BackButton.show(); return; }
       if (route === 'today') tg.BackButton.hide();
       else tg.BackButton.show();
     }
@@ -10329,7 +10344,64 @@
       applyRoute(route);
     }
 
+    function nativeOverlayRoot() {
+      const roots=[...document.querySelectorAll('.sheet-backdrop.show,.modal-backdrop.show,#drawerOverlay.show,#tourOverlay.show,.all-ex-sheet,#allExercisesDonePopup')];
+      const z=el=>{let value=0;for(let n=el;n&&n!==document.body;n=n.parentElement){const v=Number(getComputedStyle(n).zIndex);if(Number.isFinite(v))value=Math.max(value,v);}return value;};
+      return roots.filter(el=>el.getClientRects().length&&getComputedStyle(el).visibility!=='hidden').sort((a,b)=>z(a)-z(b)).at(-1)||null;
+    }
+    const nativeFocusStack=[];
+    let nativeInerted=[];
+    function syncNativeOverlayFocus() {
+      if(document.querySelector('#progressor-connections[open]'))return;
+      const root=nativeOverlayRoot(),previous=nativeFocusStack.at(-1)?.root||null;
+      if(root===previous)return;
+      for(const [el,value]of nativeInerted)el.inert=value;nativeInerted=[];
+      let returning=null;
+      while(nativeFocusStack.length&&nativeFocusStack.at(-1).root!==root){
+        if(root&&!nativeFocusStack.some(entry=>entry.root===root))break;
+        returning=nativeFocusStack.pop().opener;
+      }
+      if(root&&!nativeFocusStack.some(entry=>entry.root===root))nativeFocusStack.push({root,opener:document.activeElement});
+      if(root){
+        root.setAttribute('role','dialog');root.setAttribute('aria-modal','true');root.tabIndex=-1;
+        const title=root.querySelector('.sheet-title,.modal-title,.drawer-title,.tour-title,h2,h3');
+        root.setAttribute('aria-label',title?.textContent.trim()||'Действия');
+        for(let branch=root;branch&&branch!==document.body;branch=branch.parentElement){
+          for(const sibling of branch.parentElement?.children||[])if(sibling!==branch&&!['SCRIPT','STYLE','LINK'].includes(sibling.tagName)){
+            nativeInerted.push([sibling,sibling.inert]);sibling.inert=true;
+          }
+        }
+        const field=root.querySelector('input:not([type="hidden"]),textarea,select,button,a[href]');
+        const target=returning&&root.contains(returning)?returning:field||root;
+        if(!root.contains(document.activeElement))target.focus({preventScroll:true});
+      }else if(returning?.isConnected)returning.focus({preventScroll:true});
+      updateBackButton(state.currentRoute);
+    }
+    let nativeFocusFrame=0;
+    new MutationObserver(()=>{cancelAnimationFrame(nativeFocusFrame);nativeFocusFrame=requestAnimationFrame(syncNativeOverlayFocus);})
+      .observe(document.body,{subtree:true,childList:true,attributes:true,attributeFilter:['class']});
+    document.addEventListener('keydown',event=>{
+      if(document.querySelector('#progressor-connections[open]'))return;
+      const root=nativeOverlayRoot();if(!root)return;
+      if(event.key==='Escape'){event.preventDefault();event.stopPropagation();handleBackAction();return;}
+      if(event.key!=='Tab')return;
+      const fields=[...root.querySelectorAll('button,a[href],input,select,textarea,[tabindex="0"]')]
+        .filter(el=>!el.disabled&&el.getClientRects().length&&getComputedStyle(el).visibility!=='hidden');
+      const first=fields[0]||root,last=fields.at(-1)||root,focused=document.activeElement;
+      if(event.shiftKey&&(focused===first||!root.contains(focused))){event.preventDefault();last.focus();}
+      else if(!event.shiftKey&&(focused===last||!root.contains(focused))){event.preventDefault();first.focus();}
+    });
+
     function handleBackAction() {
+      const overlay=nativeOverlayRoot();
+      if(overlay){
+        const cancel={confirmModal:'cancelConfirm',systemDaysModal:'systemDaysCancelBtn',textPrompt:'textPromptCancel'}[overlay.id];
+        if(cancel){document.getElementById(cancel)?.click();return;}
+        if(overlay.id==='daySheet'){closeDayPicker();return;}
+        if(overlay.id==='systemSheet'){closeSystemSheet();return;}
+        if(overlay.id==='productivitySheet'){closeProductivitySheet();return;}
+        if(overlay.id==='allExercisesDonePopup'){closeAllExercisesDonePopup();return;}
+      }
       if (state.editor.open) {
         runUiAction('Не удалось сохранить изменения', async () => {
           await flushInlineNumberInput();
@@ -10870,6 +10942,7 @@
     }
 
     async function startTour({ force = false } = {}) {
+      if (document.querySelector('#progressor-context:not([hidden]),#progressor-connections[open]')) return;
       if (state.onboarding.active) return;
       if (state.tour.active) return;
       if (!force && readTourCompleted()) return;
@@ -10893,6 +10966,8 @@
       if (completed) saveTourCompleted(true);
     }
 
+    document.addEventListener('progressor:overlay-open',()=>{if(state.tour.active)stopTour();});
+
     function getTourTargetRect(step) {
       if (!step?.selector) return null;
       const el = document.querySelector(step.selector);
@@ -10912,6 +10987,7 @@
       if (typeof step.prepare === 'function') {
         await Promise.resolve(step.prepare());
       }
+      if (!state.tour.active || document.querySelector('#progressor-context:not([hidden]),#progressor-connections[open]')) { stopTour(); return; }
       const overlay = document.getElementById('tourOverlay');
       const backdrop = document.getElementById('tourBackdrop');
       const card = document.getElementById('tourCard');
@@ -14122,19 +14198,19 @@
           const decisionClass = explicitDecision === 'apply' ? ' decision-apply' : (explicitDecision === 'skip' ? ' decision-skip' : '');
           if (type === 'replace_exercise') {
             const decisionRow = mode === 'replace_exercises'
-              ? `<div class="ai-choice-row"><button class="btn ${explicitDecision === 'apply' ? 'selected' : ''}" data-ai-decision="apply" data-ai-key="${key}" data-ai-idx="${idx}">✓ Удалить</button><button class="btn ${explicitDecision === 'skip' ? 'selected' : ''}" data-ai-decision="skip" data-ai-key="${key}" data-ai-idx="${idx}">✕ Оставить</button></div>`
+              ? `<div class="ai-choice-row"><button class="btn ${explicitDecision === 'apply' ? 'selected' : ''}" data-ai-decision="apply" data-ai-key="${escapeHtml(key)}" data-ai-idx="${idx}">✓ Удалить</button><button class="btn ${explicitDecision === 'skip' ? 'selected' : ''}" data-ai-decision="skip" data-ai-key="${escapeHtml(key)}" data-ai-idx="${idx}">✕ Оставить</button></div>`
               : '';
             return `<div class="ai-action-item remove${decisionClass}"><div class="title">Удалить: ${escapeHtml(String(action.old_exercise_name || 'Упражнение'))}</div><div class="hint">День ${day}</div>${decisionRow}</div><div class="ai-action-item add${decisionClass}"><div class="title">Добавить: ${escapeHtml(String(action.new_exercise_name || 'Упражнение'))}</div><div class="hint">${Number(action.sets || 0)}×${Number(action.reps || 0)}</div></div>`;
           }
           if (type === 'remove_exercise') {
             const decisionRow = mode === 'replace_exercises'
-              ? `<div class="ai-choice-row"><button class="btn ${explicitDecision === 'apply' ? 'selected' : ''}" data-ai-decision="apply" data-ai-key="${key}" data-ai-idx="${idx}">✓ Удалить</button><button class="btn ${explicitDecision === 'skip' ? 'selected' : ''}" data-ai-decision="skip" data-ai-key="${key}" data-ai-idx="${idx}">✕ Оставить</button></div>`
+              ? `<div class="ai-choice-row"><button class="btn ${explicitDecision === 'apply' ? 'selected' : ''}" data-ai-decision="apply" data-ai-key="${escapeHtml(key)}" data-ai-idx="${idx}">✓ Удалить</button><button class="btn ${explicitDecision === 'skip' ? 'selected' : ''}" data-ai-decision="skip" data-ai-key="${escapeHtml(key)}" data-ai-idx="${idx}">✕ Оставить</button></div>`
               : '';
             return `<div class="ai-action-item remove${decisionClass}"><div class="title">Удалить: ${escapeHtml(String(action.old_exercise_name || 'Упражнение'))}</div><div class="hint">День ${day}</div>${decisionRow}</div>`;
           }
           if (type === 'add_exercise') {
             const decisionRow = mode === 'replace_exercises'
-              ? `<div class="ai-choice-row"><button class="btn ${explicitDecision === 'apply' ? 'selected' : ''}" data-ai-decision="apply" data-ai-key="${key}" data-ai-idx="${idx}">✓ Добавить</button><button class="btn ${explicitDecision === 'skip' ? 'selected' : ''}" data-ai-decision="skip" data-ai-key="${key}" data-ai-idx="${idx}">✕ Пропустить</button></div>`
+              ? `<div class="ai-choice-row"><button class="btn ${explicitDecision === 'apply' ? 'selected' : ''}" data-ai-decision="apply" data-ai-key="${escapeHtml(key)}" data-ai-idx="${idx}">✓ Добавить</button><button class="btn ${explicitDecision === 'skip' ? 'selected' : ''}" data-ai-decision="skip" data-ai-key="${escapeHtml(key)}" data-ai-idx="${idx}">✕ Пропустить</button></div>`
               : '';
             return `<div class="ai-action-item add${decisionClass}"><div class="title">Добавить: ${escapeHtml(String(action.exercise_name || 'Упражнение'))}</div><div class="hint">${Number(action.sets || 0)}×${Number(action.reps || 0)}</div>${decisionRow}</div>`;
           }
@@ -14638,8 +14714,8 @@
       const systems = state.settings.systems.items || [];
       const deadline = limit?.grace_deadline ? formatDateLocal(limit.grace_deadline) : 'через 7 дней';
       wrap.innerHTML = `
-        <div class="timer-hint">Подписка не активна. Можно оставить только одну систему. Выбери, какую оставить до ${deadline}.</div>
-        ${systems.map((s) => `<button class="btn" data-keep-system="${s.id}">Оставить: ${escapeHtml(s.name || 'Система')}</button>`).join('')}
+        <div class="timer-hint">Выберите активную программу. Все сохранённые программы и история останутся в дневнике.</div>
+        ${systems.map((s) => `<button class="btn" data-keep-system="${s.id}">Включить: ${escapeHtml(s.name || 'Система')}</button>`).join('')}
       `;
       wrap.querySelectorAll('[data-keep-system]').forEach((btn) => btn.addEventListener('click', async () => {
         const id = Number(btn.dataset.keepSystem || 0);
@@ -16307,6 +16383,7 @@
 
         await init();
 
+        state.uiReady=!!ok;
         if (ok) setStatus('ready');
       } catch (err) {
         console.error(err);
@@ -16315,6 +16392,7 @@
         setStatus('error');
       } finally {
         hideBoot();
+        window.Progressor?.refreshSurface?.();
       }
     }
 

@@ -85,6 +85,29 @@ class ReminderTests(unittest.IsolatedAsyncioTestCase):
                 await conn.execute(f"DELETE FROM {table}")
             await conn.commit()
 
+    async def test_trainer_editing_chat_never_becomes_reminder_destination(self):
+        user_id = await db.get_or_create_user(9620, 'owner')
+        await db.add_user_reminder(user_id, 1, 2, 10, 30)
+        queue = FakeJobQueue()
+        await bot._schedule_user_reminders(SimpleNamespace(job_queue=queue), user_id, chat_id=999999)
+        self.assertTrue(queue.created_jobs)
+        self.assertTrue(all(j.chat_id == 9620 and j.data['chat_id'] == 9620 for j in queue.created_jobs))
+
+    async def test_legacy_job_rechecks_owner_destination_before_delivery_and_rescheduling(self):
+        user_id = await db.get_or_create_user(9621, 'owner')
+        queue = FakeJobQueue()
+        data = dict(chat_id=999999, user_id=user_id, tz='UTC', dow=1, hh=10, mm=30, day_no=1)
+        context = SimpleNamespace(job=SimpleNamespace(data=data,name='owned-reminder'), job_queue=queue,
+                                  application=SimpleNamespace(),bot=SimpleNamespace())
+        with patch('progressor_bot.notification_preflight'), patch('progressor_reminder.reserve', return_value=True), \
+             patch.object(bot, 'build_workout_reminder', AsyncMock(return_value=('Workout', None))), \
+             patch.object(bot, 'send_main_message', AsyncMock(return_value=SimpleNamespace(chat_id=9621,message_id=77))) as send, \
+             patch.object(bot, 'remember_message'), patch.object(bot, '_rem_try_db_set_last_msg'):
+            await bot._rem_fire(context)
+        self.assertEqual(send.call_args.args[1], 9621)
+        self.assertEqual(queue.created_jobs[0].chat_id, 9621)
+        self.assertEqual(queue.created_jobs[0].data['chat_id'], 9621)
+
     async def test_repeated_wizard_time_does_not_fill_the_next_day(self):
         user_id = await db.get_or_create_user(9600, 'wizard-repeat')
         await db.set_workouts_per_week(user_id, 2)

@@ -128,6 +128,7 @@ from db import (
     get_or_create_today_session,
     get_session_for_day,
     get_active_training_system_id,
+    peek_active_training_system_id,
     fetch_day_exercises,
     add_set,
     inc_last_set,
@@ -516,7 +517,7 @@ def _parse_completion_rows(
 
 async def _active_system_id(user_id: int) -> int:
     try:
-        sid = await get_active_training_system_id(user_id)
+        sid = await peek_active_training_system_id(user_id)
         return int(sid or 0)
     except Exception:
         return 0
@@ -532,22 +533,14 @@ async def _prune_expired_day_completions(
     now_local_date = datetime.now(UTC).astimezone(zone).date()
 
     fresh: list[tuple[int, datetime]] = []
-    stale_days: list[int] = []
     for day, completed_at in parsed:
         completed_local_date = completed_at.astimezone(zone).date()
         age_days = (now_local_date - completed_local_date).days
         if age_days >= DAY_COMPLETION_RETENTION_DAYS:
-            stale_days.append(int(day))
             continue
         fresh.append((int(day), completed_at))
 
-    if stale_days:
-        async with connect_db() as conn:
-            await conn.executemany(
-                "DELETE FROM day_completions WHERE user_id=? AND system_id=? AND day_index=?",
-                [(user_id, system_id, day) for day in stale_days],
-            )
-            await conn.commit()
+    # A read hides elapsed cycle marks without changing the saved diary.
     return fresh
 
 
@@ -4431,7 +4424,6 @@ MEASUREMENT_CUSTOM_CATEGORY = {
     "letter": "E",
     "name": "Свои замеры",
 }
-CUSTOM_MEASUREMENT_REGISTRY: dict[str, dict] = {}
 
 SHARE_RESULTS_STATE_KEY = "settings_share_results_state"
 SHARE_RESULTS_PRIMARY_MSG_ID_KEY = "settings_share_results_primary_message_id"
@@ -4520,22 +4512,9 @@ def _calculate_training_weeks(first: datetime | None, last: datetime | None) -> 
 
 
 async def _load_training_summary(user_id: int) -> tuple[int, datetime | None, datetime | None]:
-    async with connect_db() as db:
-        cur = await db.execute(
-            """
-            SELECT COUNT(*), MIN(date), MAX(date)
-            FROM sessions
-            WHERE user_id=? AND day_index>0
-            """,
-            (user_id,),
-        )
-        row = await cur.fetchone()
-    if not row:
-        return 0, None, None
-    count = int(row[0] or 0)
-    first = _parse_iso_datetime(row[1])
-    last = _parse_iso_datetime(row[2])
-    return count, first, last
+    from db import recorded_training_summary
+    count, first, last = await recorded_training_summary(user_id)
+    return count, _parse_iso_datetime(first), _parse_iso_datetime(last)
 
 
 async def _load_featured_measurement_changes(
@@ -5112,39 +5091,28 @@ MEASUREMENT_ITEMS = [
 MEASUREMENT_MAP = {item["code"]: item for item in MEASUREMENT_ITEMS}
 
 
-def clear_custom_measurement_registry(user_id: int):
-    prefix = f"uc{user_id}_"
-    to_remove = [code for code in CUSTOM_MEASUREMENT_REGISTRY.keys() if code.startswith(prefix)]
-    for code in to_remove:
-        CUSTOM_MEASUREMENT_REGISTRY.pop(code, None)
-        MEASUREMENT_MAP.pop(code, None)
+def _custom_measurement_item(code, name, category_code):
+    return {'code': code, 'name': name,
+            'category': (category_code or '').strip() or MEASUREMENT_CUSTOM_CATEGORY['code'],
+            'unit': '', 'precision': 1, 'optional': False,
+            'prompt': f'Введи значение для «{name}» (например: 10).'}
 
 
 async def load_custom_measurements(
     user_id: int, context: ContextTypes.DEFAULT_TYPE
 ) -> list[dict]:
     rows = await list_custom_measurements(user_id)
-    clear_custom_measurement_registry(user_id)
     items: list[dict] = []
     for code, name, category_code in rows:
-        category = (category_code or "").strip() or MEASUREMENT_CUSTOM_CATEGORY["code"]
-        item = {
-            "code": code,
-            "name": name,
-            "category": category,
-            "unit": "",
-            "precision": 1,
-            "optional": False,
-            "prompt": f"Введи значение для «{name}» (например: 10).",
-        }
-        items.append(item)
-        CUSTOM_MEASUREMENT_REGISTRY[code] = item
-        MEASUREMENT_MAP[code] = item
+        items.append(_custom_measurement_item(code, name, category_code))
     context.user_data[MEASUREMENT_CUSTOM_CACHE_KEY] = items
+    context.user_data['measurement_custom_cache_owner'] = user_id
     return items
 
 
 def get_cached_custom_measurements(context: ContextTypes.DEFAULT_TYPE) -> list[dict]:
+    owner = context.user_data.get('measurement_custom_cache_owner')
+    if owner != context.user_data.get('_input_owner', owner): return []
     return context.user_data.get(MEASUREMENT_CUSTOM_CACHE_KEY, [])
 
 
@@ -5314,7 +5282,7 @@ async def show_measure_edit_menu(q, context: ContextTypes.DEFAULT_TYPE, user_id:
     rows = await list_measurement_metrics(user_id)
     metrics_by_category: dict[str, list[tuple[str, str]]] = {}
     for code, _ in rows:
-        item = get_measurement_item(code)
+        item = await get_owned_measurement_item(user_id, code)
         if item and not item.get("derived"):
             metrics_by_category.setdefault(item["category"], []).append(
                 (code, item["name"])
@@ -5399,10 +5367,16 @@ def get_measurement_items(category: str) -> list[dict]:
 
 
 def get_measurement_item(code: str) -> dict | None:
-    item = MEASUREMENT_MAP.get(code)
-    if item:
-        return item
-    return CUSTOM_MEASUREMENT_REGISTRY.get(code)
+    """Only the public built-in catalog is process-global."""
+    return MEASUREMENT_MAP.get(code)
+
+
+async def get_owned_measurement_item(user_id: int, code: str) -> dict | None:
+    built_in = get_measurement_item(code)
+    if built_in: return built_in
+    for owned_code, name, category in await list_custom_measurements(user_id):
+        if owned_code == code: return _custom_measurement_item(code, name, category)
+    return None
 
 
 def format_measurements_header(last_update: str | None) -> str:
@@ -5491,10 +5465,10 @@ async def get_measurement_history(
     cache: dict[str, list[tuple[float, str | None, str]]],
     limit: int = 5,
 ) -> list[tuple[float, str | None, str]]:
-    cache_key = f"{code}:{limit}"
+    cache_key = f"{user_id}:{code}:{limit}"
     if cache_key in cache:
         return cache[cache_key]
-    item = get_measurement_item(code)
+    item = await get_owned_measurement_item(user_id, code)
     if not item:
         cache[cache_key] = []
         return []
@@ -6893,12 +6867,15 @@ async def render_exercise_view(
     selected_set: int | None = None,
     prefs: UiPreferences | None = None,
 ) -> ExerciseView:
+    owner = await get_user_exercise_info(ue_id)
+    if not owner or owner[0] != user_id or owner[1] != day:
+        raise ValueError('exercise_unavailable')
     ex_id, name, raw_group = await get_exercise_info(ue_id)
     group = resolve_group(name, raw_group)
-    today = datetime.now(UTC).strftime("%Y-%m-%d")
+    today = await get_user_local_date(user_id)
     system_id = await _active_system_id(user_id)
-    session_id = await get_or_create_today_session(user_id, today, day, system_id=system_id)
-    sets = await fetch_exercise_sets(session_id, ue_id)
+    session_id = await get_session_for_day(user_id, today, day, system_id=system_id)
+    sets = await fetch_exercise_sets(session_id, ue_id) if session_id is not None else []
     baseline = await get_baseline(user_id, day, ex_id)
     last_sets = await fetch_last_session_sets(user_id, day, ue_id, today)
     prefs = prefs or await load_ui_preferences(user_id)
@@ -6944,8 +6921,9 @@ async def render_exercise_view(
             ue_id,
             session_id=session_id,
             day_index=day,
-            create=True,
-        )
+            create=False,
+        ) if session_id is not None else None
+        running_entry = running_entry or (None, 0, 0, 0, 0, 0, 1, None)
         (
             entry_id,
             dist,
@@ -7453,13 +7431,11 @@ async def _schedule_user_reminders(
         return set()
 
     tz_code = await get_user_timezone(user_id)
-    if chat_id is None:
-        record = await find_user_by_id(user_id)
-        if record and record[1] is not None:
-            try:
-                chat_id = int(record[1])
-            except (TypeError, ValueError):
-                chat_id = None
+    # A trainer can edit a pupil's timetable from another chat. The receiver is
+    # always resolved from the timetable owner, never the editing chat.
+    record = await find_user_by_id(user_id)
+    try: chat_id = int(record[1]) if record and record[1] is not None else None
+    except (TypeError, ValueError): chat_id = None
     if chat_id is None:
         logger.warning("SKIP REMINDER: chat_id is None for user %s", user_id)
         return set()
@@ -7715,8 +7691,14 @@ async def _rem_fire(context):
     3) перепланирует себя на следующий такой же слот (+7 дней).
     """
     data = context.job.data or {}
-    chat_id: int = int(data["chat_id"])
-    user_id: int = int(data.get("user_id", chat_id))
+    try: user_id = int(data['user_id'])
+    except (KeyError, ValueError, TypeError): return
+    record = await find_user_by_id(user_id)
+    if not record or record[1] is None: return
+    try: chat_id = int(record[1])
+    except (ValueError, TypeError): return
+    if chat_id <= 0: return
+    data = {**data, 'chat_id':chat_id}
     tz_name: str = data["tz"]
     dow: int = int(data["dow"])
     hh: int = int(data["hh"])
@@ -8595,11 +8577,7 @@ async def handle_broadcast_callback(q, context: ContextTypes.DEFAULT_TYPE):
 
 
 def build_subscription_keyboard() -> InlineKeyboardMarkup:
-    rows: list[list[InlineKeyboardButton]] = [
-        [InlineKeyboardButton("1 месяц — 100 ₽", web_app=WebAppInfo(build_webapp_payment_url("1m")))],
-        [InlineKeyboardButton("6 месяцев — 600 ₽", web_app=WebAppInfo(build_webapp_payment_url("6m")))],
-        [InlineKeyboardButton("12 месяцев — 1000 ₽", web_app=WebAppInfo(build_webapp_payment_url("12m")))],
-    ]
+    rows: list[list[InlineKeyboardButton]] = []
     for code in ("1m", "6m", "12m"):
         plan = SUBSCRIPTION_PLANS.get(code)
         if not plan:
@@ -8607,6 +8585,7 @@ def build_subscription_keyboard() -> InlineKeyboardMarkup:
         months_label = plan["title"].replace("Подписка на ", "")
         rows.append(
             [
+                InlineKeyboardButton(f"{months_label} · {plan['amount_rub']} ₽", web_app=WebAppInfo(build_webapp_payment_url(code))),
                 InlineKeyboardButton(
                     f"{months_label} — {plan_amount_stars(plan['amount_rub'])} ⭐",
                     callback_data=f"sub:stars:{code}",
@@ -8736,10 +8715,19 @@ async def on_subscription_back(update: Update, context: ContextTypes.DEFAULT_TYP
     await show_screen(query, context, text, kb, user_id)
 
 
+async def _require_personal_subscription(q, user_id):
+    row = await find_user_by_id(user_id)
+    actor = getattr(q, 'from_user', None)
+    if not row or actor is None or int(row[1]) != actor.id:
+        await q.answer('Подпиской управляет владелец аккаунта. Откройте свой дневник.', show_alert=True)
+        return False
+    return True
+
+
 async def show_subscription_overview(
     q, context: ContextTypes.DEFAULT_TYPE, user_id: int
 ):
-    await cleanup_expired_subscriptions(user_id)
+    if not await _require_personal_subscription(q, user_id): return
     active = await get_active_subscription(user_id)
     tz_code = await get_user_timezone(user_id)
     zone = resolve_user_zone(tz_code)
@@ -8769,6 +8757,7 @@ async def show_subscription_overview(
                 InlineKeyboardButton(rub_label, web_app=WebAppInfo(build_webapp_payment_url(code))),
                 InlineKeyboardButton(stars_label, callback_data=f"set:subscription:planstars:{code}"),
             ])
+    rows.append([InlineKeyboardButton('Общая подписка · доплатить', callback_data='pg:menu')])
     rows.append([InlineKeyboardButton(BACK_BTN, callback_data="menu:settings")])
     kb = InlineKeyboardMarkup(rows)
     await show_screen(q, context, "\n".join(lines), kb, user_id)
@@ -8777,6 +8766,7 @@ async def show_subscription_overview(
 async def start_subscription_payment(
     q, context: ContextTypes.DEFAULT_TYPE, user_id: int, plan_code: str
 ):
+    if not await _require_personal_subscription(q, user_id): return
     plan = SUBSCRIPTION_PLANS.get(plan_code)
     if not plan:
         await q.answer("Тариф не найден.", show_alert=True)
@@ -8801,6 +8791,7 @@ async def start_subscription_payment(
 async def start_subscription_payment_stars(
     q, context: ContextTypes.DEFAULT_TYPE, user_id: int, plan_code: str
 ):
+    if not await _require_personal_subscription(q, user_id): return
     plan = SUBSCRIPTION_PLANS.get(plan_code)
     if not plan:
         await q.answer("Тариф не найден.", show_alert=True)
@@ -10145,7 +10136,7 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             target_user_id = int(target_user_id)
         except (TypeError, ValueError):
             target_user_id = user_id
-        if target_user_id != user_id:
+        if target_user_id != user_id or target_user_id != actor_user_id:
             context.user_data.pop(REFERRAL_NAME_INPUT_KEY, None)
             return
         await create_or_update_referral_profile(target_user_id, name)
@@ -10662,7 +10653,7 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if input_state:
         if not await ensure_can_edit_from_message(context, update):
             return
-        item = get_measurement_item(input_state.get("metric"))
+        item = await get_owned_measurement_item(user_id, input_state.get("metric"))
         if not item:
             context.user_data.pop(MEASUREMENT_INPUT_KEY, None)
             return
@@ -10942,6 +10933,9 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["is_admin_actor"] = bool(user.id in ADMIN_IDS)
         previous_acting = context.user_data.get('acting_user_id')
         target_user_id = await resolve_target_user_id(context, actor_user_id)
+        if target_user_id != actor_user_id and data.startswith(('set:subscription', 'settings:referral', 'settings:notifications')):
+            await q.answer('Этот раздел личный. Откройте свой дневник для подписки и настроек аккаунта.', show_alert=True)
+            return
         if previous_acting and target_user_id == actor_user_id:
             await q.answer('Доступ к дневнику подопечного закрыт. Откройте дневник заново.', show_alert=True)
             return
@@ -11595,7 +11589,8 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         if data in ("menu:library", "lib:root"):
             context.user_data.pop(LIBRARY_CUSTOM_KEY, None)
-            await ensure_library_history(target_user_id)
+            if actor_user_id == target_user_id or bool(context.user_data.get('acting_can_edit')):
+                await ensure_library_history(target_user_id)
             groups = await list_library_groups(target_user_id)
             custom = await get_custom_groups(target_user_id, context)
             prefs = await load_ui_preferences(target_user_id)
@@ -12391,7 +12386,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parts = data.split(":")
             category = parts[3]
             code = parts[4]
-            item = get_measurement_item(code)
+            item = await get_owned_measurement_item(target_user_id, code)
             if not item or item.get("derived"):
                 await q.answer()
                 return
@@ -12491,7 +12486,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 rows = await list_measurement_metrics(target_user_id)
                 metrics = []
                 for code, _ in rows:
-                    item = get_measurement_item(code)
+                    item = await get_owned_measurement_item(target_user_id, code)
                     if (
                         item
                         and not item.get("derived")
@@ -12533,7 +12528,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if data.startswith("measure:edit:metric:"):
             parts = data.split(":")
             code = parts[3]
-            item = get_measurement_item(code)
+            item = await get_owned_measurement_item(target_user_id, code)
             if not item:
                 await q.answer()
                 return
@@ -12576,7 +12571,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parts = data.split(":")
             if len(parts) >= 4 and parts[-1] != "ok":
                 code = parts[3]
-                item = get_measurement_item(code)
+                item = await get_owned_measurement_item(target_user_id, code)
                 if not item or item.get("category") != MEASUREMENT_CUSTOM_CATEGORY["code"]:
                     await q.answer()
                     return
@@ -12619,7 +12614,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parts = data.split(":")
             if len(parts) >= 4 and parts[-1] != "ok":
                 code = parts[3]
-                item = get_measurement_item(code)
+                item = await get_owned_measurement_item(target_user_id, code)
                 if not item or item.get("category") != MEASUREMENT_CUSTOM_CATEGORY["code"]:
                     await q.answer()
                     return
@@ -12658,7 +12653,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             rows = await list_measurement_metrics(target_user_id)
             metrics = []
             for code, _ in rows:
-                item = get_measurement_item(code)
+                item = await get_owned_measurement_item(target_user_id, code)
                 if item:
                     metrics.append((code, item["name"]))
             if not metrics:
@@ -13017,6 +13012,12 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if not is_library:
                 suppress_completed_day_warning(context, target_user_id, day)
             async with user_locks[target_user_id]:
+                if action in {'inc', 'input'}:
+                    today = await get_user_local_date(target_user_id)
+                    session = await get_or_create_today_session(target_user_id, today, day,
+                                                                system_id=await _active_system_id(target_user_id))
+                    await get_running_entry(target_user_id, ue_id, session_id=session,
+                                             day_index=day, create=True)
                 selected = get_flex_selected(context, day, ue_id)
                 view = await render_exercise_view(
                     target_user_id, day, ue_id, selected, prefs=prefs
@@ -14352,7 +14353,10 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             today_str = await get_user_local_date(target_user_id)
             async with user_locks[target_user_id]:
                 target_system_id = await _active_system_id(target_user_id)
-                session_id = await get_or_create_today_session(target_user_id, today_str, day, system_id=target_system_id)
+                if action in mutating_ex_actions:
+                    session_id = await get_or_create_today_session(target_user_id, today_str, day, system_id=target_system_id)
+                else:
+                    session_id = await get_session_for_day(target_user_id, today_str, day, system_id=target_system_id) or 0
                 if action == "fill":
                     await open_fill_editor(
                         q,
