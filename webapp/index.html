@@ -3356,6 +3356,8 @@
       isTelegram: false,
       uiReady: false,
       isAdmin: false,
+      nativeSubject: null,
+      nativeIdentityProof: '',
       systemSheetOpen: false,
       aiCoach: { open: false, loading: false, applying: false, mode: 'replace_exercises', answerText: '', parsed: null, summary: '', rationale: [], retriesUsed: 0, maxRetries: 3, usedRequests: 0, rejectedVariants: [], hasResponse: false, requestDayKey: '', appliedByDay: {}, warnings: [], decisions: {}, done: {}, replaceDayCursor: 1 },
       subscription: {
@@ -3550,13 +3552,35 @@
       sourceMetaOpenFor: null,
     };
 
+    function hasVerifiedOwnGymSubject() {
+      if (!state.nativeSubject || state.nativeIdentityProof !== state.initData) return false;
+      const launch = window.Progressor?._launchBridge?.getState?.();
+      return !launch?.session || (String(launch.session.user?.id || '') === state.nativeSubject && launch.launchData === state.nativeIdentityProof);
+    }
+
     window.ProgressorDomain={version:1,
       subscriptionPlans:async()=>{const data=await apiFetch('/gymapi/subscription/overview',{silent:true});return (data.plans||[]).map(p=>({id:p.code,label:p.title,RUB:Math.round(Number(p.amount_rub)*100),XTR:Number(p.amount_stars)}));},
       purchaseSubscription:(id,currency)=>startSubscriptionPayment(id,currency==='XTR'?'stars':'rub'),
       hintHost:()=>document.getElementById('progressor-inline-host'),
       isReady:()=>state.uiReady,
-      eligible:()=>state.uiReady && !state.onboarding.active && !state.acting.userId && state.currentRoute==='today' && !!state.userId,
-      perform:async action=>{if(action.kind!=='gym_plan' || state.acting.userId)return false;navigateTo('settings');return true;}
+      eligible:()=>state.uiReady && !state.onboarding.active && !state.acting.userId && state.currentRoute==='today' && hasVerifiedOwnGymSubject(),
+      captureView:()=>!state.acting.userId && ['today','settings','library','allExercises','measurements','achievements','teams','subscription'].includes(state.currentRoute) ? state.currentRoute : null,
+      restoreView:async view=>{
+        if(state.acting.userId || !state.uiReady || state.onboarding.active || !['today','settings','library','allExercises','measurements','achievements','teams','subscription'].includes(view))return false;
+        const revision=window.Progressor?.interactionRevision?.();
+        if(!hasVerifiedOwnGymSubject())await loadViewerRole();
+        if(state.acting.userId || !state.uiReady || state.onboarding.active || !hasVerifiedOwnGymSubject() || revision!==window.Progressor?.interactionRevision?.())return false;
+        navigateTo(view);return true;
+      },
+      perform:async action=>{
+        if(action.kind!=='gym_plan' || !state.uiReady || state.onboarding.active || state.acting.userId)return false;
+        const revision=window.Progressor?.interactionRevision?.();
+        if(!hasVerifiedOwnGymSubject())await loadViewerRole();
+        if(!state.uiReady || state.onboarding.active || state.acting.userId || !hasVerifiedOwnGymSubject() || revision!==window.Progressor?.interactionRevision?.())return false;
+        state.settings.pendingView='plan';
+        navigateTo('settings');
+        return true;
+      }
     };
     let openConfirmModal = null;
     function getTg() {
@@ -7795,8 +7819,45 @@
     }
 
     function activeOwnerContextKey() {
-      const ownerId = Number(state.acting?.userId || state.userId || 0);
-      return String(ownerId || 'self');
+      // Runtime guards change with proof/account/actor, while persistent keys
+      // below remain stable for the same verified owner on a later launch.
+      const scope = nativeOwnerStorageScope(), proof = state.initData || '';
+      if (state.ownerContextProof !== proof || state.ownerContextScope !== scope) {
+        state.ownerContextProof = proof; state.ownerContextScope = scope;
+        state.ownerContextRevision = (state.ownerContextRevision || 0) + 1;
+      }
+      return `${scope || 'unverified'}@${state.ownerContextRevision}`;
+    }
+
+    function nativeOwnerStorageScope() {
+      if (!hasVerifiedOwnGymSubject()) return null;
+      const actor = Number(state.acting?.userId || 0);
+      if (!Number.isSafeInteger(actor) || actor < 0) return null;
+      return `viewer:${state.nativeSubject}:${actor ? `acting:${actor}` : 'self'}`;
+    }
+
+    function resetNativeOwnerMemory() {
+      resetScopedCachesForActorSwitch();
+      resetAiCoachViewState();
+      // Discard only the old account's visible editor; closing it normally
+      // flushes draft/note writes, which must not run under the next proof.
+      if (state.editor.noteTimer) clearTimeout(state.editor.noteTimer);
+      if (state.editor.noteStatusTimer) clearTimeout(state.editor.noteStatusTimer);
+      if (state.editor.flashTimer) clearTimeout(state.editor.flashTimer);
+      state.editor = { open: false, ueId: null, selectedSet: null, tab: 'sets' };
+      document.body.classList.remove('exercise-modal-open');
+      document.getElementById('sheet')?.classList.remove('show');
+      state.acting = { userId: null, name: '', canEdit: true };
+      state.todayDraft = {}; state.draftDirty = {}; state.draftRevision = {}; state.runningDraft = {};
+      state.exercises = new Map(); state.contexts = new Map();
+      state.runningHistoryIndex = {}; state.todayHistoryIndex = {};
+      state.activeDays = []; state.completedDays = new Set();
+      state.settings.workoutsPerWeek = 0; state.settings.days = [];
+      state.settings.customGroups = []; state.settings.customExercises = []; state.settings.manageableExercises = [];
+      state.lifecycle.sheetRequestSeq = (state.lifecycle.sheetRequestSeq || 0) + 1;
+      state.lifecycle.dataVersion = (state.lifecycle.dataVersion || 0) + 1;
+      invalidateAllExerciseSessionCache();
+      renderExercises([]); updateActingBanner();
     }
 
     function resetScopedCachesForActorSwitch() {
@@ -11077,13 +11138,35 @@
       return safeText.slice(0, 200).trim();
     }
 
+    let viewerIdentityLoading = null;
     async function loadViewerRole() {
+      if (viewerIdentityLoading) return viewerIdentityLoading;
+      const proof = state.initData;
+      viewerIdentityLoading = (async () => {
+      let identityTimer;
       try {
-        const me = await apiFetch('/gymapi/whoami', { silent: true });
+        // A receiving WebApp can have an empty SDK initDataUnsafe. Identity
+        // still comes from this API's verified original-proof/assertion bridge.
+        const deadline = new Promise((_, reject) => { identityTimer = setTimeout(() => reject(new Error('Identity verification timeout')), 2500); });
+        const me = await Promise.race([apiFetch('/gymapi/whoami', { silent: true, actingUserId: null, timeoutMs: 1800, retryReads: false }), deadline]);
+        if (state.initData !== proof) return;
+        const subject = Number(me?.tg_id);
+        if (me?.ok !== true || !Number.isSafeInteger(subject) || subject <= 0) throw new Error('Invalid native identity');
+        const launch = window.Progressor?._launchBridge?.getState?.();
+        if (launch?.session && (String(launch.session.user?.id || '') !== String(subject) || launch.launchData !== proof)) throw new Error('Native identity changed');
+        if (state.lastVerifiedNativeSubject && state.lastVerifiedNativeSubject !== String(subject)) resetNativeOwnerMemory();
+        state.nativeSubject = String(subject);
+        state.nativeIdentityProof = proof;
+        state.lastVerifiedNativeSubject = String(subject);
         state.isAdmin = !!me?.is_admin;
       } catch (_) {
-        state.isAdmin = false;
+        if (state.initData === proof) { state.isAdmin = false; state.nativeSubject = null; state.nativeIdentityProof = ''; }
+      } finally {
+        clearTimeout(identityTimer);
+        window.Progressor?.refreshSurface?.();
       }
+      })();
+      try { return await viewerIdentityLoading; } finally { viewerIdentityLoading = null; }
     }
 
     async function apiFetch(path, options = {}) {
@@ -11092,7 +11175,7 @@
       if (typeof path === 'string' && path.startsWith('/gymapi/')) {
         path = apiPrefix + path.slice('/gymapi'.length);
       }
-      const { silent = false, fetchOptions = null, timeoutMs = 15000, actingUserId = state.acting?.userId, ...direct } = options || {};
+      const { silent = false, fetchOptions = null, timeoutMs = 15000, retryReads = true, actingUserId = state.acting?.userId, ...direct } = options || {};
 
       // Merge headers from both layers
       const headers = new Headers();
@@ -11121,7 +11204,7 @@
         if (!headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
       }
 
-      const canRetry = ['GET', 'HEAD'].includes(String(init.method).toUpperCase());
+      const canRetry = retryReads && ['GET', 'HEAD'].includes(String(init.method).toUpperCase());
       const isAbortLikeError = (err) => err?.name === 'AbortError' || String(err?.message || '').toLowerCase().includes('abort') || String(err?.message || '').toLowerCase().includes('timeout');
       const waitUntilFetchCanRetry = () => new Promise((resolve) => {
         if (document.visibilityState === 'visible' && navigator.onLine !== false) { resolve(); return; }
@@ -11579,22 +11662,26 @@
     }
 
     function workoutStorageScope() {
-      return `${location.pathname}:${state.userId || 'guest'}:${state.acting?.userId || 'self'}:${state.settings.systems.activeSystemId || 0}`;
+      const owner = nativeOwnerStorageScope();
+      return owner ? `${location.pathname}:${owner}:${state.settings.systems.activeSystemId || 0}` : null;
     }
 
     function getLastValuesCacheKey(exercise) {
-      return `gd_last_vals_v2:${workoutStorageScope()}:${exercise.exercise_id || exercise.user_exercise_id}`;
+      const scope = workoutStorageScope();
+      return scope ? `gd_last_vals_v3:${scope}:${exercise.exercise_id || exercise.user_exercise_id}` : null;
     }
 
     function workoutDraftKey(ueId, kind) {
       const ex = state.exercises.get(Number(ueId));
       const source = ex?.source === 'all_exercises' || ex?.free_workout ? 'free' : state.dayIndex;
-      return `gd_draft_v1:${workoutStorageScope()}:${source}:${source === 'free' ? getAllExercisesDate() : getIsoDate()}:${ueId}:${kind}`;
+      const scope = workoutStorageScope();
+      return scope ? `gd_draft_v2:${scope}:${source}:${source === 'free' ? getAllExercisesDate() : getIsoDate()}:${ueId}:${kind}` : null;
     }
 
     function readWorkoutDraft(ueId, kind) {
       try {
-        const item = JSON.parse(sessionStorage.getItem(workoutDraftKey(ueId, kind)) || 'null');
+        const key = workoutDraftKey(ueId, kind); if (!key) return null;
+        const item = JSON.parse(sessionStorage.getItem(key) || 'null');
         if (!item || Date.now() - item.savedAt > 12 * 60 * 60 * 1000) return null;
         const fields = kind === 'running' ? ['distance_km', 'duration_ms', 'duration_sec', 'calories', 'heart_rate'] : ['weight_kg', 'reps', 'seconds'];
         if (!fields.every((field) => Number.isFinite(item.values?.[field]) && item.values[field] >= 0)) return null;
@@ -11603,13 +11690,14 @@
     }
 
     function persistWorkoutDraft(ueId, kind, values) {
-      try { sessionStorage.setItem(workoutDraftKey(ueId, kind), JSON.stringify({ savedAt: Date.now(), values })); }
+      try { const key = workoutDraftKey(ueId, kind); if (key) sessionStorage.setItem(key, JSON.stringify({ savedAt: Date.now(), values })); }
       catch (_) { /* Storage can be unavailable inside a WebView; memory still works. */ }
     }
 
     function getCachedLastValues(exercise) {
       try {
-        const raw = localStorage.getItem(getLastValuesCacheKey(exercise));
+        const key = getLastValuesCacheKey(exercise); if (!key) return null;
+        const raw = localStorage.getItem(key);
         if (!raw) return null;
         const parsed = JSON.parse(raw);
         return {
@@ -11627,7 +11715,7 @@
           reps: Number(values.reps || 0),
           seconds: Number(values.seconds || 0),
         };
-        localStorage.setItem(getLastValuesCacheKey(exercise), JSON.stringify(payload));
+        const key = getLastValuesCacheKey(exercise); if (key) localStorage.setItem(key, JSON.stringify(payload));
       } catch (_) {}
     }
 
@@ -12958,13 +13046,14 @@
       const requestSeq = state.lifecycle.sheetRequestSeq = (state.lifecycle.sheetRequestSeq || 0) + 1;
       const version = state.lifecycle.dataVersion || 0;
       const scope = workoutStorageScope();
+      const owner = activeOwnerContextKey();
       if (!background) {
         await flushInlineNumberInput();
         shell?.classList.add('switching');
       }
       try {
         const sheet = await apiFetch(`/gymapi/day/${dayIndex}/sheet`, { silent: background });
-        if (requestSeq !== state.lifecycle.sheetRequestSeq || scope !== workoutStorageScope()) return;
+        if (requestSeq !== state.lifecycle.sheetRequestSeq || scope !== workoutStorageScope() || owner !== activeOwnerContextKey()) return;
         if (background && ((state.lifecycle.dataVersion || 0) !== version || hasActiveWorkoutInteraction() || state.currentRoute !== 'today')) return;
         const dayChanged = Number(state.dayIndex) !== Number(dayIndex) || (state.dateIso && state.dateIso !== toIsoDate(sheet.date));
         const unchanged = !dayChanged && JSON.stringify([...state.exercises.values()]) === JSON.stringify(sheet.exercises || []);
@@ -13007,8 +13096,10 @@
     }
 
     async function loadToday() {
+      const owner = activeOwnerContextKey();
       try {
         const info = await apiFetch('/gymapi/day/today');
+        if (owner !== activeOwnerContextKey()) return;
         state.activeDays = info.active_days || [];
         state.completedDays = new Set((info.completed_days || []).map(Number));
         let targetDay = info.suggested_day_index || (state.activeDays[0]?.day_index);
@@ -13049,8 +13140,9 @@
       if (state.onboarding.active) return;
       const version = state.lifecycle.dataVersion || 0;
       const scope = workoutStorageScope();
+      const owner = activeOwnerContextKey();
       const info = await apiFetch('/gymapi/day/today', { silent: background });
-      if (scope !== workoutStorageScope() || (background && ((state.lifecycle.dataVersion || 0) !== version || hasActiveWorkoutInteraction() || state.currentRoute !== 'today'))) return;
+      if (scope !== workoutStorageScope() || owner !== activeOwnerContextKey() || (background && ((state.lifecycle.dataVersion || 0) !== version || hasActiveWorkoutInteraction() || state.currentRoute !== 'today'))) return;
       state.activeDays = info.active_days || [];
       state.completedDays = new Set((info.completed_days || []).map(Number));
       const keepCurrent = keepDay && state.activeDays.some((day) => Number(day.day_index) === Number(state.dayIndex));
@@ -13781,14 +13873,15 @@
       if (inputEl) inputEl.value = '';
     }
 
-    function pendingAiApplyStorageKey(owner = activeOwnerContextKey()) {
-      return `gym_diary_ai_apply_v1:${owner}`;
+    function pendingAiApplyStorageKey(owner = nativeOwnerStorageScope()) {
+      return /^viewer:[1-9][0-9]*:(?:self|acting:[1-9][0-9]*)$/.test(owner || '') ? `gym_diary_ai_apply_v2:${owner}` : null;
     }
 
     function storePendingAiApply(payload) {
       try {
-        sessionStorage.setItem(pendingAiApplyStorageKey(), JSON.stringify({
-          owner: activeOwnerContextKey(), payload, mode: state.aiCoach.mode,
+        const owner = nativeOwnerStorageScope(), key = pendingAiApplyStorageKey(owner); if (!key) return;
+        sessionStorage.setItem(key, JSON.stringify({
+          owner, payload, mode: state.aiCoach.mode,
         }));
       } catch (_) { /* Storage may be unavailable in private WebViews. */ }
     }
@@ -13796,6 +13889,7 @@
     function clearPendingAiApply(owner, requestId) {
       try {
         const key = pendingAiApplyStorageKey(owner);
+        if (!key) return;
         const saved = JSON.parse(sessionStorage.getItem(key) || 'null');
         if (saved?.payload?.request_id === requestId) sessionStorage.removeItem(key);
       } catch (_) {}
@@ -13803,11 +13897,13 @@
 
     async function restorePendingAiApply() {
       if (state.aiCoach.loading || state.aiCoach.applying || state.aiCoach.parsed) return;
+      if (!nativeOwnerStorageScope()) await loadViewerRole();
+      const pendingOwner = nativeOwnerStorageScope(); if (!pendingOwner) return;
       const owner = activeOwnerContextKey();
       let saved;
-      try { saved = JSON.parse(sessionStorage.getItem(pendingAiApplyStorageKey(owner)) || 'null'); } catch (_) { return; }
+      try { saved = JSON.parse(sessionStorage.getItem(pendingAiApplyStorageKey(pendingOwner)) || 'null'); } catch (_) { return; }
       const payload = saved?.payload;
-      if (saved?.owner !== owner || !/^[A-Za-z0-9_-]{16,80}$/.test(payload?.request_id || '') || !Array.isArray(payload?.actions)) return;
+      if (saved?.owner !== pendingOwner || !/^[A-Za-z0-9_-]{16,80}$/.test(payload?.request_id || '') || !Array.isArray(payload?.actions)) return;
       const requestId = state.aiCoach.requestId = (state.aiCoach.requestId || 0) + 1;
       const contextKey = aiCoachContextKey();
       const isCurrent = () => owner === activeOwnerContextKey() && requestId === state.aiCoach.requestId && contextKey === aiCoachContextKey();
@@ -13831,7 +13927,7 @@
         const status = await apiFetch(`/gymapi/ai/coach/apply/${encodeURIComponent(operationId)}`, { silent: true });
         if (!isCurrent()) return;
         if (status.found && status.result?.ok) {
-          clearPendingAiApply(owner, operationId);
+          clearPendingAiApply(pendingOwner, operationId);
           resetAiCoachViewState();
           state.aiCoach.hasResponse = true;
           state.aiCoach.summary = 'Предыдущие изменения уже сохранены. Повторно применять их не нужно.';
@@ -14370,6 +14466,9 @@
 
     async function applyAiCoachPlan({ forceAll = false } = {}) {
       if (state.aiCoach.applying) return;
+      if (!nativeOwnerStorageScope()) await loadViewerRole();
+      const pendingOwner = nativeOwnerStorageScope();
+      if (!pendingOwner) { toast('Не удалось подтвердить аккаунт. Откройте дневник повторно.'); return; }
       if (state.aiCoach.planContextKey !== aiCoachContextKey()) {
         resetAiCoachViewState();
         renderAiCoachResult();
@@ -14406,7 +14505,7 @@
         const result = await apiFetch('/gymapi/ai/coach/apply', { method: 'POST', body: JSON.stringify(payload), actingUserId });
         ensureCurrentOwner();
         if (!result?.ok || !(Number(result.system_id) > 0)) throw new Error('Сервер не подтвердил сохранение');
-        clearPendingAiApply(owner, payload.request_id);
+        clearPendingAiApply(pendingOwner, payload.request_id);
         state.settings.systems.activeSystemId = Number(result.system_id);
         invalidateAllExerciseSessionCache();
         state.lifecycle.dataVersion = Number(state.lifecycle.dataVersion || 0) + 1;
@@ -16331,7 +16430,7 @@
       setupSettingsHandlers();
       setupMeasurementsHandlers();
       setupMeasurementSheetHandlers();
-      Promise.resolve().then(() => loadViewerRole()).catch((err) => console.warn('Viewer role detection failed', err));
+      await loadViewerRole();
       openConfirmModal = setupModal();
       bindEvents();
       syncFinishFabVisibility();
