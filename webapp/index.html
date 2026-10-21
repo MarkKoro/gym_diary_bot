@@ -3545,6 +3545,8 @@
         active: false,
         index: 0,
         completed: false,
+        automaticDeferred: false,
+        generation: 0,
       },
       acting: {
         userId: null,
@@ -3574,6 +3576,7 @@
         const revision=window.Progressor?.interactionRevision?.();
         if(!hasVerifiedOwnGymSubject())await loadViewerRole();
         if(state.acting.userId || !state.uiReady || state.onboarding.active || !hasVerifiedOwnGymSubject() || revision!==window.Progressor?.interactionRevision?.())return false;
+        deferAutomaticTourForOwnedTask();
         navigateTo(view);return true;
       },
       perform:async action=>{
@@ -3581,6 +3584,7 @@
         const revision=window.Progressor?.interactionRevision?.();
         if(!hasVerifiedOwnGymSubject())await loadViewerRole();
         if(!state.uiReady || state.onboarding.active || state.acting.userId || !hasVerifiedOwnGymSubject() || revision!==window.Progressor?.interactionRevision?.())return false;
+        deferAutomaticTourForOwnedTask();
         state.settings.pendingView='plan';
         navigateTo('settings');
         return true;
@@ -10476,7 +10480,7 @@
         return;
       }
       if (state.allExercises.sheetOpen) { closeAllExerciseSheet(); return; }
-      if (state.tour.active) { stopTour({ completed: true }); return; }
+      if (state.tour.active) { stopTour(); return; }
       const timerSheetOpen = document.getElementById('timerSheet')?.classList.contains('show');
       if (timerSheetOpen) { closeTimerSheet(); return; }
       const paywallOpen = document.getElementById('paywallSheet')?.classList.contains('show');
@@ -11006,11 +11010,18 @@
       state.tour.completed = done;
     }
 
+    function deferAutomaticTourForOwnedTask() {
+      // Only a verified native action invokes this; URL markers are not intent.
+      // Keep optional learning available via explicit repeat on this document.
+      state.tour.automaticDeferred = true;
+      if (state.tour.active) stopTour();
+    }
+
     async function startTour({ force = false } = {}) {
       if (document.querySelector('#progressor-context:not([hidden]),#progressor-connections[open]')) return;
       if (state.onboarding.active) return;
       if (state.tour.active) return;
-      if (!force && readTourCompleted()) return;
+      if (!force && (state.tour.automaticDeferred || readTourCompleted())) return;
       state.tour.active = true;
       state.tour.index = 0;
       document.body.classList.add('tour-active');
@@ -11020,6 +11031,7 @@
     function stopTour({ completed = false } = {}) {
       const overlay = document.getElementById('tourOverlay');
       const card = document.getElementById('tourCard');
+      state.tour.generation = (state.tour.generation || 0) + 1;
       state.tour.active = false;
       state.tour.index = 0;
       document.body.classList.remove('tour-active');
@@ -11044,6 +11056,7 @@
 
     async function renderTourStep() {
       if (!state.tour.active) return;
+      const generation = state.tour.generation = (state.tour.generation || 0) + 1;
       const steps = tourSteps();
       const total = steps.length;
       const idx = Math.max(0, Math.min(state.tour.index, total - 1));
@@ -11052,7 +11065,9 @@
       if (typeof step.prepare === 'function') {
         await Promise.resolve(step.prepare());
       }
-      if (!state.tour.active || document.querySelector('#progressor-context:not([hidden]),#progressor-connections[open]')) { stopTour(); return; }
+      // A dismissed/replaced step must not revive its overlay or stop a new one.
+      if (!state.tour.active || generation !== state.tour.generation) return;
+      if (state.onboarding.active || document.querySelector('#progressor-context:not([hidden]),#progressor-connections[open]')) { stopTour(); return; }
       const overlay = document.getElementById('tourOverlay');
       const backdrop = document.getElementById('tourBackdrop');
       const card = document.getElementById('tourCard');
@@ -11106,11 +11121,13 @@
 
     async function moveTour(direction) {
       if (!state.tour.active) return;
+      const generation = state.tour.generation;
       const steps = tourSteps();
       const current = steps[state.tour.index];
       if (typeof current?.cleanup === 'function') {
         await Promise.resolve(current.cleanup());
       }
+      if (!state.tour.active || generation !== state.tour.generation) return;
       state.tour.index += direction;
       await renderTourStep();
     }

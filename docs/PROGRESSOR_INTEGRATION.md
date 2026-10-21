@@ -216,3 +216,12 @@ Telegram follow-up: [BOT_NATIVE.md](BOT_NATIVE.md) documents personal remaining-
 ## Native add-set retries — 2026-10-19
 
 Gym-owned [set-add operation receipts](SET_ADD_OPERATIONS.md) protect the two existing exercise surfaces and detailed editor after lost HTTP replies. Canonical workout rows/session completion semantics remain unchanged, so Core adapters require no new cross-domain writer or mapping. Preserve current rows and owner/trainer permissions when replaying; unknown client outcomes are explicit pending, with no automatic POST replay or AI. The additive receipt table is retained on code rollback and cleaned only by owner wipe.
+
+## Optional learning and owned tasks
+
+Gym coordinates its existing optional tour with the native `ProgressorDomain`
+contract; see [OPTIONAL_TOUR.md](OPTIONAL_TOUR.md). Successful verified purpose or
+return defers automatic tour for this document and closes an active optional
+overlay without a completion write. Explicit repeat remains available; mandatory
+onboarding, Core account/proof/transfer checks and all D04/D07 safeguards remain.
+This change creates no backend call, data write, AI request or new shared runtime.
