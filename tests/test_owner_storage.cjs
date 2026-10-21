@@ -24,7 +24,7 @@ function fixture({session=new Map(),local=new Map(),denied=false,api}={}){
   document:{getElementById:()=>null},getAiActionDecisionKey:(_,i)=>String(i),updateAiCoachCounter(){},renderAiCoachResult(){},toast(){},
   apiFetch:async(...args)=>{calls.push(['api',...args]);return provider?provider(...args):{found:false}},
   setTimeout:(fn,ms)=>setTimeout(fn,Math.min(ms,10)),clearTimeout,
-  renderSettings(){},mergeDayLabels:(_,days)=>days};
+  renderSettings(){},syncSetOperationControls(){},mergeDayLabels:(_,days)=>days};
  vm.createContext(context);vm.runInContext(code,context,{filename:'actual-owner-storage.js'});
  const setOwner=(subject,proof)=>{state.nativeSubject=subject;state.nativeIdentityProof=proof;state.initData=proof};
  return {context,state,session,local,calls,setOwner,setLaunch(value){currentLaunch=value},setApi(value){provider=value}};

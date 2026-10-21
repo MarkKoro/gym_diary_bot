@@ -1101,6 +1101,8 @@
     .option-row.active .radio-dot::after { display: block; }
     .loading { font-size: 14px; color: var(--muted); padding: 10px 2px; }
     .sheet-actions { margin-top: 12px; display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 8px; }
+    .sheet-actions.set-operation-pending { grid-template-columns: repeat(2, minmax(0,1fr)); }
+    .sheet-actions.set-operation-pending #editorAddSet { grid-column: 1 / -1; }
     .muted { color: var(--muted); }
     .full-screen-msg { min-height: 100vh; display: flex; align-items: center; justify-content: center; text-align: center; background: var(--bg); color: var(--text); }
     body.onboarding-active {
@@ -3211,6 +3213,7 @@
           <div id="historyContent" class="history-block"></div>
         </div>
 
+        <p id="editorSetOperationNote" class="muted" role="status" hidden></p>
         <div class="sheet-actions">
           <button id="editorAddSet" class="btn primary">Добавить подход</button>
         <button id="editorRemoveSet" class="btn">Удалить подход</button>
@@ -3358,6 +3361,7 @@
       isAdmin: false,
       nativeSubject: null,
       nativeIdentityProof: '',
+      setAddOperationsVersion: 0,
       systemSheetOpen: false,
       aiCoach: { open: false, loading: false, applying: false, mode: 'replace_exercises', answerText: '', parsed: null, summary: '', rationale: [], retriesUsed: 0, maxRetries: 3, usedRequests: 0, rejectedVariants: [], hasResponse: false, requestDayKey: '', appliedByDay: {}, warnings: [], decisions: {}, done: {}, replaceDayCursor: 1 },
       subscription: {
@@ -11158,12 +11162,16 @@
         state.nativeSubject = String(subject);
         state.nativeIdentityProof = proof;
         state.lastVerifiedNativeSubject = String(subject);
+        state.setAddOperationsVersion = me.set_add_operations_version === 1 ? 1 : 0;
         state.isAdmin = !!me?.is_admin;
       } catch (_) {
-        if (state.initData === proof) { state.isAdmin = false; state.nativeSubject = null; state.nativeIdentityProof = ''; }
+        if (state.initData === proof) { state.isAdmin = false; state.nativeSubject = null; state.nativeIdentityProof = ''; state.setAddOperationsVersion = 0; }
       } finally {
         clearTimeout(identityTimer);
         window.Progressor?.refreshSurface?.();
+        // A recovered pending write must become visible even when SDK user
+        // hints were absent while the exercise controls first rendered.
+        for (const ueId of state.exercises.keys()) syncSetOperationControls(ueId);
       }
       })();
       try { return await viewerIdentityLoading; } finally { viewerIdentityLoading = null; }
@@ -12033,6 +12041,7 @@
         syncNumberControls(container);
         const remove = container.querySelector('[data-remove-set]');
         if (remove) remove.disabled = !(exercise.sets || []).length;
+        syncSetOperationControls(ueId);
         return;
       }
       container.dataset.controlsKey = controlsKey;
@@ -12080,7 +12089,7 @@
 
       const actionsRow = document.createElement('div');
       actionsRow.className = 'workout-actions';
-      const addBtn = document.createElement('button'); addBtn.type = 'button'; addBtn.className = 'btn primary'; addBtn.textContent = 'Добавить подход';
+      const addBtn = document.createElement('button'); addBtn.type = 'button'; addBtn.className = 'btn primary'; addBtn.dataset.addSet = ''; addBtn.textContent = 'Добавить подход';
       addBtn.addEventListener('click', (ev) => { ev.stopPropagation(); handleWorkoutAdd(state.exercises.get(ueId) || exercise); });
       const removeBtn = document.createElement('button'); removeBtn.type = 'button'; removeBtn.className = 'btn'; removeBtn.textContent = 'Удалить подход';
       removeBtn.dataset.removeSet = '';
@@ -12092,6 +12101,8 @@
       detailsBtn.addEventListener('click', (ev) => { ev.stopPropagation(); openAllExerciseEditor(exercise.user_exercise_id, 'sets'); });
       actionsRow.append(addBtn, removeBtn, detailsBtn, doneBtn);
       container.appendChild(actionsRow);
+      const pendingNote = document.createElement('p'); pendingNote.dataset.setOperationNote = ''; pendingNote.className = 'muted'; pendingNote.setAttribute('role', 'status'); container.appendChild(pendingNote);
+      syncSetOperationControls(ueId);
     }
 
     function renderRunningControls(container, exercise) {
@@ -12341,7 +12352,7 @@
         const draft = ensureDraft(ueId);
         const hasDraftData = Number(draft.weight_kg || 0) > 0 || Number(draft.reps || 0) > 0 || Number(draft.seconds || 0) > 0;
         if (hasDraftData) {
-          await queueExerciseAction(ueId, () => addSet(ueId, { payload: { ...draft }, selectLast: false, toastOnSave: false }));
+          await queueAddSet(ueId, { payload: { ...draft }, selectLast: false, toastOnSave: false });
         }
       }
       const previousDone = state.workout.doneIds instanceof Set ? new Set(state.workout.doneIds) : new Set();
@@ -12387,7 +12398,7 @@
         const draft = ensureDraft(ueId);
         const hasDraftData = Number(draft.weight_kg || 0) > 0 || Number(draft.reps || 0) > 0 || Number(draft.seconds || 0) > 0;
         if (hasDraftData) {
-          await queueExerciseAction(ueId, () => addSet(ueId, { payload: { ...draft }, selectLast: false, toastOnSave: false }));
+          await queueAddSet(ueId, { payload: { ...draft }, selectLast: false, toastOnSave: false });
         }
       }
       let data;
@@ -12461,13 +12472,12 @@
         ? { seconds: Number(draft.seconds || 0), reps: 0, weight_kg: 0 }
         : { weight_kg: Number(draft.weight_kg || 0), reps: Number(draft.reps || 0), seconds: Number(draft.seconds || 0) };
       try {
-        await queueExerciseAction(ueId, async () => {
-          const data = await addSet(ueId, { payload, selectLast: false, toastOnSave: false });
-          const latest = getLastSet({ sets: data.sets || [] });
-          if (!state.draftDirty[ueId]) applyDraftFromSet(ueId, latest || payload);
-        });
+        const data = await queueAddSet(ueId, { payload, selectLast: false, toastOnSave: false });
+        if (!data) return;
+        const latest = getLastSet({ sets: data.sets || [] });
+        if (!state.draftDirty[ueId]) applyDraftFromSet(ueId, latest || payload);
       } catch (e) {
-        toast('Ошибка связи. Попробуй ещё раз.');
+        toast(e?.setOperationPending ? 'Запись пока не подтверждена. Нажмите «Проверить запись».' : e?.setOperationUnavailable ? e.message : 'Не удалось добавить подход.');
       }
       renderWorkoutBody(ueId);
     }
@@ -12967,37 +12977,146 @@
       updateFinishButton();
     }
 
+    // Pending add intentions are separate from editable input values. A retry
+    // reuses the original key/payload; two later identical sets get fresh keys.
+    const pendingSetOperations = new Map();
+    const activeSetOperations = new Map();
+    function setOperationContext(ueId) {
+      if (!hasVerifiedOwnGymSubject()) throw new Error('native_identity_not_confirmed');
+      const source = getExerciseActionSource(ueId);
+      const date = source === 'all_exercises' ? getAllExercisesDate() : getIsoDate();
+      // Receiving SDK initDataUnsafe can be empty. Use the own API's verified
+      // Telegram subject, never a guest/SDK hint, for pending write recovery.
+      const owner = nativeOwnerStorageScope();
+      if (!owner) throw new Error('native_identity_not_confirmed');
+      const scope = `${location.pathname}:${owner}:${state.settings.systems.activeSystemId || 0}`;
+      const url = getEditorActionUrl(ueId, 'set/add_once', date);
+      return { key: `gd_set_add_v1:${scope}:${source}:${date}:${Number(ueId)}`,
+        scope, url, proof: state.nativeIdentityProof, runtimeOwner: activeOwnerContextKey(), ueId: Number(ueId), actingUserId: state.acting?.userId || null };
+    }
+    function isSetOperationContextCurrent(ctx, ueId) {
+      try {
+        const current = setOperationContext(ueId);
+        return current.key === ctx.key && current.proof === ctx.proof && current.runtimeOwner === ctx.runtimeOwner;
+      } catch (_) { return false; }
+    }
+    function setOperationValues(values) {
+      return { weight_kg: Number(values.weight_kg || 0), reps: Number(values.reps || 0),
+        seconds: Number(values.seconds || 0), is_warmup: Boolean(values.is_warmup) };
+    }
+    function readSetOperation(ctx) {
+      if (pendingSetOperations.has(ctx.key)) return pendingSetOperations.get(ctx.key);
+      try {
+        const item = JSON.parse(sessionStorage.getItem(ctx.key) || 'null');
+        if (item && item.key === ctx.key && item.url === ctx.url &&
+            /^[a-f0-9]{32}$/.test(item.operation_id) &&
+            ['weight_kg', 'reps', 'seconds'].every(k => Number.isFinite(item.payload?.[k]) && item.payload[k] >= 0) &&
+            typeof item.payload?.is_warmup === 'boolean') {
+          pendingSetOperations.set(ctx.key, item); return item;
+        }
+      } catch (_) { /* In-memory recovery still works when storage is unavailable. */ }
+      return null;
+    }
+    function syncSetOperationControls(ueId) {
+      let ctx; try { ctx = setOperationContext(ueId); } catch (_) { return; }
+      const pending = readSetOperation(ctx), busy = activeSetOperations.has(ctx.key);
+      const label = busy ? 'Сохраняем…' : pending ? 'Проверить запись' : 'Добавить подход';
+      const text = pending && !busy
+        ? 'Запись подхода пока не подтверждена. «Проверить запись» безопасно проверит прежний подход; новые значения в полях сохранятся.' : '';
+      getExerciseCards(ueId).forEach(card => {
+        card.querySelectorAll('[data-add-set]').forEach(button => { button.disabled = busy; button.textContent = label; });
+        card.querySelectorAll('[data-set-operation-note]').forEach(note => { note.hidden = !text; note.textContent = text; });
+      });
+      if (state.editor?.ueId === Number(ueId)) {
+        const button = document.getElementById('editorAddSet');
+        if (button) { button.disabled = busy; button.textContent = label; button.parentElement.classList.toggle('set-operation-pending', Boolean(pending)); }
+        const note = document.getElementById('editorSetOperationNote');
+        if (note) { note.hidden = !text; note.textContent = text; }
+      }
+    }
+    function queueAddSet(ueId, opts = {}) {
+      if (!hasVerifiedOwnGymSubject() || state.setAddOperationsVersion !== 1) {
+      const beforeIdentity = { proof: state.initData, actor: state.acting?.userId || null,
+        system: state.settings.systems.activeSystemId || 0, exercise: state.exercises.get(ueId),
+        source: getExerciseActionSource(ueId), date: getExerciseActionSource(ueId) === 'all_exercises' ? getAllExercisesDate() : getIsoDate() };
+      return loadViewerRole().then(() => {
+        if (state.initData !== beforeIdentity.proof || (state.acting?.userId || null) !== beforeIdentity.actor ||
+            (state.settings.systems.activeSystemId || 0) !== beforeIdentity.system || state.exercises.get(ueId) !== beforeIdentity.exercise ||
+            getExerciseActionSource(ueId) !== beforeIdentity.source ||
+            (beforeIdentity.source === 'all_exercises' ? getAllExercisesDate() : getIsoDate()) !== beforeIdentity.date) return null;
+        if (!hasVerifiedOwnGymSubject()) throw Object.assign(new Error('Не удалось подтвердить аккаунт. Повторите действие.'), { setOperationUnavailable: true });
+        if (state.setAddOperationsVersion !== 1) throw Object.assign(new Error('Gym обновляется. Обновите экран чуть позже перед добавлением подхода.'), { setOperationUnavailable: true });
+        return queueAddSet(ueId, opts);
+      });
+      }
+      const ctx = setOperationContext(ueId);
+      if (activeSetOperations.has(ctx.key)) return activeSetOperations.get(ctx.key);
+      // Set this before yielding, so a double activation cannot enqueue a new
+      // physical set behind the unresolved one.
+      const promise = Promise.resolve().then(async () => {
+        await flushInlineNumberInput();
+        if (!isSetOperationContextCurrent(ctx, ueId)) return null;
+        const payload = setOperationValues(opts.payload || ensureDraft(ueId));
+        return queueExerciseAction(ueId, () => addSet(ueId, { ...opts, payload, operationContext: ctx }));
+      }).finally(() => { activeSetOperations.delete(ctx.key); syncSetOperationControls(ueId); });
+      activeSetOperations.set(ctx.key, promise); syncSetOperationControls(ueId);
+      return promise;
+    }
     async function addSet(ueId, opts = {}) {
       triggerHaptic();
-      const payload = opts.payload || { ...ensureDraft(ueId) };
+      const ctx = opts.operationContext || setOperationContext(ueId);
+      if (!isSetOperationContextCurrent(ctx, ueId)) return null;
+      let operation = readSetOperation(ctx);
+      const isRetry = Boolean(operation);
+      if (!operation) {
+        if (!globalThis.crypto?.getRandomValues) throw new Error('secure_operation_key_unavailable');
+        const key = [...crypto.getRandomValues(new Uint8Array(16))].map(x => x.toString(16).padStart(2, '0')).join('');
+        operation = { key: ctx.key, url: ctx.url, operation_id: key,
+          payload: setOperationValues(opts.payload || ensureDraft(ueId)) };
+        pendingSetOperations.set(ctx.key, operation);
+        try { sessionStorage.setItem(ctx.key, JSON.stringify(operation)); } catch (_) {}
+      }
+      const payload = operation.payload;
       const draftRevision = state.draftRevision[ueId] || 0;
+      const matchingDraft = JSON.stringify(setOperationValues(ensureDraft(ueId))) === JSON.stringify(payload);
       const exercise = state.exercises.get(ueId);
       const prevSets = exercise ? [...exercise.sets] : null;
+      const isCurrent = () => isSetOperationContextCurrent(ctx, ueId);
       const optimisticNo = (prevSets?.[prevSets.length - 1]?.set_no || 0) + 1;
-      if (exercise) {
-        const optimistic = { set_no: optimisticNo, weight_kg: Number(payload.weight_kg || 0), reps: Number(payload.reps || 0), seconds: Number(payload.seconds || 0) };
+      if (exercise && isCurrent() && !isRetry) {
+        const optimistic = { set_no: optimisticNo, ...payload };
         applySetsUpdate(ueId, [...prevSets, optimistic]);
         state.editor.selectedSet = null;
       }
       try {
-      const data = await apiFetch(getEditorActionUrl(ueId, 'set/add', getExerciseActionSource(ueId) === 'all_exercises' ? getAllExercisesDate() : getIsoDate()), { method: 'POST', body: JSON.stringify(payload) });
-        if ((state.draftRevision[ueId] || 0) === draftRevision) state.draftDirty[ueId] = false;
+        const data = await apiFetch(ctx.url, { method: 'POST', silent: true, actingUserId: ctx.actingUserId,
+          body: JSON.stringify({ ...payload, operation_id: operation.operation_id }) });
+        const receipt = data.operation;
+        if (receipt?.operation_id !== operation.operation_id || !['present', 'removed'].includes(receipt.state) ||
+            !Number.isInteger(receipt.set_id) || receipt.set_id <= 0 || !Number.isInteger(receipt.session_id) ||
+            receipt.session_id <= 0 || typeof receipt.replayed !== 'boolean' || !Array.isArray(data.sets)) {
+          throw new Error('set_receipt_not_confirmed');
+        }
+        pendingSetOperations.delete(ctx.key);
+        try { sessionStorage.removeItem(ctx.key); } catch (_) {}
+        if (!isCurrent()) return null;  // A late result cannot change another owner/date/view.
+        if ((state.draftRevision[ueId] || 0) === draftRevision && matchingDraft) state.draftDirty[ueId] = false;
         applySetsUpdate(ueId, data.sets);
         const last = data.sets[data.sets.length - 1];
-        if (opts.selectLast !== false) {
-          if (state.editor.ueId === ueId) state.editor.selectedSet = null;
-        }
+        if (opts.selectLast !== false && state.editor.ueId === ueId) state.editor.selectedSet = null;
         if (state.editor.ueId === ueId && last) {
-          state.editor.scrollTarget = last.set_no;
-          setFlashSet(last.set_no);
+          state.editor.scrollTarget = last.set_no; setFlashSet(last.set_no);
         }
         if (getExerciseActionSource(ueId) === 'all_exercises') scheduleAllExercisesMetaRefresh();
-        if (opts.toastOnSave) toast('Сохранено');
+        if (receipt.state === 'removed') toast('Этот подход уже удалён. Список обновлён.');
+        else if (receipt.replayed) toast('Запись подтверждена. Подход не продублирован.');
+        else if (opts.toastOnSave) toast('Сохранено');
         return data;
       } catch (e) {
-        if (prevSets) applySetsUpdate(ueId, prevSets);
+        if (prevSets && isCurrent()) applySetsUpdate(ueId, prevSets);
+        e.setOperationPending = true;
         throw e;
-      }
+      } finally { syncSetOperationControls(ueId); }
     }
 
     async function removeSet(ueId, opts = {}) {
@@ -15616,11 +15735,14 @@
         }
         closeEditor();
       }));
-      document.getElementById('editorAddSet').addEventListener('click', () => runUiAction('Не удалось добавить подход', async () => {
+      document.getElementById('editorAddSet').addEventListener('click', async () => {
         const ueId = state.editor.ueId;
-        await flushInlineNumberInput();
-        await queueExerciseAction(ueId, () => addSet(ueId, { toastOnSave: true }));
-      }));
+        try { await queueAddSet(ueId, { toastOnSave: true }); }
+        catch (e) {
+          if (e?.setOperationPending) toast('Запись пока не подтверждена. Нажмите «Проверить запись».');
+          else reportActionError('Не удалось добавить подход', e);
+        }
+      });
       document.getElementById('editorRemoveSet').addEventListener('click', () => runUiAction('Не удалось удалить подход', async () => {
         const ueId = state.editor.ueId;
         await flushInlineNumberInput();
@@ -16269,6 +16391,7 @@
     }
 
     function renderEditor() {
+      queueMicrotask(() => { if (state.editor?.ueId) syncSetOperationControls(state.editor.ueId); });
       if (!state.editor.open) return;
       const exercise = state.exercises.get(state.editor.ueId);
       if (!exercise) return;
@@ -16377,7 +16500,7 @@
       const source = getExerciseActionSource(ueId);
       if (source === 'all_exercises') {
         const exerciseId = getEditorExerciseId(ueId);
-        const withDate = ['session', 'note', 'done', 'running', 'running/done', 'set/add', 'set/remove_last', 'set/inc_last'].includes(action);
+        const withDate = ['session', 'note', 'done', 'running', 'running/done', 'set/add', 'set/add_once', 'set/remove_last', 'set/inc_last'].includes(action);
         return `/gymapi/all_exercises/exercise/${exerciseId}/${action}${withDate ? `?date=${isoDate}` : ''}`;
       }
       return `/gymapi/day/${state.dayIndex}/exercise/${Number(ueId)}/${action}?date=${isoDate}`;

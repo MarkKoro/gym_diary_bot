@@ -2234,6 +2234,7 @@ async def whoami(ctx: AuthCtx = Depends(get_auth_ctx)):
         "last_name": ctx.last_name,
         "auth_date": ctx.auth_date,
         "is_admin": int(ctx.tg_id) in ADMIN_IDS,
+        "set_add_operations_version": 1,
     }
 
 
@@ -2608,6 +2609,34 @@ async def complete_day(
     }
 
 
+def _set_operation_request(payload, ctx, source, exercise_id, iso_date, day_index=0, *, required=False):
+    operation_id = (payload or {}).get("operation_id")
+    if operation_id is None:
+        if required: raise HTTPException(400, "Для добавления нужен ключ подхода")
+        return {}  # Existing native bot and older WebApp clients remain compatible.
+    if not isinstance(operation_id, str) or not re.fullmatch(r"[a-f0-9]{32}", operation_id):
+        raise HTTPException(400, "Некорректный ключ добавления подхода")
+    # Defaults may change while a reply is lost. Keyed requests must carry the
+    # exact values the person confirmed, not derive a new intent from last set.
+    if any((payload or {}).get(k) is None for k in ("reps", "seconds", "weight_kg")):
+        raise HTTPException(400, "Для проверки подхода нужны исходные значения")
+    return {"operation_id": operation_id, "owner_id": ctx.user_id,
+            "actor_id": ctx.actor_user_id or ctx.user_id,
+            "request_context": f"{source}:{int(day_index)}:{int(exercise_id)}:{iso_date}"}
+
+
+async def _write_api_set(session_id, ue_id, reps, seconds, weight, warmup, operation):
+    try:
+        return await db.add_set(session_id, ue_id, int(reps), int(seconds), float(weight), warmup, **operation)
+    except db.SetOperationConflict:
+        raise HTTPException(409, "Этот ключ относится к другому добавлению. Обновите список подходов.")
+    except db.SetOperationAccessError:
+        raise HTTPException(403, "Нет доступа к изменению этой тренировки")
+    except ValueError:
+        raise HTTPException(400, "Некорректные значения подхода")
+
+
+@app.post("/day/{day_index}/exercise/{user_exercise_id}/set/add_once")
 @app.post("/day/{day_index}/exercise/{user_exercise_id}/set/add")
 @_validate_payload_input
 async def add_set_fast(
@@ -2623,6 +2652,7 @@ async def add_set_fast(
     await _ensure_user_exercise(user_id, user_exercise_id, day_index, request_path=str(request.url.path) if request else None)
     target_date = _parse_date_param(date)
     iso_date = _iso_date(target_date)
+    operation = _set_operation_request(payload, ctx, "day", user_exercise_id, iso_date, day_index, required=bool(request and request.url.path.endswith("/set/add_once")))
     active_system_id = await get_active_training_system_id(user_id)
     session_id = await db.get_or_create_today_session(user_id, iso_date, day_index, active_system_id)
     sets_rows = await db.fetch_exercise_sets(session_id, user_exercise_id)
@@ -2645,10 +2675,10 @@ async def add_set_fast(
         seconds = int(last[2]) if last else 0
     if weight is None:
         weight = float(last[3]) if last else 0.0
-    warmup_flag = bool(is_warmup if is_warmup is not None else (last[4] if last else False))
-    await db.add_set(session_id, user_exercise_id, int(reps), int(seconds), float(weight), warmup_flag)
+    warmup_flag = bool(is_warmup if is_warmup is not None else (False if operation else (last[4] if last else False)))
+    receipt = await _write_api_set(session_id, user_exercise_id, reps, seconds, weight, warmup_flag, operation)
     new_sets = await db.fetch_exercise_sets(session_id, user_exercise_id)
-    return {"ok": True, "sets": _serialize_sets(new_sets)}
+    return {"ok": True, "sets": _serialize_sets(new_sets), "operation": receipt}
 
 
 @app.post("/day/{day_index}/exercise/{user_exercise_id}/set/remove_last")
@@ -3292,14 +3322,16 @@ async def free_workout_current(date:str|None=None,ctx:AuthCtx=Depends(get_auth_c
     return {'session_id':row[0] if row else None,'date':selected}
 
 
+@app.post("/all_exercises/exercise/{exercise_id}/set/add_once")
 @app.post("/all_exercises/exercise/{exercise_id}/set/add")
 @_validate_payload_input
-async def all_exercise_add_set(exercise_id: ApiInt, payload: dict | None = Body(default=None), date: str | None = None, ctx: AuthCtx = Depends(get_auth_ctx)):
+async def all_exercise_add_set(exercise_id: ApiInt, payload: dict | None = Body(default=None), date: str | None = None, ctx: AuthCtx = Depends(get_auth_ctx), request: Request = None):
     if ctx.is_acting:
         raise HTTPException(status_code=403, detail="Раздел доступен только для личного дневника")
     user_id = ctx.user_id
-    ue_id = await _get_or_create_free_user_exercise(user_id, exercise_id)
     iso_date = _iso_date(_parse_date_param(date))
+    operation = _set_operation_request(payload, ctx, "all_exercises", exercise_id, iso_date, required=bool(request and request.url.path.endswith("/set/add_once")))
+    ue_id = await _get_or_create_free_user_exercise(user_id, exercise_id)
     session_id = await db.get_or_create_today_session(user_id, iso_date, 0, await get_active_training_system_id(user_id))
     sets_rows = await db.fetch_exercise_sets(session_id, ue_id)
     last = sets_rows[-1] if sets_rows else None
@@ -3316,8 +3348,8 @@ async def all_exercise_add_set(exercise_id: ApiInt, payload: dict | None = Body(
         seconds = int(last[2]) if last else 0
     if weight is None:
         weight = float(last[3]) if last else 0.0
-    await db.add_set(session_id, ue_id, int(reps), int(seconds), float(weight), False)
-    return {"ok": True, "sets": _serialize_sets(await db.fetch_exercise_sets(session_id, ue_id)), "user_exercise_id": ue_id}
+    receipt = await _write_api_set(session_id, ue_id, reps, seconds, weight, False, operation)
+    return {"ok": True, "sets": _serialize_sets(await db.fetch_exercise_sets(session_id, ue_id)), "user_exercise_id": ue_id, "operation": receipt}
 
 
 @app.post("/all_exercises/exercise/{exercise_id}/set/remove_last")

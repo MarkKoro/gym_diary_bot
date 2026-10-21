@@ -52,3 +52,15 @@ Read docs/ECOSYSTEM_CONNECTIONS.md before changing daily summaries, source-healt
 ## Bounded journey handoffs — 2026-10-19
 
 Read the canonical [journey contract](https://github.com/MarkKoro/progressor_core/blob/main/docs/JOURNEY_HANDOFFS.md) before changing purpose routing, return, change-goal review or Food goal confirmation. Keep the single Core UI, native owned actions, account/proof binding and read-only navigation. A saved workout/intake does not prove plan review; explicit scoped review is separate from seen/dismissal. Food apply must reference its server preview and preserve concurrent owner edits; see Food docs/GOAL_PREVIEWS.md. Use the frozen JQ-v1 in Core docs/JOURNEY_QUALITY_RUBRIC.md for matched tasks, separate concept and observed evidence. Do not replace agreed 90-minute free-workout completion, Moscow Food day, meal-anchor parameters or native financial/consent contracts as a side effect.
+
+
+## Set add operation receipts
+
+Read [docs/SET_ADD_OPERATIONS.md](docs/SET_ADD_OPERATIONS.md) before changing add-set writes or exercise controls. Preserve one key per unresolved intention on both Today/AllExercises/editor, current actor/owner permissions on replay, atomic receipt+append, and current rows after deletion/edits. Do not deduplicate deliberate identical sets, infer success from a lost reply, clear pending on uncertainty, or put recovery in a guest SDK scope. No Core/provider call belongs in this transaction.
+
+
+## Verified second journey package — 2026-10-21
+
+Keep the canonical owner-policy boundary and synchronized progressor_client mirrors; read Core docs/SUPPLY_OWNER_POLICY.md before changing source metadata, legal eligibility or updater recovery. The persistent owner-consent-v1-ready gate is independent from financial protocol2 and must survive ordinary code rollback. Supply keeps its single native consent predicate; Core reads only private owner snapshots.
+
+Preserve operation-key retries in Gym /set/add_once (no legacy fallback after an uncertain response), explicit saved-time provenance in Food, and Supply uncertain-delivery suppression (an unknown Telegram response must never trigger a blind retry). Keep native functions available during Core outages.

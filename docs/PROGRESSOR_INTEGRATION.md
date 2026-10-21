@@ -211,3 +211,8 @@ Native follow-up: [NATIVE_GROWTH.md](NATIVE_GROWTH.md). Profile/notification/off
 
 
 Telegram follow-up: [BOT_NATIVE.md](BOT_NATIVE.md) documents personal remaining-period credit, source-local schedules, one expiry sender, native menu ownership and financial epoch recovery.
+
+
+## Native add-set retries — 2026-10-19
+
+Gym-owned [set-add operation receipts](SET_ADD_OPERATIONS.md) protect the two existing exercise surfaces and detailed editor after lost HTTP replies. Canonical workout rows/session completion semantics remain unchanged, so Core adapters require no new cross-domain writer or mapping. Preserve current rows and owner/trainer permissions when replaying; unknown client outcomes are explicit pending, with no automatic POST replay or AI. The additive receipt table is retained on code rollback and cleaned only by owner wipe.

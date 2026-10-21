@@ -3,6 +3,7 @@ import aiosqlite
 import json
 import hashlib
 import math
+import re
 from datetime import datetime, timedelta, timezone, UTC
 import secrets
 from contextlib import asynccontextmanager, nullcontext
@@ -1099,6 +1100,20 @@ async def init_db():
             weight_kg REAL DEFAULT 0,
             is_warmup INTEGER DEFAULT 0
         );
+
+        -- One receipt per explicit add intention; keep after individual set deletion.
+        CREATE TABLE IF NOT EXISTS set_add_operations(
+            operation_id TEXT PRIMARY KEY,
+            owner_id INTEGER NOT NULL,
+            actor_id INTEGER NOT NULL,
+            session_id INTEGER NOT NULL,
+            user_exercise_id INTEGER NOT NULL,
+            request_context TEXT NOT NULL,
+            payload_hash TEXT NOT NULL,
+            set_id INTEGER NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS set_add_operations_owner ON set_add_operations(owner_id);
 
         CREATE TABLE IF NOT EXISTS day_completions(
             user_id INTEGER,
@@ -3621,6 +3636,7 @@ async def wipe_user(user_id: int):
             await db.execute("DELETE FROM running_entries WHERE user_id=?", (user_id,))
             await db.execute("DELETE FROM session_exercises WHERE session_id IN (SELECT id FROM sessions WHERE user_id=?)", (user_id,))
             await db.execute("DELETE FROM session_exercises WHERE user_exercise_id IN (SELECT id FROM user_exercises WHERE user_id=?)", (user_id,))
+            await db.execute("DELETE FROM set_add_operations WHERE owner_id=?", (user_id,))
             await db.execute("DELETE FROM sets WHERE session_id IN (SELECT id FROM sessions WHERE user_id=?)", (user_id,))
             await db.execute("DELETE FROM sets WHERE user_exercise_id IN (SELECT id FROM user_exercises WHERE user_id=?)", (user_id,))
             await db.execute("DELETE FROM day_completions WHERE user_id=?", (user_id,))
@@ -5210,6 +5226,14 @@ async def fetch_exercise_sets(session_id: int, ue_id: int):
         )
         return await cur.fetchall()
 
+class SetOperationConflict(ValueError):
+    """A key already belongs to a different authenticated request."""
+
+
+class SetOperationAccessError(ValueError):
+    """Native ownership or current trainer edit permission is unavailable."""
+
+
 async def add_set(
     session_id: int,
     user_ex_id: int,
@@ -5217,28 +5241,89 @@ async def add_set(
     seconds: int = 0,
     weight: float = 0.0,
     is_warmup: bool = False,
+    *,
+    operation_id: str | None = None,
+    owner_id: int | None = None,
+    actor_id: int | None = None,
+    request_context: str | None = None,
 ):
     if any(not math.isfinite(float(v)) or float(v) < 0 for v in (reps, seconds, weight)):
         raise ValueError("invalid_set_value")
+    if operation_id is not None and (
+        not isinstance(operation_id, str) or not re.fullmatch(r"[a-f0-9]{32}", operation_id)
+        or not owner_id or not actor_id or not isinstance(request_context, str)
+        or not request_context or len(request_context) > 256
+    ):
+        raise ValueError("invalid_set_operation")
+    values_hash = hashlib.sha256(json.dumps(
+        [int(reps), int(seconds), float(weight), bool(is_warmup)],
+        separators=(",", ":"), allow_nan=False,
+    ).encode()).hexdigest()
     async with connect_db() as db:
         await db.execute("BEGIN IMMEDIATE")
+        if operation_id is not None:
+            # Revalidate inside the writer too, including on a replay. A receipt is
+            # evidence of a previous write, never an enduring permission grant.
+            owned = await (await db.execute(
+                "SELECT 1 FROM sessions s JOIN user_exercises ue ON ue.id=? "
+                "WHERE s.id=? AND s.user_id=? AND ue.user_id=?",
+                (user_ex_id, session_id, owner_id, owner_id),
+            )).fetchone()
+            if not owned:
+                raise SetOperationAccessError("set_owner_unavailable")
+            if actor_id != owner_id:
+                permission = await (await db.execute(
+                    "SELECT status,can_edit_plan FROM trainer_links "
+                    "WHERE trainer_user_id=? AND trainee_user_id=? "
+                    "ORDER BY created_at DESC,id DESC LIMIT 1", (actor_id, owner_id),
+                )).fetchone()
+                if not permission or permission[0] != "accepted" or not permission[1]:
+                    raise SetOperationAccessError("set_edit_permission_unavailable")
+            previous = await (await db.execute(
+                "SELECT owner_id,actor_id,session_id,user_exercise_id,request_context,payload_hash,set_id "
+                "FROM set_add_operations WHERE operation_id=?", (operation_id,),
+            )).fetchone()
+            if previous:
+                expected = (owner_id, actor_id, session_id, user_ex_id, request_context, values_hash)
+                if tuple(previous[:6]) != expected:
+                    raise SetOperationConflict("set_operation_conflict")
+                present = await (await db.execute(
+                    "SELECT 1 FROM sets WHERE id=? AND session_id=? AND user_exercise_id=?",
+                    (previous[6], session_id, user_ex_id),
+                )).fetchone()
+                # No update, defaults refresh or activity touch on replay. Return
+                # current rows in the API, preserving later edits and deletion.
+                await db.commit()
+                return {"operation_id": operation_id, "set_id": previous[6],
+                        "session_id": session_id, "replayed": True,
+                        "state": "present" if present else "removed"}
         cur = await db.execute(
             "SELECT COALESCE(MAX(set_no),0)+1 FROM sets WHERE session_id=? AND user_exercise_id=?",
             (session_id, user_ex_id),
         )
         next_no = (await cur.fetchone())[0]
-        await db.execute(
+        inserted = await db.execute(
             """
             INSERT INTO sets(session_id, user_exercise_id, set_no, reps, seconds, weight_kg, is_warmup)
             VALUES(?,?,?,?,?,?,?)
             """,
             (session_id, user_ex_id, next_no, reps, seconds, weight, int(bool(is_warmup))),
         )
+        if operation_id is not None:
+            await db.execute(
+                "INSERT INTO set_add_operations VALUES(?,?,?,?,?,?,?,?,?)",
+                (operation_id, owner_id, actor_id, session_id, user_ex_id, request_context,
+                 values_hash, inserted.lastrowid, datetime.now(UTC).isoformat()),
+            )
         if not is_warmup:
             await _upsert_session_defaults(db, session_id, user_ex_id, reps, seconds, weight)
         from progressor_free_workout import touch
         await touch(db,session_id)
         await db.commit()
+        if operation_id is not None:
+            return {"operation_id": operation_id, "set_id": inserted.lastrowid,
+                    "session_id": session_id, "replayed": False, "state": "present"}
+
 
 async def remove_last_set(user_ex_id: int, session_id: int):
     async with connect_db() as db:
