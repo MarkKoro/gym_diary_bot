@@ -66,3 +66,7 @@ Keep the canonical owner-policy boundary and synchronized progressor_client mirr
 Preserve operation-key retries in Gym /set/add_once (no legacy fallback after an uncertain response), explicit saved-time provenance in Food, and Supply uncertain-delivery suppression (an unknown Telegram response must never trigger a blind retry). Keep native functions available during Core outages.
 
 Read [docs/OPTIONAL_TOUR.md](docs/OPTIONAL_TOUR.md) before changing optional learning or purpose routing. Successful verified owned actions defer automatic tour only for the current document; mandatory onboarding remains required. Closing for an owned task or Escape is not completion. Preserve explicit repeat, step generation guards and the existing Core transfer/interaction checks; raw URL markers are not authorization.
+
+## Free exercise view boundary
+
+The free-card GET resolves an existing session and returns `session_id=0` when none exists; it must not create sessions or running drafts. The first explicit native set/run write creates its parent through the existing writer. Preserve add_once operation receipts and current owner/trainer authorization. This is a workout-parent boundary, not a claim that every GET is SQL-pure: legacy owner profile/program bootstrap and positive numeric free exercise aliases remain for compatibility. Removing those needs a separate identity/API/UI design; do not introduce virtual exercise ids or hidden write fallbacks. See docs/QUALITY_PROGRAM.md.

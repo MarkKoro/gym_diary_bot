@@ -3258,7 +3258,9 @@ async def all_exercise_session(exercise_id: ApiInt, date: str | None = None, ctx
     ue_id = await _get_or_create_free_user_exercise(user_id, exercise_id)
     target_date = _parse_date_param(date)
     iso_date = _iso_date(target_date)
-    session_id = await db.get_or_create_today_session(user_id, iso_date, 0, await get_active_training_system_id(user_id))
+    # Keep the existing numeric exercise alias, but viewing a free card is not a workout.
+    # Native set/run writers create the session on the first explicit saved input.
+    session_id = await db.get_session_for_day(user_id, iso_date, 0, await get_active_training_system_id(user_id)) or 0
     sets_rows = await db.fetch_exercise_sets(session_id, ue_id)
     current_note = await db.get_exercise_persistent_note(user_id, exercise_id)
     previous_sets_rows = await db.fetch_last_session_sets(user_id, 0, ue_id, iso_date, None)

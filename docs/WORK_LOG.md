@@ -84,3 +84,17 @@ Fresh combined browser evidence on runtime-identical source A passed 58 regressi
 These are completed release gates, not proof of a completed deployment or activation. Before publication the four-database off-server restore-tested backup b5c3cc16befec2650b67afb5271210dc1bdb0e70d275b787c3011ff00442734b contains financial2 and owner-consent1; it does not establish next-meal readiness. Install through the existing coordinated updater with next-meal gate absent, verify the completed transaction, new actually running Food/Core services, fresh private Food reset projection, compatible current/updater/fallback and a new compatible backup. Activate next-meal-v1-ready only under both updater locks and then capture/restore-test a post-activation backup containing all three gates. Never remove persistent gates or restore databases over later user writes during ordinary code rollback.
 
 Gym optional learning yields only after successful verified own-purpose/return navigation within the current document. Do not mark onboarding complete, bypass mandatory onboarding, accept unverified query markers, or let an old asynchronous tour step revive a stopped/replaced overlay; explicit repeat remains available.
+
+
+## 2026-10-23 — fourth journey free-card read boundary
+
+Opening a free strength/running card now resolves an existing session and
+returns0 when absent. First explicit set/run writers retain session creation,
+authorization and add_once receipts. Numeric aliases and legacy profile/program
+bootstrap stay compatible; this is not a claim that all GETs are SQL-pure.
+The isolated exact69-file candidate passed58 Linux regressions, separate9-step
+native browser continuation and50 JS checks. A retained Windows run has54
+passes and4 existing SQLite teardown errors; these are not relabelled passes.
+The coordinated canonical cache mirror update preserves Gym's default caller.
+The final assembled source requires its own full Linux gate and backed-up
+normal main update-all deployment; see the task journal for exact results.

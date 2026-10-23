@@ -4,6 +4,12 @@ Status: deployed on 2026-10-08 Asia/Bangkok. Core, all three native bridges/cach
 
 ## Independent services and source ownership
 
+Free exercise viewing resolves an existing workout session only (`session_id=0` when absent).
+It creates no session/run/completion or free-workout activity; explicit native set/run writers
+retain ownership of the first saved input and add_once receipts. Legacy owner bootstrap and
+numeric free exercise aliases still exist, so this does not make every GET fully SQL-pure.
+Core history/projections and the agreed 90-minute free-workout completion policy are unchanged.
+
 Gym, Food, Supply keep independent processes, APIs and databases. The new Core uses its own SQLite at /var/lib/progressor/core.sqlite3 and loopback 8040. Core source is the independently runnable [MarkKoro/progressor_core](https://github.com/MarkKoro/progressor_core) repository, main. The former Gym integrations/progressor_core package is removed. Domain applications do not import Core, share its DB, or depend on its Python environment. The Core updater pulls only this fourth repository; each bot updater pulls its own main.
 
 This domain DB: `/srv/gym_diary_prod/gymdiary.db`. Public routes: /gymapp_prod/; API /gymapi_prod/ -> 8020. Identity: users.id -> users.tg_id; workouts/sessions/measurements.user_id uses the internal id.
