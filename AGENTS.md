@@ -70,3 +70,30 @@ Read [docs/OPTIONAL_TOUR.md](docs/OPTIONAL_TOUR.md) before changing optional lea
 ## Free exercise view boundary
 
 The free-card GET resolves an existing session and returns `session_id=0` when none exists; it must not create sessions or running drafts. The first explicit native set/run write creates its parent through the existing writer. Preserve add_once operation receipts and current owner/trainer authorization. This is a workout-parent boundary, not a claim that every GET is SQL-pure: legacy owner profile/program bootstrap and positive numeric free exercise aliases remain for compatibility. Removing those needs a separate identity/API/UI design; do not introduce virtual exercise ids or hidden write fallbacks. See docs/QUALITY_PROGRAM.md.
+
+
+## Free-session activity provenance — H08 D1
+
+Read docs/FREE_WORKOUT_ACTIVITY_PROOF.md before changing native touch, free
+completion, sessions migration, owner wipe or source clock semantics. Preserve
+the six-column progressor_free_sessions positional-insert contract. Only an
+existing validated current-day touch writes progressor_free_activity_proof with
+the exact source clock/day/zone, proof_version1 and clock_kind=native_touch, in
+the same owner transaction. Equal UPDATE OF last_activity invalidates proof;
+finish's conflict clause must never assign it or backfill proof. Reinstall the
+session-delete trigger after legacy rebuild, and keep explicit scoped wipe
+cleanup because foreign keys are not assumed enabled. No extra commits,
+executescript, Core writer, sender or shared helper mirror is introduced.
+
+The source witness is not operation identity or physical exercise duration.
+Keep add_once replay before touch, both native exercise surfaces, non-draft
+running writes, existing5400-second completion and unknown duration. A no-state
+finish remains recorded_only to the coordinated strict Core reader. Native-only
+tests do not certify full Core proof/admission/owner-reset/rollback behavior;
+publish only as part of the separately reviewed coordinated H08 release.
+
+
+D1 V2 free touch/current use existing progressor_timezone_history.zone, including
+exact UTC offsets up to14:00; preserve the original witness spelling. Reject
+invalid offsets without changing activity. Do not widen independent timezone
+chooser/CAS routes or duplicate the shared parser. See FREE_WORKOUT_ACTIVITY_PROOF.

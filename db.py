@@ -916,8 +916,10 @@ async def _ensure_day_completions_system_scope(db) -> None:
     await db.execute("DROP TABLE day_completions_old")
 
 async def _ensure_sessions_unique_by_day_and_system(db) -> None:
+    from progressor_free_workout import ensure_schema as ensure_free_activity_schema
     desired = ("user_id", "date", "day_index", "system_id")
     if await _has_unique_index(db, "sessions", desired):
+        await ensure_free_activity_schema(db)
         return
     await db.commit()
     foreign_keys = (await (await db.execute("PRAGMA foreign_keys")).fetchone())[0]
@@ -946,6 +948,11 @@ async def _ensure_sessions_unique_by_day_and_system(db) -> None:
         raise
     finally:
         await db.execute(f"PRAGMA foreign_keys={int(foreign_keys)}")
+
+
+    # DROP TABLE sessions also drops its attached cleanup trigger. Reinstall
+    # only after the rebuilt table and all retained session ids are in place.
+    await ensure_free_activity_schema(db)
 
 
 async def _ensure_exercises_user_scope(db) -> None:
@@ -3626,6 +3633,8 @@ async def wipe_user(user_id: int):
     async with connect_db() as db:
         await db.execute("BEGIN IMMEDIATE")
         try:
+            if await (await db.execute("SELECT 1 FROM sqlite_master WHERE name='progressor_free_activity_proof' AND type='table'")).fetchone():
+                await db.execute("DELETE FROM progressor_free_activity_proof WHERE session_id IN (SELECT id FROM sessions WHERE user_id=?)", (user_id,))
             if await (await db.execute("SELECT 1 FROM sqlite_master WHERE name='workout_session_details'")).fetchone():
                 await db.execute("DELETE FROM workout_session_details WHERE session_id IN (SELECT id FROM sessions WHERE user_id=?)",(user_id,))
             await db.execute("DELETE FROM app_meta WHERE key LIKE ?", (f"ai_apply:{user_id}:%",))
