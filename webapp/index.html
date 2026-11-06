@@ -10308,6 +10308,7 @@
         navigateTo('today', true);
         return;
       }
+      if (state.currentRoute !== normalized) closePlanPicker();
       state.currentRoute = normalized;
       window.Progressor?.refreshSurface?.();
       if (normalized !== 'allExercises') {
@@ -11043,7 +11044,7 @@
       if (completed) saveTourCompleted(true);
     }
 
-    document.addEventListener('progressor:overlay-open',()=>{if(state.tour.active)stopTour();});
+    document.addEventListener('progressor:overlay-open',()=>{closePlanPicker();if(state.tour.active)stopTour();});
 
     function getTourTargetRect(step) {
       if (!step?.selector) return null;
@@ -14808,8 +14809,14 @@
       document.getElementById('paywallSheet')?.classList.remove('show');
     }
 
+    let planPickerRequestGeneration = 0;
     async function openPlanPicker() {
+      const generation = ++planPickerRequestGeneration;
+      const originRoute = state.currentRoute;
       if (!(state.subscription.plans || []).length) await loadSubscriptionOverview();
+      // A completed read may fill the cache after its opening intent was cancelled.
+      if (generation !== planPickerRequestGeneration || state.currentRoute !== originRoute
+        || document.querySelector('#progressor-context:not([hidden]),#progressor-connections[open]')) return;
       const wrap = document.getElementById('planPickerContent');
       if (!wrap) return;
       const plans = state.subscription.plans || [];
@@ -14828,6 +14835,7 @@
     }
 
     function closePlanPicker() {
+      ++planPickerRequestGeneration;
       document.getElementById('planPickerSheet')?.classList.remove('show');
     }
 

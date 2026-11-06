@@ -97,3 +97,16 @@ D1 V2 free touch/current use existing progressor_timezone_history.zone, includin
 exact UTC offsets up to14:00; preserve the original witness spelling. Reject
 invalid offsets without changing activity. Do not widen independent timezone
 chooser/CAS routes or duplicate the shared parser. See FREE_WORKOUT_ACTIVITY_PROOF.
+
+
+## Native UI opening ownership — 2026-11-06
+
+Keep the plan-picker opening scoped to its current route and explicit intention.
+Route departure, Close or a canonical Core overlay cancels only that UI opening;
+an already-sent native read may finish its ordinary cache update. Do not claim
+server cancellation or rollback, or add a request replay. Native focus and
+keyboard handling must yield while the canonical Core settings dialog is open.
+Preserve same-origin launch/auth checks, native permissions, equal RUB/Stars
+choices and existing payment/provider confirmation. Core remains the single shared UI;
+this change adds no shared helper or mirror. See docs/PROGRESSOR_INTEGRATION.md
+for the standalone CJS evidence and browser/Python test boundaries.

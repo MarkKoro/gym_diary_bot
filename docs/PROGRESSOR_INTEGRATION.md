@@ -231,3 +231,30 @@ return defers automatic tour for this document and closes an active optional
 overlay without a completion write. Explicit repeat remains available; mandatory
 onboarding, Core account/proof/transfer checks and all D04/D07 safeguards remain.
 This change creates no backend call, data write, AI request or new shared runtime.
+
+
+## Native plan-picker opening ownership — 2026-11-06
+
+An explicit picker opening owns a document-local generation and originating
+native route. Route departure, picker Close and canonical Core overlay opening
+retire that intention. Returning to the old route does not revive it; a fresh
+explicit opening remains available, including the ordinary Today paywall path.
+After the existing native overview finishes, only the current intention may
+reveal the picker, and visible Core surfaces retain UI ownership.
+
+This is UI-intent cancellation. The already-sent native GET may complete its
+ordinary cache update; it is not aborted, retried or represented as a server
+rollback. No save, payment, tariff, owner/auth, same-origin proof or provider
+verification changes. Native focus/keyboard handling yields while the canonical
+Core settings dialog is open; the shared UI and helper copies retain their
+existing single Core source.
+
+The focused standalone Node CJS suite has 14 source-extracted cases using the
+shipped functions with controlled promises and a small DOM model. Retained
+receipts distinguish the old page's 10 failures from the candidate's 14 passes.
+These cases are separate from Python suites. Actual synthetic browser routes
+are separate observations, not extra unique tests, physical Telegram/device
+proof, real persistence/payment/provider evidence, users or a quality score.
+Retain actual synthetic browser observations separately from those suites.
+This contract note and source package do not claim publication or deployment;
+root records bounded route acceptance and any later operational evidence.
