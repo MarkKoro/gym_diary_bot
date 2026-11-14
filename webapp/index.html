@@ -3581,11 +3581,14 @@
         navigateTo(view);return true;
       },
       perform:async action=>{
-        if(action.kind!=='gym_plan' || !state.uiReady || state.onboarding.active || state.acting.userId)return false;
+        if(!['gym_plan','gym_today','gym_free'].includes(action.kind) || !state.uiReady || state.onboarding.active || state.acting.userId)return false;
         const revision=window.Progressor?.interactionRevision?.();
         if(!hasVerifiedOwnGymSubject())await loadViewerRole();
         if(!state.uiReady || state.onboarding.active || state.acting.userId || !hasVerifiedOwnGymSubject() || revision!==window.Progressor?.interactionRevision?.())return false;
         deferAutomaticTourForOwnedTask();
+        // gym_today and gym_free open the two existing workout surfaces; gym_plan keeps the plan editor.
+        if(action.kind==='gym_today'){navigateTo('today');return true;}
+        if(action.kind==='gym_free'){navigateTo('allExercises');return true;}
         state.settings.pendingView='plan';
         navigateTo('settings');
         return true;
