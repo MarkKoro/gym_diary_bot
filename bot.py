@@ -353,19 +353,19 @@ SUBSCRIPTION_PLANS = {
         "title": "Подписка на 1 месяц",
         "months": 1,
         "days": 30,
-        "amount_rub": 100,
+        "amount_rub": 199,
     },
     "6m": {
         "title": "Подписка на 6 месяцев",
         "months": 6,
         "days": 180,
-        "amount_rub": 600,
+        "amount_rub": 1190,
     },
     "12m": {
         "title": "Подписка на 12 месяцев",
         "months": 12,
         "days": 365,
-        "amount_rub": 1000,
+        "amount_rub": 1990,
     },
 }
 

@@ -214,9 +214,9 @@ STAR_RUB_RATE = 1.79
 STAR_MARKUP = 1.10
 
 SUBSCRIPTION_PLANS = {
-    '1m': {'title': '1 месяц', 'days': 30, 'amount_rub': 100},
-    '6m': {'title': '6 месяцев', 'days': 180, 'amount_rub': 600},
-    '12m': {'title': '12 месяцев', 'days': 365, 'amount_rub': 1000},
+    '1m': {'title': '1 месяц', 'days': 30, 'amount_rub': 199},
+    '6m': {'title': '6 месяцев', 'days': 180, 'amount_rub': 1190},
+    '12m': {'title': '12 месяцев', 'days': 365, 'amount_rub': 1990},
 }
 
 
