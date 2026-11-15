@@ -24,6 +24,41 @@
     return new Set(Array.isArray(saved) ? saved.filter(id => modules.some(m => m.id === id)) : modules.filter(m => m.on).map(m => m.id));
   }
   function save(set) { try { localStorage.setItem(modulesKey, JSON.stringify([...set])); } catch {} }
+  const orderKey = 'gym.ui2.order';
+  function ordered() {
+    let saved = null; try { saved = JSON.parse(localStorage.getItem(orderKey) || 'null'); } catch {}
+    const ids = Array.isArray(saved) ? saved.filter(id => modules.some(m => m.id === id)) : [];
+    return [...ids.map(id => modules.find(m => m.id === id)), ...modules.filter(m => !ids.includes(m.id))];
+  }
+  // Drag a row by its handle; the list order is the order of blocks on the screen.
+  function draggable(list) {
+    let row = null;
+    const move = event => {
+      if (!row) return;
+      event.preventDefault();
+      const rows = [...list.querySelectorAll('[data-module]')].filter(item => item !== row);
+      const next = rows.find(item => { const box = item.getBoundingClientRect(); return event.clientY < box.top + box.height / 2; });
+      if (next) list.insertBefore(row, next); else list.append(row);
+    };
+    const drop = () => {
+      if (!row) return;
+      row.classList.remove('u2-dragging'); row = null;
+      try { localStorage.setItem(orderKey, JSON.stringify([...list.querySelectorAll('[data-module]')].map(item => item.dataset.module))); } catch {}
+      paint();
+    };
+    list.addEventListener('pointerdown', event => {
+      const grip = event.target.closest('.u2-grip'); if (!grip) return;
+      event.preventDefault(); row = grip.closest('[data-module]'); row.classList.add('u2-dragging'); grip.setPointerCapture?.(event.pointerId);
+    });
+    list.addEventListener('pointermove', move); list.addEventListener('pointerup', drop); list.addEventListener('pointercancel', drop);
+    // Keyboard and assistive order change.
+    list.addEventListener('keydown', event => {
+      const grip = event.target.closest('.u2-grip'); if (!grip || !['ArrowUp', 'ArrowDown'].includes(event.key)) return;
+      event.preventDefault(); const item = grip.closest('[data-module]'), other = event.key === 'ArrowUp' ? item.previousElementSibling : item.nextElementSibling;
+      if (!other) return; if (event.key === 'ArrowUp') list.insertBefore(item, other); else list.insertBefore(other, item);
+      row = item; drop(); item.querySelector('.u2-grip')?.focus();
+    });
+  }
   let built = false, home = null, seg = null, plan = null, shade = null, timer = 0;
   async function loadPlan() {
     try { const response = await fetch('/gymapi_prod/day/today', {cache: 'no-store'}); if (response.ok) plan = await response.json(); } catch {}
@@ -43,15 +78,16 @@
   function openModules() {
     closeSheet();
     const set = enabled();
-    const sheet = el('div', {class: 'u2-sheet', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Мой экран'}, el('h3', null, 'Мой экран'), el('p', null, 'Что показывать на главном экране зала.'),
-      el('button', {type: 'button', class: 'u2-toggle', 'aria-pressed': 'true', disabled: true}, el('span', null, 'Тренировка дня'), el('span', null, 'всегда')),
-      ...modules.map(module => {
-        const button = el('button', {type: 'button', class: 'u2-toggle', 'aria-pressed': String(set.has(module.id)), onclick: () => {
-          if (set.has(module.id)) set.delete(module.id); else set.add(module.id);
-          save(set); button.setAttribute('aria-pressed', String(set.has(module.id))); button.lastChild.textContent = set.has(module.id) ? 'вкл' : 'выкл'; paint();
-        }}, el('span', null, module.title), el('span', null, set.has(module.id) ? 'вкл' : 'выкл'));
-        return button;
-      }),
+    const list = el('div', {class: 'u2-order'}, ...ordered().map(module => {
+      const button = el('button', {type: 'button', class: 'u2-toggle', 'aria-pressed': String(set.has(module.id)), onclick: () => {
+        if (set.has(module.id)) set.delete(module.id); else set.add(module.id);
+        save(set); button.setAttribute('aria-pressed', String(set.has(module.id))); button.lastChild.textContent = set.has(module.id) ? 'вкл' : 'выкл'; paint();
+      }}, el('span', null, module.title), el('span', null, set.has(module.id) ? 'вкл' : 'выкл'));
+      return el('div', {class: 'u2-order-row', 'data-module': module.id}, el('button', {type: 'button', class: 'u2-grip', 'aria-label': `Переместить «${module.title}». Стрелки вверх и вниз меняют порядок`}, '⋮⋮'), button);
+    }));
+    draggable(list);
+    const sheet = el('div', {class: 'u2-sheet', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Мой экран'}, el('h3', null, 'Мой экран'), el('p', null, 'Включайте блоки и перетаскивайте их за ручку слева — в таком порядке они встанут на главном экране зала.'),
+      el('button', {type: 'button', class: 'u2-toggle', 'aria-pressed': 'true', disabled: true}, el('span', null, 'Тренировка дня'), el('span', null, 'всегда')), list,
       el('button', {type: 'button', class: 'btn primary', style: 'width:100%;margin-top:14px', onclick: closeSheet}, 'Готово'));
     shade = el('div', {class: 'u2-shade', onclick: event => { if (event.target === shade) closeSheet(); }}, sheet);
     document.body.append(shade);
@@ -70,7 +106,7 @@
       el('div', {class: 'u2-actions'}, list.length ? el('button', {type: 'button', onclick: start}, done && done < list.length ? 'Продолжить' : done ? 'Открыть' : 'Начать') : el('button', {type: 'button', onclick: () => go('allExercises')}, 'Свободная тренировка'),
         list.length ? el('button', {type: 'button', onclick: () => go('allExercises')}, 'Свободная') : el('button', {type: 'button', onclick: () => go('settings')}, 'План')));
     const blocks = [];
-    for (const module of modules) {
+    for (const module of ordered()) {
       if (!set.has(module.id)) continue;
       if (module.id === 'week') { if (days.length) blocks.push(el('div', {class: 'u2-row tint'}, el('span', null, el('b', null, 'На этой неделе осталось'), el('small', null, `тренировочных дней в цикле: ${days.length}`)), el('em', null, `${Math.max(0, days.length - finished)} из ${days.length}`))); continue; }
       if (module.id === 'volume') { const text = document.getElementById('finishTotal')?.textContent.split(':')[1]?.trim(); blocks.push(el('div', {class: 'u2-row tint'}, el('span', null, el('b', null, 'Объём за сегодня')), el('em', null, text || '0 кг'))); continue; }
@@ -94,9 +130,9 @@
     const title = document.getElementById('dayTitle');
     if (title) new MutationObserver(schedule).observe(title, {childList: true, characterData: true, subtree: true});
     window.addEventListener('hashchange', schedule);
-    // The page follows Telegram's dark scheme; the shared look is light, so pin the page's own light rules.
-    const pin = () => { if (root.dataset.pgUi === '2' && root.dataset.theme !== 'light') root.dataset.theme = 'light'; };
-    new MutationObserver(pin).observe(root, {attributes: true, attributeFilter: ['data-theme']}); pin();
+    // The page's own light or dark rules follow the shared scheme, so its hard-coded colours match the tokens.
+    const pin = () => { const want = root.dataset.pgScheme === 'dark' ? 'dark' : 'light'; if (root.dataset.pgUi === '2' && root.dataset.theme !== want) root.dataset.theme = want; };
+    new MutationObserver(pin).observe(root, {attributes: true, attributeFilter: ['data-theme', 'data-pg-scheme']}); pin();
     paint(); void loadPlan();
   }
   function apply(on) {
