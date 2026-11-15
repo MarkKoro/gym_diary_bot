@@ -98,3 +98,14 @@ passes and4 existing SQLite teardown errors; these are not relabelled passes.
 The coordinated canonical cache mirror update preserves Gym's default caller.
 The final assembled source requires its own full Linux gate and backed-up
 normal main update-all deployment; see the task journal for exact results.
+
+## Shared Progressor look — 2026-11-15
+
+The page gained the shared light look (ui2), enabled per account by the Core
+session field `home` and remembered in localStorage `progressor.ui`. Rules are
+scoped to html[data-pg-ui="2"]; removing the flag returns the previous interface.
+The Core shell hides its top bar on such pages and shows one bottom tab bar.
+Evidence and limits are in the commit messages: Node suites and a desktop
+browser against canned answers only; Playwright, Linux Python suites on a
+workstation and physical Telegram devices were not run by the author. The
+coordinated updater ran each repository's own checks before switching.
