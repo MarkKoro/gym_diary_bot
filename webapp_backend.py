@@ -2265,6 +2265,21 @@ async def day_today(ctx: AuthCtx = Depends(get_auth_ctx)):
     }
 
 
+@app.get("/day/start_hint")
+async def day_start_hint(ctx: AuthCtx = Depends(get_auth_ctx)):
+    """Which kind of workout the person actually records: the plan or free sessions.
+
+    Read-only. Only sessions that contain at least one set count, most recent twelve.
+    """
+    async with db.connect_db() as conn:
+        rows = await (await conn.execute(
+            "SELECT s.day_index FROM sessions s WHERE s.user_id=? AND EXISTS(SELECT 1 FROM sets WHERE sets.session_id=s.id) "
+            "ORDER BY s.date DESC, s.id DESC LIMIT 12", (ctx.user_id,))).fetchall()
+    free = sum(1 for row in rows if int(row[0] or 0) == 0)
+    plan = len(rows) - free
+    return {"preferred": "free" if free > plan else "plan" if plan else None, "free_sessions": free, "plan_sessions": plan, "sample": len(rows)}
+
+
 @app.get("/day/{day_index}/sheet")
 async def day_sheet(
     day_index: ApiInt,
