@@ -58,7 +58,6 @@ html[data-pg-ui="2"] .u2-order-row{display:flex;align-items:stretch;gap:6px;marg
 html[data-pg-ui="2"] .u2-order-row .u2-toggle{margin-top:0;flex:1}
 html[data-pg-ui="2"] .u2-grip{flex:none;width:44px;border:0;border-radius:14px;background:var(--pg-surface,#F3F4F7);color:var(--pg-muted,#6B7585);font-size:16px;letter-spacing:-2px;cursor:grab;touch-action:none}
 html[data-pg-ui="2"] .u2-dragging{opacity:.85;transform:scale(1.02);box-shadow:0 14px 30px rgba(10,12,18,.22);border-radius:16px;position:relative;z-index:1}
-html[data-pg-ui="2"] .u2-hero,html[data-pg-ui="2"] .u2-tile{transform-style:preserve-3d;will-change:transform}
 /* Sets as a table: number, previous result, weight, repetitions, mark. */
 html[data-pg-ui="2"] .sets-list.u2-sets{background:var(--pg-surface,#F3F4F7);border-radius:18px;padding:8px;gap:2px}
 html[data-pg-ui="2"] .u2-set{display:grid;grid-template-columns:28px 1.3fr 1fr 1fr 30px;gap:6px;align-items:center;text-align:center;min-height:46px;padding:0 6px;border-radius:12px;color:var(--pg-text,#10131A)}
