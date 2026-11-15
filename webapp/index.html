@@ -11636,6 +11636,8 @@
         return;
       }
       const previousSets = ctx.data?.previous_sets || [];
+      // The table shows the previous result per set; redraw it once that result has arrived.
+      if (document.documentElement.dataset.pgUi === '2' && ui2PreviousShown !== `${exercise.user_exercise_id}:${previousSets.length}` && document.getElementById('setsList')?.classList.contains('u2-sets')) renderSetsList(exercise);
       if (previousSets.length && !exercise.sets?.length && !state.draftDirty[exercise.user_exercise_id]) {
         const latest = previousSets[previousSets.length - 1];
         applyDraftFromSet(exercise.user_exercise_id, latest);
@@ -15917,9 +15919,42 @@
       if (row) row.scrollIntoView({ behavior: 'smooth', block: 'center' });
     }
 
+    // Shared look: sets as a table with the previous result beside each one.
+    let ui2PreviousShown = '';
+    function renderSetsTable(exercise, list) {
+      const ctx = getOrCreateContext(exercise.user_exercise_id);
+      const previous = ctx.loaded && !ctx.error ? (ctx.data?.previous_sets || []) : [];
+      ui2PreviousShown = `${exercise.user_exercise_id}:${previous.length}`;
+      const cell = (text, className) => { const node = document.createElement('div'); node.className = className; node.textContent = text; return node; };
+      const brief = set => !set ? '—' : Number(set.seconds) > 0 && !Number(set.reps) ? `${set.seconds} сек` : `${Number(set.weight_kg) || 0}×${Number(set.reps) || 0}`;
+      const head = document.createElement('div'); head.className = 'u2-set u2-set-head';
+      head.append(cell('', 'u2-set-no'), cell('прошлый', 'u2-set-prev'), cell('кг', 'u2-set-num'), cell(exercise.sets.some(s => Number(s.seconds) > 0 && !Number(s.reps)) ? 'сек' : 'повт.', 'u2-set-num'), cell('', 'u2-set-mark'));
+      list.append(head);
+      const total = Math.max(exercise.sets.length, previous.length);
+      for (let index = 0; index < total; index++) {
+        const set = exercise.sets[index], row = document.createElement('div');
+        row.className = 'u2-set' + (set ? ' done' : index === exercise.sets.length ? ' next' : '');
+        const timed = set && Number(set.seconds) > 0 && !Number(set.reps);
+        row.append(cell(String(set ? set.set_no : index + 1), 'u2-set-no'), cell(brief(previous[index]), 'u2-set-prev'),
+          cell(set ? String(Number(set.weight_kg) || 0) : '—', 'u2-set-num'), cell(set ? String(timed ? set.seconds : set.reps) : '—', 'u2-set-num'), cell('', 'u2-set-mark'));
+        if (set) {
+          row.dataset.setNo = set.set_no; row.setAttribute('role', 'button'); row.tabIndex = 0;
+          row.setAttribute('aria-label', `Подход ${set.set_no}: ${brief(set)}. Изменить`);
+          if (set.set_no === state.editor.flashSet) row.classList.add('flash');
+          if (set.set_no === state.editor.selectedSet) row.classList.add('selected');
+          row.addEventListener('click', () => selectSet(set.set_no));
+          row.addEventListener('keydown', event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); selectSet(set.set_no); } });
+        }
+        list.append(row);
+      }
+      if (!total) list.append(cell('Подходов пока нет. Задайте вес и повторы ниже и добавьте первый.', 'u2-set-empty'));
+    }
+
     function renderSetsList(exercise) {
       const list = document.getElementById('setsList');
       list.innerHTML = '';
+      list.classList.toggle('u2-sets', document.documentElement.dataset.pgUi === '2');
+      if (document.documentElement.dataset.pgUi === '2') { renderSetsTable(exercise, list); return; }
       exercise.sets.forEach((s) => {
         const row = document.createElement('div');
         row.className = 'set-row';
