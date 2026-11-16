@@ -2280,6 +2280,32 @@ async def day_start_hint(ctx: AuthCtx = Depends(get_auth_ctx)):
     return {"preferred": "free" if free > plan else "plan" if plan else None, "free_sessions": free, "plan_sessions": plan, "sample": len(rows)}
 
 
+@app.get("/stats/records")
+async def stats_records(ctx: AuthCtx = Depends(get_auth_ctx)):
+    """Personal records of the last 30 days: a working weight above everything recorded before.
+
+    Read-only. Warm-up sets and sets without repetitions do not count; a first-ever result is not a record.
+    """
+    since = (datetime.now() - timedelta(days=30)).date().isoformat()
+    async with db.connect_db() as conn:
+        rows = await (await conn.execute(
+            """
+            SELECT e.name,
+                   MAX(CASE WHEN s.date>=? THEN st.weight_kg END) AS recent,
+                   MAX(CASE WHEN s.date<? THEN st.weight_kg END) AS before,
+                   MAX(CASE WHEN s.date>=? THEN s.date END) AS last_date
+            FROM sets st
+            JOIN sessions s ON s.id=st.session_id
+            JOIN user_exercises ue ON ue.id=st.user_exercise_id
+            JOIN exercises e ON e.id=ue.exercise_id
+            WHERE s.user_id=? AND ue.user_id=? AND COALESCE(st.is_warmup,0)=0 AND st.reps>0 AND st.weight_kg>0
+            GROUP BY e.id
+            HAVING recent IS NOT NULL AND before IS NOT NULL AND recent>before
+            ORDER BY (recent-before)/before DESC, e.name LIMIT 5
+            """, (since, since, since, ctx.user_id, ctx.user_id))).fetchall()
+    return {"since": since, "records": [{"name": str(r[0] or ""), "weight_kg": float(r[1]), "previous_kg": float(r[2]), "date": r[3]} for r in rows]}
+
+
 @app.get("/day/{day_index}/sheet")
 async def day_sheet(
     day_index: ApiInt,

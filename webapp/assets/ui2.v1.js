@@ -14,6 +14,7 @@
   const modules = [
     {id: 'week', title: 'Остаток недели', on: true},
     {id: 'volume', title: 'Объём за сегодня', on: false},
+    {id: 'records', title: 'Личные рекорды', on: true},
     {id: 'stats', title: 'Статистика упражнений', on: false, open: () => go('library')},
     {id: 'measure', title: 'Замеры тела', on: false, open: () => go('measurements')},
     {id: 'awards', title: 'Достижения', on: false, open: () => go('achievements')},
@@ -59,9 +60,11 @@
       row = item; drop(); item.querySelector('.u2-grip')?.focus();
     });
   }
-  let built = false, home = null, seg = null, plan = null, shade = null, timer = 0;
+  let built = false, home = null, seg = null, plan = null, records = null, shade = null, timer = 0;
   async function loadPlan() {
     try { const response = await fetch('/gymapi_prod/day/today', {cache: 'no-store'}); if (response.ok) plan = await response.json(); } catch {}
+    paint();
+    try { const response = await fetch('/gymapi_prod/stats/records', {cache: 'no-store'}); if (response.ok) records = (await response.json()).records || []; } catch {}
     paint();
   }
   function cards() {
@@ -110,6 +113,13 @@
       if (!set.has(module.id)) continue;
       if (module.id === 'week') { if (days.length) blocks.push(el('div', {class: 'u2-row tint'}, el('span', null, el('b', null, 'На этой неделе осталось'), el('small', null, `тренировочных дней в цикле: ${days.length}`)), el('em', null, `${Math.max(0, days.length - finished)} из ${days.length}`))); continue; }
       if (module.id === 'volume') { const text = document.getElementById('finishTotal')?.textContent.split(':')[1]?.trim(); blocks.push(el('div', {class: 'u2-row tint'}, el('span', null, el('b', null, 'Объём за сегодня')), el('em', null, text || '0 кг'))); continue; }
+      if (module.id === 'records') {
+        const number = value => Number(value).toLocaleString('ru-RU', {maximumFractionDigits: 1});
+        if (records && records.length) blocks.push(el('div', {class: 'u2-row tint u2-records'}, el('span', null, el('b', null, 'Рекорды за 30 дней'),
+          ...records.slice(0, 3).map(item => el('small', null, `${item.name}: ${number(item.weight_kg)} кг (было ${number(item.previous_kg)})`)))));
+        else if (records) blocks.push(el('div', {class: 'u2-row tint'}, el('span', null, el('b', null, 'Рекорды за 30 дней'), el('small', null, 'Пока нет. Рекорд — рабочий вес выше всех прошлых записей.'))));
+        continue;
+      }
       blocks.push(el('button', {type: 'button', class: 'u2-row', onclick: module.open}, el('span', null, el('b', null, module.title)), el('span', {'aria-hidden': 'true'}, '›')));
     }
     home.replaceChildren(hero, ...blocks, el('button', {type: 'button', class: 'u2-add', onclick: openModules}, 'Настроить экран'));

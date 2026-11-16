@@ -117,3 +117,7 @@ same muscle group when known), and the old exercise leaves the day only after
 the new one is saved. Client-only, built on the existing add and toggle routes.
 Evidence: script syntax check and the unchanged Python suite; the flow itself
 was not exercised in a browser or on a phone.
+
+Later the same day: `GET /stats/records` (working weight above all earlier ones within
+30 days, read-only) and the "Личные рекорды" block on the ui2 Today screen.
+Evidence: `tests/test_stats_records.py`.
