@@ -121,3 +121,6 @@ was not exercised in a browser or on a phone.
 Later the same day: `GET /stats/records` (working weight above all earlier ones within
 30 days, read-only) and the "Личные рекорды" block on the ui2 Today screen.
 Evidence: `tests/test_stats_records.py`.
+
+## 2026-11-16 — убраны упоминания рекламных рассылок
+- `bot.py`, `webapp_backend.py`: из описания подписки убраны фразы про «рекламные рассылки» (сайт обещает отсутствие рекламы в приложении). Описание подписки теперь перечисляет реальные возможности: ИИ-функции, своя команда, больше подопечных и систем. Логика не менялась.
