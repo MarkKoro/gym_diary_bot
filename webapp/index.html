@@ -613,6 +613,7 @@
       }
       .exercise-card { cursor: pointer; position: relative; background: color-mix(in srgb, var(--card) 92%, var(--bg)); }
     .exercise-card.delete-mode { cursor: default; }
+    .exercise-swap-btn { border: 0; font: inherit; font-size: 13px; font-weight: 600; padding: 8px 12px; border-radius: 12px; background: rgba(127,127,127,0.16); color: inherit; cursor: pointer; margin-right: 8px; }
     .exercise-delete-btn {
         width: 44px;
         height: 44px;
@@ -2724,7 +2725,7 @@
             </button>
             <div id="manageMenu" class="manage-menu" role="menu" aria-hidden="true">
               <button type="button" data-action="add">Добавить упражнение</button>
-              <button type="button" data-action="delete">Удалить упражнение</button>
+              <button type="button" data-action="delete">Удалить или заменить упражнение</button>
               <button type="button" data-action="timer">Включить таймер</button>
               <button type="button" data-action="ai">Прогрессируем вместе с ИИ</button>
             </div>
@@ -12763,6 +12764,16 @@
           handleExerciseDelete(exercise);
         });
         headerMeta.remove();
+        if (state.dayIndex && !isAllExercisesEditorContext()) {
+          // Replace = pick another exercise in the add sheet; the old one leaves the day only after the new one is saved.
+          const swapBtn = document.createElement('button');
+          swapBtn.type = 'button';
+          swapBtn.className = 'exercise-swap-btn';
+          swapBtn.textContent = 'Заменить';
+          swapBtn.setAttribute('aria-label', `Заменить упражнение «${exercise.name || ''}» другим`);
+          swapBtn.addEventListener('click', (ev) => { ev.stopPropagation(); startExerciseReplace(exercise); });
+          header.appendChild(swapBtn);
+        }
         header.appendChild(delBtn);
       }
 
@@ -12905,6 +12916,23 @@
         });
       }
       updateFinishButton();
+    }
+
+    async function startExerciseReplace(exercise) {
+      openManageAddSheet();
+      state.manage.replace = { exerciseId: Number(exercise.exercise_id), name: String(exercise.name || ''), dayIndex: Number(state.dayIndex) };
+      toast(`Выберите замену для «${exercise.name || 'упражнения'}»`);
+      // Open the same muscle group straight away when the catalog knows it.
+      const wanted = String(exercise.group || exercise.muscle_group || '').trim();
+      for (let tries = 0; wanted && tries < 20 && state.manage.replace; tries += 1) {
+        const groups = state.manage.add.groups || [];
+        if (groups.length && !state.manage.add.loading) {
+          const group = groups.find((g) => String(g.code) === wanted);
+          if (group && state.manage.add.view === 'groups') openManageGroup(group);
+          break;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 150));
+      }
     }
 
     async function handleExerciseDelete(exercise) {
@@ -13678,6 +13706,21 @@
           body: JSON.stringify({ exercise_id: exerciseId }),
         });
         state.manage.add.selectedIds.add(exerciseId);
+        const replace = state.manage.replace;
+        if (replace && Number(replace.dayIndex) === Number(dayIndex) && Number(replace.exerciseId) !== Number(exerciseId)) {
+          state.manage.replace = null;
+          let removed = false;
+          try {
+            const data = await apiFetch(`/gymapi/day/${dayIndex}/exercise/${replace.exerciseId}/toggle`, { method: 'POST' });
+            removed = !data?.enabled;
+            // The toggle re-enabled an exercise that was already gone: put it back to "removed".
+            if (!removed) { await apiFetch(`/gymapi/day/${dayIndex}/exercise/${replace.exerciseId}/toggle`, { method: 'POST' }); removed = true; }
+          } catch (_) {}
+          closeManageAddSheet();
+          await loadSheet(state.dayIndex);
+          toast(removed ? `Заменено: «${replace.name}» убрано из дня` : `Новое упражнение добавлено, но «${replace.name}» убрать не удалось`);
+          return;
+        }
         if (row) {
           row.classList.add('added');
           if (!row.querySelector('.manage-check')) {
@@ -13725,6 +13768,7 @@
     function closeManageAddSheet(opts = {}) {
       const { keepMode = false } = opts;
       state.manage.add.open = false;
+      state.manage.replace = null;
       document.getElementById('manageExerciseSheet').classList.remove('show');
       closeManageDayPicker();
       if (!keepMode) setManageMode('normal');

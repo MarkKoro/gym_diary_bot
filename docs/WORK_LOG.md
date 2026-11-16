@@ -109,3 +109,11 @@ Evidence and limits are in the commit messages: Node suites and a desktop
 browser against canned answers only; Playwright, Linux Python suites on a
 workstation and physical Telegram devices were not run by the author. The
 coordinated updater ran each repository's own checks before switching.
+
+## 2026-11-16 — Replace an exercise inside a workout day
+
+The delete mode of a plan day now has "Заменить": the add sheet opens (on the
+same muscle group when known), and the old exercise leaves the day only after
+the new one is saved. Client-only, built on the existing add and toggle routes.
+Evidence: script syntax check and the unchanged Python suite; the flow itself
+was not exercised in a browser or on a phone.
