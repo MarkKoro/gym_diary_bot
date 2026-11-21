@@ -5057,10 +5057,10 @@ MEASUREMENT_ITEMS = [
     ),
     _measurement_item(
         "wod_time_sec",
-        "Время WOD (сек)",
+        "Время комплекса (сек)",
         "records",
         "",
-        prompt="Укажи время WOD в формате ММ:СС или ЧЧ:ММ:СС.",
+        prompt="Укажи время комплекса в формате ММ:СС или ЧЧ:ММ:СС.",
         item_type="duration",
     ),
     _measurement_item(
@@ -8090,7 +8090,7 @@ async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text = "<b>Stats</b>\n<code>" + json.dumps(data, ensure_ascii=False, indent=2) + "</code>"
         await update.effective_message.reply_html(text)
     except Exception as exc:
-        await update.effective_message.reply_text(f"stats error: {exc!s}")
+        await update.effective_message.reply_text(f"Ошибка статистики: {exc!s}")
 
 
 async def splash_reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -8118,7 +8118,7 @@ async def ai_pass_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = await get_or_create_user(user.id, user.username)
     removed = await reset_ai_coach_quota(user_id)
     await message.reply_text(
-        f"AI-квота сброшена. Удалено записей: {removed}. Теперь можно снова делать запросы в webapp."
+        f"Лимит ИИ сброшен. Удалено записей: {removed}. Теперь можно снова делать запросы в приложении."
     )
 
 
@@ -8645,12 +8645,12 @@ async def on_subscription_choose(update: Update, context: ContextTypes.DEFAULT_T
             query,
             context,
             (
-                f"Оплата тарифа «{title}» в RUB откроется на защищённой странице YooKassa.\n"
+                f"Оплата тарифа «{title}» в рублях откроется на защищённой странице ЮKassa.\n"
                 "Это основной сценарий оплаты рублями.\n"
-                "Stars остаются внутри Telegram."
+                "Оплата звёздами остаётся внутри Telegram."
             ),
             InlineKeyboardMarkup([
-                [InlineKeyboardButton("💳 Открыть оплату RUB", web_app=WebAppInfo(payment_url))],
+                [InlineKeyboardButton("💳 Открыть оплату в рублях", web_app=WebAppInfo(payment_url))],
                 [InlineKeyboardButton("⬅️ Назад", callback_data="back:main")],
             ]),
             db_user_id,
@@ -8661,9 +8661,9 @@ async def on_subscription_choose(update: Update, context: ContextTypes.DEFAULT_T
         payload = f"setsubstars:{db_user_id}:{plan_code}:{secrets.token_hex(8)}"
         currency = "XTR"
         amount = plan_amount_stars(plan["amount_rub"])
-        prices = [LabeledPrice(label=f"{title} · Stars", amount=amount)]
+        prices = [LabeledPrice(label=f"{title} · звёзды", amount=amount)]
         provider_token = ""
-        description = "Оплата подписки в Telegram Stars"
+        description = "Оплата подписки звёздами Telegram"
         payment_payload = {"plan": plan_code, "payment_method": "stars"}
 
     await create_payment_record(
@@ -8744,8 +8744,8 @@ async def show_subscription_overview(
     else:
         lines.append("Подписка не оформлена.")
     lines.append("")
-    lines.append("Оплата в RUB проходит на защищённой внешней странице YooKassa через WebApp.")
-    lines.append("Telegram Stars остаются доступными и оплачиваются прямо в Telegram.")
+    lines.append("Оплата в рублях проходит на защищённой внешней странице ЮKassa через приложение.")
+    lines.append("Оплата звёздами Telegram тоже доступна — прямо в Telegram.")
     rows: list[list[InlineKeyboardButton]] = []
     if TG_TOKEN:
         for code, plan in SUBSCRIPTION_PLANS.items():
@@ -8773,13 +8773,13 @@ async def start_subscription_payment(
 
     payment_url = build_webapp_payment_url(plan_code)
     text = (
-        f"Оплата тарифа «{plan['title']}» в рублях откроется во внешнем защищённом окне YooKassa.\n"
-        "Это основной способ оплаты RUB.\n"
-        "Оплата Stars остаётся внутри Telegram."
+        f"Оплата тарифа «{plan['title']}» в рублях откроется во внешнем защищённом окне ЮKassa.\n"
+        "Это основной способ оплаты в рублях.\n"
+        "Оплата звёздами остаётся внутри Telegram."
     )
     kb = InlineKeyboardMarkup(
         [
-            [InlineKeyboardButton("💳 Перейти к оплате RUB", web_app=WebAppInfo(payment_url))],
+            [InlineKeyboardButton("💳 Перейти к оплате в рублях", web_app=WebAppInfo(payment_url))],
             [InlineKeyboardButton(BACK_BTN, callback_data="set:subscription")],
         ]
     )
@@ -8821,10 +8821,10 @@ async def start_subscription_payment_stars(
         await context.bot.send_invoice(
             chat_id=tg_user_id,
             title=f"Подписка — {plan['title']}",
-            description="Оплата подписки в Telegram Stars",
+            description="Оплата подписки звёздами Telegram",
             payload=payload,
             currency="XTR",
-            prices=[LabeledPrice(label=f"{plan['title']} · Stars", amount=stars_amount)],
+            prices=[LabeledPrice(label=f"{plan['title']} · звёзды", amount=stars_amount)],
             provider_token="",
         )
     except Exception:
@@ -8849,7 +8849,7 @@ def wizard_catalog_text(day: int, group: str, prefs: UiPreferences) -> str:
         "metcon": (
             "День {day}. Выбери формат меткона.",
             "День {day}: меткон.",
-            "AMRAP — на раунды, For Time — на время.",
+            "«На раунды» — максимум раундов за отведённое время, «На время» — комплекс на скорость.",
         ),
     }
     detailed, _compact, hint = templates.get(group, ("", "", ""))
@@ -8866,8 +8866,8 @@ def enrich_metcon_keyboard(
     ex_rows: list[tuple[int, str]],
 ) -> InlineKeyboardMarkup:
     quick_map = [
-        (AMRAP_EXERCISE_NAME, "AMRAP"),
-        (FOR_TIME_EXERCISE_NAME, "For Time"),
+        (AMRAP_EXERCISE_NAME, "На раунды"),
+        (FOR_TIME_EXERCISE_NAME, "На время"),
     ]
     option_rows: list[list[InlineKeyboardButton]] = []
     nav_rows: list[list[InlineKeyboardButton]] = []
@@ -14235,7 +14235,7 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 kb = InlineKeyboardMarkup(
                     [[InlineKeyboardButton(t("BACK"), callback_data=f"ex:view:{day}:{ue_id}")]]
                 )
-                await show_screen(q, context, 'Напиши схему WOD. Оставь пусто, чтобы очистить.', kb, target_user_id)
+                await show_screen(q, context, 'Напиши схему комплекса. Оставь пусто, чтобы очистить.', kb, target_user_id)
                 return
             if action == "webappoff":
                 await set_webapp_prompt_suppressed(target_user_id, True)
@@ -14279,14 +14279,14 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     ex_id, ex_name, ex_group = await get_exercise_info(ue_id)
                     resolved_group = resolve_group(ex_name, ex_group)
                     prompt_text = (
-                        "Внимание! Записывать свою тренировку внутри WebApp намного удобнее, "
+                        "Внимание! Записывать свою тренировку в приложении намного удобнее, "
                         "поэтому мы предлагаем вам делать это там."
                     )
                     kb = InlineKeyboardMarkup(
                         [
                             [
                                 InlineKeyboardButton(
-                                    "Открыть WebApp", web_app=WebAppInfo(WEBAPP_URL)
+                                    "Открыть приложение", web_app=WebAppInfo(WEBAPP_URL)
                                 )
                             ],
                             [InlineKeyboardButton("Открыть в боте", callback_data=f"ex:view:{day}:{ue_id}:bot")],

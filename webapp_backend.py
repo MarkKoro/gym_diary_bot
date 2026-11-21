@@ -202,6 +202,55 @@ ANATOMY_MUSCLE_CODES = {
 ApiInt = Annotated[int, Field(ge=-(2**63), le=2**63-1)]
 
 app = FastAPI(title="GymDiary WebApp backend")
+
+# Internal error codes stay stable for code paths and tests; users see Russian text.
+_RU_ERROR_DETAILS = {
+    'already_in_team': 'Вы уже состоите в команде',
+    'name_length_2_32': 'Название команды — от 2 до 32 символов',
+    'code_required': 'Укажите код команды',
+    'team_not_found': 'Команда не найдена',
+    'team_closed': 'Команда закрыта — отправьте заявку на вступление',
+    'team_open_use_direct_join': 'Команда открыта — вступайте без заявки',
+    'team_full': 'В команде нет свободных мест',
+    'team_name_required': 'Укажите название команды',
+    'founder_only': 'Это может сделать только основатель команды',
+    'captain_only': 'Доступно только капитану команды',
+    'not_team_captain': 'Это может сделать только капитан команды',
+    'remove_member_failed': 'Не удалось исключить участника',
+    'set_member_role_failed': 'Не удалось изменить роль участника',
+    'cannot_remove_self': 'Нельзя исключить себя',
+    'captain_role_locked': 'Роль капитана нельзя изменить',
+    'invalid_role': 'Неизвестная роль',
+    'member_not_found': 'Участник не найден',
+    'request_not_pending': 'Заявка уже обработана',
+    'style_not_unlocked': 'Этот стиль ещё не открыт',
+    'system_not_found': 'Система не найдена',
+    'system_name_exists': 'Система с таким названием уже есть',
+    'system_changed': 'Система тренировок изменилась. Обновите экран.',
+    'exercise_not_found': 'Упражнение не найдено',
+    'day_not_active': 'День не активен',
+    'invalid_group': 'Некорректная группа',
+    'invalid_plan': 'Некорректный план',
+    'invalid_set_value': 'Некорректное значение подхода',
+    'invalid_set_operation': 'Некорректная операция с подходом',
+    'invalid_workout_duration': 'Некорректная длительность тренировки',
+    'no_completed_strength_sets': 'Нет завершённых силовых подходов',
+    'request_conflict': 'Запрос конфликтует с предыдущим. Обновите экран.',
+    'session_owner_mismatch': 'Тренировка принадлежит другому пользователю',
+    'Invalid measurement value': 'Некорректное значение замера',
+    'days must be positive': 'Количество дней должно быть больше нуля',
+    'Either user_exercise_id or exercise_id must be provided': 'Не указано упражнение',
+}
+
+
+@app.exception_handler(HTTPException)
+async def _russian_http_error_details(request: Request, exc: HTTPException):
+    from fastapi.exception_handlers import http_exception_handler
+    detail = exc.detail
+    if isinstance(detail, str) and detail in _RU_ERROR_DETAILS:
+        exc = HTTPException(exc.status_code, _RU_ERROR_DETAILS[detail], headers=getattr(exc, 'headers', None))
+    return await http_exception_handler(request, exc)
+
 install_auth_bridge(app, "gym")
 from progressor_client import install_cache_worker
 install_cache_worker(app, "gym", db.DB_PATH,lambda:{'RUB':SUBSCRIPTION_PLANS['1m']['amount_rub']*100,'XTR':_plan_amount_stars(SUBSCRIPTION_PLANS['1m']['amount_rub'])})
@@ -238,7 +287,7 @@ def _get_http_client(name: str) -> httpx.AsyncClient:
     client = getattr(app.state, name, None)
     if client:
         return client
-    raise HTTPException(status_code=503, detail='HTTP client pool недоступен')
+    raise HTTPException(status_code=503, detail='Сервис временно недоступен. Попробуйте позже.')
 
 
 
@@ -256,11 +305,11 @@ def _resolve_payment_method(raw: str | None) -> str:
 
 def _subscription_features() -> list[str]:
     return [
-        'AI Coach поможет собрать систему / изменить упражнение / проанализировать ошибки.',
+        'ИИ-тренер поможет собрать систему, изменить упражнение или разобрать ошибки.',
         'Расширенный список достижений: больше рамок, бейджей и наград за прогресс.',
         'Командные зачёты: можно создать свою великолепную команду, приглашать участников и расти в рейтинге.',
         'Неограниченное количество систем тренировок: сохраняй разные сплиты и переключайся между ними в любой момент.',
-        'Отключение рекламы внутри бота и WebApp.',
+        'Отключение рекламы внутри бота и приложения.',
         'Поддержка проекта: ты напрямую помогаешь развивать продукт и выпускать новые инструменты.',
     ]
 
@@ -360,7 +409,7 @@ async def _create_telegram_subscription_invoice_link(
     if not TG_TOKEN:
         raise HTTPException(status_code=503, detail='Оплата временно недоступна')
     if method != 'stars':
-        raise HTTPException(status_code=400, detail='Telegram invoice доступен только для Stars')
+        raise HTTPException(status_code=400, detail='Счёт в Telegram доступен только для оплаты звёздами')
     plan = SUBSCRIPTION_PLANS.get(plan_code)
     if not plan:
         raise HTTPException(status_code=400, detail='Неизвестный тариф')
@@ -374,7 +423,7 @@ async def _create_telegram_subscription_invoice_link(
     body['currency'] = 'XTR'
     body['prices'] = [
         {
-            'label': f"{plan['title']} · Telegram Stars",
+            'label': f"{plan['title']} · звёзды Telegram",
             'amount': _plan_amount_stars(plan['amount_rub']),
         }
     ]
@@ -432,7 +481,7 @@ def get_tg_init_data(
         init_data = request.query_params.get("initData")
 
     if not init_data:
-        raise HTTPException(status_code=401, detail="Missing initData")
+        raise HTTPException(status_code=401, detail="Нет данных Telegram. Откройте приложение из бота.")
 
     try:
         return verify_and_parse_init_data(
@@ -441,7 +490,7 @@ def get_tg_init_data(
             max_age_sec=MAX_INITDATA_AGE_SEC,
         )
     except InitDataError as e:
-        raise HTTPException(status_code=401, detail=f"Invalid initData: {e}")
+        raise HTTPException(status_code=401, detail="Не удалось подтвердить вход. Откройте приложение заново из бота.")
 
 
 @dataclass(frozen=True)
@@ -479,11 +528,11 @@ async def get_auth_ctx(
                 raise HTTPException(status_code=403, detail='Раздел доступен только для личного дневника')
             link = await get_trainer_link(internal_user_id, acting_user_id)
             if not link or str(link[1]) != "accepted":
-                raise HTTPException(status_code=403, detail="Trainer link not available")
+                raise HTTPException(status_code=403, detail="Связь с тренером недоступна")
             acting_can_edit = bool(link[2])
             is_acting = True
             if request.method != "GET" and not acting_can_edit:
-                raise HTTPException(status_code=403, detail="No edit permission for trainee")
+                raise HTTPException(status_code=403, detail="Нет прав на изменение плана подопечного")
             internal_user_id = acting_user_id
 
     # Viewing another diary must not seed its program, sessions or reminders.
@@ -837,7 +886,7 @@ def _sanitize_ai_action(action: dict, *, max_day_index: int) -> dict | None:
 def _sanitize_ai_action_plan(plan: dict | None, mode: str, *, workouts_per_week: int, active_day_count: int, requested_days: int | None = None) -> tuple[dict, list[dict]]:
     warnings: list[dict] = []
     if not isinstance(plan, dict):
-        return {"actions": []}, [{"code": "invalid_action_plan", "detail": "Пустой или невалидный JSON action_plan от AI."}]
+        return {"actions": []}, [{"code": "invalid_action_plan", "detail": "ИИ вернул пустой или некорректный план."}]
 
     raw_actions = plan.get("actions") if isinstance(plan.get("actions"), list) else []
     # Day indices need not be contiguous (for example, only days 2 and 5 are active).
@@ -847,7 +896,7 @@ def _sanitize_ai_action_plan(plan: dict | None, mode: str, *, workouts_per_week:
     for a in raw_actions:
         clean = _sanitize_ai_action(a, max_day_index=max_day_index)
         if not clean:
-            warnings.append({"code": "invalid_action", "detail": "Одно из действий AI было отброшено как невалидное."})
+            warnings.append({"code": "invalid_action", "detail": "Одно из действий ИИ отброшено как некорректное."})
             continue
         clean_actions.append(clean)
 
@@ -858,7 +907,7 @@ def _sanitize_ai_action_plan(plan: dict | None, mode: str, *, workouts_per_week:
     if mode == "new_system":
         create_actions = [a for a in clean_actions if a.get("type") == "create_system"]
         if not create_actions:
-            return {"actions": []}, [{"code": "missing_create_system", "detail": "Для режима new_system не найдено валидного create_system действия."}]
+            return {"actions": []}, [{"code": "missing_create_system", "detail": "ИИ не предложил новую систему тренировок."}]
         picked = create_actions[0]
 
         # доп. нормализация количества дней
@@ -868,10 +917,10 @@ def _sanitize_ai_action_plan(plan: dict | None, mode: str, *, workouts_per_week:
         days = [d for d in days if isinstance(d, dict) and isinstance(d.get("exercises"), list) and d.get("exercises")]
         days.sort(key=lambda x: int(x.get("day_index") or 0))
         if len(days) > 7:
-            warnings.append({"code": "days_truncated", "detail": f"AI вернул {len(days)} дней, ограничено до 7.", "actual": len(days), "max": 7})
+            warnings.append({"code": "days_truncated", "detail": f"ИИ вернул {len(days)} дн., оставлено 7.", "actual": len(days), "max": 7})
             days = days[:7]
         if len(days) < 2:
-            warnings.append({"code": "too_few_days", "detail": "AI вернул слишком мало дней новой системы; рекомендуется минимум 2."})
+            warnings.append({"code": "too_few_days", "detail": "ИИ вернул слишком мало дней новой системы; рекомендуется минимум 2."})
         if expected_days > 0 and len(days) != expected_days:
             return {"actions": []}, [{"code": "days_count_mismatch", "detail": f"ИИ вернул {len(days)} день(дней) вместо {expected_days}.", "expected": expected_days, "actual": len(days)}]
         picked["days"] = days
@@ -1342,10 +1391,10 @@ muscle_group:
 async def _call_openai_chat(system_prompt: str, user_prompt: str, *, mode: str, requested_days: int | None = None) -> dict:
     openai_api_key = get_openai_api_key()
     if not openai_api_key:
-        raise HTTPException(status_code=503, detail='OPENAI_API_KEY не задан')
+        raise HTTPException(status_code=503, detail='ИИ временно недоступен')
     openai_model = get_openai_model().strip()
     if not openai_model:
-        raise HTTPException(status_code=503, detail='OPENAI_MODEL не задан')
+        raise HTTPException(status_code=503, detail='ИИ временно недоступен')
 
     limits = _ai_limits_for_mode(mode)
     response_format = _ai_response_format_for_mode(mode, requested_days=requested_days)
@@ -1373,7 +1422,7 @@ async def _call_openai_chat(system_prompt: str, user_prompt: str, *, mode: str, 
 
     if resp.status_code >= 400:
         detail = resp.text[:900]
-        raise HTTPException(status_code=502, detail=f'OpenAI error: {detail}')
+        raise HTTPException(status_code=502, detail='ИИ временно недоступен. Попробуйте позже.')
 
     data = resp.json()
     text = ''
@@ -1640,7 +1689,7 @@ def _parse_date_param(date_str: str | None) -> date:
     try:
         return datetime.strptime(date_str, "%Y-%m-%d").date()
     except ValueError:
-        raise HTTPException(status_code=400, detail="Неверный формат даты, используйте YYYY-MM-DD")
+        raise HTTPException(status_code=400, detail="Неверный формат даты, используйте ГГГГ-ММ-ДД")
 
 
 def _calc_base_work(reps: int | float, seconds: int | float, weight: float | None) -> float:
@@ -1967,7 +2016,7 @@ async def _load_user_settings(user_id: int):
     if not settings:
         raise HTTPException(
             status_code=400,
-            detail="Пожалуйста, открой бота и настрой количество тренировок в неделю, затем вернись в WebApp.",
+            detail="Пожалуйста, открой бота и настрой количество тренировок в неделю, затем вернись в приложение.",
         )
     system, workouts_per_week = settings
     active_days = await db.list_active_days(user_id)
@@ -2759,9 +2808,9 @@ async def inc_last_set_fast(
     field_map = {"kg": "weight_kg", "reps": "reps", "sec": "seconds"}
     db_field = field_map.get(field)
     if db_field is None:
-        raise HTTPException(status_code=400, detail="Поле должно быть reps/sec/kg")
+        raise HTTPException(status_code=400, detail="Поле должно быть: повторы, секунды или килограммы")
     if delta is None:
-        raise HTTPException(status_code=400, detail="Нужно передать delta")
+        raise HTTPException(status_code=400, detail="Нужно указать изменение")
 
     target_date = _parse_date_param(date)
     iso_date = _iso_date(target_date)
@@ -3190,7 +3239,7 @@ async def settings_system_group_clear(
     normalized = str(code or "").strip().lower()
     normalized = normalize_exercise_group_for_ui(normalized)
     if normalized != "other":
-        raise HTTPException(status_code=400, detail="unsupported_group")
+        raise HTTPException(status_code=400, detail="Неизвестная группа")
     removed_links, removed_owned_exercises = await db.clear_group_exercises_for_user(ctx.user_id, normalized)
     groups_stats, _ = await db.list_all_exercise_groups_for_user(ctx.user_id, _iso_date(_parse_date_param(None)))
     remaining_catalog_items = int((groups_stats.get("other") or {}).get("count", 0))
@@ -3624,7 +3673,7 @@ async def list_library_exercises(
     ctx: AuthCtx = Depends(get_auth_ctx),
 ):
     if only_used not in (None, 1):
-        raise HTTPException(status_code=400, detail="Параметр only_used поддерживает только значение 1")
+        raise HTTPException(status_code=400, detail="Некорректный фильтр упражнений")
 
     user_id = ctx.user_id
     muscle_filter = (muscle or "").strip().lower() or None
@@ -4114,7 +4163,7 @@ async def measurements_history(
     items_map = {**MEASUREMENT_MAP, **{item["code"]: item for item in custom_items}}
     item = items_map.get(code)
     if not item:
-        raise HTTPException(status_code=404, detail="Measurement not found")
+        raise HTTPException(status_code=404, detail="Замер не найден")
     cache: dict[str, list[tuple[float, str | None, str]]] = {}
     history = await get_measurement_history(user_id, code, cache, items_map, limit=limit)
     timezone = await get_user_timezone(user_id)
@@ -4158,12 +4207,12 @@ async def measurements_add_entry(
     raw_value = payload.get("value")
     value_text = str(raw_value if raw_value is not None else payload.get("text") or "").strip()
     if not metric or not value_text:
-        raise HTTPException(status_code=400, detail="Metric/value required")
+        raise HTTPException(status_code=400, detail="Укажите показатель и значение")
     custom_items = await load_custom_measurements(user_id)
     items_map = {**MEASUREMENT_MAP, **{item["code"]: item for item in custom_items}}
     item = items_map.get(metric)
     if not item or item.get("derived"):
-        raise HTTPException(status_code=404, detail="Measurement not found")
+        raise HTTPException(status_code=404, detail="Замер не найден")
     try:
         value, extra = parse_measurement_input(item, value_text)
     except ValueError as exc:
@@ -4187,7 +4236,7 @@ async def measurements_add_custom(
     user_id = ctx.user_id
     name = (payload.get("name") or "").strip()
     if not name:
-        raise HTTPException(status_code=400, detail="Name required")
+        raise HTTPException(status_code=400, detail="Укажите название")
     category_code = (payload.get("category_code") or "").strip() or None
     code = await add_custom_measurement(user_id, name, category_code)
     return {
@@ -4206,7 +4255,7 @@ async def measurements_delete_custom(
     user_id = ctx.user_id
     measurement_code = (code or "").strip()
     if not measurement_code:
-        raise HTTPException(status_code=400, detail="Code required")
+        raise HTTPException(status_code=400, detail="Укажите код")
     removed = await delete_custom_measurement(user_id, measurement_code)
     return {"ok": True, "removed": removed}
 
@@ -4221,11 +4270,11 @@ async def measurements_add_category(
     name = (payload.get("name") or "").strip()
     letter = (payload.get("letter") or "").strip().upper()
     if not name:
-        raise HTTPException(status_code=400, detail="Name required")
+        raise HTTPException(status_code=400, detail="Укажите название")
     if not letter:
         letter = name[:1].upper()
     if not letter:
-        raise HTTPException(status_code=400, detail="Letter required")
+        raise HTTPException(status_code=400, detail="Укажите букву")
     code = await add_measurement_category(user_id, letter[:1], name)
     return {"ok": True, "code": code, "letter": letter[:1], "name": name}
 
@@ -4238,7 +4287,7 @@ async def measurements_delete_category(
     user_id = ctx.user_id
     category_code = (code or "").strip()
     if not category_code:
-        raise HTTPException(status_code=400, detail="Code required")
+        raise HTTPException(status_code=400, detail="Укажите код")
     custom_items = await load_custom_measurements(user_id)
     removed_items = 0
     for item in custom_items:
@@ -4448,10 +4497,10 @@ MEASUREMENT_ITEMS = [
     ),
     _measurement_item(
         "wod_time_sec",
-        "Время WOD (сек)",
+        "Время комплекса (сек)",
         "records",
         "",
-        prompt="Укажи время WOD в формате ММ:СС или ЧЧ:ММ:СС.",
+        prompt="Укажи время комплекса в формате ММ:СС или ЧЧ:ММ:СС.",
         item_type="duration",
     ),
     _measurement_item(
@@ -5139,7 +5188,7 @@ async def settings_overview(ctx: AuthCtx = Depends(get_auth_ctx)):
 async def delete_custom_exercise(exercise_id: ApiInt, ctx: AuthCtx = Depends(get_auth_ctx)):
     removed = await hard_delete_user_owned_exercise(ctx.user_id, int(exercise_id))
     if not removed:
-        raise HTTPException(status_code=404, detail="exercise_not_found_or_base")
+        raise HTTPException(status_code=404, detail="Упражнение не найдено или его нельзя удалить")
     return {"ok": True, "removed": True}
 
 
@@ -5599,18 +5648,18 @@ async def settings_trainer_request_decision(
     user_id = ctx.user_id
     link = await _get_trainer_link_by_id(link_id)
     if not link or int(link[1]) != user_id:
-        raise HTTPException(status_code=404, detail="Request not found")
+        raise HTTPException(status_code=404, detail="Заявка не найдена")
     status = str(link[3] or "")
     if status != "pending":
-        raise HTTPException(status_code=400, detail="Request already processed")
+        raise HTTPException(status_code=400, detail="Заявка уже обработана")
     if decision not in {"accept", "decline"}:
-        raise HTTPException(status_code=400, detail="Unsupported decision")
+        raise HTTPException(status_code=400, detail="Неизвестное решение по заявке")
     try:
         changed = await update_trainer_link_status(int(link[0]), "accepted" if decision == "accept" else "declined")
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     if not changed:
-        raise HTTPException(status_code=409, detail="Request already processed")
+        raise HTTPException(status_code=409, detail="Заявка уже обработана")
     if decision == "accept":
         await _evaluate_achievements(int(link[1]))
         await _evaluate_achievements(int(link[2]))
@@ -5626,18 +5675,18 @@ async def settings_trainer_link(
     user_id = ctx.user_id
     code = str(payload.get("code") or "").strip()
     if not code:
-        raise HTTPException(status_code=400, detail="Missing code")
+        raise HTTPException(status_code=400, detail="Укажите код тренера")
     trainer = await find_user_by_trainer_code(code)
     if not trainer:
-        raise HTTPException(status_code=404, detail="Trainer not found")
+        raise HTTPException(status_code=404, detail="Тренер не найден")
     trainer_id, _username, accepts_requests = trainer
     if int(trainer_id) == user_id:
         raise HTTPException(status_code=400, detail="Нельзя использовать свой код")
     if not accepts_requests:
-        raise HTTPException(status_code=400, detail="Trainer is not accepting requests")
+        raise HTTPException(status_code=400, detail="Тренер сейчас не принимает заявки")
     existing = await get_latest_trainer_link_for_trainee(user_id)
     if existing and str(existing[2]) in {"pending", "accepted"}:
-        raise HTTPException(status_code=400, detail="Link already exists")
+        raise HTTPException(status_code=400, detail="Связь с этим тренером уже есть")
     try:
         await create_trainer_request(int(trainer_id), user_id, can_edit_plan=False)
     except ValueError as exc:
@@ -5665,7 +5714,7 @@ async def settings_trainer_allow_edit(
     enabled = bool(payload.get("enabled"))
     link = await get_active_trainer_link_for_trainee(user_id)
     if not link:
-        raise HTTPException(status_code=404, detail="Link not found")
+        raise HTTPException(status_code=404, detail="Связь не найдена")
     await update_trainer_link_permissions(int(link[0]), 1 if enabled else 0)
     return {"ok": True}
 
@@ -5679,7 +5728,7 @@ async def settings_trainer_label(
     user_id = ctx.user_id
     link = await get_active_trainer_link_for_trainee(user_id)
     if not link:
-        raise HTTPException(status_code=404, detail="Link not found")
+        raise HTTPException(status_code=404, detail="Связь не найдена")
     label = str(payload.get("label") or "").strip() or None
     await update_trainer_label(int(link[0]), label)
     return {"ok": True}
@@ -5695,7 +5744,7 @@ async def settings_trainer_trainee_label(
     user_id = ctx.user_id
     link = await _get_trainer_link_by_id(link_id)
     if not link or int(link[1]) != user_id:
-        raise HTTPException(status_code=404, detail="Link not found")
+        raise HTTPException(status_code=404, detail="Связь не найдена")
     label = str(payload.get("label") or "").strip() or None
     await update_trainee_label(int(link_id), label)
     return {"ok": True}
@@ -5709,7 +5758,7 @@ async def settings_trainer_trainee_detach(
     user_id = ctx.user_id
     link = await get_trainer_link(user_id, int(trainee_user_id))
     if not link:
-        raise HTTPException(status_code=404, detail="Link not found")
+        raise HTTPException(status_code=404, detail="Связь не найдена")
     await update_trainer_link_status(int(link[0]), "removed")
     return {"ok": True}
 
@@ -5879,11 +5928,11 @@ async def achievements_select_frame(payload: dict = Body(default_factory=dict), 
     frame_code = str(frame_code).strip()
     ach_code = achievements.FRAME_TO_CODE.get(frame_code)
     if not ach_code:
-        raise HTTPException(status_code=400, detail='Unknown frame code')
+        raise HTTPException(status_code=400, detail='Неизвестная рамка')
     is_admin = int(ctx.tg_id) in ADMIN_IDS
     unlocked_codes = {code for code, _ in await list_user_achievements(user_id)}
     if ach_code not in unlocked_codes and not is_admin:
-        raise HTTPException(status_code=403, detail='Frame is locked')
+        raise HTTPException(status_code=403, detail='Эта рамка ещё не открыта')
     await set_title_frame(user_id, frame_code, int(system_id) if system_id is not None else None)
     return {'ok': True, 'title_frame_code': frame_code}
 
@@ -5893,7 +5942,7 @@ async def achievements_select_frame(payload: dict = Body(default_factory=dict), 
 async def achievements_select_badge(payload: dict = Body(default_factory=dict), ctx: AuthCtx = Depends(get_auth_ctx)):
     user_id = int(ctx.user_id)
     if not await _has_active_subscription(user_id):
-        raise HTTPException(status_code=403, detail='Subscription required')
+        raise HTTPException(status_code=403, detail='Нужна активная подписка')
     badge_code = payload.get('badge_code')
     system_id = payload.get('system_id')
     hidden = payload.get('hidden')
@@ -5901,7 +5950,7 @@ async def achievements_select_badge(payload: dict = Body(default_factory=dict), 
     if badge_code is not None:
         badge_code = str(badge_code).strip()
         if badge_code and badge_code not in unlocked_codes:
-            raise HTTPException(status_code=403, detail='Badge is locked')
+            raise HTTPException(status_code=403, detail='Этот значок ещё не открыт')
     await set_badge(user_id, badge_code if badge_code else None, int(system_id) if system_id is not None else None)
     if hidden is not None:
         await set_badge_hidden(user_id, bool(hidden), int(system_id) if system_id is not None else None)
@@ -5981,7 +6030,7 @@ async def teams_me(ctx: AuthCtx = Depends(get_auth_ctx)):
 async def teams_create(payload: dict = Body(default_factory=dict), ctx: AuthCtx = Depends(get_auth_ctx)):
     user_id = int(ctx.user_id)
     if not await _has_active_subscription(user_id):
-        raise HTTPException(status_code=403, detail='Premium required')
+        raise HTTPException(status_code=403, detail='Нужна активная подписка')
     current_team = await get_user_team(user_id)
     if current_team:
         raise HTTPException(status_code=400, detail='already_in_team')
@@ -6632,7 +6681,7 @@ async def payment_redirect_create(payload: dict = Body(default_factory=dict), ct
     kind = str(payload.get('kind') or '').strip().lower()
     plan_id = str(payload.get('plan_id') or '').strip()
     if kind != 'subscription':
-        raise HTTPException(status_code=400, detail='Поддерживается только kind=subscription')
+        raise HTTPException(status_code=400, detail='Поддерживается только оплата подписки')
     payment_id, confirmation_url, plan = await _create_subscription_redirect_payment(
         int(ctx.user_id),
         plan_id,
@@ -6708,7 +6757,7 @@ async def subscription_payment_notify_bot_success(ctx: AuthCtx = Depends(get_aut
     text = (
         '🎉 Подписка успешно активирована!\n\n'
         'Теперь у вас доступны:\n'
-        '• AI-функции для прогресса и корректировок;\n'
+        '• ИИ-функции для прогресса и корректировок;\n'
         '• Создание собственной команды;\n'
         '• Неограниченное количество тренировочных систем.\n\n'
         'Откройте главное меню и продолжайте тренировку 💪'
@@ -6789,7 +6838,7 @@ def _format_ai_quota_reset_at(reset_at: str | None, tz_name: str | None) -> str:
 @app.get('/ai/coach/apply/{request_id}')
 async def ai_coach_apply_status(request_id: str, ctx: AuthCtx = Depends(get_auth_ctx)):
     if not re.fullmatch(r'[A-Za-z0-9_-]{16,80}', request_id):
-        raise HTTPException(status_code=400, detail='invalid_request_id')
+        raise HTTPException(status_code=400, detail='Некорректный номер операции')
     raw = await db.get_app_meta(f'ai_apply:{ctx.user_id}:{request_id}')
     if not raw:
         return {'found': False}
@@ -6801,7 +6850,7 @@ async def ai_coach_apply_status(request_id: str, ctx: AuthCtx = Depends(get_auth
 @_validate_payload_input
 async def ai_coach_apply(payload: dict = Body(...), ctx: AuthCtx = Depends(get_auth_ctx)):
     if not await db.get_active_subscription(ctx.user_id):
-        raise HTTPException(status_code=403, detail='AI доступен только при активной подписке')
+        raise HTTPException(status_code=403, detail='ИИ доступен только при активной подписке')
     request_id = str(payload.get('request_id') or '')
     system_id = _to_int(payload.get('system_id'))
     raw_actions = payload.get('actions')
@@ -6851,12 +6900,12 @@ async def ai_coach_query(payload: dict = Body(default_factory=dict), ctx: AuthCt
     user_id = ctx.user_id
     sub = await db.get_active_subscription(user_id)
     if not sub:
-        raise HTTPException(status_code=403, detail='AI доступен только при активной подписке')
+        raise HTTPException(status_code=403, detail='ИИ доступен только при активной подписке')
 
     mode = str(payload.get('mode') or 'mistakes_analysis').strip()
     user_message = _clip_text(str(payload.get('message') or '').strip(), 1800)
     if mode not in {'replace_exercises', 'new_system', 'mistakes_analysis'}:
-        raise HTTPException(status_code=400, detail='Неподдерживаемый AI-режим')
+        raise HTTPException(status_code=400, detail='Неподдерживаемый режим ИИ')
     if mode in {'replace_exercises', 'new_system'} and not user_message:
         raise HTTPException(status_code=400, detail='Опиши, что хочешь улучшить')
 

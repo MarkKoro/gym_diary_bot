@@ -2635,7 +2635,7 @@
     </div>
   </div>
 
-  <div id="not-telegram" class="full-screen-msg" style="display:none; padding:32px; text-align:center;">Открой WebApp из Telegram. В браузере авторизация не работает.</div>
+  <div id="not-telegram" class="full-screen-msg" style="display:none; padding:32px; text-align:center;">Открой приложение из Telegram. В браузере авторизация не работает.</div>
   <div id="onboarding" class="onboarding">
     <div class="onboarding-card" id="onboardingCard"></div>
   </div>
@@ -4065,7 +4065,7 @@
       if (app) setVisible(app, true);
       hideBoot();
       const normalized = normalizeError(err);
-      const text = `Где упало: ${where}\n\n${normalized}\n\nUA: ${navigator.userAgent}\nURL: ${location.href}`;
+      const text = `Где упало: ${where}\n\n${normalized}\n\nБраузер: ${navigator.userAgent}\nАдрес: ${location.href}`;
       if (fatalText) fatalText.textContent = text;
       console.error(err);
     }
@@ -8527,7 +8527,7 @@
           row.innerHTML = `
             <div class="ach-icon">${escapeHtml(a.icon || '🏅')}</div>
             <div>
-              <div style="font-weight:700">${escapeHtml(a.title || a.code || 'Достижение')}${!lockedMode && unseenCodes.has(String(a.code || '')) ? '<span class=\"ach-new-chip\">New</span>' : ''}</div>
+              <div style="font-weight:700">${escapeHtml(a.title || a.code || 'Достижение')}${!lockedMode && unseenCodes.has(String(a.code || '')) ? '<span class=\"ach-new-chip\">Новое</span>' : ''}</div>
               <div class="ach-meta">${lockedMode ? 'Закрыто' : ('Открыто' + (a.unlocked_at ? ' · ' + String(a.unlocked_at).slice(0, 10) : ''))}</div>${a.unlock_hint ? `<div class="ach-meta" style="margin-top:4px;">${escapeHtml(String(a.unlock_hint))}</div>` : ''}
             </div>
           `;
@@ -8819,7 +8819,7 @@
             ${ui.tintEnabled ? `
               <div class="settings-row settings-panel inline">
                 <div>
-                  <div class="label">Буква P (Progresor)</div>
+                  <div class="label">Буква «P» (логотип Progressor)</div>
                   <div class="hint">Показывать декоративную букву P снизу на 30% высоты экрана.</div>
                 </div>
                 <button class="btn small-btn toggle-icon" data-action="toggle-tint-glyph">${ui.tintGlyphEnabled ? '🟢 Включено' : '⚪ Выключено'}</button>
@@ -10663,8 +10663,8 @@
           <div class="onboarding-title">Давайте настроим тренировки</div>
           <div class="onboarding-text">
             Привет! 👋
-            Дальше давай настроим всё под тебя — это можно сделать прямо здесь в боте или в WebApp.
-            Видео-инструкцию можно посмотреть в боте, а в WebApp продолжим без неё.
+            Дальше давай настроим всё под тебя — это можно сделать прямо здесь в боте или в приложении.
+            Видео-инструкцию можно посмотреть в боте, а в приложении продолжим без неё.
           </div>
           <div class="onboarding-actions">
             <button class="btn primary" data-onboarding-action="start">Начать</button>
@@ -10969,7 +10969,7 @@
         { title: 'Тренировочные системы', text: 'Кнопка «Система» открывает выбор системы: можно создать новую, переключить активную, переименовать и изменить цвет.', selector: '#systemOpenBtn' },
         {
           title: 'Плюс/минус упражнения',
-          text: 'Кнопка ± открывает меню действий:<br>• <b>Добавить упражнение</b> — выбираете группу мышц, затем упражнение, и добавляете его в текущий день.<br>• <b>Удалить упражнение</b> — переход в отдельный режим удаления, где упражнения убираются по одному.<br>• <b>Таймер</b> — быстрый запуск таймера отдыха между подходами.<br>• <b>Прогрессируем вместе с ИИ</b> (<b>доступно в Premium</b>) — ИИ помогает улучшать план, корректировать нагрузку и разбирать ошибки.',
+          text: 'Кнопка ± открывает меню действий:<br>• <b>Добавить упражнение</b> — выбираете группу мышц, затем упражнение, и добавляете его в текущий день.<br>• <b>Удалить упражнение</b> — переход в отдельный режим удаления, где упражнения убираются по одному.<br>• <b>Таймер</b> — быстрый запуск таймера отдыха между подходами.<br>• <b>Прогрессируем вместе с ИИ</b> (<b>доступно в подписке</b>) — ИИ помогает улучшать план, корректировать нагрузку и разбирать ошибки.',
           selector: '#manageExerciseBtn'
         },
         { title: 'Быстрое добавление', text: 'Когда включён режим добавления, появляется кнопка «+» внизу. Через неё добавляются упражнения в текущий день.', selector: '#addExerciseBtn', prepare: () => setManageMode('add') },
@@ -13100,7 +13100,7 @@
             getExerciseActionSource(ueId) !== beforeIdentity.source ||
             (beforeIdentity.source === 'all_exercises' ? getAllExercisesDate() : getIsoDate()) !== beforeIdentity.date) return null;
         if (!hasVerifiedOwnGymSubject()) throw Object.assign(new Error('Не удалось подтвердить аккаунт. Повторите действие.'), { setOperationUnavailable: true });
-        if (state.setAddOperationsVersion !== 1) throw Object.assign(new Error('Gym обновляется. Обновите экран чуть позже перед добавлением подхода.'), { setOperationUnavailable: true });
+        if (state.setAddOperationsVersion !== 1) throw Object.assign(new Error('Раздел «Тренировки» обновляется. Обновите экран чуть позже перед добавлением подхода.'), { setOperationUnavailable: true });
         return queueAddSet(ueId, opts);
       });
       }
@@ -13209,7 +13209,7 @@
           setTimeout(() => tg?.close?.(), 120);
         } catch (_) {}
       } catch (e) {
-        if (e?.status === 401 || e?.status === 403) toast('Нет доступа. Открой WebApp из Telegram.');
+        if (e?.status === 401 || e?.status === 403) toast('Нет доступа. Открой приложение из Telegram.');
         else toast('Ошибка связи. Попробуй ещё раз.');
       }
     }
@@ -14768,10 +14768,10 @@
         <div class="subscription-popup-overlay">
           <div class="subscription-popup">
             <div class="subscription-popup-title">Оплата подписки (${escapeHtml(intent.planId)})</div>
-            <div class="subscription-sheet-note">RUB — через внешний redirect в YooKassa. Stars — внутри Telegram.</div>
+            <div class="subscription-sheet-note">Оплата в рублях — на внешней странице ЮKassa. Оплата звёздами — внутри Telegram.</div>
             <div class="subscription-popup-actions">
               ${intent.paymentMethod === 'stars'
-                ? '<button class="btn primary" data-sub-pay-action="start-stars">Оплатить в Telegram Stars</button>'
+                ? '<button class="btn primary" data-sub-pay-action="start-stars">Оплатить звёздами Telegram</button>'
                 : `<button class="btn ${prepared?.confirmation_url ? 'secondary' : 'primary'}" data-sub-pay-action="prepare-rub">Подготовить оплату</button>
                    <button class="btn ${prepared?.confirmation_url ? 'primary' : 'secondary'}" data-sub-pay-action="open-rub" ${prepared?.confirmation_url ? '' : 'disabled'}>Открыть оплату в браузере</button>`}
             </div>
@@ -14783,7 +14783,7 @@
       const features = (sub.features || []).map((f) => `<li>${escapeHtml(f)}</li>`).join('');
       const accentNote = sub.active
         ? 'Спасибо за поддержку проекта. Подписка уже активна — все функции открыты.'
-        : 'В подписке: AI Coach для корректировок, расширенные достижения и создание собственной команды в командных зачётах.';
+        : 'В подписке: ИИ-тренер для корректировок, расширенные достижения и создание собственной команды в командных зачётах.';
       const cta = sub.active
         ? '<button class="btn subscription-plan-btn" data-sub-action="change-plan">Продлить подписку</button>'
         : '<button class="btn subscription-plan-btn" data-sub-action="open-picker">Купить подписку</button>';
@@ -14975,7 +14975,7 @@
               () => {},
               'Подписка активирована 🎉',
               `✨ Спасибо за поддержку!
-*⭐ Бонус: AI-функции и персональные корректировки от AI Coach ⭐*
+*⭐ Бонус: ИИ-функции и персональные корректировки от ИИ-тренера ⭐*
 *⭐ Бонус: создание собственной команды ⭐*
 *⭐ Бонус: неограниченное число систем тренировок ⭐*`,
               'Отлично',
@@ -15932,7 +15932,7 @@
           hash: (window.location.hash || '').slice(0, 300),
           ua: navigator.userAgent,
         };
-        showFatal(new Error('Telegram WebApp detected, but initData is EMPTY. Debug: ' + JSON.stringify(dbg)), 'initTelegram');
+        showFatal(new Error('Telegram открыл приложение без данных входа. Закройте его и откройте заново из бота. Технические данные: ' + JSON.stringify(dbg)), 'initTelegram');
         return false;
       }
 
