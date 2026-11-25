@@ -120,6 +120,7 @@ from settings import (
     BOT_PUBLIC_LINK,
     INSTRUCTION_URL,
 )
+from db import expire_stale_pending_payments as db_expire_stale_pending_payments
 from db import (
     get_user_exercise_info,
     init_db,
@@ -7814,6 +7815,22 @@ async def post_init(app: Application):
         first=30,
         name="refresh_reminders_meta",
     )
+    app.job_queue.run_repeating(
+        _expire_stale_payments_job,
+        interval=300,
+        first=60,
+        name="expire_stale_pending_payments",
+    )
+
+
+async def _expire_stale_payments_job(context: ContextTypes.DEFAULT_TYPE):
+    try:
+        expired = await db_expire_stale_pending_payments()
+    except Exception as exc:
+        logger.warning("Failed to expire stale payments: %s", exc)
+        return
+    if expired:
+        logger.info("Expired %s unpaid payments older than 30 minutes", expired)
 
 
 async def _refresh_reminders_if_needed(context: ContextTypes.DEFAULT_TYPE):

@@ -4303,6 +4303,36 @@ async def redeem_gift_code_with_status(code: str, user_id: int) -> tuple[str, in
         return ("ok", days)
 
 
+STALE_PAYMENT_MINUTES = 30
+
+
+async def expire_stale_pending_payments(max_age_minutes: int = STALE_PAYMENT_MINUTES) -> int:
+    """Счета, которые не оплатили за max_age_minutes, переводятся в canceled.
+
+    Telegram и ЮKassa не сообщают, что человек закрыл окно оплаты, поэтому без
+    этого такие счета висели бы в pending вечно. Поздняя оплата не теряется:
+    устаревший Telegram-счёт отклоняется на pre_checkout (деньги не списываются),
+    а статус ЮKassa всегда перепроверяется у провайдера и перезаписывается.
+    """
+    cutoff = (datetime.now(UTC) - timedelta(minutes=max_age_minutes)).isoformat()
+    now_iso = datetime.now(UTC).isoformat(timespec="seconds")
+    async with connect_db() as db:
+        cur = await db.execute(
+            """
+            UPDATE payments
+               SET status='canceled',
+                   payload_json=json_set(CASE WHEN json_valid(payload_json) THEN payload_json ELSE '{}' END,
+                                         '$.expired_unpaid_at', ?)
+             WHERE status IN ('pending','created')
+               AND finalized_at IS NULL
+               AND created_at < ?
+            """,
+            (now_iso, cutoff),
+        )
+        await db.commit()
+        return int(cur.rowcount or 0)
+
+
 async def update_payment_status(external_id: str, status: str, payload: dict | None = None) -> None:
     async with connect_db() as db:
         await db.execute("BEGIN IMMEDIATE")
